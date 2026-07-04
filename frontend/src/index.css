@@ -1,0 +1,46 @@
+@import 'tailwindcss';
+
+@custom-variant dark (&:where(.dark, .dark *));
+
+@theme {
+  --color-cat-base: #11111b;
+  --color-cat-mantle: #181825;
+  --color-cat-surface0: #1e1e2e;
+  --color-cat-surface1: #313244;
+  --color-cat-text: #cdd6f4;
+  --color-cat-subtext: #a6adc8;
+  --color-cat-overlay: #6c7086;
+  --color-cat-accent: #6366f1;
+}
+
+html,
+body,
+#root {
+  height: 100%;
+  margin: 0;
+}
+
+body {
+  @apply bg-cat-base text-cat-text font-sans antialiased;
+}
+
+html:not(.dark) body {
+  @apply bg-slate-50 text-slate-900;
+}
+
+::-webkit-scrollbar {
+  width: 6px;
+  height: 6px;
+}
+
+::-webkit-scrollbar-track {
+  @apply bg-cat-surface0;
+}
+
+::-webkit-scrollbar-thumb {
+  @apply bg-cat-surface1 rounded;
+}
+
+::-webkit-scrollbar-thumb:hover {
+  background: #585b70;
+}

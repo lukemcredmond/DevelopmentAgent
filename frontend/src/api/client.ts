@@ -1,0 +1,402 @@
+import type {
+  AppEvent,
+  AppState,
+  BriefPayload,
+  ChatPayload,
+  ChatResponse,
+  ConfigPayload,
+  CreateProjectPayload,
+  FileDiffResponse,
+  FileSearchResult,
+  FileTreeNode,
+  GitStatusResponse,
+  ManualTaskPayload,
+  MoveTaskPayload,
+  OllamaHealthResponse,
+  ProjectSummary,
+  SkillsResponse,
+  SkillPayload,
+  SprintRunPayload,
+  TerminalRunPayload,
+  TerminalRunResponse,
+  UpdateTaskPayload,
+  WorkflowSettingsPayload,
+} from '../types'
+
+class ApiError extends Error {
+  status: number
+  detail: string
+
+  constructor(status: number, detail: string) {
+    super(detail)
+    this.status = status
+    this.detail = detail
+  }
+}
+
+async function request<T>(
+  path: string,
+  init?: RequestInit,
+): Promise<T> {
+  const res = await fetch(path, {
+    headers: { 'Content-Type': 'application/json', ...init?.headers },
+    ...init,
+  })
+
+  if (!res.ok) {
+    let detail = res.statusText
+    try {
+      const body = (await res.json()) as { detail?: string }
+      detail = body.detail ?? detail
+    } catch {
+      /* ignore */
+    }
+    throw new ApiError(res.status, detail)
+  }
+
+  if (res.status === 204) {
+    return undefined as T
+  }
+
+  return (await res.json()) as T
+}
+
+export async function fetchState(): Promise<AppState> {
+  return request<AppState>('/api/state')
+}
+
+export async function updateConfig(payload: ConfigPayload): Promise<AppState> {
+  return request<AppState>('/api/config', {
+    method: 'POST',
+    body: JSON.stringify(payload),
+  })
+}
+
+export async function createProject(
+  payload: CreateProjectPayload,
+): Promise<AppState> {
+  return request<AppState>('/api/projects/create', {
+    method: 'POST',
+    body: JSON.stringify(payload),
+  })
+}
+
+export async function loadProject(projectId: string): Promise<AppState> {
+  return request<AppState>(`/api/projects/load/${encodeURIComponent(projectId)}`, {
+    method: 'POST',
+  })
+}
+
+export async function deleteProject(
+  projectId: string,
+): Promise<{ ok: boolean; projectsList: ProjectSummary[] }> {
+  return request<{ ok: boolean; projectsList: ProjectSummary[] }>(
+    `/api/projects/${encodeURIComponent(projectId)}`,
+    { method: 'DELETE' },
+  )
+}
+
+export function exportProject(projectId: string): void {
+  window.location.assign(
+    `/api/projects/${encodeURIComponent(projectId)}/export`,
+  )
+}
+
+export async function importProject(file: File): Promise<AppState> {
+  const form = new FormData()
+  form.append('file', file)
+  const res = await fetch('/api/projects/import', {
+    method: 'POST',
+    body: form,
+  })
+  if (!res.ok) {
+    let detail = res.statusText
+    try {
+      const body = (await res.json()) as { detail?: string }
+      detail = body.detail ?? detail
+    } catch {
+      /* ignore */
+    }
+    throw new ApiError(res.status, detail)
+  }
+  return (await res.json()) as AppState
+}
+
+export async function fetchSkills(): Promise<SkillsResponse> {
+  return request<SkillsResponse>('/api/skills')
+}
+
+export async function assignSkill(payload: SkillPayload): Promise<AppState> {
+  return request<AppState>('/api/assign-skill', {
+    method: 'POST',
+    body: JSON.stringify(payload),
+  })
+}
+
+export async function removeSkill(payload: SkillPayload): Promise<AppState> {
+  return request<AppState>('/api/remove-skill', {
+    method: 'POST',
+    body: JSON.stringify(payload),
+  })
+}
+
+export async function addManualTask(
+  payload: ManualTaskPayload,
+): Promise<AppState> {
+  return request<AppState>('/api/tasks/manual', {
+    method: 'POST',
+    body: JSON.stringify(payload),
+  })
+}
+
+export async function updateTask(
+  taskId: string,
+  payload: UpdateTaskPayload,
+): Promise<AppState> {
+  return request<AppState>(`/api/tasks/${encodeURIComponent(taskId)}`, {
+    method: 'PATCH',
+    body: JSON.stringify(payload),
+  })
+}
+
+export async function deleteTask(taskId: string): Promise<AppState> {
+  return request<AppState>(`/api/tasks/${encodeURIComponent(taskId)}`, {
+    method: 'DELETE',
+  })
+}
+
+export async function moveTask(payload: MoveTaskPayload): Promise<AppState> {
+  return request<AppState>('/api/tasks/move', {
+    method: 'POST',
+    body: JSON.stringify(payload),
+  })
+}
+
+export async function resetWorkspace(): Promise<AppState> {
+  return request<AppState>('/api/reset', { method: 'POST' })
+}
+
+export async function triggerPlan(payload: BriefPayload): Promise<AppState> {
+  return request<AppState>('/api/plan', {
+    method: 'POST',
+    body: JSON.stringify(payload),
+  })
+}
+
+export async function triggerStep(payload: BriefPayload): Promise<AppState> {
+  return request<AppState>('/api/step', {
+    method: 'POST',
+    body: JSON.stringify(payload),
+  })
+}
+
+export async function sendChat(payload: ChatPayload): Promise<ChatResponse> {
+  return request<ChatResponse>('/api/chat', {
+    method: 'POST',
+    body: JSON.stringify(payload),
+  })
+}
+
+export async function* streamChat(
+  payload: ChatPayload,
+  signal?: AbortSignal,
+): AsyncGenerator<string, void, unknown> {
+  const res = await fetch('/api/chat/stream', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify(payload),
+    signal,
+  })
+
+  if (!res.ok) {
+    let detail = res.statusText
+    try {
+      const body = (await res.json()) as { detail?: string }
+      detail = body.detail ?? detail
+    } catch {
+      /* ignore */
+    }
+    throw new ApiError(res.status, detail)
+  }
+
+  const reader = res.body?.getReader()
+  if (!reader) return
+
+  const decoder = new TextDecoder()
+  let buffer = ''
+
+  while (true) {
+    const { done, value } = await reader.read()
+    if (done) break
+
+    buffer += decoder.decode(value, { stream: true })
+    const lines = buffer.split('\n')
+    buffer = lines.pop() ?? ''
+
+    for (const line of lines) {
+      if (line.startsWith('data: ')) {
+        const data = line.slice(6)
+        if (data === '[DONE]') return
+        try {
+          const parsed = JSON.parse(data) as {
+            chunk?: string
+            token?: string
+            content?: string
+            done?: boolean
+          }
+          if (parsed.done) return
+          yield parsed.chunk ?? parsed.token ?? parsed.content ?? ''
+        } catch {
+          yield data
+        }
+      }
+    }
+  }
+}
+
+export async function fetchFileTree(): Promise<FileTreeNode[]> {
+  const res = await request<{ tree?: FileTreeNode[] } | FileTreeNode[]>(
+    '/api/files/tree',
+  )
+  return Array.isArray(res) ? res : (res.tree ?? [])
+}
+
+export async function saveFile(
+  path: string,
+  content: string,
+): Promise<AppState | { ok: boolean }> {
+  return request<AppState | { ok: boolean }>('/api/files/save', {
+    method: 'POST',
+    body: JSON.stringify({ path, content }),
+  })
+}
+
+export async function searchFiles(query: string): Promise<FileSearchResult[]> {
+  const res = await request<{ results?: FileSearchResult[] } | FileSearchResult[]>(
+    `/api/files/search?q=${encodeURIComponent(query)}`,
+  )
+  return Array.isArray(res) ? res : (res.results ?? [])
+}
+
+export async function fetchFileDiff(path: string): Promise<FileDiffResponse> {
+  return request<FileDiffResponse>(
+    `/api/files/diff?path=${encodeURIComponent(path)}`,
+  )
+}
+
+export async function checkOllamaHealth(
+  url?: string,
+): Promise<OllamaHealthResponse> {
+  const qs = url ? `?url=${encodeURIComponent(url)}` : ''
+  return request<OllamaHealthResponse>(`/api/ollama/health${qs}`)
+}
+
+export async function runTerminal(
+  payload: TerminalRunPayload,
+): Promise<TerminalRunResponse> {
+  return request<TerminalRunResponse>('/api/terminal/run', {
+    method: 'POST',
+    body: JSON.stringify(payload),
+  })
+}
+
+export async function runSprint(payload: SprintRunPayload): Promise<AppState> {
+  return request<AppState>('/api/sprint/run', {
+    method: 'POST',
+    body: JSON.stringify(payload),
+  })
+}
+
+export async function planAndRun(payload: SprintRunPayload): Promise<AppState> {
+  return request<AppState>('/api/sprint/plan-and-run', {
+    method: 'POST',
+    body: JSON.stringify(payload),
+  })
+}
+
+export async function approveTask(taskId: string): Promise<AppState> {
+  return request<AppState>(`/api/tasks/${encodeURIComponent(taskId)}/approve`, {
+    method: 'POST',
+  })
+}
+
+export async function resolveUserQuestion(
+  taskId: string,
+  answer: string,
+): Promise<AppState> {
+  return request<AppState>(
+    `/api/tasks/${encodeURIComponent(taskId)}/resolve-user`,
+    { method: 'POST', body: JSON.stringify({ answer }) },
+  )
+}
+
+export async function reorderTasks(
+  lane: string,
+  taskIds: string[],
+): Promise<AppState> {
+  return request<AppState>('/api/tasks/reorder', {
+    method: 'POST',
+    body: JSON.stringify({ lane, taskIds }),
+  })
+}
+
+export async function updateWorkflowSettings(
+  payload: WorkflowSettingsPayload,
+): Promise<AppState> {
+  return request<AppState>('/api/workflow/settings', {
+    method: 'POST',
+    body: JSON.stringify(payload),
+  })
+}
+
+export async function cancelSprint(): Promise<{ ok: boolean }> {
+  return request<{ ok: boolean }>('/api/sprint/cancel', { method: 'POST' })
+}
+
+export async function fetchGitStatus(): Promise<GitStatusResponse> {
+  return request<GitStatusResponse>('/api/git/status')
+}
+
+export function subscribeEvents(
+  onEvent: (event: AppEvent) => void,
+  onError?: (error: Event) => void,
+): EventSource {
+  const source = new EventSource('/api/events')
+
+  source.addEventListener('message', (e) => {
+    try {
+      const event = JSON.parse(e.data) as AppEvent
+      onEvent(event)
+    } catch {
+      onEvent({ type: 'connected', data: e.data })
+    }
+  })
+
+  source.addEventListener('state', (e) => {
+    onEvent({ type: 'state', data: JSON.parse(e.data) })
+  })
+
+  source.addEventListener('board', (e) => {
+    onEvent({ type: 'board', data: JSON.parse(e.data) })
+  })
+
+  source.addEventListener('files', (e) => {
+    onEvent({ type: 'files', data: JSON.parse(e.data) })
+  })
+
+  source.addEventListener('log', (e) => {
+    onEvent({ type: 'log', data: JSON.parse(e.data) })
+  })
+
+  source.addEventListener('sprint', (e) => {
+    onEvent({ type: 'sprint', data: JSON.parse(e.data) })
+  })
+
+  source.onerror = (err) => {
+    onError?.(err)
+  }
+
+  return source
+}
+
+export { ApiError }
