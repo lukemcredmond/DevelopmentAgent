@@ -30,6 +30,21 @@ export default function TerminalPanel({ workspaceDir, hidden = false }: Terminal
   const fitRef = useRef<FitAddon | null>(null)
   const [command, setCommand] = useState('')
   const [history, setHistory] = useState<string[]>([])
+  const [terminalReady, setTerminalReady] = useState(false)
+
+  const printWelcome = (term: Terminal) => {
+    term.writeln('\x1b[1;34mAll Hands Terminal\x1b[0m — type a command below')
+    term.writeln(`cwd: ${workspaceDir}`)
+    term.writeln('')
+  }
+
+  const handleClear = () => {
+    const term = terminalRef.current
+    if (!term) return
+    term.clear()
+    setHistory([])
+    printWelcome(term)
+  }
 
   const safeFit = () => {
     const container = containerRef.current
@@ -63,12 +78,11 @@ export default function TerminalPanel({ workspaceDir, hidden = false }: Terminal
     term.loadAddon(fit)
     term.open(containerRef.current)
 
-    term.writeln('\x1b[1;34mAll Hands Terminal\x1b[0m — type a command below')
-    term.writeln(`cwd: ${workspaceDir}`)
-    term.writeln('')
+    printWelcome(term)
 
     terminalRef.current = term
     fitRef.current = fit
+    setTerminalReady(true)
 
     const raf = requestAnimationFrame(() => safeFit())
     const observer = new ResizeObserver(() => safeFit())
@@ -82,6 +96,7 @@ export default function TerminalPanel({ workspaceDir, hidden = false }: Terminal
       term.dispose()
       terminalRef.current = null
       fitRef.current = null
+      setTerminalReady(false)
     }
   }, [workspaceDir])
 
@@ -117,10 +132,18 @@ export default function TerminalPanel({ workspaceDir, hidden = false }: Terminal
     <div
       className={`flex flex-col h-full bg-cat-base overflow-hidden ${hidden ? 'hidden' : ''}`}
     >
-      <div className="px-4 py-2 border-b border-cat-surface1 shrink-0">
+      <div className="px-4 py-2 border-b border-cat-surface1 flex items-center justify-between shrink-0">
         <h3 className="text-xs font-bold uppercase tracking-wider text-cat-subtext">
           Terminal
         </h3>
+        <button
+          type="button"
+          onClick={handleClear}
+          disabled={!terminalReady}
+          className="text-[10px] px-2 py-0.5 rounded border border-cat-surface1 text-cat-subtext hover:text-white hover:bg-cat-surface0 disabled:opacity-50"
+        >
+          Clear
+        </button>
       </div>
       <div ref={containerRef} className="flex-1 min-h-0 p-1" />
       <div className="p-2 border-t border-cat-surface1 flex gap-2 shrink-0">

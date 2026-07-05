@@ -73,15 +73,31 @@ class ScrumAgent:
         if not self.assigned_skills:
             return ""
 
+        from backend.services.prompt_budget import skills_context_max_chars
+        from backend.services.workflow_settings import get_workflow_settings
+
+        max_chars = skills_context_max_chars(int(get_workflow_settings().get("ollamaNumCtx", 32768)))
         skills_context = "\n=== SPECIALIZED AGENT SKILLS ===\n"
+        used = len(skills_context)
+        truncated = False
         for skill_file in self.assigned_skills:
             skill_path = os.path.join(state.SKILLS_DIR, skill_file)
             if os.path.exists(skill_path):
                 try:
                     with open(skill_path, "r", encoding="utf-8") as f:
-                        skills_context += f"\n[Skill: {skill_file}]\n{f.read()}\n"
+                        block = f"\n[Skill: {skill_file}]\n{f.read()}\n"
+                    if used + len(block) > max_chars:
+                        remaining = max_chars - used
+                        if remaining > 100:
+                            skills_context += block[: remaining - 30] + "\n...[skill truncated]\n"
+                        truncated = True
+                        break
+                    skills_context += block
+                    used += len(block)
                 except Exception:
                     pass
+        if truncated:
+            skills_context += "\n[Additional skills omitted — context budget exceeded]\n"
         return skills_context
 
     def _build_system_content(self) -> str:
@@ -98,7 +114,24 @@ class ScrumAgent:
         return "\n\n".join(parts)
 
     def _chat_options(self) -> Dict[str, Any]:
-        return {"temperature": 0.1}
+        ws = get_workflow_settings()
+        return {
+            "temperature": 0.1,
+            "num_ctx": int(ws.get("ollamaNumCtx", 32768)),
+        }
+
+    @staticmethod
+    def _is_context_overflow_error(error: str) -> bool:
+        lower = error.lower()
+        return "exceed_context" in lower or "context size" in lower
+
+    def _context_overflow_message(self) -> str:
+        ws = get_workflow_settings()
+        num_ctx = int(ws.get("ollamaNumCtx", 32768))
+        return (
+            f"Request exceeded Ollama context (num_ctx={num_ctx}). "
+            "Increase Ollama context size in Workflow settings, or shorten the project brief / remove assigned skills."
+        )
 
     def _chat(
         self,
@@ -172,6 +205,10 @@ class ScrumAgent:
                     duration_ms=duration_ms,
                     error=last_error,
                 )
+                if self._is_context_overflow_error(last_error):
+                    overflow_msg = self._context_overflow_message()
+                    add_system_log(self.role, "error", overflow_msg)
+                    return None
                 continue
 
         return None
@@ -279,6 +316,9 @@ class ScrumAgent:
         return None
 
     def execute_step(self, user_prompt: str, max_iterations: int = 8) -> str:
+        from backend.agents.registry import configure_agent_tools
+
+        configure_agent_tools()
         tools = self.registry.get_ollama_tools()
         messages: List[ChatMessage] = [
             {"role": "system", "content": self._build_system_content()},

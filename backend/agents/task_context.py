@@ -580,8 +580,19 @@ def build_dod_block() -> str:
 
 def build_task_prompt(task: Dict[str, Any], brief: str) -> str:
     """Builds a structured prompt for sprint agents."""
+    from backend.services.prompt_budget import truncate_brief, workspace_file_list_cap
+    from backend.services.workflow_settings import get_workflow_settings
+
+    num_ctx = int(get_workflow_settings().get("ollamaNumCtx", 32768))
+    brief = truncate_brief(brief, num_ctx)
+
     normalize_task(task)
-    file_list = ", ".join(state.VIRTUAL_FILESYSTEM.keys()) or "(empty workspace)"
+    paths = sorted(state.VIRTUAL_FILESYSTEM.keys())
+    cap = workspace_file_list_cap(num_ctx)
+    if len(paths) > cap:
+        file_list = ", ".join(paths[:cap]) + f", … (+{len(paths) - cap} more)"
+    else:
+        file_list = ", ".join(paths) or "(empty workspace)"
     task_files = task["files"]
     task_file_lines = []
     for f in task_files:

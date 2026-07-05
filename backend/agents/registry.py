@@ -396,47 +396,69 @@ tool_run_command = Tool(
     func=lambda command: run_agent_command(command),
 )
 
-agent_po.register_tool(tool_read)
-agent_po.register_tool(tool_board)
-agent_po.register_tool(tool_add_backlog_tasks)
-agent_po.register_tool(tool_grep)
-agent_po.register_tool(tool_glob)
-agent_po.register_tool(tool_semantic)
-agent_po.register_tool(tool_search)
-agent_po.register_tool(tool_web_search)
+def configure_agent_tools(ws: dict | None = None) -> None:
+    """Register agent tools based on workflow settings (reduces schema bloat)."""
+    from backend.services.workflow_settings import get_workflow_settings
 
-agent_dev.register_tool(tool_read)
-agent_dev.register_tool(tool_write)
-agent_dev.register_tool(tool_apply_patch)
-agent_dev.register_tool(tool_delete)
-agent_dev.register_tool(tool_board)
-agent_dev.register_tool(tool_run_command)
-agent_dev.register_tool(tool_grep)
-agent_dev.register_tool(tool_glob)
-agent_dev.register_tool(tool_semantic)
-agent_dev.register_tool(tool_search)
-agent_dev.register_tool(tool_web_search)
-agent_dev.register_tool(tool_git_status)
-agent_dev.register_tool(tool_git_diff)
-agent_dev.register_tool(tool_git_commit)
+    settings = ws or get_workflow_settings()
+    enable_web = bool(settings.get("enableWebSearch"))
+    enable_semantic = bool(settings.get("enableSemanticSearch", True))
 
-agent_cr.register_tool(tool_read)
-agent_cr.register_tool(tool_apply_patch)
-agent_cr.register_tool(tool_board)
-agent_cr.register_tool(tool_grep)
-agent_cr.register_tool(tool_glob)
-agent_cr.register_tool(tool_semantic)
-agent_cr.register_tool(tool_search)
+    for agent in (agent_po, agent_dev, agent_cr, agent_qa):
+        agent.registry.clear()
 
-agent_qa.register_tool(tool_read)
-agent_qa.register_tool(tool_test)
-agent_qa.register_tool(tool_run_command)
-agent_qa.register_tool(tool_grep)
-agent_qa.register_tool(tool_glob)
-agent_qa.register_tool(tool_semantic)
-agent_qa.register_tool(tool_search)
-agent_qa.register_tool(tool_web_search)
-agent_qa.register_tool(tool_board)
+    agent_po.registry.register(tool_read)
+    agent_po.registry.register(tool_board)
+    agent_po.registry.register(tool_add_backlog_tasks)
+    agent_po.registry.register(tool_grep)
+    agent_po.registry.register(tool_glob)
+    if enable_semantic:
+        agent_po.registry.register(tool_semantic)
+    if enable_web:
+        agent_po.registry.register(tool_web_search)
+
+    agent_dev.registry.register(tool_read)
+    agent_dev.registry.register(tool_write)
+    agent_dev.registry.register(tool_apply_patch)
+    agent_dev.registry.register(tool_delete)
+    agent_dev.registry.register(tool_board)
+    agent_dev.registry.register(tool_run_command)
+    agent_dev.registry.register(tool_grep)
+    agent_dev.registry.register(tool_glob)
+    agent_dev.registry.register(tool_search)
+    agent_dev.registry.register(tool_git_status)
+    agent_dev.registry.register(tool_git_diff)
+    agent_dev.registry.register(tool_git_commit)
+    if enable_semantic:
+        agent_dev.registry.register(tool_semantic)
+    if enable_web:
+        agent_dev.registry.register(tool_web_search)
+
+    agent_cr.registry.register(tool_read)
+    agent_cr.registry.register(tool_apply_patch)
+    agent_cr.registry.register(tool_board)
+    agent_cr.registry.register(tool_grep)
+    agent_cr.registry.register(tool_glob)
+    agent_cr.registry.register(tool_search)
+    if enable_semantic:
+        agent_cr.registry.register(tool_semantic)
+    if enable_web:
+        agent_cr.registry.register(tool_web_search)
+
+    agent_qa.registry.register(tool_read)
+    agent_qa.registry.register(tool_test)
+    agent_qa.registry.register(tool_run_command)
+    agent_qa.registry.register(tool_grep)
+    agent_qa.registry.register(tool_glob)
+    agent_qa.registry.register(tool_search)
+    agent_qa.registry.register(tool_board)
+    if enable_semantic:
+        agent_qa.registry.register(tool_semantic)
+    if enable_web:
+        agent_qa.registry.register(tool_web_search)
+
+
+configure_agent_tools()
 
 AGENT_MAP = {
     "po": agent_po,

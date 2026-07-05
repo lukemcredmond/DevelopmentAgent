@@ -109,6 +109,7 @@ interface TaskDetailModalProps {
   onDiagnose?: (taskId: string) => void | Promise<void>
   onRetryStep?: (taskId: string, mode: 'same' | 'optimized') => void | Promise<void>
   onViewFileDiff?: (path: string) => void | Promise<void>
+  onOpenModelTab?: () => void
 }
 
 function CollapsibleSection({
@@ -203,6 +204,7 @@ export default function TaskDetailModal({
   onDiagnose,
   onRetryStep,
   onViewFileDiff,
+  onOpenModelTab,
 }: TaskDetailModalProps) {
   const [title, setTitle] = useState('')
   const [description, setDescription] = useState('')
@@ -351,11 +353,20 @@ export default function TaskDetailModal({
               </p>
               <p className="text-[11px] text-emerald-200/90 mb-2">{diagnosis.recommendedAction}</p>
               {diagnosis.evidence?.length > 0 && (
-                <ul className="text-[10px] text-cat-overlay list-disc pl-4 space-y-0.5">
+                <ul className="text-[10px] text-cat-overlay list-disc pl-4 space-y-0.5 mb-2">
                   {diagnosis.evidence.map((ev, i) => (
                     <li key={i}>{ev}</li>
                   ))}
                 </ul>
+              )}
+              {onOpenModelTab && (
+                <button
+                  type="button"
+                  onClick={onOpenModelTab}
+                  className="text-[10px] text-indigo-400 hover:text-indigo-300"
+                >
+                  View diagnosis prompt in Model tab →
+                </button>
               )}
             </CollapsibleSection>
           )}

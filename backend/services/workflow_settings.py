@@ -26,6 +26,7 @@ DEFAULT_WORKFLOW_SETTINGS: Dict[str, Any] = {
     "enableSemanticSearch": True,
     "qdrantUrl": "http://localhost:6333",
     "embedModel": "nomic-embed-text",
+    "ollamaNumCtx": 32768,
 }
 
 DEFAULT_SPRINT_SUMMARY: Dict[str, Any] = {

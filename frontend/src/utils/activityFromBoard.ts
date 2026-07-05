@@ -68,4 +68,16 @@ export function mergeActivityEvents(
   return merged.slice(-MAX_ACTIVITY)
 }
 
+export function filterActivityAfterClear(
+  events: ActivityEvent[],
+  clearedAt: string | null,
+): ActivityEvent[] {
+  if (!clearedAt) return events
+  return events.filter((e) => e.timestamp > clearedAt)
+}
+
+export function activityTimestampNow(): string {
+  return new Date().toISOString().slice(0, 19).replace('T', ' ')
+}
+
 export { MAX_ACTIVITY }

@@ -5,6 +5,7 @@ import {
   assignSkills,
   ApiError,
   checkOllamaHealth,
+  clearChatHistory,
   clearTaskTranscript,
   createProject,
   deleteProject,
@@ -145,6 +146,7 @@ export default function App() {
     refreshToolHistory,
     clearLogs,
     clearActivity,
+    activityWasCleared,
     sseLive,
   } = useAppState()
 
@@ -365,6 +367,11 @@ export default function App() {
       window.clearInterval(interval)
     }
   }, [ollamaUrl])
+
+  const handleClearChat = useCallback(async () => {
+    await clearChatHistory()
+    setChatMessages([])
+  }, [])
 
   const withLoading = async (fn: () => Promise<void>) => {
     setLoading(true)
@@ -842,6 +849,7 @@ export default function App() {
                     <ActivityPanel
                       events={activityEvents}
                       onClear={clearActivity}
+                      wasCleared={activityWasCleared}
                       onTaskClick={(taskId) => {
                         const task = findTaskOnBoard(state.board, taskId)
                         if (task) setSelectedTask(task)
@@ -887,6 +895,7 @@ export default function App() {
                   onRefreshState={() => void refresh()}
                   onSplitTask={(taskId) => void handleSplitTask(taskId)}
                   toolEvents={toolEvents}
+                  onClearChat={handleClearChat}
                 />
                 <TerminalPanel
                   hidden={bottomTab !== 'terminal'}
@@ -978,10 +987,16 @@ export default function App() {
           void withLoading(async () => {
             const data = await diagnoseTask(taskId, ollamaUrl)
             if (data.state) handleState(data.state)
-            const updated = Object.values(data.state?.board ?? state.board)
+            const updated = Object.values(data.state?.board ?? {})
               .flat()
               .find((t) => t.id === taskId)
-            if (updated) setSelectedTask(updated)
+            if (updated) {
+              setSelectedTask(updated)
+            } else if (data.diagnosis) {
+              setSelectedTask((prev) =>
+                prev?.id === taskId ? { ...prev, lastDiagnosis: data.diagnosis } : prev,
+              )
+            }
           })
         }
         onRetryStep={(taskId, mode) =>
@@ -997,8 +1012,13 @@ export default function App() {
                     : 'dev'
             const data = await retryAgentStep({ taskId, agentId, mode, ollamaUrl })
             if (data.state) handleState(data.state)
+            const updated = Object.values(data.state?.board ?? {})
+              .flat()
+              .find((t) => t.id === taskId)
+            if (updated) setSelectedTask(updated)
           })
         }
+        onOpenModelTab={() => setBottomTab('model')}
         onViewFileDiff={(path) =>
           void fetchFileDiff(path).then((d) =>
             setFileDiffModal({

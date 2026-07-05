@@ -97,6 +97,7 @@ class WorkflowSettingsPayload(BaseModel):
     enableSemanticSearch: Optional[bool] = None
     qdrantUrl: Optional[str] = None
     embedModel: Optional[str] = None
+    ollamaNumCtx: Optional[int] = None
 
 
 class DiagnoseTaskPayload(BaseModel):

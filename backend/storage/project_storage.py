@@ -348,6 +348,13 @@ class ProjectStorage:
             )
             return [dict(r) for r in cursor.fetchall()]
 
+    def clear_chat_messages(self, project_id: str) -> int:
+        with sqlite3.connect(self.db_path) as conn:
+            cursor = conn.cursor()
+            cursor.execute("DELETE FROM chat_messages WHERE project_id = ?", (project_id,))
+            conn.commit()
+            return cursor.rowcount
+
     def save_file_revision(
         self,
         project_id: str,

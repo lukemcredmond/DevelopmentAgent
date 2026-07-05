@@ -397,8 +397,15 @@ def _inject_sprint_context(
     instructions: str,
 ) -> str:
     """Build sprint prompt with pre-loaded file contents (no Tools log row per step)."""
+    from backend.services.prompt_budget import sprint_file_context_max_chars
+    from backend.services.workflow_settings import get_workflow_settings
+
     task_id = active_task["id"]
-    context_block, paths = build_sprint_file_context(active_task)
+    num_ctx = int(get_workflow_settings().get("ollamaNumCtx", 32768))
+    context_block, paths = build_sprint_file_context(
+        active_task,
+        max_chars=sprint_file_context_max_chars(num_ctx),
+    )
     if paths:
         add_system_log(
             agent_role,
