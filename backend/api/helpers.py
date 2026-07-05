@@ -1,6 +1,8 @@
 from backend import state
+from backend.agents.agent_run import get_active_run
 from backend.agents.registry import agent_cr, agent_dev, agent_po, agent_qa
 from backend.services.skills import scan_skills_directory
+from backend.services.tool_approval import list_pending_approvals
 from backend.services.workflow_settings import (
     build_workflow_notifications,
     get_active_lanes,
@@ -43,4 +45,6 @@ def build_state_response() -> dict:
         "lastSprintSummary": get_last_sprint_summary(),
         "notifications": build_workflow_notifications(),
         "chatMessages": state.storage.get_chat_messages(state.CURRENT_PROJECT_ID, limit=100),
+        "activeAgentRun": get_active_run().to_dict() if get_active_run() else None,
+        "pendingToolApprovals": list_pending_approvals(),
     }

@@ -295,6 +295,43 @@ def _dev_complete_lane() -> str:
     return "Code Review" if get_workflow_settings().get("requireCodeReview") else "QA"
 
 
+def _log_sprint_step_outcome(
+    agent: str,
+    task_id: str,
+    title: str,
+    lane_before: str,
+    result: str,
+) -> None:
+    lane_after = get_task_lane(task_id) or lane_before
+    snippet = result[:120].replace("\n", " ")
+    log_type = "info"
+    if result == "SIMULATION_FALLBACK":
+        log_type = "warning"
+    elif result.startswith("Max tool iterations") or result.startswith("Stopped:"):
+        log_type = "warning"
+    add_system_log(
+        agent,
+        log_type,
+        f"'{title}' ({task_id}): {lane_before} → {lane_after} — {snippet}",
+    )
+
+
+def _audit_dev_files_written(task: Dict[str, Any], lane_before: str, task_id: str) -> None:
+    lane_after = get_task_lane(task_id) or lane_before
+    if lane_before != "In Progress" or lane_after == lane_before:
+        return
+    if lane_after in ("Needs PO", "Needs User"):
+        return
+    files = task.get("files") or []
+    if not files:
+        add_system_log(
+            "Developer",
+            "warning",
+            f"Developer advanced '{task.get('title', task_id)}' with no files recorded — "
+            "check transcript for tool failures",
+        )
+
+
 def _llm_iterations() -> int:
     return int(get_workflow_settings().get("maxLlmIterationsPerStep", 8))
 
@@ -480,8 +517,9 @@ def _run_developer_step(active_task: Dict[str, Any], brief: str) -> None:
     target = _dev_complete_lane()
     prompt = (
         build_task_prompt(active_task, brief)
-        + "\nRegistered tools: read_file, write_file, run_command, update_board, git_status, git_diff, git_commit. "
-        "Implement using write_file and read_file. "
+        + "\nRegistered tools: read_file, write_file, apply_patch, run_command, update_board, git_status, git_diff, git_commit. "
+        "Use apply_patch for edits to existing files; write_file for new files. "
+        "Implement using read_file, apply_patch, and write_file. "
         "For Flutter/Dart use run_command with command 'flutter analyze'. "
         "Unclear requirements → move to 'Needs PO'. "
         "User-only decisions (keys, design) → move to 'Needs User' and state userQuestion. "
@@ -516,6 +554,8 @@ def _run_developer_step(active_task: Dict[str, Any], brief: str) -> None:
                 else:
                     clear_qa_failure(task_id)
                     move_board_stage(task_id, target)
+        _log_sprint_step_outcome("Developer", task_id, task.get("title", task_id), lane_before, result)
+        _audit_dev_files_written(task, lane_before, task_id)
         _check_stuck_and_escalate(task_id, lane_before)
 
 
@@ -541,6 +581,11 @@ def _run_code_review_step(active_task: Dict[str, Any], brief: str) -> None:
             record_task_decision(task_id, "Code Reviewer", "review", result[:500], result)
             if _task_in_lane(task_id, "Code Review"):
                 move_board_stage(task_id, "QA")
+        task = find_task_by_id(task_id)
+        if task:
+            _log_sprint_step_outcome(
+                "Code Reviewer", task_id, task.get("title", task_id), lane_before, result
+            )
         _check_stuck_and_escalate(task_id, lane_before)
 
 
@@ -577,6 +622,7 @@ def _run_qa_step(active_task: Dict[str, Any], brief: str) -> None:
                 else:
                     move_board_stage(task_id, "Done")
                     _commit_on_done(task)
+        _log_sprint_step_outcome("QA Tester", task_id, task.get("title", task_id), lane_before, result)
         _check_stuck_and_escalate(task_id, lane_before)
 
 

@@ -18,6 +18,7 @@ import {
   removeSkill,
   reorderTasks,
   resetWorkspace,
+  resolveToolApproval,
   resolveUserQuestion,
   triggerPlan,
   triggerStep,
@@ -41,9 +42,11 @@ import SkillModal from './components/SkillModal'
 import TaskDetailModal from './components/TaskDetailModal'
 import TerminalPanel from './components/TerminalPanel'
 import ToolResolutionModal from './components/ToolResolutionModal'
+import ToolApprovalModal from './components/ToolApprovalModal'
+import AgentRunBar from './components/AgentRunBar'
 import { useAppState, useAutoSprint } from './hooks/useAppState'
 import { useTheme } from './hooks/useTheme'
-import type { AgentId, AppState, BoardLane, ChatMessageRecord, PendingToolRequest, Task, WorkflowSettings } from './types'
+import type { AgentId, AppState, BoardLane, ChatMessageRecord, PendingToolApproval, PendingToolRequest, Task, WorkflowSettings } from './types'
 import { getDisplayLanes } from './types'
 import { findTaskOnBoard } from './utils/taskFormat'
 
@@ -83,7 +86,7 @@ function applyStateFields(
 
 export default function App() {
   const { theme, toggleTheme, isDark } = useTheme()
-  const { state, loading, setLoading, applyState, activityEvents, pendingTools, refreshPendingTools } =
+  const { state, loading, setLoading, applyState, activityEvents, pendingTools, refreshPendingTools, pendingApprovals, refreshPendingApprovals, activeRun, currentTool } =
     useAppState()
 
   const [ollamaUrl, setOllamaUrl] = useState('http://localhost:11434')
@@ -126,6 +129,7 @@ export default function App() {
   const [ollamaOk, setOllamaOk] = useState<boolean | null>(null)
   const [actionError, setActionError] = useState<string | null>(null)
   const [pendingToolModal, setPendingToolModal] = useState<PendingToolRequest | null>(null)
+  const [approvalModal, setApprovalModal] = useState<PendingToolApproval | null>(null)
 
   const findTaskLane = (taskId: string): BoardLane | null => {
     const lanes = getDisplayLanes(state.activeLanes, state.workflowSettings)
@@ -228,6 +232,12 @@ export default function App() {
       setPendingToolModal(pendingTools[0] ?? null)
     }
   }, [pendingTools, pendingToolModal])
+
+  useEffect(() => {
+    if (pendingApprovals.length > 0 && !approvalModal) {
+      setApprovalModal(pendingApprovals[0] ?? null)
+    }
+  }, [pendingApprovals, approvalModal])
 
   const handleMoveTask = async (taskId: string, fromLane: BoardLane, toLane: BoardLane) => {
     if (sprintRunning) {
@@ -426,6 +436,7 @@ export default function App() {
             </div>
 
             <div className="h-[40%] min-h-[180px] flex flex-col border-t border-cat-surface1">
+              <AgentRunBar activeRun={activeRun} currentTool={currentTool} />
               <div className="flex bg-cat-mantle border-b border-cat-surface1 shrink-0">
                 {bottomTabs.map((tab) => (
                   <button
@@ -655,6 +666,15 @@ export default function App() {
         pending={pendingToolModal}
         onClose={() => setPendingToolModal(null)}
         onResolved={() => void refreshPendingTools()}
+      />
+
+      <ToolApprovalModal
+        pending={approvalModal}
+        onClose={() => setApprovalModal(null)}
+        onResolved={() => void refreshPendingApprovals()}
+        onApprove={async (id, approved) => {
+          await resolveToolApproval(id, approved)
+        }}
       />
     </div>
   )

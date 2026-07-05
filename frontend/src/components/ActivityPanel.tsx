@@ -21,9 +21,16 @@ export default function ActivityPanel({ events, onTaskClick }: ActivityPanelProp
     }
     if (filter === 'transcript') {
       return events.filter((e) =>
-        ['transcript', 'decision_detail', 'tool', 'pending_tool', 'tool_alias_saved'].includes(
-          e.kind,
-        ),
+        [
+          'transcript',
+          'decision_detail',
+          'tool',
+          'tool_failed',
+          'tool_start',
+          'tool_end',
+          'pending_tool',
+          'tool_alias_saved',
+        ].includes(e.kind),
       )
     }
     return events
@@ -78,7 +85,11 @@ export default function ActivityPanel({ events, onTaskClick }: ActivityPanelProp
               key={`${event.timestamp}-${event.taskId}-${idx}`}
               type="button"
               onClick={() => toggleExpand(idx)}
-              className="w-full text-left p-2 rounded border border-cat-surface1/40 bg-cat-surface0/30 hover:border-indigo-500/30 transition-colors"
+              className={`w-full text-left p-2 rounded border transition-colors ${
+                event.kind === 'tool_failed'
+                  ? 'border-rose-500/40 bg-rose-950/20 hover:border-rose-500/60'
+                  : 'border-cat-surface1/40 bg-cat-surface0/30 hover:border-indigo-500/30'
+              }`}
             >
               <div className="flex items-center justify-between opacity-75 mb-1 text-[10px] gap-2">
                 <span className="font-bold text-indigo-300 truncate">

@@ -43,6 +43,9 @@ def load_project_into_state(project_id: str) -> bool:
     from backend.services.tool_aliases import load_pending_tools_for_project
 
     load_pending_tools_for_project(state.CURRENT_PROJECT_ID)
+    from backend.services.mcp_tools import register_mcp_tools_from_settings
+
+    register_mcp_tools_from_settings()
     return True
 
 

@@ -3,6 +3,7 @@ from backend.agents.tools import Tool
 from backend.services.board_service import move_board_stage
 from backend.services.git_service import git_commit, git_diff, git_init, git_status
 from backend.workspace.files import (
+    apply_workspace_patch,
     read_workspace_file,
     run_agent_command,
     run_tests_on_workspace,
@@ -24,7 +25,8 @@ agent_dev = ScrumAgent(
     role="Developer",
     model="qwen2.5-coder:14b",
     system_prompt=(
-        "You implement features from the backlog. Write code with write_file. "
+        "You implement features from the backlog. Use apply_patch for edits to existing files "
+        "and write_file for new files. "
         "If requirements are unclear, escalate to the Product Owner by moving the task to 'Needs PO'. "
         "When implementation is complete, move the task to 'QA' for validation."
     ),
@@ -60,6 +62,24 @@ tool_write = Tool(
         "required": ["path", "content"],
     },
     func=write_workspace_file,
+)
+
+tool_apply_patch = Tool(
+    name="apply_patch",
+    description=(
+        "Replace a unique old_text snippet with new_text in an existing workspace file. "
+        "Prefer for small edits; use write_file for new files or full rewrites."
+    ),
+    parameters={
+        "type": "object",
+        "properties": {
+            "path": {"type": "string"},
+            "old_text": {"type": "string"},
+            "new_text": {"type": "string"},
+        },
+        "required": ["path", "old_text", "new_text"],
+    },
+    func=apply_workspace_patch,
 )
 
 tool_read = Tool(
@@ -160,6 +180,7 @@ agent_po.register_tool(tool_board)
 
 agent_dev.register_tool(tool_read)
 agent_dev.register_tool(tool_write)
+agent_dev.register_tool(tool_apply_patch)
 agent_dev.register_tool(tool_board)
 agent_dev.register_tool(tool_run_command)
 agent_dev.register_tool(tool_git_status)
@@ -167,6 +188,7 @@ agent_dev.register_tool(tool_git_diff)
 agent_dev.register_tool(tool_git_commit)
 
 agent_cr.register_tool(tool_read)
+agent_cr.register_tool(tool_apply_patch)
 agent_cr.register_tool(tool_board)
 agent_cr.register_tool(tool_git_diff)
 

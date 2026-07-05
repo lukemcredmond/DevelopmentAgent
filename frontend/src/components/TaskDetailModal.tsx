@@ -346,12 +346,39 @@ export default function TaskDetailModal({
                 visibleTranscript.map((entry, i) => (
                   <div
                     key={i}
-                    className="text-[10px] font-mono text-cat-subtext bg-cat-base border border-cat-surface1 rounded p-2"
+                    className={`text-[10px] font-mono text-cat-subtext bg-cat-base border rounded p-2 ${
+                      entry.role === 'tool' && entry.toolSuccess === false
+                        ? 'border-rose-500/50'
+                        : entry.role === 'tool' && entry.toolSuccess === true
+                          ? 'border-emerald-500/40'
+                          : 'border-cat-surface1'
+                    }`}
                   >
-                    <div className="text-cat-overlay mb-0.5">
-                      [{entry.timestamp}] {entry.agent ?? entry.role}
+                    <div className="text-cat-overlay mb-0.5 flex items-center gap-2 flex-wrap">
+                      <span>
+                        [{entry.timestamp}] {entry.agent ?? entry.role}
+                      </span>
+                      {entry.role === 'tool' && entry.toolSuccess != null && (
+                        <span
+                          className={
+                            entry.toolSuccess
+                              ? 'text-emerald-400 font-bold'
+                              : 'text-rose-400 font-bold'
+                          }
+                        >
+                          {entry.toolSuccess ? 'OK' : 'FAILED'}
+                        </span>
+                      )}
+                      {entry.toolName && (
+                        <span className="text-indigo-300">{entry.toolName}</span>
+                      )}
                     </div>
                     <p className="whitespace-pre-wrap max-h-24 overflow-y-auto">{entry.content}</p>
+                    {entry.toolArgs && Object.keys(entry.toolArgs).length > 0 && (
+                      <pre className="mt-1 text-[9px] text-cat-overlay overflow-x-auto">
+                        {JSON.stringify(entry.toolArgs, null, 2)}
+                      </pre>
+                    )}
                   </div>
                 ))
               )}

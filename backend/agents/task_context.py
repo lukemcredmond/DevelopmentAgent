@@ -309,24 +309,28 @@ def record_task_transcript(
     role: str,
     content: str,
     agent: Optional[str] = None,
+    **metadata: Any,
 ) -> None:
     task = find_task_by_id(task_id)
     if not task:
         return
     normalize_task(task)
-    task["transcript"].append(
-        {
-            "timestamp": datetime.datetime.now().strftime("%Y-%m-%d %H:%M:%S"),
-            "role": role,
-            "agent": agent or role,
-            "content": content[:4000],
-        }
-    )
+    entry: Dict[str, Any] = {
+        "timestamp": datetime.datetime.now().strftime("%Y-%m-%d %H:%M:%S"),
+        "role": role,
+        "agent": agent or role,
+        "content": content[:4000],
+    }
+    for key in ("toolName", "toolSuccess", "toolArgs", "toolOutput"):
+        if key in metadata and metadata[key] is not None:
+            entry[key] = metadata[key]
+    task["transcript"].append(entry)
     if len(task["transcript"]) > MAX_TASK_TRANSCRIPT:
         task["transcript"] = task["transcript"][-MAX_TASK_TRANSCRIPT:]
+    activity_kind = "tool_failed" if metadata.get("toolSuccess") is False else "transcript"
     publish_activity(
         task_id,
-        "transcript",
+        activity_kind,
         content,
         role=role,
         agent=agent or role,

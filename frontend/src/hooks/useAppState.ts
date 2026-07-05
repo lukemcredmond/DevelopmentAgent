@@ -1,9 +1,22 @@
 import { useCallback, useEffect, useRef, useState } from 'react'
-import { cancelSprint, fetchPendingTools, fetchState, runSprint, subscribeEvents } from '../api/client'
-import type { ActivityEvent, AppState, Board, SystemLog } from '../types'
+import {
+  cancelSprint,
+  fetchPendingApprovals,
+  fetchPendingTools,
+  fetchState,
+  runSprint,
+  subscribeEvents,
+} from '../api/client'
+import type {
+  ActivityEvent,
+  AgentRunState,
+  AppState,
+  Board,
+  PendingToolApproval,
+  SystemLog,
+} from '../types'
 import { EMPTY_BOARD, hasSprintWork } from '../types'
 import { hydrateActivityFromBoard, mergeActivityEvents } from '../utils/activityFromBoard'
-import type { PendingToolRequest } from '../types'
 
 const defaultState: AppState = {
   projectId: '',
@@ -32,12 +45,27 @@ function patchBoardFromEvent(data: unknown, prev: AppState): AppState | null {
   return { ...prev, board: payload.board }
 }
 
+function mapAgentRun(raw: Record<string, unknown>): AgentRunState {
+  return {
+    runId: String(raw.run_id ?? raw.runId ?? ''),
+    taskId: String(raw.task_id ?? raw.taskId ?? ''),
+    agent: String(raw.agent ?? ''),
+    status: (raw.status as AgentRunState['status']) ?? 'thinking',
+    currentTool: (raw.current_tool ?? raw.currentTool) as string | null | undefined,
+    startedAt: String(raw.started_at ?? raw.startedAt ?? ''),
+    error: (raw.error as string | null | undefined) ?? null,
+  }
+}
+
 export function useAppState() {
   const [state, setState] = useState<AppState>(defaultState)
   const [loading, setLoading] = useState(false)
   const [error, setError] = useState<string | null>(null)
   const [activityEvents, setActivityEvents] = useState<ActivityEvent[]>([])
-  const [pendingTools, setPendingTools] = useState<PendingToolRequest[]>([])
+  const [pendingTools, setPendingTools] = useState<import('../types').PendingToolRequest[]>([])
+  const [pendingApprovals, setPendingApprovals] = useState<PendingToolApproval[]>([])
+  const [activeRun, setActiveRun] = useState<AgentRunState | null>(null)
+  const [currentTool, setCurrentTool] = useState<string | null>(null)
   const liveActivityRef = useRef<ActivityEvent[]>([])
   const boardRef = useRef<Board>(defaultState.board)
 
@@ -59,26 +87,41 @@ export function useAppState() {
     }
   }, [])
 
+  const refreshPendingApprovals = useCallback(async () => {
+    try {
+      const data = await fetchPendingApprovals()
+      setPendingApprovals(data.pending ?? [])
+    } catch {
+      setPendingApprovals([])
+    }
+  }, [])
+
   const refresh = useCallback(async () => {
     try {
       const data = await fetchState()
       setState(data)
       syncActivityFromBoard(data.board)
+      setActiveRun(data.activeAgentRun ? mapAgentRun(data.activeAgentRun as unknown as Record<string, unknown>) : null)
+      setPendingApprovals(data.pendingToolApprovals ?? [])
       setError(null)
       void refreshPendingTools()
+      void refreshPendingApprovals()
     } catch (e) {
       setError(e instanceof Error ? e.message : 'Failed to fetch state')
     }
-  }, [syncActivityFromBoard, refreshPendingTools])
+  }, [syncActivityFromBoard, refreshPendingTools, refreshPendingApprovals])
 
   const applyState = useCallback(
     (data: AppState) => {
       setState(data)
       syncActivityFromBoard(data.board)
+      setActiveRun(data.activeAgentRun ? mapAgentRun(data.activeAgentRun as unknown as Record<string, unknown>) : null)
+      setPendingApprovals(data.pendingToolApprovals ?? [])
       setError(null)
       void refreshPendingTools()
+      void refreshPendingApprovals()
     },
-    [syncActivityFromBoard, refreshPendingTools],
+    [syncActivityFromBoard, refreshPendingTools, refreshPendingApprovals],
   )
 
   const appendLog = useCallback((log: SystemLog) => {
@@ -118,15 +161,50 @@ export function useAppState() {
         void refresh()
       } else if (event.type === 'sprint') {
         void refresh()
+        setActiveRun(null)
+        setCurrentTool(null)
       } else if (event.type === 'activity' && event.data) {
         appendActivity(event.data as ActivityEvent)
       } else if (event.type === 'pending_tool' && event.data) {
         void refreshPendingTools()
+      } else if (event.type === 'agent_run' && event.data) {
+        const run = mapAgentRun(event.data as Record<string, unknown>)
+        if (run.status === 'completed' || run.status === 'failed' || run.status === 'idle') {
+          setActiveRun(null)
+          setCurrentTool(null)
+        } else {
+          setActiveRun(run)
+          setCurrentTool(run.currentTool ?? null)
+        }
+      } else if (event.type === 'tool_start' && event.data) {
+        const payload = event.data as { toolName?: string; agent?: string; taskId?: string }
+        setCurrentTool(payload.toolName ?? null)
+        setActiveRun((prev) =>
+          prev ?? {
+            runId: '',
+            taskId: String(payload.taskId ?? ''),
+            agent: String(payload.agent ?? ''),
+            status: 'tool_executing',
+            currentTool: payload.toolName ?? null,
+            startedAt: new Date().toISOString(),
+          },
+        )
+      } else if (event.type === 'tool_end') {
+        setCurrentTool(null)
+      } else if (event.type === 'tool_approval_required' && event.data) {
+        void refreshPendingApprovals()
       }
     })
 
     return () => source.close()
-  }, [refresh, appendLog, appendActivity, syncActivityFromBoard, refreshPendingTools])
+  }, [
+    refresh,
+    appendLog,
+    appendActivity,
+    syncActivityFromBoard,
+    refreshPendingTools,
+    refreshPendingApprovals,
+  ])
 
   return {
     state,
@@ -142,6 +220,10 @@ export function useAppState() {
     appendActivity,
     pendingTools,
     refreshPendingTools,
+    pendingApprovals,
+    refreshPendingApprovals,
+    activeRun,
+    currentTool,
   }
 }
 

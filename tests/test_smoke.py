@@ -409,3 +409,151 @@ def test_move_board_stage_removes_all_duplicate_copies():
     assert dup_id in [t["id"] for t in state.SHARED_BOARD.get("In Progress", [])]
     assert dup_id not in [t["id"] for t in state.SHARED_BOARD.get("Backlog", [])]
     assert dup_id not in [t["id"] for t in state.SHARED_BOARD.get("QA", [])]
+
+
+def test_is_tool_failure_detects_common_errors():
+    from backend.agents.tool_outcomes import is_tool_failure
+
+    assert is_tool_failure("write_file", "Error: Path escapes workspace: ../etc/passwd")
+    assert is_tool_failure("write_file", "Error: physical write failed for 'x': denied")
+    assert is_tool_failure("run_command", "[failed exit 1]\nstderr")
+    assert is_tool_failure("run_test", "❌ QA Validation Failure: bad")
+    assert not is_tool_failure("write_file", "Successfully saved file physically at: '/tmp/x'")
+
+
+def test_write_workspace_file_invalid_path_error_prefix():
+    from backend.workspace.files import write_workspace_file
+
+    initialize()
+    result = write_workspace_file("../outside.dart", "content")
+    assert result.startswith("Error:")
+
+
+def test_record_tool_usage_failure_metadata():
+    from backend import state
+    from backend.agents.registry import agent_dev
+    from backend.agents.task_context import init_new_task
+
+    initialize()
+    task = init_new_task({"id": "T-TOOL-FAIL", "title": "Tool fail", "description": "d"})
+    state.SHARED_BOARD.setdefault("In Progress", []).append(task)
+    state.ACTIVE_SPRINT_TASK_ID = "T-TOOL-FAIL"
+    before_logs = len(state.SYSTEM_LOGS)
+
+    agent_dev._record_tool_usage(
+        "T-TOOL-FAIL",
+        "write_file",
+        {"path": "lib/missing.dart", "content": ""},
+        "Error: physical write failed for 'lib/missing.dart': denied",
+        "implement",
+        success=False,
+    )
+
+    entry = task["transcript"][-1]
+    assert entry["toolSuccess"] is False
+    assert entry["toolName"] == "write_file"
+    assert entry["toolArgs"]["path"] == "lib/missing.dart"
+    assert any("FAILED" in log["text"] for log in state.SYSTEM_LOGS[before_logs:])
+
+
+def test_audit_dev_files_written_warning():
+    from backend import state
+    from backend.agents.task_context import init_new_task
+    from backend.services.sprint_service import _audit_dev_files_written
+
+    initialize()
+    task = init_new_task({"id": "T-NO-FILES", "title": "No files", "description": "d"})
+    state.SHARED_BOARD = {
+        "In Progress": [],
+        "QA": [task],
+        "Backlog": [],
+        "Needs PO": [],
+        "Needs User": [],
+        "Done": [],
+    }
+    task["status"] = "QA"
+    before = len(state.SYSTEM_LOGS)
+    _audit_dev_files_written(task, "In Progress", "T-NO-FILES")
+    assert any(
+        "no files recorded" in log["text"].lower()
+        for log in state.SYSTEM_LOGS[before:]
+    )
+
+
+def test_tool_requires_approval_settings():
+    from backend.services.tool_approval import tool_requires_approval
+    from backend.services.workflow_settings import save_workflow_settings
+
+    initialize()
+    save_workflow_settings({"requireToolApproval": False})
+    assert tool_requires_approval("write_file") is False
+    save_workflow_settings({"requireToolApproval": True})
+    assert tool_requires_approval("write_file") is True
+    assert tool_requires_approval("apply_patch") is True
+    assert tool_requires_approval("read_file") is False
+
+
+def test_resolve_tool_approval_unblocks():
+    import threading
+    from datetime import datetime
+
+    from backend import state
+    from backend.services.tool_approval import PendingToolApproval, resolve_tool_approval
+
+    initialize()
+    approval = PendingToolApproval(
+        id="appr-test",
+        run_id="RUN1",
+        task_id="T1",
+        agent="Developer",
+        tool_name="write_file",
+        arguments={"path": "lib/a.dart", "content": "x"},
+        timestamp=datetime.now().strftime("%Y-%m-%d %H:%M:%S"),
+    )
+    state.PENDING_TOOL_APPROVALS.append(approval)
+    done = threading.Event()
+
+    def wait_for_it():
+        approval.event.wait(timeout=2)
+        done.set()
+
+    threading.Thread(target=wait_for_it, daemon=True).start()
+    assert resolve_tool_approval("appr-test", True) is True
+    assert done.wait(timeout=2)
+    assert approval.approved is True
+
+
+def test_apply_workspace_patch_replaces_unique_snippet():
+    from backend import state
+    from backend.workspace.files import apply_workspace_patch, write_workspace_file
+
+    initialize()
+    write_workspace_file("patch_test.txt", "hello world")
+    result = apply_workspace_patch("patch_test.txt", "world", "there")
+    assert "Successfully saved" in result
+    assert state.VIRTUAL_FILESYSTEM["patch_test.txt"] == "hello there"
+
+
+def test_apply_workspace_patch_fails_when_old_text_missing():
+    from backend.workspace.files import apply_workspace_patch, write_workspace_file
+
+    initialize()
+    write_workspace_file("patch_miss.txt", "alpha beta")
+    result = apply_workspace_patch("patch_miss.txt", "gamma", "delta")
+    assert result.startswith("Error:")
+
+
+def test_agent_run_lifecycle():
+    from backend import state
+    from backend.agents.agent_run import finish_run, get_active_run, start_run, update_run
+
+    initialize()
+    state.ACTIVE_SPRINT_TASK_ID = "T-RUN"
+    run = start_run("T-RUN", "Developer")
+    assert get_active_run() is not None
+    assert get_active_run().status == "thinking"
+    update_run(status="tool_executing", current_tool="read_file")
+    assert get_active_run().current_tool == "read_file"
+    finish_run(status="completed")
+    assert get_active_run() is None
+    assert run.run_id

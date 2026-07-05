@@ -12,6 +12,7 @@ from backend.services.tool_aliases import (
     resolve_pending_tool,
     save_alias,
 )
+from backend.services.tool_approval import list_pending_approvals, resolve_tool_approval
 
 router = APIRouter()
 
@@ -30,6 +31,10 @@ class ResolvePendingPayload(BaseModel):
     target_tool: str = Field(alias="targetTool")
     default_args: Optional[Dict[str, Any]] = Field(default=None, alias="defaultArgs")
     save_mapping: bool = Field(default=True, alias="saveMapping")
+
+
+class ToolApprovalPayload(BaseModel):
+    approved: bool
 
 
 @router.get("/api/tools/pending")
@@ -70,3 +75,18 @@ def resolve_pending(request_id: str, payload: ResolvePendingPayload):
         if not result:
             raise HTTPException(status_code=404, detail="Pending tool request not found")
     return {"ok": True, "mapping": result, "pending": list_pending_tools()}
+
+
+@router.get("/api/tools/pending-approvals")
+def get_pending_approvals():
+    with state.STATE_LOCK:
+        return {"pending": list_pending_approvals()}
+
+
+@router.post("/api/tools/approvals/{approval_id}")
+def post_tool_approval(approval_id: str, payload: ToolApprovalPayload):
+    with state.STATE_LOCK:
+        ok = resolve_tool_approval(approval_id, payload.approved)
+        if not ok:
+            raise HTTPException(status_code=404, detail="Approval request not found or already resolved")
+    return {"ok": True, "pending": list_pending_approvals()}

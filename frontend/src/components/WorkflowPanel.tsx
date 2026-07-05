@@ -63,6 +63,14 @@ export default function WorkflowPanel({
         />
         Require code review before QA
       </label>
+      <label className="flex items-center gap-2 text-[11px] text-cat-subtext cursor-pointer">
+        <input
+          type="checkbox"
+          checked={settings.requireToolApproval ?? false}
+          onChange={(e) => onSettingsChange({ requireToolApproval: e.target.checked })}
+        />
+        Require approval for write_file and run_command
+      </label>
 
       <div className="grid grid-cols-3 gap-2 text-[11px]">
         <label>

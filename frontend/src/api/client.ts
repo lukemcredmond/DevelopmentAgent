@@ -382,6 +382,27 @@ export async function resolvePendingTool(
   })
 }
 
+export async function fetchPendingApprovals(): Promise<{
+  pending: import('../types').PendingToolApproval[]
+}> {
+  return request<{ pending: import('../types').PendingToolApproval[] }>(
+    '/api/tools/pending-approvals',
+  )
+}
+
+export async function resolveToolApproval(
+  approvalId: string,
+  approved: boolean,
+): Promise<{ ok: boolean }> {
+  return request<{ ok: boolean }>(
+    `/api/tools/approvals/${encodeURIComponent(approvalId)}`,
+    {
+      method: 'POST',
+      body: JSON.stringify({ approved }),
+    },
+  )
+}
+
 export async function fetchGitStatus(): Promise<GitStatusResponse> {
   return request<GitStatusResponse>('/api/git/status')
 }

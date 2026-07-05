@@ -17,8 +17,10 @@ SYSTEM_LOGS: List[Dict[str, str]] = []
 STATE_LOCK = threading.RLock()
 ACTIVE_SPRINT_TASK_ID: Optional[str] = None
 ACTIVE_SPRINT_AGENT: Optional[str] = None
+ACTIVE_AGENT_RUN: Optional[Any] = None
 SPRINT_CANCEL = False
 EVENT_SUBSCRIBERS: List[Any] = []
 PENDING_TOOL_REQUESTS: List[Dict[str, Any]] = []
+PENDING_TOOL_APPROVALS: List[Any] = []
 
 storage = ProjectStorage()

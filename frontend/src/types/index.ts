@@ -30,6 +30,10 @@ export interface TaskTranscriptEntry {
   role: string
   content: string
   agent?: string
+  toolName?: string
+  toolSuccess?: boolean
+  toolArgs?: Record<string, unknown>
+  toolOutput?: string
 }
 
 export interface QaFailure {
@@ -59,10 +63,40 @@ export type Board = Partial<Record<BoardLane, Task[]>>
 export interface WorkflowSettings {
   requireBacklogApproval: boolean
   requireCodeReview: boolean
+  requireToolApproval?: boolean
+  toolApprovalTools?: string[]
+  mcpServers?: McpServerConfig[]
   definitionOfDone: string[]
   maxSprintSteps: number
   maxLlmIterationsPerStep: number
   maxPoRoundTrips: number
+}
+
+export interface McpServerConfig {
+  name: string
+  transport?: string
+  command: string
+  args?: string[]
+}
+
+export interface AgentRunState {
+  runId: string
+  taskId: string
+  agent: string
+  status: 'idle' | 'thinking' | 'tool_executing' | 'awaiting_approval' | 'completed' | 'failed'
+  currentTool?: string | null
+  startedAt: string
+  error?: string | null
+}
+
+export interface PendingToolApproval {
+  id: string
+  runId: string
+  taskId?: string
+  agent: string
+  toolName: string
+  toolArgs?: Record<string, unknown>
+  timestamp: string
 }
 
 export interface BriefChangelogEntry {
@@ -144,6 +178,8 @@ export interface AppState {
   lastSprintSummary?: SprintSummary
   notifications?: WorkflowNotifications
   chatMessages?: ChatMessageRecord[]
+  activeAgentRun?: AgentRunState | null
+  pendingToolApprovals?: PendingToolApproval[]
 }
 
 export interface ConfigPayload {
@@ -201,6 +237,9 @@ export interface MoveTaskPayload {
 export interface WorkflowSettingsPayload {
   requireBacklogApproval?: boolean
   requireCodeReview?: boolean
+  requireToolApproval?: boolean
+  toolApprovalTools?: string[]
+  mcpServers?: McpServerConfig[]
   definitionOfDone?: string[]
   maxSprintSteps?: number
   maxLlmIterationsPerStep?: number
@@ -312,6 +351,10 @@ export type AppEventType =
   | 'sprint'
   | 'activity'
   | 'pending_tool'
+  | 'tool_start'
+  | 'tool_end'
+  | 'agent_run'
+  | 'tool_approval_required'
   | 'connected'
 
 export interface AppEvent {
@@ -340,6 +383,9 @@ export const AGENT_LABELS: Record<AgentId, string> = {
 export const DEFAULT_WORKFLOW_SETTINGS: WorkflowSettings = {
   requireBacklogApproval: false,
   requireCodeReview: false,
+  requireToolApproval: false,
+  toolApprovalTools: ['write_file', 'run_command'],
+  mcpServers: [],
   definitionOfDone: [],
   maxSprintSteps: 20,
   maxLlmIterationsPerStep: 8,

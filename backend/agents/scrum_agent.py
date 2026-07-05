@@ -1,4 +1,5 @@
 import json
+from datetime import datetime
 import os
 import time
 from typing import Any, Dict, Generator, List, Mapping, Optional, Sequence, Tuple, Union
@@ -7,8 +8,18 @@ from ollama import Client
 from ollama._types import Message
 
 from backend import state
+from backend.agents.agent_run import finish_run, get_active_run, start_run, update_run
 from backend.agents.task_context import record_task_decision, record_task_transcript
+from backend.agents.tool_outcomes import (
+    format_tool_transcript_content,
+    is_tool_failure,
+    sanitize_tool_args_for_log,
+    summarize_tool_args,
+)
 from backend.agents.tools import ToolRegistry
+from backend.services.events import publish_event
+from backend.services.logs import add_system_log
+from backend.services.tool_approval import request_tool_approval, tool_requires_approval
 from backend.storage.memory_engine import SemanticMemoryEngine
 
 ChatMessage = Union[Mapping[str, Any], Message]
@@ -98,26 +109,54 @@ class ScrumAgent:
 
         return None
 
+    def _log_step_exit(self, message: str, log_type: str = "warning") -> None:
+        add_system_log(self.role, log_type, message)
+
     def _record_tool_usage(
         self,
         task_id: str,
         tool_name: str,
+        arguments: Dict[str, Any],
         tool_output: str,
         user_prompt: str,
+        *,
+        success: bool,
     ) -> None:
+        safe_args = sanitize_tool_args_for_log(tool_name, arguments)
+        content = format_tool_transcript_content(
+            tool_name, arguments, tool_output, success=success
+        )
         record_task_transcript(
             task_id,
             "tool",
-            f"{tool_name}: {tool_output[:500]}",
+            content,
             agent=self.role,
+            toolName=tool_name,
+            toolSuccess=success,
+            toolArgs=safe_args,
+            toolOutput=tool_output[:2000],
         )
         record_task_decision(
             task_id,
             self.role,
-            "tool",
-            f"Used tool '{tool_name}'",
+            "tool_fail" if not success else "tool",
+            f"{'Failed' if not success else 'Used'} tool '{tool_name}'",
             tool_output[:500],
         )
+        arg_summary = summarize_tool_args(tool_name, arguments)
+        if success:
+            if tool_name == "write_file":
+                path = safe_args.get("path", "?")
+                nbytes = safe_args.get("contentLength", 0)
+                add_system_log(self.role, "success", f"write_file OK {path} ({nbytes} bytes)")
+            else:
+                add_system_log(self.role, "success", f"{tool_name} OK — {arg_summary}")
+        else:
+            add_system_log(
+                self.role,
+                "error",
+                f"{tool_name} FAILED {arg_summary} — {tool_output[:300]}",
+            )
         self.memory.save(
             self.role,
             f"Invoked tool '{tool_name}' on task: {user_prompt}",
@@ -133,32 +172,91 @@ class ScrumAgent:
     ) -> Optional[str]:
         """Process tool calls; return early-stop message when same call fails 3x."""
         messages.append(message)
+        run = get_active_run()
+        task_id = state.ACTIVE_SPRINT_TASK_ID
 
         for call in message.tool_calls or []:
             tool_name = call.function.name
             arguments = dict(call.function.arguments)
-            tool_output = self.registry.invoke(tool_name, arguments)
+            safe_args = sanitize_tool_args_for_log(tool_name, arguments)
+            arg_summary = summarize_tool_args(tool_name, arguments)
+            add_system_log(self.role, "info", f"Calling {tool_name} — {arg_summary}")
 
-            is_failure = (
-                tool_output.startswith("Error")
-                or tool_output.startswith("❌")
-                or "not registered" in tool_output.lower()
+            run_id = run.run_id if run else "NO-RUN"
+            publish_event(
+                "tool_start",
+                {
+                    "runId": run_id,
+                    "taskId": task_id or "system",
+                    "agent": self.role,
+                    "toolName": tool_name,
+                    "toolArgs": safe_args,
+                    "timestamp": datetime.now().strftime("%Y-%m-%d %H:%M:%S"),
+                },
             )
-            if is_failure:
+            update_run(status="tool_executing", current_tool=tool_name)
+
+            tool_output = ""
+            success = False
+            started = time.time()
+
+            if tool_requires_approval(tool_name):
+                update_run(status="awaiting_approval", current_tool=tool_name)
+                approved, deny_msg = request_tool_approval(
+                    run_id,
+                    tool_name,
+                    arguments,
+                    task_id=task_id,
+                    agent=self.role,
+                )
+                update_run(status="tool_executing", current_tool=tool_name)
+                if not approved:
+                    tool_output = deny_msg
+                    success = False
+                else:
+                    tool_output = self.registry.invoke(tool_name, arguments)
+                    success = not is_tool_failure(tool_name, tool_output)
+            else:
+                tool_output = self.registry.invoke(tool_name, arguments)
+                success = not is_tool_failure(tool_name, tool_output)
+
+            duration_ms = int((time.time() - started) * 1000)
+            publish_event(
+                "tool_end",
+                {
+                    "runId": run_id,
+                    "taskId": task_id or "system",
+                    "agent": self.role,
+                    "toolName": tool_name,
+                    "toolArgs": safe_args,
+                    "toolSuccess": success,
+                    "toolOutput": tool_output[:500],
+                    "durationMs": duration_ms,
+                    "timestamp": datetime.now().strftime("%Y-%m-%d %H:%M:%S"),
+                },
+            )
+            update_run(status="thinking", clear_tool=True)
+
+            if not success:
                 key = (tool_name, json.dumps(arguments, sort_keys=True))
                 failed_tool_keys.append(key)
                 if failed_tool_keys.count(key) >= 3:
-                    return (
+                    stop_msg = (
                         f"Stopped: tool '{tool_name}' failed repeatedly with the same arguments. "
                         f"Last error: {tool_output[:200]}"
                     )
+                    self._log_step_exit(stop_msg, "error")
+                    finish_run(status="failed", error=stop_msg)
+                    return stop_msg
 
-            if state.ACTIVE_SPRINT_TASK_ID:
+            if task_id:
                 self._record_tool_usage(
-                    state.ACTIVE_SPRINT_TASK_ID,
+                    task_id,
                     tool_name,
+                    arguments,
                     tool_output,
                     user_prompt,
+                    success=success,
                 )
 
             messages.append(
@@ -178,32 +276,47 @@ class ScrumAgent:
         ]
 
         failed_tool_keys: List[Tuple[str, str]] = []
+        task_id = state.ACTIVE_SPRINT_TASK_ID
+        if task_id:
+            start_run(task_id, self.role)
 
-        for _ in range(max_iterations):
-            response = self._chat(messages, tools=tools or None)
-            if response is None:
-                return "SIMULATION_FALLBACK"
+        try:
+            for _ in range(max_iterations):
+                update_run(status="thinking")
+                response = self._chat(messages, tools=tools or None)
+                if response is None:
+                    self._log_step_exit("Ollama unavailable — SIMULATION_FALLBACK", "warning")
+                    finish_run(status="failed", error="SIMULATION_FALLBACK")
+                    return "SIMULATION_FALLBACK"
 
-            message = response.message
-            if message.tool_calls:
-                early_stop = self._process_tool_calls(
-                    message, messages, user_prompt, failed_tool_keys
-                )
-                if early_stop:
-                    return early_stop
-                continue
+                message = response.message
+                if message.tool_calls:
+                    early_stop = self._process_tool_calls(
+                        message, messages, user_prompt, failed_tool_keys
+                    )
+                    if early_stop:
+                        return early_stop
+                    continue
 
-            content = (message.content or "").strip()
-            if state.ACTIVE_SPRINT_TASK_ID and content:
-                record_task_transcript(
-                    state.ACTIVE_SPRINT_TASK_ID,
-                    "assistant",
-                    content,
-                    agent=self.role,
-                )
-            return content or "Task completed."
+                content = (message.content or "").strip()
+                if task_id and content:
+                    record_task_transcript(
+                        task_id,
+                        "assistant",
+                        content,
+                        agent=self.role,
+                    )
+                finish_run(status="completed")
+                return content or "Task completed."
 
-        return "Max tool iterations reached without completing the task."
+            max_msg = "Max tool iterations reached without completing the task."
+            self._log_step_exit(max_msg, "warning")
+            finish_run(status="failed", error=max_msg)
+            return max_msg
+        except Exception as exc:
+            finish_run(status="failed", error=str(exc))
+            raise
+
 
     def stream_messages(
         self,

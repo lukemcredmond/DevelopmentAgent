@@ -9,6 +9,9 @@ from backend.config import MAX_SPRINT_STEPS
 DEFAULT_WORKFLOW_SETTINGS: Dict[str, Any] = {
     "requireBacklogApproval": False,
     "requireCodeReview": False,
+    "requireToolApproval": False,
+    "toolApprovalTools": ["write_file", "run_command"],
+    "mcpServers": [],
     "definitionOfDone": [],
     "maxSprintSteps": MAX_SPRINT_STEPS,
     "maxLlmIterationsPerStep": 8,

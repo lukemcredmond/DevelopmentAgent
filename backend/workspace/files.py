@@ -3,6 +3,7 @@ from typing import Any, Dict, List, Optional
 
 from backend import state
 from backend.agents.task_context import record_task_decision, record_task_file
+from backend.services.logs import add_system_log
 from backend.services.project_service import save_current_project_state
 
 
@@ -41,7 +42,13 @@ def write_workspace_file(path: str, content: str, author: Optional[str] = None) 
     try:
         safe_path = resolve_workspace_path(path)
     except ValueError as e:
-        return str(e)
+        msg = f"Error: {e}"
+        add_system_log(
+            state.ACTIVE_SPRINT_AGENT or "Developer",
+            "error",
+            f"write_file rejected path '{path}': {e}",
+        )
+        return msg
 
     previous = state.VIRTUAL_FILESYSTEM.get(safe_path)
     state.VIRTUAL_FILESYSTEM[safe_path] = content
@@ -53,6 +60,11 @@ def write_workspace_file(path: str, content: str, author: Optional[str] = None) 
             os.makedirs(dir_name, exist_ok=True)
         with open(phys_path, "w", encoding="utf-8") as f:
             f.write(content)
+
+        if not os.path.isfile(phys_path):
+            msg = f"Error: Write reported success but file missing at '{phys_path}'"
+            add_system_log(state.ACTIVE_SPRINT_AGENT or "Developer", "error", msg)
+            return msg
 
         if previous != content:
             state.storage.save_file_revision(
@@ -73,9 +85,31 @@ def write_workspace_file(path: str, content: str, author: Optional[str] = None) 
             )
 
         save_current_project_state()
+        nbytes = len(content.encode("utf-8"))
+        add_system_log(
+            state.ACTIVE_SPRINT_AGENT or "Developer",
+            "success",
+            f"Wrote '{safe_path}' ({nbytes} bytes) → {phys_path}",
+        )
         return f"Successfully saved file physically at: '{phys_path}'"
     except Exception as e:
-        return f"Wrote virtual cache, but physical write failed: {str(e)}"
+        msg = f"Error: physical write failed for '{safe_path}': {e}"
+        add_system_log(state.ACTIVE_SPRINT_AGENT or "Developer", "error", msg)
+        return msg
+
+
+def apply_workspace_patch(path: str, old_text: str, new_text: str) -> str:
+    """Replace a unique old_text snippet in a file with new_text."""
+    current = read_workspace_file(path)
+    if current.startswith("Error:"):
+        return f"Error: Cannot patch — {current}"
+    count = current.count(old_text)
+    if count == 0:
+        return f"Error: old_text not found in '{path}'"
+    if count > 1:
+        return f"Error: old_text appears {count} times in '{path}' — must be unique"
+    updated = current.replace(old_text, new_text, 1)
+    return write_workspace_file(path, updated)
 
 
 def read_workspace_file(path: str) -> str:

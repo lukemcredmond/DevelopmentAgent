@@ -357,6 +357,14 @@ Persisted per project in SQLite (`settings` table, key `workflow:{project_id}`).
 - **Frontend:** Vite + React + TypeScript; `@dnd-kit` Kanban, Monaco editor, xterm.js terminal
 - **Persistence:** SQLite (`~/.allhands/scrum_memory.db`) — projects, board, files, logs, chat, revisions, brief changelog
 - **Agents:** `ScrumAgent` uses the [Ollama Python SDK](https://github.com/ollama/ollama-python) against your local Ollama server. Tools are registered in `ToolRegistry` and passed via the native `tools` parameter; the agent loop executes `message.tool_calls` and feeds results back until the model finishes.
+
+### Cursor-like tool runtime (Path A)
+
+- **Live tool strip:** SSE events `tool_start`, `tool_end`, and `agent_run` drive the Agent Run bar above the bottom panel during sprint steps.
+- **Structured transcripts:** Each tool row includes `toolName`, `toolSuccess`, `toolArgs` (path/content length), and truncated output.
+- **Optional approval:** Enable **Require approval for write_file and run_command** in Workflow settings. The agent pauses until you Approve or Deny in the modal (120s timeout).
+- **apply_patch:** Prefer `apply_patch` for edits to existing files; use `write_file` for new files or full rewrites.
+- **MCP tools (optional):** Add stdio MCP servers to `workflowSettings.mcpServers` (name, command, args). Tools register as `mcp_{server}_{tool}` on project load.
 - **Security:** Binds localhost only; terminal and subprocess run with workspace cwd constraints
 
 ---
