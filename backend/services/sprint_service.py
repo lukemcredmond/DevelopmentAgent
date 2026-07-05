@@ -571,10 +571,12 @@ def _run_developer_step(active_task: Dict[str, Any], brief: str) -> None:
         + "\nRegistered tools: read_file, write_file, apply_patch, run_command, update_board, git_status, git_diff, git_commit. "
         "Use apply_patch for edits to existing files; write_file for new files. "
         "Implement using read_file, apply_patch, and write_file. "
+        "Read each tool result before calling update_board — if write_file or apply_patch fails, "
+        "try a different path or approach (do not repeat the same failing arguments). "
         "For Flutter/Dart use run_command with command 'flutter analyze'. "
         "Unclear requirements → move to 'Needs PO'. "
         "User-only decisions (keys, design) → move to 'Needs User' and state userQuestion. "
-        f"When complete → move to '{target}'."
+        f"When complete and files are written → move to '{target}'."
     )
     result = agent_dev.execute_step(prompt, max_iterations=_llm_iterations())
 
@@ -603,10 +605,18 @@ def _run_developer_step(active_task: Dict[str, Any], brief: str) -> None:
                             lane="Needs PO",
                         )
                 else:
-                    clear_qa_failure(task_id)
-                    move_board_stage(task_id, target)
+                    fresh = find_task_by_id(task_id)
+                    if fresh and fresh.get("files"):
+                        clear_qa_failure(task_id)
+                        move_board_stage(task_id, target)
+                    elif fresh:
+                        add_system_log(
+                            "Developer",
+                            "warning",
+                            f"'{fresh.get('title', task_id)}' finished with no files — staying In Progress",
+                        )
         _log_sprint_step_outcome("Developer", task_id, task.get("title", task_id), lane_before, result)
-        _audit_dev_files_written(task, lane_before, task_id)
+        _audit_dev_files_written(find_task_by_id(task_id) or task, lane_before, task_id)
         _check_stuck_and_escalate(task_id, lane_before)
 
 

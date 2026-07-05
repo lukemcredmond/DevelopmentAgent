@@ -140,6 +140,12 @@ export default function App() {
   }
 
   const selectedTaskLane = selectedTask ? findTaskLane(selectedTask.id) : null
+
+  useEffect(() => {
+    if (!selectedTask) return
+    const fresh = findTaskOnBoard(state.board, selectedTask.id)
+    if (fresh) setSelectedTask(fresh)
+  }, [state.board, selectedTask?.id])
   const [localFiles, setLocalFiles] = useState<Record<string, string>>({})
 
   const setters = {

@@ -46,6 +46,19 @@ function patchBoardFromEvent(data: unknown, prev: AppState): AppState | null {
 }
 
 function mapAgentRun(raw: Record<string, unknown>): AgentRunState {
+  const recentRaw = raw.recent_tools ?? raw.recentTools
+  const recentTools = Array.isArray(recentRaw)
+    ? recentRaw.map((t) => {
+        const entry = t as Record<string, unknown>
+        return {
+          toolName: String(entry.toolName ?? entry.tool_name ?? '?'),
+          toolSuccess: Boolean(entry.toolSuccess ?? entry.tool_success),
+          toolOutput: String(entry.toolOutput ?? entry.tool_output ?? ''),
+          durationMs: Number(entry.durationMs ?? entry.duration_ms ?? 0),
+          timestamp: String(entry.timestamp ?? ''),
+        }
+      })
+    : []
   return {
     runId: String(raw.run_id ?? raw.runId ?? ''),
     taskId: String(raw.task_id ?? raw.taskId ?? ''),
@@ -54,6 +67,33 @@ function mapAgentRun(raw: Record<string, unknown>): AgentRunState {
     currentTool: (raw.current_tool ?? raw.currentTool) as string | null | undefined,
     startedAt: String(raw.started_at ?? raw.startedAt ?? ''),
     error: (raw.error as string | null | undefined) ?? null,
+    iteration: Number(raw.iteration ?? 0) || undefined,
+    maxIterations: Number(raw.max_iterations ?? raw.maxIterations ?? 0) || undefined,
+    recentTools,
+  }
+}
+
+function mapToolEndToActivity(data: Record<string, unknown>): ActivityEvent {
+  return {
+    taskId: String(data.taskId ?? data.task_id ?? ''),
+    taskTitle: String(data.taskTitle ?? data.task_title ?? ''),
+    kind: data.toolSuccess === false ? 'tool_failed' : 'tool_end',
+    role: 'tool',
+    agent: String(data.agent ?? ''),
+    content: `${data.toolName ?? '?'} ${data.toolSuccess === false ? 'FAILED' : 'OK'}: ${String(data.toolOutput ?? '').slice(0, 400)}`,
+    timestamp: String(data.timestamp ?? new Date().toISOString()),
+  }
+}
+
+function mapApprovalFromEvent(data: Record<string, unknown>): PendingToolApproval {
+  return {
+    id: String(data.id ?? ''),
+    runId: String(data.runId ?? data.run_id ?? ''),
+    taskId: data.taskId != null ? String(data.taskId) : undefined,
+    agent: String(data.agent ?? ''),
+    toolName: String(data.toolName ?? data.tool_name ?? ''),
+    toolArgs: (data.toolArgs ?? data.tool_args) as Record<string, unknown> | undefined,
+    timestamp: String(data.timestamp ?? ''),
   }
 }
 
@@ -65,9 +105,21 @@ export function useAppState() {
   const [pendingTools, setPendingTools] = useState<import('../types').PendingToolRequest[]>([])
   const [pendingApprovals, setPendingApprovals] = useState<PendingToolApproval[]>([])
   const [activeRun, setActiveRun] = useState<AgentRunState | null>(null)
+  const [displayRun, setDisplayRun] = useState<AgentRunState | null>(null)
   const [currentTool, setCurrentTool] = useState<string | null>(null)
   const liveActivityRef = useRef<ActivityEvent[]>([])
   const boardRef = useRef<Board>(defaultState.board)
+  const displayRunTimerRef = useRef<number | null>(null)
+
+  const scheduleDisplayRunClear = useCallback(() => {
+    if (displayRunTimerRef.current) {
+      window.clearTimeout(displayRunTimerRef.current)
+    }
+    displayRunTimerRef.current = window.setTimeout(() => {
+      setDisplayRun(null)
+      displayRunTimerRef.current = null
+    }, 3000)
+  }, [])
 
   useEffect(() => {
     boardRef.current = state.board
@@ -163,35 +215,63 @@ export function useAppState() {
         void refresh()
         setActiveRun(null)
         setCurrentTool(null)
+        setDisplayRun(null)
       } else if (event.type === 'activity' && event.data) {
         appendActivity(event.data as ActivityEvent)
       } else if (event.type === 'pending_tool' && event.data) {
         void refreshPendingTools()
       } else if (event.type === 'agent_run' && event.data) {
         const run = mapAgentRun(event.data as Record<string, unknown>)
-        if (run.status === 'completed' || run.status === 'failed' || run.status === 'idle') {
+        if (run.status === 'completed' || run.status === 'failed') {
+          setDisplayRun(run)
           setActiveRun(null)
           setCurrentTool(null)
+          scheduleDisplayRunClear()
         } else {
           setActiveRun(run)
+          setDisplayRun(run)
           setCurrentTool(run.currentTool ?? null)
         }
       } else if (event.type === 'tool_start' && event.data) {
         const payload = event.data as { toolName?: string; agent?: string; taskId?: string }
         setCurrentTool(payload.toolName ?? null)
-        setActiveRun((prev) =>
-          prev ?? {
-            runId: '',
-            taskId: String(payload.taskId ?? ''),
-            agent: String(payload.agent ?? ''),
-            status: 'tool_executing',
-            currentTool: payload.toolName ?? null,
-            startedAt: new Date().toISOString(),
-          },
-        )
-      } else if (event.type === 'tool_end') {
+        setActiveRun((prev) => {
+          const base =
+            prev ??
+            ({
+              runId: '',
+              taskId: String(payload.taskId ?? ''),
+              agent: String(payload.agent ?? ''),
+              status: 'tool_executing',
+              currentTool: payload.toolName ?? null,
+              startedAt: new Date().toISOString(),
+              recentTools: [],
+            } as AgentRunState)
+          return { ...base, status: 'tool_executing', currentTool: payload.toolName ?? null }
+        })
+      } else if (event.type === 'tool_end' && event.data) {
+        const payload = event.data as Record<string, unknown>
+        const entry = {
+          toolName: String(payload.toolName ?? '?'),
+          toolSuccess: payload.toolSuccess !== false,
+          toolOutput: String(payload.toolOutput ?? ''),
+          durationMs: Number(payload.durationMs ?? 0),
+          timestamp: String(payload.timestamp ?? ''),
+        }
+        const mergeRun = (prev: AgentRunState | null): AgentRunState | null => {
+          if (!prev) return prev
+          const recentTools = [...(prev.recentTools ?? []), entry].slice(-5)
+          return { ...prev, recentTools, currentTool: null, status: 'thinking' }
+        }
+        setActiveRun((prev) => mergeRun(prev))
+        setDisplayRun((prev) => mergeRun(prev))
         setCurrentTool(null)
+        appendActivity(mapToolEndToActivity(payload))
       } else if (event.type === 'tool_approval_required' && event.data) {
+        const approval = mapApprovalFromEvent(event.data as Record<string, unknown>)
+        setPendingApprovals((prev) =>
+          prev.some((p) => p.id === approval.id) ? prev : [...prev, approval],
+        )
         void refreshPendingApprovals()
       }
     })
@@ -204,7 +284,10 @@ export function useAppState() {
     syncActivityFromBoard,
     refreshPendingTools,
     refreshPendingApprovals,
+    scheduleDisplayRunClear,
   ])
+
+  const runBarState = activeRun ?? displayRun
 
   return {
     state,
@@ -222,7 +305,7 @@ export function useAppState() {
     refreshPendingTools,
     pendingApprovals,
     refreshPendingApprovals,
-    activeRun,
+    activeRun: runBarState,
     currentTool,
   }
 }

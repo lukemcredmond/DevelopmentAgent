@@ -321,13 +321,11 @@ def record_task_file(
 
 
 def sync_task_files_from_transcript(task: Dict[str, Any]) -> int:
-    """Backfill task.files from successful file-tool transcript entries."""
+    """Backfill task.files from file-tool transcript entries (success and failed)."""
     normalize_task(task)
     added = 0
     for entry in task.get("transcript") or []:
         if not isinstance(entry, dict):
-            continue
-        if entry.get("toolSuccess") is False:
             continue
         tool_name = entry.get("toolName")
         if tool_name not in FILE_TOOLS:
@@ -338,7 +336,8 @@ def sync_task_files_from_transcript(task: Dict[str, Any]) -> int:
         path = file_path_from_tool(str(tool_name), tool_args)
         if not path:
             continue
-        action = FILE_TOOLS[str(tool_name)]
+        base_action = FILE_TOOLS[str(tool_name)]
+        action = base_action if entry.get("toolSuccess") is not False else f"{base_action}-failed"
         paths = {f.get("path") for f in task["files"] if isinstance(f, dict)}
         if path in paths:
             continue

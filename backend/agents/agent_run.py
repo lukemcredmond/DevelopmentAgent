@@ -1,8 +1,8 @@
 """Structured agent run state for live SSE updates."""
 
-from dataclasses import asdict, dataclass
+from dataclasses import asdict, dataclass, field
 from datetime import datetime
-from typing import Any, Dict, Literal, Optional
+from typing import Any, Dict, List, Literal, Optional
 import uuid
 
 from backend import state
@@ -17,6 +17,8 @@ RunStatus = Literal[
     "failed",
 ]
 
+MAX_RECENT_TOOLS = 5
+
 
 @dataclass
 class AgentRunState:
@@ -27,6 +29,9 @@ class AgentRunState:
     current_tool: Optional[str]
     started_at: str
     error: Optional[str] = None
+    iteration: int = 0
+    max_iterations: int = 8
+    recent_tools: List[Dict[str, Any]] = field(default_factory=list)
 
     def to_dict(self) -> Dict[str, Any]:
         return asdict(self)
@@ -37,7 +42,7 @@ def _publish_run(run: Optional[AgentRunState]) -> None:
         publish_event("agent_run", run.to_dict())
 
 
-def start_run(task_id: str, agent: str) -> AgentRunState:
+def start_run(task_id: str, agent: str, *, max_iterations: int = 8) -> AgentRunState:
     run = AgentRunState(
         run_id=uuid.uuid4().hex[:12].upper(),
         task_id=task_id,
@@ -45,6 +50,9 @@ def start_run(task_id: str, agent: str) -> AgentRunState:
         status="thinking",
         current_tool=None,
         started_at=datetime.now().strftime("%Y-%m-%d %H:%M:%S"),
+        iteration=0,
+        max_iterations=max_iterations,
+        recent_tools=[],
     )
     state.ACTIVE_AGENT_RUN = run
     _publish_run(run)
@@ -57,6 +65,8 @@ def update_run(
     current_tool: Optional[str] = None,
     error: Optional[str] = None,
     clear_tool: bool = False,
+    iteration: Optional[int] = None,
+    max_iterations: Optional[int] = None,
 ) -> None:
     run = state.ACTIVE_AGENT_RUN
     if not run:
@@ -69,6 +79,18 @@ def update_run(
         run.current_tool = current_tool
     if error is not None:
         run.error = error
+    if iteration is not None:
+        run.iteration = iteration
+    if max_iterations is not None:
+        run.max_iterations = max_iterations
+    _publish_run(run)
+
+
+def append_recent_tool(entry: Dict[str, Any]) -> None:
+    run = state.ACTIVE_AGENT_RUN
+    if not run:
+        return
+    run.recent_tools = (run.recent_tools + [entry])[-MAX_RECENT_TOOLS:]
     _publish_run(run)
 
 

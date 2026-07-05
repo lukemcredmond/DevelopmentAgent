@@ -17,6 +17,7 @@ DEFAULT_WORKFLOW_SETTINGS: Dict[str, Any] = {
     "maxLlmIterationsPerStep": 8,
     "maxPoRoundTrips": 3,
     "maxStuckSteps": 3,
+    "maxToolFailuresPerStep": 5,
 }
 
 DEFAULT_SPRINT_SUMMARY: Dict[str, Any] = {

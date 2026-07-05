@@ -8,9 +8,16 @@ from ollama import Client
 from ollama._types import Message
 
 from backend import state
-from backend.agents.agent_run import finish_run, get_active_run, start_run, update_run
+from backend.agents.agent_run import (
+    append_recent_tool,
+    finish_run,
+    get_active_run,
+    start_run,
+    update_run,
+)
 from backend.agents.task_context import (
     find_task_by_id,
+    publish_activity,
     record_task_decision,
     record_task_file,
     record_task_transcript,
@@ -28,9 +35,24 @@ from backend.agents.tools import ToolRegistry
 from backend.services.events import publish_event
 from backend.services.logs import add_system_log
 from backend.services.tool_approval import request_tool_approval, tool_requires_approval
+from backend.services.workflow_settings import get_workflow_settings
 from backend.storage.memory_engine import SemanticMemoryEngine
 
 ChatMessage = Union[Mapping[str, Any], Message]
+
+SAME_ARGS_FAILURE_LIMIT = 3
+
+
+def _normalize_tool_arguments(raw: Any) -> Dict[str, Any]:
+    if isinstance(raw, str):
+        try:
+            parsed = json.loads(raw)
+            return dict(parsed) if isinstance(parsed, dict) else {}
+        except json.JSONDecodeError:
+            return {}
+    if isinstance(raw, dict):
+        return dict(raw)
+    return {}
 
 
 class ScrumAgent:
@@ -156,6 +178,11 @@ class ScrumAgent:
             path = file_path_from_tool(tool_name, arguments)
             if action and path:
                 record_task_file(task_id, path, action, persist=True)
+        else:
+            action = file_action_for_tool(tool_name)
+            path = file_path_from_tool(tool_name, arguments)
+            if action and path:
+                record_task_file(task_id, path, f"{action}-failed", persist=True)
         arg_summary = summarize_tool_args(tool_name, arguments)
         if success:
             if tool_name == "write_file":
@@ -182,15 +209,18 @@ class ScrumAgent:
         messages: List[ChatMessage],
         user_prompt: str,
         failed_tool_keys: List[Tuple[str, str]],
+        total_failures: List[int],
+        max_tool_failures: int,
     ) -> Optional[str]:
-        """Process tool calls; return early-stop message when same call fails 3x."""
+        """Process tool calls; return early-stop message when limits exceeded."""
         messages.append(message)
         run = get_active_run()
         task_id = state.ACTIVE_SPRINT_TASK_ID
+        ts = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
 
         for call in message.tool_calls or []:
             tool_name = call.function.name
-            arguments = dict(call.function.arguments)
+            arguments = _normalize_tool_arguments(call.function.arguments)
             safe_args = sanitize_tool_args_for_log(tool_name, arguments)
             arg_summary = summarize_tool_args(tool_name, arguments)
             add_system_log(self.role, "info", f"Calling {tool_name} — {arg_summary}")
@@ -204,7 +234,7 @@ class ScrumAgent:
                     "agent": self.role,
                     "toolName": tool_name,
                     "toolArgs": safe_args,
-                    "timestamp": datetime.now().strftime("%Y-%m-%d %H:%M:%S"),
+                    "timestamp": ts,
                 },
             )
             update_run(status="tool_executing", current_tool=tool_name)
@@ -234,6 +264,15 @@ class ScrumAgent:
                 success = not is_tool_failure(tool_name, tool_output)
 
             duration_ms = int((time.time() - started) * 1000)
+            output_preview = tool_output[:500]
+            tool_entry = {
+                "toolName": tool_name,
+                "toolSuccess": success,
+                "toolOutput": output_preview,
+                "durationMs": duration_ms,
+                "timestamp": ts,
+            }
+            append_recent_tool(tool_entry)
             publish_event(
                 "tool_end",
                 {
@@ -243,20 +282,37 @@ class ScrumAgent:
                     "toolName": tool_name,
                     "toolArgs": safe_args,
                     "toolSuccess": success,
-                    "toolOutput": tool_output[:500],
+                    "toolOutput": output_preview,
                     "durationMs": duration_ms,
-                    "timestamp": datetime.now().strftime("%Y-%m-%d %H:%M:%S"),
+                    "timestamp": ts,
                 },
             )
+            if task_id:
+                publish_activity(
+                    task_id,
+                    "tool_failed" if not success else "tool_end",
+                    f"{tool_name} {'FAILED' if not success else 'OK'}: {output_preview[:400]}",
+                    role="tool",
+                    agent=self.role,
+                )
             update_run(status="thinking", clear_tool=True)
 
             if not success:
+                total_failures[0] += 1
                 key = (tool_name, json.dumps(arguments, sort_keys=True))
                 failed_tool_keys.append(key)
-                if failed_tool_keys.count(key) >= 3:
+                if failed_tool_keys.count(key) >= SAME_ARGS_FAILURE_LIMIT:
                     stop_msg = (
                         f"Stopped: tool '{tool_name}' failed repeatedly with the same arguments. "
                         f"Last error: {tool_output[:200]}"
+                    )
+                    self._log_step_exit(stop_msg, "error")
+                    finish_run(status="failed", error=stop_msg)
+                    return stop_msg
+                if total_failures[0] >= max_tool_failures:
+                    stop_msg = (
+                        f"Stopped: {total_failures[0]} tool failures this step (limit {max_tool_failures}). "
+                        f"Last error ({tool_name}): {tool_output[:200]}"
                     )
                     self._log_step_exit(stop_msg, "error")
                     finish_run(status="failed", error=stop_msg)
@@ -279,6 +335,17 @@ class ScrumAgent:
                     "content": tool_output,
                 }
             )
+            if not success:
+                messages.append(
+                    {
+                        "role": "system",
+                        "content": (
+                            f"Tool '{tool_name}' failed: {tool_output[:300]}. "
+                            "Do not repeat the same arguments. Try a different path, "
+                            "command, or approach to achieve the task."
+                        ),
+                    }
+                )
         return None
 
     def execute_step(self, user_prompt: str, max_iterations: int = 8) -> str:
@@ -289,13 +356,25 @@ class ScrumAgent:
         ]
 
         failed_tool_keys: List[Tuple[str, str]] = []
+        total_failures: List[int] = [0]
+        ws = get_workflow_settings()
+        max_tool_failures = int(ws.get("maxToolFailuresPerStep", 5))
         task_id = state.ACTIVE_SPRINT_TASK_ID
         if task_id:
-            start_run(task_id, self.role)
+            start_run(task_id, self.role, max_iterations=max_iterations)
 
         try:
-            for _ in range(max_iterations):
-                update_run(status="thinking")
+            for iteration in range(1, max_iterations + 1):
+                update_run(
+                    status="thinking",
+                    iteration=iteration,
+                    max_iterations=max_iterations,
+                )
+                add_system_log(
+                    self.role,
+                    "info",
+                    f"LLM iteration {iteration}/{max_iterations}",
+                )
                 response = self._chat(messages, tools=tools or None)
                 if response is None:
                     self._log_step_exit("Ollama unavailable — SIMULATION_FALLBACK", "warning")
@@ -305,7 +384,12 @@ class ScrumAgent:
                 message = response.message
                 if message.tool_calls:
                     early_stop = self._process_tool_calls(
-                        message, messages, user_prompt, failed_tool_keys
+                        message,
+                        messages,
+                        user_prompt,
+                        failed_tool_keys,
+                        total_failures,
+                        max_tool_failures,
                     )
                     if early_stop:
                         return early_stop
@@ -334,6 +418,11 @@ class ScrumAgent:
                 task = find_task_by_id(task_id)
                 if task:
                     sync_task_files_from_transcript(task)
+                    from backend.services.board_service import publish_board_update
+                    from backend.services.project_service import save_current_project_state
+
+                    save_current_project_state()
+                    publish_board_update(task_id, source="task_files")
 
 
     def stream_messages(

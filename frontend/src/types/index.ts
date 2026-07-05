@@ -89,6 +89,14 @@ export interface McpServerConfig {
   args?: string[]
 }
 
+export interface RecentToolEntry {
+  toolName: string
+  toolSuccess: boolean
+  toolOutput: string
+  durationMs: number
+  timestamp: string
+}
+
 export interface AgentRunState {
   runId: string
   taskId: string
@@ -97,6 +105,9 @@ export interface AgentRunState {
   currentTool?: string | null
   startedAt: string
   error?: string | null
+  iteration?: number
+  maxIterations?: number
+  recentTools?: RecentToolEntry[]
 }
 
 export interface PendingToolApproval {

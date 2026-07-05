@@ -695,3 +695,96 @@ def test_git_commit_returns_hash(monkeypatch):
     assert result["success"] is True
     assert result["hash"] == "deadbeef1234567890"
     assert "github.com" in result["remoteUrl"]
+
+
+def test_sync_transcript_includes_failed_file_tools():
+    from backend import state
+    from backend.agents.task_context import init_new_task, sync_task_files_from_transcript
+
+    initialize()
+    task = init_new_task({"id": "T-FAIL-F", "title": "Fail file", "description": "d"})
+    task["transcript"] = [
+        {
+            "timestamp": "2026-01-01 12:00:00",
+            "role": "tool",
+            "content": "write_file failed",
+            "toolName": "write_file",
+            "toolSuccess": False,
+            "toolArgs": {"path": "lib/missing.dart", "contentLength": 0},
+        },
+    ]
+    state.SHARED_BOARD.setdefault("In Progress", []).append(task)
+    added = sync_task_files_from_transcript(task)
+    assert added == 1
+    assert task["files"][0]["path"] == "lib/missing.dart"
+    assert task["files"][0]["action"] == "written-failed"
+
+
+def test_record_task_file_on_failed_tool_via_agent():
+    from backend import state
+    from backend.agents.registry import agent_dev
+    from backend.agents.task_context import init_new_task, set_active_sprint_context
+
+    initialize()
+    task = init_new_task({"id": "T-REC-FAIL", "title": "Rec", "description": "d"})
+    state.SHARED_BOARD.setdefault("In Progress", []).append(task)
+    set_active_sprint_context("T-REC-FAIL", "Developer")
+    state.ACTIVE_SPRINT_TASK_ID = "T-REC-FAIL"
+    agent_dev._record_tool_usage(
+        "T-REC-FAIL",
+        "read_file",
+        {"path": "nope.txt"},
+        "Error: File 'nope.txt' not found.",
+        "prompt",
+        success=False,
+    )
+    assert any(f.get("path") == "nope.txt" for f in task["files"])
+    assert task["files"][0]["action"] == "read-failed"
+
+
+def test_normalize_tool_arguments_parses_json_string():
+    from backend.agents.scrum_agent import _normalize_tool_arguments
+
+    args = _normalize_tool_arguments('{"path": "lib/a.dart", "content": "x"}')
+    assert args["path"] == "lib/a.dart"
+
+
+def test_append_recent_tool_on_run():
+    from backend import state
+    from backend.agents.agent_run import append_recent_tool, get_active_run, start_run
+
+    initialize()
+    state.ACTIVE_SPRINT_TASK_ID = "T-RUN2"
+    start_run("T-RUN2", "Developer", max_iterations=4)
+    append_recent_tool(
+        {
+            "toolName": "write_file",
+            "toolSuccess": True,
+            "toolOutput": "ok",
+            "durationMs": 10,
+            "timestamp": "2026-01-01",
+        }
+    )
+    run = get_active_run()
+    assert run is not None
+    assert len(run.recent_tools) == 1
+    assert run.recent_tools[0]["toolName"] == "write_file"
+
+
+def test_dev_step_does_not_auto_advance_without_files(monkeypatch):
+    from backend import state
+    from backend.agents.task_context import init_new_task
+    from backend.services import sprint_service
+
+    initialize()
+    task = init_new_task({"id": "T-NOADV", "title": "No files", "description": "d"})
+    state.SHARED_BOARD.setdefault("In Progress", []).append(task)
+
+    def fake_execute_step(prompt, max_iterations=8):
+        return "Implementation complete."
+
+    monkeypatch.setattr(sprint_service.agent_dev, "execute_step", fake_execute_step)
+    sprint_service._run_developer_step(task, "brief")
+    assert "T-NOADV" in [t["id"] for t in state.SHARED_BOARD.get("In Progress", [])]
+    assert "T-NOADV" not in [t["id"] for t in state.SHARED_BOARD.get("QA", [])]
+    assert "T-NOADV" not in [t["id"] for t in state.SHARED_BOARD.get("Code Review", [])]
