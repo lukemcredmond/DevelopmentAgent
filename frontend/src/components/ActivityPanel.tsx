@@ -1,17 +1,21 @@
-import { useMemo, useState } from 'react'
+import { useEffect, useMemo, useRef, useState } from 'react'
 import type { ActivityEvent } from '../types'
 import { formatTaskText } from '../utils/taskFormat'
 
-type ActivityFilter = 'all' | 'po_bounce' | 'transcript'
+type ActivityFilter = 'all' | 'po_bounce' | 'transcript' | 'failures'
 
 interface ActivityPanelProps {
   events: ActivityEvent[]
   onTaskClick?: (taskId: string) => void
 }
 
+const SCROLL_THRESHOLD_PX = 48
+
 export default function ActivityPanel({ events, onTaskClick }: ActivityPanelProps) {
   const [filter, setFilter] = useState<ActivityFilter>('all')
   const [expanded, setExpanded] = useState<Set<number>>(new Set())
+  const scrollRef = useRef<HTMLDivElement>(null)
+  const stickToBottomRef = useRef(true)
 
   const filtered = useMemo(() => {
     if (filter === 'po_bounce') {
@@ -33,8 +37,29 @@ export default function ActivityPanel({ events, onTaskClick }: ActivityPanelProp
         ].includes(e.kind),
       )
     }
+    if (filter === 'failures') {
+      return events.filter((e) => e.kind === 'tool_failed')
+    }
     return events
   }, [events, filter])
+
+  const failureCount = useMemo(
+    () => events.filter((e) => e.kind === 'tool_failed').length,
+    [events],
+  )
+
+  const handleScroll = () => {
+    const el = scrollRef.current
+    if (!el) return
+    stickToBottomRef.current =
+      el.scrollHeight - el.scrollTop - el.clientHeight <= SCROLL_THRESHOLD_PX
+  }
+
+  useEffect(() => {
+    const el = scrollRef.current
+    if (!el || !stickToBottomRef.current) return
+    el.scrollTo({ top: el.scrollHeight, behavior: 'smooth' })
+  }, [filtered.length, events.length])
 
   const toggleExpand = (index: number) => {
     setExpanded((prev) => {
@@ -51,30 +76,38 @@ export default function ActivityPanel({ events, onTaskClick }: ActivityPanelProp
         <h3 className="text-xs font-bold uppercase tracking-wider text-cat-subtext">
           Agent Activity
         </h3>
-        <div className="flex gap-1">
-          {(['all', 'po_bounce', 'transcript'] as const).map((f) => (
+        <div className="flex gap-1 flex-wrap justify-end">
+          {(['all', 'po_bounce', 'transcript', 'failures'] as const).map((f) => (
             <button
               key={f}
               type="button"
               onClick={() => setFilter(f)}
               className={`text-[9px] px-2 py-0.5 rounded uppercase ${
                 filter === f
-                  ? 'bg-indigo-950/50 text-indigo-300 border border-indigo-500/40'
+                  ? f === 'failures'
+                    ? 'bg-rose-950/50 text-rose-300 border border-rose-500/40'
+                    : 'bg-indigo-950/50 text-indigo-300 border border-indigo-500/40'
                   : 'text-cat-overlay hover:text-white'
               }`}
             >
               {f === 'po_bounce' ? 'PO↔Dev' : f}
+              {f === 'failures' && failureCount > 0 ? ` (${failureCount})` : ''}
             </button>
           ))}
         </div>
       </div>
-      <div className="flex-1 p-3 overflow-y-auto space-y-2 font-mono text-xs">
+      <div
+        ref={scrollRef}
+        onScroll={handleScroll}
+        className="flex-1 p-3 overflow-y-auto space-y-2 font-mono text-xs"
+      >
         {filtered.length === 0 && (
           <p className="text-cat-overlay italic">No agent activity yet. Run a sprint step to see transcripts.</p>
         )}
         {[...filtered].reverse().map((event, i) => {
           const idx = filtered.length - 1 - i
           const isOpen = expanded.has(idx)
+          const isFailure = event.kind === 'tool_failed'
           const contentStr = formatTaskText(event.content)
           const preview =
             contentStr.length > 120 && !isOpen
@@ -86,22 +119,31 @@ export default function ActivityPanel({ events, onTaskClick }: ActivityPanelProp
               type="button"
               onClick={() => toggleExpand(idx)}
               className={`w-full text-left p-2 rounded border transition-colors ${
-                event.kind === 'tool_failed'
-                  ? 'border-rose-500/40 bg-rose-950/20 hover:border-rose-500/60'
+                isFailure
+                  ? 'border-rose-500/60 bg-rose-950/30 hover:border-rose-400 ring-1 ring-rose-500/20'
                   : 'border-cat-surface1/40 bg-cat-surface0/30 hover:border-indigo-500/30'
               }`}
             >
               <div className="flex items-center justify-between opacity-75 mb-1 text-[10px] gap-2">
-                <span className="font-bold text-indigo-300 truncate">
+                <span className={`font-bold truncate ${isFailure ? 'text-rose-300' : 'text-indigo-300'}`}>
                   {formatTaskText(event.agent)} · {formatTaskText(event.taskTitle)}
                 </span>
                 <span className="shrink-0">{event.timestamp}</span>
               </div>
-              <div className="text-[10px] text-cat-overlay mb-1">
-                {event.kind}
-                {event.lane ? ` → ${event.lane}` : ''}
+              <div className="text-[10px] mb-1 flex items-center gap-2">
+                {isFailure && (
+                  <span className="text-[9px] font-bold uppercase px-1.5 py-0.5 rounded bg-rose-900/60 text-rose-200">
+                    FAILED
+                  </span>
+                )}
+                <span className={isFailure ? 'text-rose-300' : 'text-cat-overlay'}>
+                  {event.kind}
+                  {event.lane ? ` → ${event.lane}` : ''}
+                </span>
               </div>
-              <p className="whitespace-pre-wrap text-cat-subtext">{preview}</p>
+              <p className={`whitespace-pre-wrap ${isFailure ? 'text-rose-100' : 'text-cat-subtext'}`}>
+                {preview}
+              </p>
               {onTaskClick && (
                 <span
                   role="presentation"

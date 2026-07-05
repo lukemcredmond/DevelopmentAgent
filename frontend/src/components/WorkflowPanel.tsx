@@ -71,6 +71,12 @@ export default function WorkflowPanel({
         />
         Require approval for write_file and run_command
       </label>
+      <p className="text-[10px] text-cat-overlay leading-relaxed -mt-1 pl-5">
+        When unchecked (default), tools run immediately without asking. When checked,{' '}
+        <span className="text-indigo-300">write_file</span>,{' '}
+        <span className="text-indigo-300">apply_patch</span>, and{' '}
+        <span className="text-indigo-300">run_command</span> pause until you approve in the modal.
+      </p>
 
       <div className="grid grid-cols-3 gap-2 text-[11px]">
         <label>

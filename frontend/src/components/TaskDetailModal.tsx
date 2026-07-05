@@ -1,5 +1,5 @@
 import { useEffect, useState, type ReactNode } from 'react'
-import type { BoardLane, Task, TaskFile, TaskGitCommit } from '../types'
+import type { BoardLane, Task, TaskFile, TaskGitCommit, TaskTranscriptEntry } from '../types'
 import { formatAcceptanceCriteria, formatTaskText, sanitizeTaskForUi } from '../utils/taskFormat'
 
 function getTaskFilePath(f: TaskFile | string): string {
@@ -37,6 +37,15 @@ function fileActionBadgeClass(action?: string): string {
     default:
       return 'bg-cat-surface1 text-cat-subtext'
   }
+}
+
+function isTranscriptFailure(entry: TaskTranscriptEntry): boolean {
+  if (entry.toolSuccess === false) return true
+  if (entry.role === 'tool') {
+    const content = entry.content ?? ''
+    if (content.includes('✗') || /\bFAILED\b/i.test(content)) return true
+  }
+  return false
 }
 
 function buildCommitUrl(remoteUrl: string, hash: string): string | null {
@@ -172,6 +181,7 @@ export default function TaskDetailModal({
   const [editing, setEditing] = useState(false)
   const [userAnswer, setUserAnswer] = useState('')
   const [showAllTranscript, setShowAllTranscript] = useState(false)
+  const [showFailuresOnly, setShowFailuresOnly] = useState(false)
 
   useEffect(() => {
     if (task) {
@@ -181,6 +191,7 @@ export default function TaskDetailModal({
       setEditing(false)
       setUserAnswer('')
       setShowAllTranscript(false)
+      setShowFailuresOnly(false)
     }
   }, [task])
 
@@ -190,9 +201,15 @@ export default function TaskDetailModal({
   const files = sortTaskFiles(safeTask.files ?? [])
   const decisions = [...(safeTask.decisions ?? [])].reverse()
   const allTranscript = [...(safeTask.transcript ?? [])].reverse()
+  const transcriptFailureCount = allTranscript.filter(isTranscriptFailure).length
+  const decisionFailureCount = decisions.filter((d) => d.type === 'tool_fail').length
+  const totalFailureCount = transcriptFailureCount + decisionFailureCount
   const transcriptCount = allTranscript.length
-  const transcriptCollapsedDefault = transcriptCount > 20
-  const visibleTranscript = showAllTranscript ? allTranscript : allTranscript.slice(0, 50)
+  const transcriptCollapsedDefault = transcriptCount > 20 && totalFailureCount === 0
+  const filteredTranscript = showFailuresOnly
+    ? allTranscript.filter(isTranscriptFailure)
+    : allTranscript
+  const visibleTranscript = showAllTranscript ? filteredTranscript : filteredTranscript.slice(0, 50)
   const acList = formatAcceptanceCriteria(safeTask.acceptanceCriteria)
   const blockedBy = safeTask.blockedBy ?? []
   const relatedTaskIds = safeTask.relatedTaskIds ?? []
@@ -418,14 +435,34 @@ export default function TaskDetailModal({
                 <p className="text-[11px] text-cat-overlay italic">None yet</p>
               ) : (
                 decisions.map((d, i) => (
-                  <div key={i} className="bg-cat-base border border-cat-surface1 rounded-lg p-2 text-[11px]">
-                    <div className="flex justify-between text-[10px] text-cat-overlay mb-1">
-                      <span>{d.agent} · {d.type}</span>
+                  <div
+                    key={i}
+                    className={`bg-cat-base border rounded-lg p-2 text-[11px] ${
+                      d.type === 'tool_fail'
+                        ? 'border-rose-500/50 bg-rose-950/20'
+                        : 'border-cat-surface1'
+                    }`}
+                  >
+                    <div className="flex justify-between text-[10px] text-cat-overlay mb-1 gap-2">
+                      <span className="flex items-center gap-2">
+                        {d.type === 'tool_fail' && (
+                          <span className="text-[9px] font-bold uppercase px-1 py-0.5 rounded bg-rose-900/60 text-rose-200">
+                            FAILED
+                          </span>
+                        )}
+                        <span>{d.agent} · {d.type}</span>
+                      </span>
                       <span>{d.timestamp}</span>
                     </div>
-                    <p className="text-white">{d.summary}</p>
+                    <p className={d.type === 'tool_fail' ? 'text-rose-100' : 'text-white'}>
+                      {d.summary}
+                    </p>
                     {d.detail && (
-                      <p className="text-cat-subtext mt-1 whitespace-pre-wrap text-[10px] max-h-20 overflow-y-auto">
+                      <p
+                        className={`mt-1 whitespace-pre-wrap text-[10px] max-h-20 overflow-y-auto ${
+                          d.type === 'tool_fail' ? 'text-rose-200/90' : 'text-cat-subtext'
+                        }`}
+                      >
                         {d.detail}
                       </p>
                     )}
@@ -437,10 +474,36 @@ export default function TaskDetailModal({
 
           <CollapsibleSection
             title="Transcript"
-            badge={transcriptCount}
+            badge={
+              totalFailureCount > 0
+                ? `${transcriptCount} · ${totalFailureCount} failed`
+                : transcriptCount
+            }
             defaultOpen={!transcriptCollapsedDefault}
           >
-            <div className="flex items-center justify-between mb-2 gap-2">
+            {totalFailureCount > 0 && (
+              <div className="mb-2 p-2 rounded-lg border border-rose-500/40 bg-rose-950/25 text-[10px] text-rose-100">
+                <span className="font-bold uppercase text-rose-300 mr-2">
+                  {totalFailureCount} tool failure{totalFailureCount === 1 ? '' : 's'}
+                </span>
+                Red entries below show failed read/write/run commands. Check Agent Decisions for
+                summaries.
+              </div>
+            )}
+            <div className="flex items-center justify-between mb-2 gap-2 flex-wrap">
+              {transcriptFailureCount > 0 && (
+                <button
+                  type="button"
+                  onClick={() => setShowFailuresOnly((v) => !v)}
+                  className={`text-[10px] px-2 py-0.5 rounded border ${
+                    showFailuresOnly
+                      ? 'border-rose-500/50 text-rose-300 bg-rose-950/30'
+                      : 'border-cat-surface1 text-indigo-400 hover:text-indigo-300'
+                  }`}
+                >
+                  {showFailuresOnly ? 'Show all' : `Failures only (${transcriptFailureCount})`}
+                </button>
+              )}
               {transcriptCount > 50 && !showAllTranscript && (
                 <button
                   type="button"
@@ -471,14 +534,18 @@ export default function TaskDetailModal({
             </div>
             <div className="overflow-y-auto max-h-48 space-y-2 pr-1">
               {visibleTranscript.length === 0 ? (
-                <p className="text-[11px] text-cat-overlay italic">Empty</p>
+                <p className="text-[11px] text-cat-overlay italic">
+                  {showFailuresOnly ? 'No failed tool entries in transcript' : 'Empty'}
+                </p>
               ) : (
-                visibleTranscript.map((entry, i) => (
+                visibleTranscript.map((entry, i) => {
+                  const failed = isTranscriptFailure(entry)
+                  return (
                   <div
                     key={i}
-                    className={`text-[10px] font-mono text-cat-subtext bg-cat-base border rounded p-2 ${
-                      entry.role === 'tool' && entry.toolSuccess === false
-                        ? 'border-rose-500/50'
+                    className={`text-[10px] font-mono bg-cat-base border rounded p-2 ${
+                      failed
+                        ? 'border-rose-500/60 bg-rose-950/25 ring-1 ring-rose-500/20'
                         : entry.role === 'tool' && entry.toolSuccess === true
                           ? 'border-emerald-500/40'
                           : 'border-cat-surface1'
@@ -488,29 +555,40 @@ export default function TaskDetailModal({
                       <span>
                         [{entry.timestamp}] {entry.agent ?? entry.role}
                       </span>
-                      {entry.role === 'tool' && entry.toolSuccess != null && (
-                        <span
-                          className={
-                            entry.toolSuccess
-                              ? 'text-emerald-400 font-bold'
-                              : 'text-rose-400 font-bold'
-                          }
-                        >
-                          {entry.toolSuccess ? 'OK' : 'FAILED'}
+                      {failed && (
+                        <span className="text-[9px] font-bold uppercase px-1 py-0.5 rounded bg-rose-900/60 text-rose-200">
+                          FAILED
                         </span>
                       )}
+                      {entry.role === 'tool' && entry.toolSuccess != null && !failed && (
+                        <span className="text-emerald-400 font-bold">OK</span>
+                      )}
                       {entry.toolName && (
-                        <span className="text-indigo-300">{entry.toolName}</span>
+                        <span className={failed ? 'text-rose-300' : 'text-indigo-300'}>
+                          {entry.toolName}
+                        </span>
                       )}
                     </div>
-                    <p className="whitespace-pre-wrap max-h-24 overflow-y-auto">{entry.content}</p>
+                    <p
+                      className={`whitespace-pre-wrap max-h-24 overflow-y-auto ${
+                        failed ? 'text-rose-100' : 'text-cat-subtext'
+                      }`}
+                    >
+                      {entry.content}
+                    </p>
+                    {entry.toolOutput && failed && (
+                      <pre className="mt-1 text-[9px] text-rose-200/90 whitespace-pre-wrap max-h-20 overflow-y-auto border-t border-rose-500/30 pt-1">
+                        {entry.toolOutput}
+                      </pre>
+                    )}
                     {entry.toolArgs && Object.keys(entry.toolArgs).length > 0 && (
                       <pre className="mt-1 text-[9px] text-cat-overlay overflow-x-auto">
                         {JSON.stringify(entry.toolArgs, null, 2)}
                       </pre>
                     )}
                   </div>
-                ))
+                  )
+                })
               )}
             </div>
           </CollapsibleSection>

@@ -493,6 +493,25 @@ def test_tool_requires_approval_settings():
     assert tool_requires_approval("read_file") is False
 
 
+def test_workflow_settings_api_persists_tool_approval():
+    from backend.services.workflow_settings import get_workflow_settings
+
+    initialize()
+    client = TestClient(app)
+    response = client.post(
+        "/api/workflow/settings",
+        json={"requireToolApproval": True},
+    )
+    assert response.status_code == 200
+    assert response.json()["workflowSettings"]["requireToolApproval"] is True
+    assert get_workflow_settings()["requireToolApproval"] is True
+    response = client.post(
+        "/api/workflow/settings",
+        json={"requireToolApproval": False},
+    )
+    assert response.json()["workflowSettings"]["requireToolApproval"] is False
+
+
 def test_resolve_tool_approval_unblocks():
     import threading
     from datetime import datetime

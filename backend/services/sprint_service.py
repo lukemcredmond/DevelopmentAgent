@@ -328,6 +328,24 @@ def _log_sprint_step_outcome(
     )
 
 
+def _count_task_tool_failures(task: Dict[str, Any]) -> int:
+    count = 0
+    for entry in task.get("transcript") or []:
+        if not isinstance(entry, dict):
+            continue
+        if entry.get("toolSuccess") is False:
+            count += 1
+            continue
+        if entry.get("role") == "tool":
+            content = str(entry.get("content", ""))
+            if "✗" in content or " FAILED " in content.upper():
+                count += 1
+    for decision in task.get("decisions") or []:
+        if isinstance(decision, dict) and decision.get("type") == "tool_fail":
+            count += 1
+    return count
+
+
 def _audit_dev_files_written(task: Dict[str, Any], lane_before: str, task_id: str) -> None:
     lane_after = get_task_lane(task_id) or lane_before
     if lane_before != "In Progress" or lane_after == lane_before:
@@ -335,12 +353,23 @@ def _audit_dev_files_written(task: Dict[str, Any], lane_before: str, task_id: st
     if lane_after in ("Needs PO", "Needs User"):
         return
     files = task.get("files") or []
-    if not files:
+    if files:
+        return
+    failures = _count_task_tool_failures(task)
+    title = task.get("title", task_id)
+    if failures:
         add_system_log(
             "Developer",
             "warning",
-            f"Developer advanced '{task.get('title', task_id)}' with no files recorded — "
-            "check transcript for tool failures",
+            f"Developer advanced '{title}' with no files recorded — "
+            f"{failures} failed tool(s) in transcript (open task → Transcript, red entries)",
+        )
+    else:
+        add_system_log(
+            "Developer",
+            "warning",
+            f"Developer advanced '{title}' with no files recorded — "
+            "no write/read tools logged; open task → Transcript and Agent Decisions",
         )
 
 
