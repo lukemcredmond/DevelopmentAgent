@@ -4,6 +4,7 @@ import uuid
 from collections import defaultdict
 from typing import Any, Dict, List, Optional, Set, Tuple
 
+from backend.agents.tool_outcomes import FILE_TOOLS, file_path_from_tool
 from backend.config import MAX_TASK_DECISIONS, MAX_TASK_TRANSCRIPT
 from backend import state
 from backend.services.events import publish_event
@@ -186,6 +187,34 @@ def normalize_task(task: Dict[str, Any]) -> Dict[str, Any]:
         task["userQuestion"] = coerce_task_text(task["userQuestion"])
     if "files" not in task or not isinstance(task["files"], list):
         task["files"] = []
+    else:
+        normalized_files: List[Dict[str, Any]] = []
+        for f in task["files"]:
+            if isinstance(f, str):
+                normalized_files.append({"path": f, "action": "touched"})
+            elif isinstance(f, dict) and f.get("path"):
+                normalized_files.append(
+                    {
+                        "path": str(f["path"]),
+                        "action": str(f.get("action") or "touched"),
+                        **({"lastTouchedAt": f["lastTouchedAt"]} if f.get("lastTouchedAt") else {}),
+                    }
+                )
+        task["files"] = normalized_files
+    if "relatedTaskIds" not in task or not isinstance(task.get("relatedTaskIds"), list):
+        task["relatedTaskIds"] = []
+    else:
+        task["relatedTaskIds"] = [str(r) for r in task["relatedTaskIds"] if r]
+    if task.get("gitCommit") is not None and isinstance(task["gitCommit"], dict):
+        gc = task["gitCommit"]
+        task["gitCommit"] = {
+            "hash": coerce_task_text(gc.get("hash")),
+            "message": coerce_task_text(gc.get("message", "")),
+            "timestamp": coerce_task_text(gc.get("timestamp", "")),
+            **({"remoteUrl": coerce_task_text(gc["remoteUrl"])} if gc.get("remoteUrl") else {}),
+        }
+    elif task.get("gitCommit") is not None:
+        task["gitCommit"] = None
     if "decisions" not in task or not isinstance(task["decisions"], list):
         task["decisions"] = []
     if "transcript" not in task or not isinstance(task["transcript"], list):
@@ -248,6 +277,7 @@ def normalize_board_tasks() -> None:
     for lane in state.SHARED_BOARD.values():
         for task in lane:
             normalize_task(task)
+            sync_task_files_from_transcript(task)
 
 
 def set_active_sprint_context(task_id: str, agent_role: str) -> None:
@@ -260,15 +290,86 @@ def clear_active_sprint_context() -> None:
     state.ACTIVE_SPRINT_AGENT = None
 
 
-def record_task_file(task_id: str, path: str, action: str = "written") -> None:
+def _now_timestamp() -> str:
+    return datetime.datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+
+
+def record_task_file(
+    task_id: str,
+    path: str,
+    action: str = "written",
+    *,
+    persist: bool = False,
+) -> None:
     task = find_task_by_id(task_id)
     if not task:
         return
     normalize_task(task)
-    entry = {"path": path, "action": action}
-    existing_paths = {f if isinstance(f, str) else f.get("path") for f in task["files"]}
-    if path not in existing_paths:
-        task["files"].append(entry)
+    ts = _now_timestamp()
+    existing = next((f for f in task["files"] if f.get("path") == path), None)
+    if existing:
+        existing["action"] = action
+        existing["lastTouchedAt"] = ts
+    else:
+        task["files"].append({"path": path, "action": action, "lastTouchedAt": ts})
+    if persist:
+        from backend.services.board_service import publish_board_update
+        from backend.services.project_service import save_current_project_state
+
+        save_current_project_state()
+        publish_board_update(task_id, source="task_files")
+
+
+def sync_task_files_from_transcript(task: Dict[str, Any]) -> int:
+    """Backfill task.files from successful file-tool transcript entries."""
+    normalize_task(task)
+    added = 0
+    for entry in task.get("transcript") or []:
+        if not isinstance(entry, dict):
+            continue
+        if entry.get("toolSuccess") is False:
+            continue
+        tool_name = entry.get("toolName")
+        if tool_name not in FILE_TOOLS:
+            continue
+        tool_args = entry.get("toolArgs") or {}
+        if not isinstance(tool_args, dict):
+            continue
+        path = file_path_from_tool(str(tool_name), tool_args)
+        if not path:
+            continue
+        action = FILE_TOOLS[str(tool_name)]
+        paths = {f.get("path") for f in task["files"] if isinstance(f, dict)}
+        if path in paths:
+            continue
+        ts = entry.get("timestamp") or _now_timestamp()
+        task["files"].append({"path": path, "action": action, "lastTouchedAt": ts})
+        added += 1
+    return added
+
+
+def record_task_git_commit(task_id: str, commit_info: Dict[str, Any]) -> None:
+    task = find_task_by_id(task_id)
+    if not task:
+        return
+    normalize_task(task)
+    task["gitCommit"] = {
+        "hash": coerce_task_text(commit_info.get("hash")),
+        "message": coerce_task_text(commit_info.get("message", "")),
+        "timestamp": commit_info.get("timestamp") or _now_timestamp(),
+        **(
+            {"remoteUrl": coerce_task_text(commit_info["remoteUrl"])}
+            if commit_info.get("remoteUrl")
+            else {}
+        ),
+    }
+    publish_activity(
+        task_id,
+        "git_commit",
+        f"Commit {task['gitCommit']['hash'][:8]}: {task['gitCommit']['message'][:120]}",
+        role="system",
+        agent="System",
+    )
 
 
 def record_task_decision(

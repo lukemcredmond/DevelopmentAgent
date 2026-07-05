@@ -9,8 +9,16 @@ from ollama._types import Message
 
 from backend import state
 from backend.agents.agent_run import finish_run, get_active_run, start_run, update_run
-from backend.agents.task_context import record_task_decision, record_task_transcript
+from backend.agents.task_context import (
+    find_task_by_id,
+    record_task_decision,
+    record_task_file,
+    record_task_transcript,
+    sync_task_files_from_transcript,
+)
 from backend.agents.tool_outcomes import (
+    file_action_for_tool,
+    file_path_from_tool,
     format_tool_transcript_content,
     is_tool_failure,
     sanitize_tool_args_for_log,
@@ -143,6 +151,11 @@ class ScrumAgent:
             f"{'Failed' if not success else 'Used'} tool '{tool_name}'",
             tool_output[:500],
         )
+        if success:
+            action = file_action_for_tool(tool_name)
+            path = file_path_from_tool(tool_name, arguments)
+            if action and path:
+                record_task_file(task_id, path, action, persist=True)
         arg_summary = summarize_tool_args(tool_name, arguments)
         if success:
             if tool_name == "write_file":
@@ -316,6 +329,11 @@ class ScrumAgent:
         except Exception as exc:
             finish_run(status="failed", error=str(exc))
             raise
+        finally:
+            if task_id:
+                task = find_task_by_id(task_id)
+                if task:
+                    sync_task_files_from_transcript(task)
 
 
     def stream_messages(

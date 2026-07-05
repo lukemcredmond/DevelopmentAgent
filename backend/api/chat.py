@@ -7,6 +7,7 @@ from backend import state
 from backend.agents.registry import AGENT_MAP
 from backend.api.schemas import ChatPayload
 from backend.services.events import publish_event
+from backend.services.project_service import save_current_project_state
 from backend.workspace.files import build_file_context_block
 
 router = APIRouter()
@@ -17,6 +18,21 @@ def _compose_message(payload: ChatPayload) -> str:
     if context_block:
         return f"{context_block}\nUser message:\n{payload.message}"
     return payload.message
+
+
+def _apply_chat_task_context(payload: ChatPayload) -> None:
+    if payload.task_id:
+        state.ACTIVE_SPRINT_TASK_ID = payload.task_id
+        agent = AGENT_MAP.get(payload.agent)
+        if agent:
+            state.ACTIVE_SPRINT_AGENT = agent.role
+
+
+def _finalize_chat_task_context(payload: ChatPayload) -> None:
+    if payload.task_id:
+        save_current_project_state()
+    state.ACTIVE_SPRINT_TASK_ID = None
+    state.ACTIVE_SPRINT_AGENT = None
 
 
 @router.post("/api/chat")
@@ -31,10 +47,11 @@ def chat_with_agent(payload: ChatPayload):
             state.CURRENT_PROJECT_ID, "user", payload.message, agent=agent.role
         )
 
-        if payload.task_id:
-            state.ACTIVE_SPRINT_TASK_ID = payload.task_id
-
-        response = agent.execute_step(_compose_message(payload))
+        _apply_chat_task_context(payload)
+        try:
+            response = agent.execute_step(_compose_message(payload))
+        finally:
+            _finalize_chat_task_context(payload)
 
         state.storage.save_chat_message(
             state.CURRENT_PROJECT_ID, "assistant", response, agent=agent.role
@@ -60,12 +77,16 @@ def chat_stream(payload: ChatPayload):
             state.storage.save_chat_message(
                 state.CURRENT_PROJECT_ID, "user", payload.message, agent=agent.role
             )
+            _apply_chat_task_context(payload)
             composed = _compose_message(payload)
             messages = [{"role": "user", "content": composed}]
             full = ""
-            for chunk in agent.stream_messages(messages):
-                full += chunk
-                yield f"data: {json.dumps({'chunk': chunk})}\n\n"
+            try:
+                for chunk in agent.stream_messages(messages):
+                    full += chunk
+                    yield f"data: {json.dumps({'chunk': chunk})}\n\n"
+            finally:
+                _finalize_chat_task_context(payload)
             state.storage.save_chat_message(
                 state.CURRENT_PROJECT_ID, "assistant", full, agent=agent.role
             )

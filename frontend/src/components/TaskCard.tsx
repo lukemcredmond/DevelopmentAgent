@@ -28,6 +28,9 @@ export default function TaskCard({
   }
 
   const blocked = (task.blockedBy ?? []).length > 0
+  const relatedCount = (task.relatedTaskIds ?? []).length
+  const hasCommit = Boolean(task.gitCommit?.hash)
+  const isDone = task.status === 'Done'
 
   return (
     <button
@@ -59,6 +62,23 @@ export default function TaskCard({
           {task.qaFailure && (
             <span className="text-[9px] bg-rose-950/50 text-rose-300 px-1 py-0.5 rounded" title="QA failed">
               <i className="fa-solid fa-xmark" />
+            </span>
+          )}
+          {relatedCount > 0 && (
+            <span
+              className="text-[9px] bg-violet-950/50 text-violet-300 px-1 py-0.5 rounded"
+              title="Related features"
+            >
+              ↔{relatedCount}
+            </span>
+          )}
+          {isDone && hasCommit && (
+            <span
+              className="text-[9px] bg-emerald-950/50 text-emerald-300 px-1 py-0.5 rounded font-mono"
+              title={`Commit ${task.gitCommit?.hash?.slice(0, 8)}`}
+            >
+              <i className="fa-solid fa-code-commit mr-0.5" />
+              {task.gitCommit?.hash?.slice(0, 7)}
             </span>
           )}
           {fileCount > 0 && (

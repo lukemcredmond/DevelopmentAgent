@@ -554,6 +554,11 @@ export default function App() {
             }
           })
         }
+        onRelatedTaskClick={(taskId) => {
+          const related = findTaskOnBoard(state.board, taskId)
+          if (related) setSelectedTask(related)
+        }}
+        getTaskTitle={(taskId) => findTaskOnBoard(state.board, taskId)?.title}
       />
 
       <SkillModal

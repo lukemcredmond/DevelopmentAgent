@@ -66,8 +66,32 @@ def git_diff(path: Optional[str] = None) -> Dict[str, Any]:
     return _run_git(args)
 
 
+def git_remote_url() -> Optional[str]:
+    result = _run_git(["remote", "get-url", "origin"])
+    if result.get("success") and result.get("stdout"):
+        return result["stdout"].strip()
+    return None
+
+
+def git_head_hash() -> Optional[str]:
+    result = _run_git(["rev-parse", "HEAD"])
+    if result.get("success") and result.get("stdout"):
+        return result["stdout"].strip()
+    return None
+
+
 def git_commit(message: str) -> Dict[str, Any]:
     add_result = _run_git(["add", "-A"])
     if not add_result["success"]:
         return add_result
-    return _run_git(["commit", "-m", message])
+    commit_result = _run_git(["commit", "-m", message])
+    if not commit_result.get("success"):
+        return commit_result
+    commit_hash = git_head_hash()
+    remote_url = git_remote_url()
+    return {
+        **commit_result,
+        "hash": commit_hash,
+        "message": message,
+        "remoteUrl": remote_url,
+    }

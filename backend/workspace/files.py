@@ -76,7 +76,7 @@ def write_workspace_file(path: str, content: str, author: Optional[str] = None) 
             )
 
         if state.ACTIVE_SPRINT_TASK_ID:
-            record_task_file(state.ACTIVE_SPRINT_TASK_ID, safe_path, "written")
+            record_task_file(state.ACTIVE_SPRINT_TASK_ID, safe_path, "written", persist=False)
             record_task_decision(
                 state.ACTIVE_SPRINT_TASK_ID,
                 state.ACTIVE_SPRINT_AGENT or "Developer",
@@ -125,7 +125,7 @@ def read_workspace_file(path: str) -> str:
                 content = f.read()
                 state.VIRTUAL_FILESYSTEM[safe_path] = content
                 if state.ACTIVE_SPRINT_TASK_ID:
-                    record_task_file(state.ACTIVE_SPRINT_TASK_ID, safe_path, "read")
+                    record_task_file(state.ACTIVE_SPRINT_TASK_ID, safe_path, "read", persist=True)
                 return content
         except Exception:
             pass
@@ -140,7 +140,7 @@ def run_tests_on_workspace(test_script_path: str) -> str:
     if state.ACTIVE_SPRINT_TASK_ID:
         try:
             safe_path = resolve_workspace_path(test_script_path)
-            record_task_file(state.ACTIVE_SPRINT_TASK_ID, safe_path, "tested")
+            record_task_file(state.ACTIVE_SPRINT_TASK_ID, safe_path, "tested", persist=True)
         except ValueError:
             pass
 

@@ -1,5 +1,7 @@
 from backend.agents.scrum_agent import ScrumAgent
+from backend.agents.task_context import record_task_git_commit
 from backend.agents.tools import Tool
+from backend import state
 from backend.services.board_service import move_board_stage
 from backend.services.git_service import git_commit, git_diff, git_init, git_status
 from backend.workspace.files import (
@@ -136,6 +138,21 @@ tool_git_diff = Tool(
     func=lambda path=None: git_diff(path),
 )
 
+
+def _invoke_git_commit(message: str):
+    result = git_commit(message)
+    if result.get("success") and result.get("hash") and state.ACTIVE_SPRINT_TASK_ID:
+        record_task_git_commit(
+            state.ACTIVE_SPRINT_TASK_ID,
+            {
+                "hash": result["hash"],
+                "message": message,
+                "remoteUrl": result.get("remoteUrl"),
+            },
+        )
+    return result
+
+
 tool_git_commit = Tool(
     name="git_commit",
     description="Stages all changes and commits with the given message.",
@@ -144,7 +161,7 @@ tool_git_commit = Tool(
         "properties": {"message": {"type": "string"}},
         "required": ["message"],
     },
-    func=lambda message: git_commit(message),
+    func=_invoke_git_commit,
 )
 
 tool_git_init = Tool(

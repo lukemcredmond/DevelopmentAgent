@@ -557,3 +557,122 @@ def test_agent_run_lifecycle():
     finish_run(status="completed")
     assert get_active_run() is None
     assert run.run_id
+
+
+def test_record_task_file_upserts_action():
+    from backend import state
+    from backend.agents.task_context import init_new_task, record_task_file
+
+    initialize()
+    task = init_new_task({"id": "T-FILES", "title": "Files", "description": "d"})
+    state.SHARED_BOARD.setdefault("In Progress", []).append(task)
+    record_task_file("T-FILES", "lib/auth.dart", "read", persist=False)
+    record_task_file("T-FILES", "lib/auth.dart", "written", persist=False)
+    assert len(task["files"]) == 1
+    assert task["files"][0]["path"] == "lib/auth.dart"
+    assert task["files"][0]["action"] == "written"
+    assert task["files"][0].get("lastTouchedAt")
+
+
+def test_sync_task_files_from_transcript():
+    from backend import state
+    from backend.agents.task_context import init_new_task, sync_task_files_from_transcript
+
+    initialize()
+    task = init_new_task({"id": "T-TR", "title": "Transcript", "description": "d"})
+    task["transcript"] = [
+        {
+            "timestamp": "2026-01-01 12:00:00",
+            "role": "tool",
+            "content": "write_file",
+            "toolName": "write_file",
+            "toolSuccess": True,
+            "toolArgs": {"path": "lib/main.dart", "contentLength": 100},
+        },
+        {
+            "timestamp": "2026-01-01 12:01:00",
+            "role": "tool",
+            "content": "read_file",
+            "toolName": "read_file",
+            "toolSuccess": True,
+            "toolArgs": {"path": "lib/bloc/auth_bloc.dart"},
+        },
+    ]
+    state.SHARED_BOARD.setdefault("In Progress", []).append(task)
+    added = sync_task_files_from_transcript(task)
+    assert added == 2
+    paths = {f["path"] for f in task["files"]}
+    assert "lib/main.dart" in paths
+    assert "lib/bloc/auth_bloc.dart" in paths
+
+
+def test_record_task_git_commit():
+    from backend import state
+    from backend.agents.task_context import init_new_task, record_task_git_commit
+
+    initialize()
+    task = init_new_task({"id": "T-GIT", "title": "Git task", "description": "d"})
+    state.SHARED_BOARD.setdefault("Done", []).append(task)
+    record_task_git_commit(
+        "T-GIT",
+        {
+            "hash": "abc123def456",
+            "message": "T-GIT: Git task",
+            "remoteUrl": "https://github.com/org/repo.git",
+        },
+    )
+    assert task["gitCommit"]["hash"] == "abc123def456"
+    assert task["gitCommit"]["remoteUrl"] == "https://github.com/org/repo.git"
+
+
+def test_link_related_features_auth_area():
+    from backend import state
+    from backend.agents.task_context import init_new_task
+    from backend.services.feature_similarity import link_related_features
+
+    initialize()
+    existing = init_new_task(
+        {
+            "id": "T-AUTH-LOGIN",
+            "title": "Auth login flow",
+            "description": "Implement user authentication login with bloc",
+        }
+    )
+    state.SHARED_BOARD.setdefault("In Progress", []).append(existing)
+    new_task = init_new_task(
+        {
+            "id": "T-AUTH-LOGOUT",
+            "title": "Auth logout flow",
+            "description": "Implement user authentication logout with bloc",
+        }
+    )
+    linked = link_related_features(new_task, exclude_ids={"T-AUTH-LOGOUT"})
+    assert "T-AUTH-LOGIN" in new_task.get("relatedTaskIds", [])
+    assert linked
+    assert "T-AUTH-LOGIN" in new_task.get("blockedBy", [])
+
+
+def test_git_commit_returns_hash(monkeypatch):
+    from backend.services import git_service
+
+    def fake_run(args, timeout=30):
+        if args[:2] == ["commit", "-m"]:
+            return {"success": True, "stdout": "", "stderr": "", "returncode": 0}
+        if args == ["add", "-A"]:
+            return {"success": True, "stdout": "", "stderr": "", "returncode": 0}
+        if args == ["rev-parse", "HEAD"]:
+            return {"success": True, "stdout": "deadbeef1234567890\n", "stderr": "", "returncode": 0}
+        if args == ["remote", "get-url", "origin"]:
+            return {
+                "success": True,
+                "stdout": "https://github.com/example/repo.git\n",
+                "stderr": "",
+                "returncode": 0,
+            }
+        return {"success": False, "stdout": "", "stderr": "unknown", "returncode": 1}
+
+    monkeypatch.setattr(git_service, "_run_git", fake_run)
+    result = git_service.git_commit("test message")
+    assert result["success"] is True
+    assert result["hash"] == "deadbeef1234567890"
+    assert "github.com" in result["remoteUrl"]

@@ -1,6 +1,27 @@
 """Tool invocation summaries and failure classification."""
 
-from typing import Any, Dict
+from typing import Any, Dict, Optional
+
+FILE_TOOLS: Dict[str, str] = {
+    "read_file": "read",
+    "write_file": "written",
+    "apply_patch": "written",
+    "run_test": "tested",
+}
+
+
+def file_path_from_tool(name: str, args: Dict[str, Any]) -> Optional[str]:
+    """Extract workspace-relative path from a file-related tool invocation."""
+    if name not in FILE_TOOLS:
+        return None
+    path = args.get("path") or args.get("test_script_path")
+    if isinstance(path, str) and path.strip():
+        return path.strip()
+    return None
+
+
+def file_action_for_tool(name: str) -> Optional[str]:
+    return FILE_TOOLS.get(name)
 
 
 def sanitize_tool_args_for_log(name: str, args: Dict[str, Any]) -> Dict[str, Any]:

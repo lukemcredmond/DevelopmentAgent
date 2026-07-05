@@ -1,9 +1,62 @@
 import { useEffect, useState, type ReactNode } from 'react'
-import type { BoardLane, Task, TaskFile } from '../types'
+import type { BoardLane, Task, TaskFile, TaskGitCommit } from '../types'
 import { formatAcceptanceCriteria, formatTaskText, sanitizeTaskForUi } from '../utils/taskFormat'
 
 function getTaskFilePath(f: TaskFile | string): string {
   return typeof f === 'string' ? f : f.path
+}
+
+function normalizeTaskFile(f: TaskFile | string): TaskFile {
+  return typeof f === 'string' ? { path: f, action: 'touched' } : f
+}
+
+const FILE_ACTION_ORDER: Record<string, number> = {
+  written: 0,
+  tested: 1,
+  read: 2,
+  touched: 3,
+}
+
+function sortTaskFiles(files: (TaskFile | string)[]): TaskFile[] {
+  return [...files].map(normalizeTaskFile).sort((a, b) => {
+    const ao = FILE_ACTION_ORDER[a.action ?? 'touched'] ?? 3
+    const bo = FILE_ACTION_ORDER[b.action ?? 'touched'] ?? 3
+    if (ao !== bo) return ao - bo
+    return (b.lastTouchedAt ?? '').localeCompare(a.lastTouchedAt ?? '')
+  })
+}
+
+function fileActionBadgeClass(action?: string): string {
+  switch (action) {
+    case 'written':
+      return 'bg-emerald-950/60 text-emerald-300'
+    case 'read':
+      return 'bg-slate-800 text-slate-300'
+    case 'tested':
+      return 'bg-amber-950/60 text-amber-300'
+    default:
+      return 'bg-cat-surface1 text-cat-subtext'
+  }
+}
+
+function buildCommitUrl(remoteUrl: string, hash: string): string | null {
+  let url = remoteUrl.trim()
+  if (url.startsWith('git@')) {
+    const match = /^git@([^:]+):(.+?)(?:\.git)?$/.exec(url)
+    if (match) {
+      url = `https://${match[1]}/${match[2].replace(/\.git$/, '')}`
+    }
+  }
+  url = url.replace(/\.git$/, '')
+  if (
+    url.includes('github.com') ||
+    url.includes('gitlab.com') ||
+    url.includes('dev.azure.com') ||
+    url.includes('visualstudio.com')
+  ) {
+    return `${url}/commit/${hash}`
+  }
+  return null
 }
 
 interface TaskDetailModalProps {
@@ -22,6 +75,8 @@ interface TaskDetailModalProps {
   onClearTranscript?: (taskId: string) => void
   onApprove?: (taskId: string) => void
   onResolveUser?: (taskId: string, answer: string) => void
+  onRelatedTaskClick?: (taskId: string) => void
+  getTaskTitle?: (taskId: string) => string | undefined
 }
 
 function CollapsibleSection({
@@ -56,6 +111,47 @@ function CollapsibleSection({
   )
 }
 
+function GitCommitSection({ commit }: { commit: TaskGitCommit }) {
+  const shortHash = commit.hash.slice(0, 8)
+  const link = commit.remoteUrl ? buildCommitUrl(commit.remoteUrl, commit.hash) : null
+
+  const copyHash = () => {
+    void navigator.clipboard.writeText(commit.hash)
+  }
+
+  return (
+    <CollapsibleSection title="Git Commit" defaultOpen>
+      <div className="space-y-1 text-[11px]">
+        {link ? (
+          <a
+            href={link}
+            target="_blank"
+            rel="noopener noreferrer"
+            className="font-mono text-indigo-300 hover:text-indigo-200 underline"
+          >
+            {shortHash}
+          </a>
+        ) : (
+          <button
+            type="button"
+            onClick={copyHash}
+            className="font-mono text-indigo-300 hover:text-indigo-200"
+            title="Copy full hash"
+          >
+            {shortHash}
+          </button>
+        )}
+        {commit.message && (
+          <p className="text-cat-subtext whitespace-pre-wrap">{commit.message}</p>
+        )}
+        {commit.timestamp && (
+          <p className="text-[10px] text-cat-overlay">{commit.timestamp}</p>
+        )}
+      </div>
+    </CollapsibleSection>
+  )
+}
+
 export default function TaskDetailModal({
   task,
   taskLane,
@@ -67,6 +163,8 @@ export default function TaskDetailModal({
   onClearTranscript,
   onApprove,
   onResolveUser,
+  onRelatedTaskClick,
+  getTaskTitle,
 }: TaskDetailModalProps) {
   const [title, setTitle] = useState('')
   const [description, setDescription] = useState('')
@@ -89,7 +187,7 @@ export default function TaskDetailModal({
   if (!task) return null
 
   const safeTask = sanitizeTaskForUi(task)
-  const files = safeTask.files ?? []
+  const files = sortTaskFiles(safeTask.files ?? [])
   const decisions = [...(safeTask.decisions ?? [])].reverse()
   const allTranscript = [...(safeTask.transcript ?? [])].reverse()
   const transcriptCount = allTranscript.length
@@ -97,6 +195,7 @@ export default function TaskDetailModal({
   const visibleTranscript = showAllTranscript ? allTranscript : allTranscript.slice(0, 50)
   const acList = formatAcceptanceCriteria(safeTask.acceptanceCriteria)
   const blockedBy = safeTask.blockedBy ?? []
+  const relatedTaskIds = safeTask.relatedTaskIds ?? []
 
   return (
     <div className="fixed inset-0 bg-black/75 flex items-center justify-center p-4 z-50">
@@ -187,6 +286,30 @@ export default function TaskDetailModal({
             </div>
           )}
 
+          {relatedTaskIds.length > 0 && (
+            <CollapsibleSection title="Related Features" badge={relatedTaskIds.length} defaultOpen>
+              <div className="space-y-1">
+                {relatedTaskIds.map((relatedId) => (
+                  <button
+                    key={relatedId}
+                    type="button"
+                    onClick={() => onRelatedTaskClick?.(relatedId)}
+                    className="w-full text-left text-[11px] font-mono bg-cat-base border border-cat-surface1 rounded px-2 py-1.5 hover:border-indigo-500/50 text-indigo-300"
+                  >
+                    {relatedId}
+                    {getTaskTitle?.(relatedId) && (
+                      <span className="text-cat-subtext font-sans ml-2">
+                        — {getTaskTitle(relatedId)}
+                      </span>
+                    )}
+                  </button>
+                ))}
+              </div>
+            </CollapsibleSection>
+          )}
+
+          {safeTask.gitCommit?.hash && <GitCommitSection commit={safeTask.gitCommit} />}
+
           {safeTask.qaFailure && (
             <div className="bg-rose-950/30 border border-rose-500/30 rounded-lg p-3">
               <h4 className="text-xs font-bold text-rose-300 mb-1">Last QA Failure</h4>
@@ -267,15 +390,22 @@ export default function TaskDetailModal({
               ) : (
                 files.map((f, i) => (
                   <button
-                    key={i}
+                    key={`${f.path}-${i}`}
                     type="button"
                     onClick={() => {
                       onOpenFile(getTaskFilePath(f))
                       onClose()
                     }}
-                    className="w-full text-left text-[11px] font-mono bg-cat-base border border-cat-surface1 rounded px-2 py-1.5 hover:border-indigo-500/50 text-indigo-300"
+                    className="w-full text-left text-[11px] font-mono bg-cat-base border border-cat-surface1 rounded px-2 py-1.5 hover:border-indigo-500/50 text-indigo-300 flex items-center justify-between gap-2"
                   >
-                    {getTaskFilePath(f)}
+                    <span className="truncate">{getTaskFilePath(f)}</span>
+                    {f.action && (
+                      <span
+                        className={`shrink-0 text-[9px] uppercase px-1.5 py-0.5 rounded ${fileActionBadgeClass(f.action)}`}
+                      >
+                        {f.action}
+                      </span>
+                    )}
                   </button>
                 ))
               )}

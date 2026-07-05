@@ -24,6 +24,7 @@ from backend.agents.task_context import (
     normalize_task,
     publish_activity,
     record_task_decision,
+    record_task_git_commit,
     set_active_sprint_context,
     set_qa_failure,
     sort_backlog,
@@ -39,6 +40,7 @@ from backend.services.brief_service import (
     set_project_brief,
 )
 from backend.services.events import publish_event
+from backend.services.feature_similarity import iter_board_tasks, link_related_features
 from backend.services.git_service import git_commit, git_init
 from backend.services.logs import add_system_log
 from backend.services.project_service import save_current_project_state
@@ -268,6 +270,10 @@ def _append_tasks(tasks: List[Dict[str, Any]]) -> int:
             id_map[str(i)] = new_id
         prepared.append(task)
 
+    batch_ids = {str(t["id"]) for t in prepared}
+    prior_candidates = iter_board_tasks(exclude_ids=batch_ids)
+    added_tasks: List[Dict[str, Any]] = []
+
     added = 0
     for task in prepared:
         remapped: List[str] = []
@@ -281,8 +287,14 @@ def _append_tasks(tasks: List[Dict[str, Any]]) -> int:
                 remapped.append(ref_str)
         task["blockedBy"] = remapped
         init_new_task(task)
+        link_related_features(
+            task,
+            exclude_ids=batch_ids,
+            candidates=prior_candidates + added_tasks,
+        )
         task["status"] = lane
         state.SHARED_BOARD[lane].append(task)
+        added_tasks.append(task)
         added += 1
     if lane == "Backlog":
         sort_backlog()
@@ -342,7 +354,17 @@ def _commit_on_done(task: Dict[str, Any]) -> None:
         git_init()
     msg = f"{task['id']}: {task['title']}"
     result = git_commit(msg)
-    if result.get("success"):
+    if result.get("success") and result.get("hash"):
+        record_task_git_commit(
+            task["id"],
+            {
+                "hash": result["hash"],
+                "message": msg,
+                "remoteUrl": result.get("remoteUrl"),
+            },
+        )
+        add_system_log("System", "success", f"Git commit on Done: {msg} ({result['hash'][:8]})")
+    elif result.get("success"):
         add_system_log("System", "success", f"Git commit on Done: {msg}")
     else:
         add_system_log("System", "info", f"Git commit skipped/failed: {result.get('stderr', '')[:200]}")

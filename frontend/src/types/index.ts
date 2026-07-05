@@ -15,6 +15,14 @@ export type LogType = 'info' | 'success' | 'warning' | 'error'
 export interface TaskFile {
   path: string
   action?: string
+  lastTouchedAt?: string
+}
+
+export interface TaskGitCommit {
+  hash: string
+  message?: string
+  timestamp?: string
+  remoteUrl?: string
 }
 
 export interface TaskDecision {
@@ -53,6 +61,8 @@ export interface Task {
   acceptanceCriteria?: string[]
   priority?: number
   blockedBy?: string[]
+  relatedTaskIds?: string[]
+  gitCommit?: TaskGitCommit | null
   qaFailure?: QaFailure | null
   userQuestion?: string | null
   poRoundTrips?: number
