@@ -421,7 +421,7 @@ def record_task_transcript(
         "agent": agent or role,
         "content": content[:4000],
     }
-    for key in ("toolName", "toolSuccess", "toolArgs", "toolOutput"):
+    for key in ("toolName", "toolSuccess", "toolArgs", "toolOutput", "source"):
         if key in metadata and metadata[key] is not None:
             entry[key] = metadata[key]
     task["transcript"].append(entry)

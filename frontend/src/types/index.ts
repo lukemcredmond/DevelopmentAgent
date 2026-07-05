@@ -97,6 +97,69 @@ export interface RecentToolEntry {
   timestamp: string
 }
 
+export interface ToolExecutionEvent {
+  id: string
+  runId?: string
+  taskId?: string
+  agent: string
+  toolName: string
+  toolArgs?: Record<string, unknown>
+  toolSuccess?: boolean
+  toolOutput?: string
+  durationMs?: number
+  timestamp: string
+  status: 'running' | 'completed' | 'failed'
+  source: 'agent' | 'manual' | 'replay'
+}
+
+export interface ToolDefinition {
+  name: string
+  description: string
+  parameters: Record<string, unknown>
+}
+
+export interface ToolRegistryResponse {
+  agent: string
+  tools: ToolDefinition[]
+}
+
+export interface ToolExecutePayload {
+  agent: string
+  toolName: string
+  arguments: Record<string, unknown>
+  taskId?: string
+}
+
+export interface ToolExecuteResult {
+  toolName: string
+  toolArgs: Record<string, unknown>
+  toolSuccess: boolean
+  toolOutput: string
+  durationMs: number
+  timestamp: string
+  agent: string
+  agentId: string
+  taskId?: string
+  source: string
+  runId: string
+}
+
+export interface TranscriptToolEntry {
+  index: number
+  toolName: string
+  toolArgs: Record<string, unknown>
+  toolSuccess?: boolean
+  timestamp?: string
+  source?: string
+  content?: string
+}
+
+export interface ToolReplayPayload {
+  taskId: string
+  entryIndices?: number[]
+  failedOnly?: boolean
+}
+
 export interface AgentRunState {
   runId: string
   taskId: string

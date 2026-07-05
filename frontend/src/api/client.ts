@@ -21,6 +21,11 @@ import type {
   TerminalRunPayload,
   TerminalRunResponse,
   UpdateTaskPayload,
+  ToolExecutePayload,
+  ToolExecuteResult,
+  ToolRegistryResponse,
+  ToolReplayPayload,
+  TranscriptToolEntry,
   WorkflowSettingsPayload,
 } from '../types'
 
@@ -399,6 +404,39 @@ export async function resolveToolApproval(
     {
       method: 'POST',
       body: JSON.stringify({ approved }),
+    },
+  )
+}
+
+export async function fetchToolRegistry(agent: string): Promise<ToolRegistryResponse> {
+  return request<ToolRegistryResponse>(`/api/tools/registry?agent=${encodeURIComponent(agent)}`)
+}
+
+export async function executeTool(
+  payload: ToolExecutePayload,
+): Promise<{ ok: boolean; result: ToolExecuteResult }> {
+  return request<{ ok: boolean; result: ToolExecuteResult }>('/api/tools/execute', {
+    method: 'POST',
+    body: JSON.stringify(payload),
+  })
+}
+
+export async function fetchTaskToolCalls(
+  taskId: string,
+): Promise<{ taskId: string; entries: TranscriptToolEntry[] }> {
+  return request<{ taskId: string; entries: TranscriptToolEntry[] }>(
+    `/api/tools/transcript/${encodeURIComponent(taskId)}`,
+  )
+}
+
+export async function replayTools(
+  payload: ToolReplayPayload,
+): Promise<{ ok: boolean; executed: number; results: ToolExecuteResult[] }> {
+  return request<{ ok: boolean; executed: number; results: ToolExecuteResult[] }>(
+    '/api/tools/replay',
+    {
+      method: 'POST',
+      body: JSON.stringify(payload),
     },
   )
 }

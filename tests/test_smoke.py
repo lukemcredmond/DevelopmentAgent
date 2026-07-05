@@ -431,28 +431,28 @@ def test_write_workspace_file_invalid_path_error_prefix():
 
 def test_record_tool_usage_failure_metadata():
     from backend import state
-    from backend.agents.registry import agent_dev
     from backend.agents.task_context import init_new_task
+    from backend.services.tool_execution_service import execute_tool
 
     initialize()
     task = init_new_task({"id": "T-TOOL-FAIL", "title": "Tool fail", "description": "d"})
     state.SHARED_BOARD.setdefault("In Progress", []).append(task)
-    state.ACTIVE_SPRINT_TASK_ID = "T-TOOL-FAIL"
     before_logs = len(state.SYSTEM_LOGS)
 
-    agent_dev._record_tool_usage(
-        "T-TOOL-FAIL",
-        "write_file",
-        {"path": "lib/missing.dart", "content": ""},
-        "Error: physical write failed for 'lib/missing.dart': denied",
-        "implement",
-        success=False,
+    execute_tool(
+        "dev",
+        "read_file",
+        {"path": "missing-tool-fail.txt"},
+        task_id="T-TOOL-FAIL",
+        source="agent",
+        skip_approval=True,
+        user_prompt="implement",
     )
 
     entry = task["transcript"][-1]
     assert entry["toolSuccess"] is False
-    assert entry["toolName"] == "write_file"
-    assert entry["toolArgs"]["path"] == "lib/missing.dart"
+    assert entry["toolName"] == "read_file"
+    assert entry["toolArgs"]["path"] == "missing-tool-fail.txt"
     assert any("FAILED" in log["text"] for log in state.SYSTEM_LOGS[before_logs:])
 
 
@@ -722,21 +722,20 @@ def test_sync_transcript_includes_failed_file_tools():
 
 def test_record_task_file_on_failed_tool_via_agent():
     from backend import state
-    from backend.agents.registry import agent_dev
-    from backend.agents.task_context import init_new_task, set_active_sprint_context
+    from backend.agents.task_context import init_new_task
+    from backend.services.tool_execution_service import execute_tool
 
     initialize()
     task = init_new_task({"id": "T-REC-FAIL", "title": "Rec", "description": "d"})
     state.SHARED_BOARD.setdefault("In Progress", []).append(task)
-    set_active_sprint_context("T-REC-FAIL", "Developer")
-    state.ACTIVE_SPRINT_TASK_ID = "T-REC-FAIL"
-    agent_dev._record_tool_usage(
-        "T-REC-FAIL",
+    execute_tool(
+        "dev",
         "read_file",
         {"path": "nope.txt"},
-        "Error: File 'nope.txt' not found.",
-        "prompt",
-        success=False,
+        task_id="T-REC-FAIL",
+        source="manual",
+        skip_approval=True,
+        user_prompt="prompt",
     )
     assert any(f.get("path") == "nope.txt" for f in task["files"])
     assert task["files"][0]["action"] == "read-failed"
@@ -788,3 +787,94 @@ def test_dev_step_does_not_auto_advance_without_files(monkeypatch):
     assert "T-NOADV" in [t["id"] for t in state.SHARED_BOARD.get("In Progress", [])]
     assert "T-NOADV" not in [t["id"] for t in state.SHARED_BOARD.get("QA", [])]
     assert "T-NOADV" not in [t["id"] for t in state.SHARED_BOARD.get("Code Review", [])]
+
+
+def test_tool_registry_endpoint():
+    initialize()
+    client = TestClient(app)
+    response = client.get("/api/tools/registry?agent=dev")
+    assert response.status_code == 200
+    data = response.json()
+    assert data["agent"] == "dev"
+    names = [t["name"] for t in data["tools"]]
+    assert "read_file" in names
+
+
+def test_manual_tool_execute_read_file():
+    from backend import state
+
+    initialize()
+    client = TestClient(app)
+    state.VIRTUAL_FILESYSTEM["package.json"] = '{"name": "test"}'
+    response = client.post(
+        "/api/tools/execute",
+        json={
+            "agent": "dev",
+            "toolName": "read_file",
+            "arguments": {"path": "package.json"},
+        },
+    )
+    assert response.status_code == 200
+    result = response.json()["result"]
+    assert result["toolName"] == "read_file"
+    assert result["toolSuccess"] is True
+    assert "test" in result["toolOutput"]
+    assert result["source"] == "manual"
+
+
+def test_manual_execute_skips_approval_for_write_file():
+    from backend import state
+    from backend.services.workflow_settings import save_workflow_settings
+
+    initialize()
+    save_workflow_settings({"requireToolApproval": True})
+    client = TestClient(app)
+    response = client.post(
+        "/api/tools/execute",
+        json={
+            "agent": "dev",
+            "toolName": "write_file",
+            "arguments": {"path": "_manual_test.txt", "content": "hello"},
+        },
+    )
+    assert response.status_code == 200
+    result = response.json()["result"]
+    assert result["toolSuccess"] is True
+    assert "_manual_test.txt" in state.VIRTUAL_FILESYSTEM or response.json()["ok"]
+
+
+def test_tool_transcript_and_replay():
+    from backend import state
+    from backend.agents.task_context import init_new_task, record_task_transcript
+
+    initialize()
+    client = TestClient(app)
+    task = init_new_task({"id": "T-REPLAY", "title": "Replay", "description": "d"})
+    state.SHARED_BOARD.setdefault("In Progress", []).append(task)
+    record_task_transcript(
+        "T-REPLAY",
+        "tool",
+        "read_file failed",
+        agent="Developer",
+        toolName="read_file",
+        toolSuccess=False,
+        toolArgs={"path": "nope-replay.txt"},
+        toolOutput="Error: not found",
+        source="agent",
+    )
+
+    transcript_resp = client.get("/api/tools/transcript/T-REPLAY")
+    assert transcript_resp.status_code == 200
+    entries = transcript_resp.json()["entries"]
+    assert len(entries) == 1
+    assert entries[0]["toolName"] == "read_file"
+
+    replay_resp = client.post(
+        "/api/tools/replay",
+        json={"taskId": "T-REPLAY", "entryIndices": [entries[0]["index"]]},
+    )
+    assert replay_resp.status_code == 200
+    assert replay_resp.json()["executed"] == 1
+    results = replay_resp.json()["results"]
+    assert results[0]["source"] == "replay"
+    assert results[0]["toolName"] == "read_file"

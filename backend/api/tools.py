@@ -1,9 +1,10 @@
 from typing import Any, Dict, List, Optional
 
-from fastapi import APIRouter, HTTPException
+from fastapi import APIRouter, HTTPException, Query
 from pydantic import BaseModel, ConfigDict, Field
 
 from backend import state
+from backend.agents.registry import AGENT_MAP
 from backend.api.helpers import build_state_response
 from backend.services.tool_aliases import (
     delete_alias,
@@ -13,8 +14,16 @@ from backend.services.tool_aliases import (
     save_alias,
 )
 from backend.services.tool_approval import list_pending_approvals, resolve_tool_approval
+from backend.services.tool_execution_service import (
+    execute_tool,
+    get_transcript_tool_entries,
+    list_agent_tools,
+    replay_transcript_tools,
+)
 
 router = APIRouter()
+
+VALID_AGENTS = set(AGENT_MAP.keys())
 
 
 class ToolAliasPayload(BaseModel):
@@ -35,6 +44,102 @@ class ResolvePendingPayload(BaseModel):
 
 class ToolApprovalPayload(BaseModel):
     approved: bool
+
+
+class ToolExecutePayload(BaseModel):
+    model_config = ConfigDict(populate_by_name=True)
+
+    agent: str = "dev"
+    tool_name: str = Field(alias="toolName")
+    arguments: Dict[str, Any] = Field(default_factory=dict)
+    task_id: Optional[str] = Field(default=None, alias="taskId")
+
+
+class ToolReplayPayload(BaseModel):
+    model_config = ConfigDict(populate_by_name=True)
+
+    task_id: str = Field(alias="taskId")
+    entry_indices: Optional[List[int]] = Field(default=None, alias="entryIndices")
+    failed_only: bool = Field(default=False, alias="failedOnly")
+
+
+def _tool_result_dict(result) -> Dict[str, Any]:
+    return {
+        "toolName": result.tool_name,
+        "toolArgs": result.safe_args,
+        "toolSuccess": result.success,
+        "toolOutput": result.tool_output,
+        "durationMs": result.duration_ms,
+        "timestamp": result.timestamp,
+        "agent": result.agent,
+        "agentId": result.agent_id,
+        "taskId": result.task_id,
+        "source": result.source,
+        "runId": result.run_id,
+    }
+
+
+@router.get("/api/tools/registry")
+def get_tool_registry(agent: str = Query(default="dev")):
+    if agent not in VALID_AGENTS:
+        raise HTTPException(status_code=400, detail=f"Unknown agent: {agent}")
+    with state.STATE_LOCK:
+        return {"agent": agent, "tools": list_agent_tools(agent)}
+
+
+@router.post("/api/tools/execute")
+def post_tool_execute(payload: ToolExecutePayload):
+    if payload.agent not in VALID_AGENTS:
+        raise HTTPException(status_code=400, detail=f"Unknown agent: {payload.agent}")
+    with state.STATE_LOCK:
+        try:
+            result = execute_tool(
+                payload.agent,
+                payload.tool_name,
+                payload.arguments,
+                task_id=payload.task_id,
+                source="manual",
+                skip_approval=True,
+                user_prompt=f"Manual test: {payload.tool_name}",
+            )
+        except ValueError as exc:
+            raise HTTPException(status_code=400, detail=str(exc)) from exc
+        from backend.services.project_service import save_current_project_state
+
+        save_current_project_state()
+    return {"ok": True, "result": _tool_result_dict(result)}
+
+
+@router.get("/api/tools/transcript/{task_id}")
+def get_task_tool_transcript(task_id: str):
+    from backend.agents.task_context import find_task_by_id
+
+    with state.STATE_LOCK:
+        if not find_task_by_id(task_id):
+            raise HTTPException(status_code=404, detail="Task not found")
+        entries = get_transcript_tool_entries(task_id)
+    return {"taskId": task_id, "entries": entries}
+
+
+@router.post("/api/tools/replay")
+def post_tool_replay(payload: ToolReplayPayload):
+    with state.STATE_LOCK:
+        try:
+            results = replay_transcript_tools(
+                payload.task_id,
+                payload.entry_indices,
+                failed_only=payload.failed_only,
+            )
+        except ValueError as exc:
+            raise HTTPException(status_code=404, detail=str(exc)) from exc
+        from backend.services.project_service import save_current_project_state
+
+        save_current_project_state()
+    return {
+        "ok": True,
+        "executed": len(results),
+        "results": [_tool_result_dict(r) for r in results],
+    }
 
 
 @router.get("/api/tools/pending")

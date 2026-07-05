@@ -44,13 +44,14 @@ import TerminalPanel from './components/TerminalPanel'
 import ToolResolutionModal from './components/ToolResolutionModal'
 import ToolApprovalModal from './components/ToolApprovalModal'
 import AgentRunBar from './components/AgentRunBar'
+import ToolsPanel from './components/ToolsPanel'
 import { useAppState, useAutoSprint } from './hooks/useAppState'
 import { useTheme } from './hooks/useTheme'
 import type { AgentId, AppState, BoardLane, ChatMessageRecord, PendingToolApproval, PendingToolRequest, Task, WorkflowSettings } from './types'
 import { getDisplayLanes } from './types'
 import { findTaskOnBoard } from './utils/taskFormat'
 
-type BottomTab = 'console' | 'activity' | 'chat' | 'terminal' | 'search' | 'git'
+type BottomTab = 'console' | 'activity' | 'tools' | 'chat' | 'terminal' | 'search' | 'git'
 
 function chatRecordsToUi(messages: ChatMessageRecord[] | undefined): ChatUiMessage[] {
   return (messages ?? []).map((m, i) => ({
@@ -86,8 +87,25 @@ function applyStateFields(
 
 export default function App() {
   const { theme, toggleTheme, isDark } = useTheme()
-  const { state, loading, setLoading, applyState, activityEvents, pendingTools, refreshPendingTools, pendingApprovals, refreshPendingApprovals, activeRun, currentTool } =
-    useAppState()
+  const {
+    state,
+    loading,
+    setLoading,
+    applyState,
+    refresh,
+    activityEvents,
+    pendingTools,
+    refreshPendingTools,
+    pendingApprovals,
+    refreshPendingApprovals,
+    activeRun,
+    currentTool,
+    toolEvents,
+    clearToolEvents,
+    toolFailureCount,
+    toolRunningCount,
+    toolStartTick,
+  } = useAppState()
 
   const [ollamaUrl, setOllamaUrl] = useState('http://localhost:11434')
   const [brief, setBrief] = useState('')
@@ -265,9 +283,21 @@ export default function App() {
     }
   }
 
+  useEffect(() => {
+    if (toolStartTick > 0) {
+      setBottomTab('tools')
+    }
+  }, [toolStartTick])
+
   const bottomTabs: { id: BottomTab; label: string; icon: string; badge?: number }[] = [
     { id: 'console', label: 'Console', icon: 'fa-terminal' },
     { id: 'activity', label: 'Activity', icon: 'fa-wave-square', badge: activityEvents.length || undefined },
+    {
+      id: 'tools',
+      label: 'Tools',
+      icon: 'fa-wrench',
+      badge: toolRunningCount > 0 ? toolRunningCount : toolFailureCount || undefined,
+    },
     { id: 'chat', label: 'Chat', icon: 'fa-comments' },
     { id: 'terminal', label: 'Terminal', icon: 'fa-square-terminal' },
     { id: 'search', label: 'Search', icon: 'fa-magnifying-glass' },
@@ -442,7 +472,11 @@ export default function App() {
             </div>
 
             <div className="h-[40%] min-h-[180px] flex flex-col border-t border-cat-surface1">
-              <AgentRunBar activeRun={activeRun} currentTool={currentTool} />
+              <AgentRunBar
+                activeRun={activeRun}
+                currentTool={currentTool}
+                onOpenTools={() => setBottomTab('tools')}
+              />
               <div className="flex bg-cat-mantle border-b border-cat-surface1 shrink-0">
                 {bottomTabs.map((tab) => (
                   <button
@@ -474,6 +508,15 @@ export default function App() {
                       const task = findTaskOnBoard(state.board, taskId)
                       if (task) setSelectedTask(task)
                     }}
+                  />
+                )}
+                {bottomTab === 'tools' && (
+                  <ToolsPanel
+                    toolEvents={toolEvents}
+                    onClearLog={clearToolEvents}
+                    board={state.board}
+                    selectedTaskId={selectedTask?.id}
+                    onRefreshState={() => void refresh()}
                   />
                 )}
                 <ChatPanel

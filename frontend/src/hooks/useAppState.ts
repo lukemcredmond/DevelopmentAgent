@@ -14,6 +14,7 @@ import type {
   Board,
   PendingToolApproval,
   SystemLog,
+  ToolExecutionEvent,
 } from '../types'
 import { EMPTY_BOARD, hasSprintWork } from '../types'
 import { hydrateActivityFromBoard, mergeActivityEvents } from '../utils/activityFromBoard'
@@ -73,16 +74,67 @@ function mapAgentRun(raw: Record<string, unknown>): AgentRunState {
   }
 }
 
-function mapToolEndToActivity(data: Record<string, unknown>): ActivityEvent {
+function mapToolSource(raw: unknown): ToolExecutionEvent['source'] {
+  if (raw === 'manual' || raw === 'replay' || raw === 'agent') return raw
+  return 'agent'
+}
+
+function buildToolEventId(payload: Record<string, unknown>): string {
+  return `${String(payload.runId ?? payload.run_id ?? 'run')}-${String(payload.toolName ?? '?')}-${String(payload.timestamp ?? Date.now())}`
+}
+
+function mapToolStart(payload: Record<string, unknown>): ToolExecutionEvent {
   return {
-    taskId: String(data.taskId ?? data.task_id ?? ''),
-    taskTitle: String(data.taskTitle ?? data.task_title ?? ''),
-    kind: data.toolSuccess === false ? 'tool_failed' : 'tool_end',
-    role: 'tool',
-    agent: String(data.agent ?? ''),
-    content: `${data.toolName ?? '?'} ${data.toolSuccess === false ? 'FAILED' : 'OK'}: ${String(data.toolOutput ?? '').slice(0, 400)}`,
-    timestamp: String(data.timestamp ?? new Date().toISOString()),
+    id: buildToolEventId(payload),
+    runId: String(payload.runId ?? payload.run_id ?? ''),
+    taskId: payload.taskId != null ? String(payload.taskId) : undefined,
+    agent: String(payload.agent ?? ''),
+    toolName: String(payload.toolName ?? '?'),
+    toolArgs: (payload.toolArgs ?? payload.tool_args) as Record<string, unknown> | undefined,
+    timestamp: String(payload.timestamp ?? new Date().toISOString()),
+    status: 'running',
+    source: mapToolSource(payload.source),
   }
+}
+
+function applyToolEnd(events: ToolExecutionEvent[], payload: Record<string, unknown>): ToolExecutionEvent[] {
+  const id = buildToolEventId(payload)
+  const success = payload.toolSuccess !== false
+  const nextEntry: ToolExecutionEvent = {
+    id,
+    runId: String(payload.runId ?? payload.run_id ?? ''),
+    taskId: payload.taskId != null ? String(payload.taskId) : undefined,
+    agent: String(payload.agent ?? ''),
+    toolName: String(payload.toolName ?? '?'),
+    toolArgs: (payload.toolArgs ?? payload.tool_args) as Record<string, unknown> | undefined,
+    toolSuccess: success,
+    toolOutput: String(payload.toolOutput ?? ''),
+    durationMs: Number(payload.durationMs ?? payload.duration_ms ?? 0),
+    timestamp: String(payload.timestamp ?? new Date().toISOString()),
+    status: success ? 'completed' : 'failed',
+    source: mapToolSource(payload.source),
+  }
+  const idx = events.findIndex((e) => e.id === id)
+  if (idx >= 0) {
+    const copy = [...events]
+    copy[idx] = { ...copy[idx], ...nextEntry }
+    return copy
+  }
+  const runningIdx = [...events]
+    .reverse()
+    .findIndex(
+      (e) =>
+        e.status === 'running' &&
+        e.toolName === nextEntry.toolName &&
+        e.runId === nextEntry.runId,
+    )
+  if (runningIdx >= 0) {
+    const realIdx = events.length - 1 - runningIdx
+    const copy = [...events]
+    copy[realIdx] = { ...copy[realIdx], ...nextEntry }
+    return copy
+  }
+  return [...events, nextEntry].slice(-200)
 }
 
 function mapApprovalFromEvent(data: Record<string, unknown>): PendingToolApproval {
@@ -107,6 +159,8 @@ export function useAppState() {
   const [activeRun, setActiveRun] = useState<AgentRunState | null>(null)
   const [displayRun, setDisplayRun] = useState<AgentRunState | null>(null)
   const [currentTool, setCurrentTool] = useState<string | null>(null)
+  const [toolEvents, setToolEvents] = useState<ToolExecutionEvent[]>([])
+  const [toolStartTick, setToolStartTick] = useState(0)
   const liveActivityRef = useRef<ActivityEvent[]>([])
   const boardRef = useRef<Board>(defaultState.board)
   const displayRunTimerRef = useRef<number | null>(null)
@@ -187,6 +241,13 @@ export function useAppState() {
     )
   }, [])
 
+  const clearToolEvents = useCallback(() => {
+    setToolEvents([])
+  }, [])
+
+  const toolFailureCount = toolEvents.filter((e) => e.status === 'failed').length
+  const toolRunningCount = toolEvents.filter((e) => e.status === 'running').length
+
   useEffect(() => {
     void refresh()
   }, [refresh])
@@ -233,8 +294,11 @@ export function useAppState() {
           setCurrentTool(run.currentTool ?? null)
         }
       } else if (event.type === 'tool_start' && event.data) {
-        const payload = event.data as { toolName?: string; agent?: string; taskId?: string }
-        setCurrentTool(payload.toolName ?? null)
+        const payload = event.data as Record<string, unknown>
+        setToolEvents((prev) => [...prev, mapToolStart(payload)].slice(-200))
+        setToolStartTick((t) => t + 1)
+        const toolName = payload.toolName != null ? String(payload.toolName) : null
+        setCurrentTool(toolName)
         setActiveRun((prev) => {
           const base =
             prev ??
@@ -243,11 +307,11 @@ export function useAppState() {
               taskId: String(payload.taskId ?? ''),
               agent: String(payload.agent ?? ''),
               status: 'tool_executing',
-              currentTool: payload.toolName ?? null,
+              currentTool: toolName,
               startedAt: new Date().toISOString(),
               recentTools: [],
             } as AgentRunState)
-          return { ...base, status: 'tool_executing', currentTool: payload.toolName ?? null }
+          return { ...base, status: 'tool_executing', currentTool: toolName }
         })
       } else if (event.type === 'tool_end' && event.data) {
         const payload = event.data as Record<string, unknown>
@@ -266,7 +330,7 @@ export function useAppState() {
         setActiveRun((prev) => mergeRun(prev))
         setDisplayRun((prev) => mergeRun(prev))
         setCurrentTool(null)
-        appendActivity(mapToolEndToActivity(payload))
+        setToolEvents((prev) => applyToolEnd(prev, payload))
       } else if (event.type === 'tool_approval_required' && event.data) {
         const approval = mapApprovalFromEvent(event.data as Record<string, unknown>)
         setPendingApprovals((prev) =>
@@ -307,6 +371,11 @@ export function useAppState() {
     refreshPendingApprovals,
     activeRun: runBarState,
     currentTool,
+    toolEvents,
+    clearToolEvents,
+    toolFailureCount,
+    toolRunningCount,
+    toolStartTick,
   }
 }
 

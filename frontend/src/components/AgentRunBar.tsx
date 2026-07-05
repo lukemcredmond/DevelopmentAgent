@@ -1,30 +1,12 @@
-import { useEffect, useState } from 'react'
-import type { AgentRunState, RecentToolEntry } from '../types'
+import type { AgentRunState } from '../types'
 
 interface AgentRunBarProps {
   activeRun: AgentRunState | null
   currentTool?: string | null
+  onOpenTools?: () => void
 }
 
-function mapRecentTool(raw: Record<string, unknown>): RecentToolEntry {
-  return {
-    toolName: String(raw.toolName ?? raw.tool_name ?? '?'),
-    toolSuccess: Boolean(raw.toolSuccess ?? raw.tool_success),
-    toolOutput: String(raw.toolOutput ?? raw.tool_output ?? ''),
-    durationMs: Number(raw.durationMs ?? raw.duration_ms ?? 0),
-    timestamp: String(raw.timestamp ?? ''),
-  }
-}
-
-export default function AgentRunBar({ activeRun, currentTool }: AgentRunBarProps) {
-  const [expanded, setExpanded] = useState(true)
-
-  useEffect(() => {
-    if (activeRun && activeRun.status !== 'completed' && activeRun.status !== 'failed') {
-      setExpanded(true)
-    }
-  }, [activeRun?.runId, activeRun?.status])
-
+export default function AgentRunBar({ activeRun, currentTool, onOpenTools }: AgentRunBarProps) {
   if (!activeRun) return null
 
   const toolLabel = currentTool || activeRun.currentTool
@@ -35,18 +17,9 @@ export default function AgentRunBar({ activeRun, currentTool }: AgentRunBarProps
     activeRun.status === 'awaiting_approval'
   const isDone = activeRun.status === 'completed' || activeRun.status === 'failed'
 
-  if (isDone && !activeRun.recentTools?.length && !activeRun.error) {
+  if (isDone && !activeRun.error) {
     return null
   }
-
-  const recentTools: RecentToolEntry[] = (activeRun.recentTools ?? []).map((t) => {
-    if (typeof t === 'object' && t !== null && 'toolName' in t) {
-      return t as RecentToolEntry
-    }
-    const entry = t as Record<string, unknown>
-    return mapRecentTool(entry)
-  })
-  const lastTool = recentTools[recentTools.length - 1]
 
   const statusLabel = isWaitingApproval
     ? 'awaiting approval — agent paused'
@@ -83,66 +56,16 @@ export default function AgentRunBar({ activeRun, currentTool }: AgentRunBarProps
           <span className="text-indigo-300 truncate max-w-[200px]">{toolLabel}</span>
         )}
         <span className="text-cat-overlay ml-auto text-[10px]">{activeRun.taskId}</span>
-        {(recentTools.length > 0 || lastTool) && (
+        {onOpenTools && (
           <button
             type="button"
-            onClick={() => setExpanded((e) => !e)}
+            onClick={onOpenTools}
             className="text-[10px] text-indigo-400 hover:text-indigo-300"
           >
-            {expanded ? 'Hide tools' : `Show tools (${recentTools.length})`}
+            Tools →
           </button>
         )}
       </div>
-
-      {expanded && lastTool && (
-        <div
-          className={`mx-4 mb-2 p-2 rounded border ${
-            lastTool.toolSuccess
-              ? 'border-emerald-500/40 bg-emerald-950/20'
-              : 'border-rose-500/40 bg-rose-950/20'
-          }`}
-        >
-          <div className="flex items-center gap-2 mb-1 flex-wrap">
-            <span
-              className={`text-[9px] font-bold uppercase px-1.5 py-0.5 rounded ${
-                lastTool.toolSuccess
-                  ? 'bg-emerald-900/60 text-emerald-200'
-                  : 'bg-rose-900/60 text-rose-200'
-              }`}
-            >
-              {lastTool.toolSuccess ? 'OK' : 'FAILED'}
-            </span>
-            <span className="text-indigo-300">{lastTool.toolName}</span>
-            {lastTool.durationMs > 0 && (
-              <span className="text-cat-overlay text-[10px]">{lastTool.durationMs}ms</span>
-            )}
-          </div>
-          <p
-            className={`whitespace-pre-wrap text-[10px] max-h-20 overflow-y-auto ${
-              lastTool.toolSuccess ? 'text-cat-subtext' : 'text-rose-100'
-            }`}
-          >
-            {lastTool.toolOutput || '(no output)'}
-          </p>
-        </div>
-      )}
-
-      {expanded && recentTools.length > 1 && (
-        <div className="mx-4 mb-2 space-y-1 max-h-24 overflow-y-auto">
-          {recentTools.slice(0, -1).reverse().map((t, i) => (
-            <div
-              key={`${t.toolName}-${t.timestamp}-${i}`}
-              className="flex items-center gap-2 text-[10px] text-cat-overlay"
-            >
-              <span className={t.toolSuccess ? 'text-emerald-400' : 'text-rose-400'}>
-                {t.toolSuccess ? '✓' : '✗'}
-              </span>
-              <span className="text-indigo-300">{t.toolName}</span>
-              <span className="truncate flex-1">{t.toolOutput.slice(0, 80)}</span>
-            </div>
-          ))}
-        </div>
-      )}
 
       {isWaitingApproval && (
         <p className="mx-4 mb-2 text-[10px] text-amber-200">

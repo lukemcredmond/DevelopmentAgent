@@ -1,5 +1,4 @@
 import json
-from datetime import datetime
 import os
 import time
 from typing import Any, Dict, Generator, List, Mapping, Optional, Sequence, Tuple, Union
@@ -9,7 +8,6 @@ from ollama._types import Message
 
 from backend import state
 from backend.agents.agent_run import (
-    append_recent_tool,
     finish_run,
     get_active_run,
     start_run,
@@ -17,24 +15,12 @@ from backend.agents.agent_run import (
 )
 from backend.agents.task_context import (
     find_task_by_id,
-    publish_activity,
-    record_task_decision,
-    record_task_file,
     record_task_transcript,
     sync_task_files_from_transcript,
 )
-from backend.agents.tool_outcomes import (
-    file_action_for_tool,
-    file_path_from_tool,
-    format_tool_transcript_content,
-    is_tool_failure,
-    sanitize_tool_args_for_log,
-    summarize_tool_args,
-)
 from backend.agents.tools import ToolRegistry
-from backend.services.events import publish_event
 from backend.services.logs import add_system_log
-from backend.services.tool_approval import request_tool_approval, tool_requires_approval
+from backend.services.tool_execution_service import execute_tool
 from backend.services.workflow_settings import get_workflow_settings
 from backend.storage.memory_engine import SemanticMemoryEngine
 
@@ -142,67 +128,6 @@ class ScrumAgent:
     def _log_step_exit(self, message: str, log_type: str = "warning") -> None:
         add_system_log(self.role, log_type, message)
 
-    def _record_tool_usage(
-        self,
-        task_id: str,
-        tool_name: str,
-        arguments: Dict[str, Any],
-        tool_output: str,
-        user_prompt: str,
-        *,
-        success: bool,
-    ) -> None:
-        safe_args = sanitize_tool_args_for_log(tool_name, arguments)
-        content = format_tool_transcript_content(
-            tool_name, arguments, tool_output, success=success
-        )
-        record_task_transcript(
-            task_id,
-            "tool",
-            content,
-            agent=self.role,
-            toolName=tool_name,
-            toolSuccess=success,
-            toolArgs=safe_args,
-            toolOutput=tool_output[:2000],
-        )
-        record_task_decision(
-            task_id,
-            self.role,
-            "tool_fail" if not success else "tool",
-            f"{'Failed' if not success else 'Used'} tool '{tool_name}'",
-            tool_output[:500],
-        )
-        if success:
-            action = file_action_for_tool(tool_name)
-            path = file_path_from_tool(tool_name, arguments)
-            if action and path:
-                record_task_file(task_id, path, action, persist=True)
-        else:
-            action = file_action_for_tool(tool_name)
-            path = file_path_from_tool(tool_name, arguments)
-            if action and path:
-                record_task_file(task_id, path, f"{action}-failed", persist=True)
-        arg_summary = summarize_tool_args(tool_name, arguments)
-        if success:
-            if tool_name == "write_file":
-                path = safe_args.get("path", "?")
-                nbytes = safe_args.get("contentLength", 0)
-                add_system_log(self.role, "success", f"write_file OK {path} ({nbytes} bytes)")
-            else:
-                add_system_log(self.role, "success", f"{tool_name} OK — {arg_summary}")
-        else:
-            add_system_log(
-                self.role,
-                "error",
-                f"{tool_name} FAILED {arg_summary} — {tool_output[:300]}",
-            )
-        self.memory.save(
-            self.role,
-            f"Invoked tool '{tool_name}' on task: {user_prompt}",
-            "tool_usage",
-        )
-
     def _process_tool_calls(
         self,
         message: Message,
@@ -216,85 +141,29 @@ class ScrumAgent:
         messages.append(message)
         run = get_active_run()
         task_id = state.ACTIVE_SPRINT_TASK_ID
-        ts = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+        from backend.agents.registry import AGENT_MAP
+
+        agent_id = next((aid for aid, a in AGENT_MAP.items() if a is self), "dev")
 
         for call in message.tool_calls or []:
             tool_name = call.function.name
             arguments = _normalize_tool_arguments(call.function.arguments)
-            safe_args = sanitize_tool_args_for_log(tool_name, arguments)
-            arg_summary = summarize_tool_args(tool_name, arguments)
-            add_system_log(self.role, "info", f"Calling {tool_name} — {arg_summary}")
 
             run_id = run.run_id if run else "NO-RUN"
-            publish_event(
-                "tool_start",
-                {
-                    "runId": run_id,
-                    "taskId": task_id or "system",
-                    "agent": self.role,
-                    "toolName": tool_name,
-                    "toolArgs": safe_args,
-                    "timestamp": ts,
-                },
+            result = execute_tool(
+                agent_id,
+                tool_name,
+                arguments,
+                task_id=task_id,
+                source="agent",
+                skip_approval=False,
+                run_id=run_id,
+                user_prompt=user_prompt,
+                on_awaiting_approval=lambda name: update_run(status="awaiting_approval", current_tool=name),
+                on_tool_executing=lambda name: update_run(status="tool_executing", current_tool=name),
             )
-            update_run(status="tool_executing", current_tool=tool_name)
-
-            tool_output = ""
-            success = False
-            started = time.time()
-
-            if tool_requires_approval(tool_name):
-                update_run(status="awaiting_approval", current_tool=tool_name)
-                approved, deny_msg = request_tool_approval(
-                    run_id,
-                    tool_name,
-                    arguments,
-                    task_id=task_id,
-                    agent=self.role,
-                )
-                update_run(status="tool_executing", current_tool=tool_name)
-                if not approved:
-                    tool_output = deny_msg
-                    success = False
-                else:
-                    tool_output = self.registry.invoke(tool_name, arguments)
-                    success = not is_tool_failure(tool_name, tool_output)
-            else:
-                tool_output = self.registry.invoke(tool_name, arguments)
-                success = not is_tool_failure(tool_name, tool_output)
-
-            duration_ms = int((time.time() - started) * 1000)
-            output_preview = tool_output[:500]
-            tool_entry = {
-                "toolName": tool_name,
-                "toolSuccess": success,
-                "toolOutput": output_preview,
-                "durationMs": duration_ms,
-                "timestamp": ts,
-            }
-            append_recent_tool(tool_entry)
-            publish_event(
-                "tool_end",
-                {
-                    "runId": run_id,
-                    "taskId": task_id or "system",
-                    "agent": self.role,
-                    "toolName": tool_name,
-                    "toolArgs": safe_args,
-                    "toolSuccess": success,
-                    "toolOutput": output_preview,
-                    "durationMs": duration_ms,
-                    "timestamp": ts,
-                },
-            )
-            if task_id:
-                publish_activity(
-                    task_id,
-                    "tool_failed" if not success else "tool_end",
-                    f"{tool_name} {'FAILED' if not success else 'OK'}: {output_preview[:400]}",
-                    role="tool",
-                    agent=self.role,
-                )
+            tool_output = result.tool_output
+            success = result.success
             update_run(status="thinking", clear_tool=True)
 
             if not success:
@@ -317,16 +186,6 @@ class ScrumAgent:
                     self._log_step_exit(stop_msg, "error")
                     finish_run(status="failed", error=stop_msg)
                     return stop_msg
-
-            if task_id:
-                self._record_tool_usage(
-                    task_id,
-                    tool_name,
-                    arguments,
-                    tool_output,
-                    user_prompt,
-                    success=success,
-                )
 
             messages.append(
                 {
