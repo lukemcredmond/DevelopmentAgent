@@ -39,9 +39,9 @@ export default function KanbanColumn({
       </div>
       <SortableContext items={tasks.map((t) => t.id)} strategy={verticalListSortingStrategy}>
         <div className="space-y-2 overflow-y-auto flex-1">
-          {tasks.map((task) => (
+          {tasks.map((task, i) => (
             <TaskCard
-              key={task.id}
+              key={`${lane}-${task.id}-${i}`}
               task={task}
               fileCount={getTaskFileCount(task)}
               decisionCount={getTaskDecisionCount(task)}

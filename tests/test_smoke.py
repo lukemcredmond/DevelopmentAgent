@@ -326,3 +326,86 @@ def test_stuck_loop_escalates_to_needs_po():
     state.SHARED_BOARD.setdefault("QA", []).append(task)
     _check_stuck_and_escalate("T-STUCK", "QA")
     assert "T-STUCK" in [t["id"] for t in state.SHARED_BOARD.get("Needs PO", [])]
+
+
+def test_assign_unique_task_id_avoids_existing_board_ids():
+    from backend import state
+    from backend.agents.task_context import all_task_ids, assign_unique_task_id, init_new_task
+
+    initialize()
+    task = init_new_task({"id": "T-EXIST", "title": "Existing", "description": "d"})
+    state.SHARED_BOARD.setdefault("Backlog", []).append(task)
+    taken_before = all_task_ids()
+    new_task = {"id": 1, "title": "New"}
+    new_id = assign_unique_task_id(new_task, preserve_po_ref=True, existing_ids=set(taken_before))
+    assert new_id not in taken_before
+    assert new_id.startswith("TASK-")
+    assert new_task["poRefId"] == "1"
+
+
+def test_append_tasks_remaps_blocked_by():
+    from backend import state
+    from backend.services.sprint_service import _append_tasks
+
+    initialize()
+    state.SHARED_BOARD = {"Backlog": [], "Pending Approval": [], "In Progress": [], "Needs PO": [], "Needs User": [], "QA": [], "Done": []}
+    count = _append_tasks(
+        [
+            {"id": 1, "title": "First", "description": "a", "acceptanceCriteria": ["a"]},
+            {"id": 2, "title": "Second", "description": "b", "acceptanceCriteria": ["b"], "blockedBy": ["1"]},
+        ]
+    )
+    assert count == 2
+    backlog = state.SHARED_BOARD.get("Backlog", []) + state.SHARED_BOARD.get("Pending Approval", [])
+    by_title = {t["title"]: t for t in backlog}
+    assert by_title["Second"]["blockedBy"] == [by_title["First"]["id"]]
+    assert by_title["First"]["id"].startswith("TASK-")
+    assert by_title["First"]["poRefId"] == "1"
+
+
+def test_dedupe_board_tasks_removes_cross_lane_duplicates():
+    from backend import state
+    from backend.agents.task_context import dedupe_board_tasks, init_new_task
+
+    initialize()
+    dup_id = "T-DUP"
+    task_a = init_new_task({"id": dup_id, "title": "Dup A", "description": "d", "status": "Backlog"})
+    task_b = init_new_task({"id": dup_id, "title": "Dup B", "description": "d", "status": "In Progress"})
+    state.SHARED_BOARD = {
+        "Backlog": [task_a],
+        "In Progress": [task_b],
+        "Needs PO": [],
+        "Needs User": [],
+        "QA": [],
+        "Done": [],
+    }
+    removed = dedupe_board_tasks()
+    assert removed == 1
+    all_ids = [t["id"] for lane in state.SHARED_BOARD.values() for t in lane]
+    assert all_ids.count(dup_id) == 1
+    assert dup_id in [t["id"] for t in state.SHARED_BOARD.get("Backlog", [])]
+
+
+def test_move_board_stage_removes_all_duplicate_copies():
+    from backend import state
+    from backend.agents.task_context import init_new_task
+    from backend.services.board_service import move_board_stage
+
+    initialize()
+    dup_id = "T-MOVE-DUP"
+    task_a = init_new_task({"id": dup_id, "title": "Dup", "description": "d"})
+    task_b = init_new_task({"id": dup_id, "title": "Dup copy", "description": "d"})
+    state.SHARED_BOARD = {
+        "Backlog": [task_a],
+        "QA": [task_b],
+        "In Progress": [],
+        "Needs PO": [],
+        "Needs User": [],
+        "Done": [],
+    }
+    move_board_stage(dup_id, "In Progress")
+    all_ids = [t["id"] for lane in state.SHARED_BOARD.values() for t in lane]
+    assert all_ids.count(dup_id) == 1
+    assert dup_id in [t["id"] for t in state.SHARED_BOARD.get("In Progress", [])]
+    assert dup_id not in [t["id"] for t in state.SHARED_BOARD.get("Backlog", [])]
+    assert dup_id not in [t["id"] for t in state.SHARED_BOARD.get("QA", [])]

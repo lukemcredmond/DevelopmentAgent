@@ -2,13 +2,14 @@ import json
 import os
 import random
 import re
-import uuid
 from typing import Any, Dict, List, Optional
 
 from backend import state
 from backend.agents.registry import agent_cr, agent_dev, agent_po, agent_qa
 from backend.agents.task_context import (
+    all_task_ids,
     apply_po_clarification,
+    assign_unique_task_id,
     build_dod_block,
     build_task_prompt,
     clear_active_sprint_context,
@@ -253,11 +254,32 @@ def _new_task_lane() -> str:
 def _append_tasks(tasks: List[Dict[str, Any]]) -> int:
     lane = _new_task_lane()
     state.SHARED_BOARD.setdefault(lane, [])
-    added = 0
-    for raw in tasks:
+    existing_ids = all_task_ids()
+    prepared: List[Dict[str, Any]] = []
+    id_map: Dict[str, str] = {}
+
+    for i, raw in enumerate(tasks):
         task = _enrich_task_from_po(raw)
-        if "id" not in task:
-            task["id"] = "TASK-" + str(uuid.uuid4())[:8].upper()
+        po_ref = task.get("id")
+        new_id = assign_unique_task_id(task, preserve_po_ref=True, existing_ids=existing_ids)
+        if po_ref is not None:
+            id_map[str(po_ref)] = new_id
+        elif str(i) not in id_map:
+            id_map[str(i)] = new_id
+        prepared.append(task)
+
+    added = 0
+    for task in prepared:
+        remapped: List[str] = []
+        for ref in task.get("blockedBy") or []:
+            ref_str = str(ref)
+            if ref_str in id_map:
+                remapped.append(id_map[ref_str])
+            elif ref_str in existing_ids:
+                remapped.append(ref_str)
+            else:
+                remapped.append(ref_str)
+        task["blockedBy"] = remapped
         init_new_task(task)
         task["status"] = lane
         state.SHARED_BOARD[lane].append(task)
@@ -333,8 +355,9 @@ def run_po_plan(brief: str, ollama_url: str) -> None:
 
     po_output = agent_po.execute_step(
         "You are the Product Owner. Decompose the project brief into developer-ready features. "
-        "Reply with ONLY a JSON array. Each object must have: id, title, description, "
-        "acceptanceCriteria (string array), optional blockedBy (task id array), optional priority (number, lower=higher).\n"
+        "Reply with ONLY a JSON array. Each object must have: title, description, "
+        "acceptanceCriteria (string array), optional id (hint only — the system assigns TASK-{GUID}), "
+        "optional blockedBy (array of id values from the same JSON array), optional priority (number, lower=higher).\n"
         f"Existing titles (do NOT duplicate): {existing_hint}\n"
         f"{build_dod_block()}\nProject brief:\n{brief}",
         max_iterations=_llm_iterations(),

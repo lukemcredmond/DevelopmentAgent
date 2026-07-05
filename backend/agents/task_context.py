@@ -1,6 +1,8 @@
 import datetime
 import json
-from typing import Any, Dict, List, Optional
+import uuid
+from collections import defaultdict
+from typing import Any, Dict, List, Optional, Set, Tuple
 
 from backend.config import MAX_TASK_DECISIONS, MAX_TASK_TRANSCRIPT
 from backend import state
@@ -31,6 +33,85 @@ def publish_activity(
             "timestamp": datetime.datetime.now().strftime("%Y-%m-%d %H:%M:%S"),
         },
     )
+
+
+def generate_task_id() -> str:
+    return f"TASK-{uuid.uuid4().hex.upper()}"
+
+
+def all_task_ids() -> Set[str]:
+    ids: Set[str] = set()
+    for tasks in state.SHARED_BOARD.values():
+        for task in tasks:
+            tid = str(task.get("id", "")).strip()
+            if tid:
+                ids.add(tid)
+    return ids
+
+
+def task_id_exists(task_id: str) -> bool:
+    return str(task_id) in all_task_ids()
+
+
+def assign_unique_task_id(
+    task: Dict[str, Any],
+    *,
+    preserve_po_ref: bool = True,
+    existing_ids: Optional[Set[str]] = None,
+) -> str:
+    """Assign a new GUID task id; optionally store the PO-supplied id in poRefId."""
+    taken = existing_ids if existing_ids is not None else all_task_ids()
+    if preserve_po_ref and task.get("id") is not None:
+        task["poRefId"] = str(task["id"])
+    new_id = generate_task_id()
+    while new_id in taken:
+        new_id = generate_task_id()
+    task["id"] = new_id
+    taken.add(new_id)
+    return new_id
+
+
+def dedupe_board_tasks() -> int:
+    """Remove duplicate task ids from the board, keeping one canonical copy per id."""
+    by_id: Dict[str, List[Tuple[str, Dict[str, Any]]]] = defaultdict(list)
+    for lane, tasks in state.SHARED_BOARD.items():
+        for task in tasks:
+            tid = str(task.get("id", "")).strip()
+            if tid:
+                by_id[tid].append((lane, task))
+
+    removed = 0
+    for tid, occurrences in by_id.items():
+        if len(occurrences) <= 1:
+            continue
+
+        keep_lane, keep_task = occurrences[0]
+        for lane, task in occurrences:
+            if str(task.get("status", "")) == lane:
+                keep_lane, keep_task = lane, task
+                break
+
+        for lane in list(state.SHARED_BOARD.keys()):
+            before = len(state.SHARED_BOARD[lane])
+            state.SHARED_BOARD[lane] = [
+                t for t in state.SHARED_BOARD[lane] if str(t.get("id", "")) != tid
+            ]
+            removed += before - len(state.SHARED_BOARD[lane])
+
+        keep_task["status"] = keep_lane
+        state.SHARED_BOARD.setdefault(keep_lane, []).append(keep_task)
+        removed -= 1
+
+    if removed > 0:
+        from backend.services.logs import add_system_log
+
+        add_system_log(
+            "System",
+            "warning",
+            f"Removed {removed} duplicate task card(s) from the board (dedupe by id).",
+        )
+
+    return max(0, removed)
 
 
 def find_task_by_id(task_id: str) -> Optional[Dict[str, Any]]:
@@ -92,8 +173,11 @@ def normalize_acceptance_criteria(items: Any) -> List[str]:
 
 def normalize_task(task: Dict[str, Any]) -> Dict[str, Any]:
     """Ensures task has context fields for file associations, decisions, and transcript."""
-    if task.get("id") is not None:
-        task["id"] = str(task["id"])
+    raw_id = task.get("id")
+    if raw_id is not None:
+        task["id"] = str(raw_id)
+    if not str(task.get("id", "")).strip():
+        task["id"] = generate_task_id()
     if "title" in task:
         task["title"] = coerce_task_text(task["title"])
     if "description" in task:

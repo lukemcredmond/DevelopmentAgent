@@ -2,7 +2,7 @@ import os
 
 from backend import state
 from backend.agents.registry import agent_cr, agent_dev, agent_po, agent_qa
-from backend.agents.task_context import normalize_board_tasks
+from backend.agents.task_context import dedupe_board_tasks, normalize_board_tasks
 from backend.services.logs import add_system_log
 from backend.services.project_service import save_current_project_state
 from backend.services.board_lanes import normalize_board_lanes
@@ -20,6 +20,7 @@ def load_project_into_state(project_id: str) -> bool:
     state.WORKSPACE_DIR = proj["workspace_dir"]
     state.SHARED_BOARD = normalize_board_lanes(proj["board_state"])
     normalize_board_tasks()
+    dedupe_board_tasks()
     save_current_project_state()
 
     state.VIRTUAL_FILESYSTEM = proj["files"]
