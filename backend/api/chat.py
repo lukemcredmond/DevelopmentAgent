@@ -130,6 +130,13 @@ def chat_with_agent(payload: ChatPayload):
     return result
 
 
+@router.post("/api/chat/clear")
+def clear_chat_history():
+    with state.STATE_LOCK:
+        deleted = state.storage.clear_chat_messages(state.CURRENT_PROJECT_ID)
+        return {"ok": True, "deleted": deleted, "chatMessages": []}
+
+
 @router.post("/api/chat/stream")
 def chat_stream(payload: ChatPayload):
     if payload.agent not in AGENT_MAP:

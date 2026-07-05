@@ -129,6 +129,7 @@ export interface WorkflowSettings {
   enableSemanticSearch?: boolean
   qdrantUrl?: string
   embedModel?: string
+  ollamaNumCtx?: number
 }
 
 export interface McpServerConfig {
@@ -400,6 +401,7 @@ export interface WorkflowSettingsPayload {
   enableSemanticSearch?: boolean
   qdrantUrl?: string
   embedModel?: string
+  ollamaNumCtx?: number
 }
 
 export interface SkillsResponse {
@@ -568,6 +570,7 @@ export const DEFAULT_WORKFLOW_SETTINGS: WorkflowSettings = {
   enableSemanticSearch: true,
   qdrantUrl: 'http://localhost:6333',
   embedModel: 'nomic-embed-text',
+  ollamaNumCtx: 32768,
 }
 
 export const EMPTY_BOARD: Board = {

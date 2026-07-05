@@ -8,11 +8,12 @@ interface ActivityPanelProps {
   events: ActivityEvent[]
   onTaskClick?: (taskId: string) => void
   onClear?: () => void
+  wasCleared?: boolean
 }
 
 const SCROLL_THRESHOLD_PX = 48
 
-export default function ActivityPanel({ events, onTaskClick, onClear }: ActivityPanelProps) {
+export default function ActivityPanel({ events, onTaskClick, onClear, wasCleared = false }: ActivityPanelProps) {
   const [filter, setFilter] = useState<ActivityFilter>('all')
   const [expanded, setExpanded] = useState<Set<number>>(new Set())
   const scrollRef = useRef<HTMLDivElement>(null)
@@ -78,11 +79,13 @@ export default function ActivityPanel({ events, onTaskClick, onClear }: Activity
           Agent Activity
         </h3>
         <div className="flex gap-1 flex-wrap justify-end items-center">
-          {onClear && events.length > 0 && (
+          <span className="text-[10px] text-cat-overlay mr-1">{events.length} events</span>
+          {onClear && (
             <button
               type="button"
               onClick={onClear}
-              className="text-[9px] px-2 py-0.5 rounded border border-cat-surface1 text-cat-subtext hover:text-white hover:bg-cat-surface0 mr-1"
+              disabled={events.length === 0 && !wasCleared}
+              className="text-[10px] px-2 py-0.5 rounded border border-cat-surface1 text-cat-subtext hover:text-white hover:bg-cat-surface0 disabled:opacity-50 mr-1"
             >
               Clear
             </button>
@@ -112,7 +115,11 @@ export default function ActivityPanel({ events, onTaskClick, onClear }: Activity
         className="flex-1 p-3 overflow-y-auto space-y-2 font-mono text-xs"
       >
         {filtered.length === 0 && (
-          <p className="text-cat-overlay italic">No agent activity yet. Run a sprint step to see transcripts.</p>
+          <p className="text-cat-overlay italic">
+            {wasCleared
+              ? 'Cleared — new sprint events will appear here.'
+              : 'No agent activity yet. Run a sprint step to see transcripts.'}
+          </p>
         )}
         {[...filtered].reverse().map((event, i) => {
           const idx = filtered.length - 1 - i

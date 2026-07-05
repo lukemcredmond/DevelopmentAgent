@@ -1207,6 +1207,80 @@ def test_clear_tool_history_api():
     assert raw in (None, "", "[]")
 
 
+def test_clear_chat_history_api():
+    from backend import state
+
+    initialize()
+    state.storage.save_chat_message(
+        state.CURRENT_PROJECT_ID,
+        "user",
+        "hello from smoke test",
+        agent="Developer",
+    )
+    state.storage.save_chat_message(
+        state.CURRENT_PROJECT_ID,
+        "assistant",
+        "reply from smoke test",
+        agent="Developer",
+    )
+
+    client = TestClient(app)
+    state_before = client.get("/api/state")
+    assert state_before.status_code == 200
+    assert len(state_before.json()["chatMessages"]) >= 2
+
+    clear_resp = client.post("/api/chat/clear")
+    assert clear_resp.status_code == 200
+    body = clear_resp.json()
+    assert body["ok"] is True
+    assert body["deleted"] >= 2
+    assert body["chatMessages"] == []
+
+    state_after = client.get("/api/state")
+    assert state_after.status_code == 200
+    assert state_after.json()["chatMessages"] == []
+
+
+def test_chat_options_includes_num_ctx():
+    from backend.agents.registry import agent_po
+    from backend.services.workflow_settings import save_workflow_settings
+
+    initialize()
+    save_workflow_settings({"ollamaNumCtx": 32768})
+    opts = agent_po._chat_options()
+    assert opts["num_ctx"] == 32768
+    assert opts["temperature"] == 0.1
+
+
+def test_configure_po_tools_respects_web_search_flag():
+    from backend.agents.registry import agent_po, configure_agent_tools
+    from backend.services.workflow_settings import save_workflow_settings
+
+    initialize()
+    save_workflow_settings({"enableWebSearch": False, "enableSemanticSearch": False})
+    configure_agent_tools()
+    names = agent_po.registry.tool_names()
+    assert "web_search" not in names
+    assert "semantic_search" not in names
+    assert "search_code" not in names
+    assert "grep" in names
+    assert "add_backlog_tasks" in names
+
+
+def test_prompt_budget_scales_with_num_ctx():
+    from backend.services.prompt_budget import sprint_file_context_max_chars, truncate_brief
+
+    small = sprint_file_context_max_chars(4096)
+    large = sprint_file_context_max_chars(32768)
+    assert small < large
+    assert small >= 2000
+
+    long_brief = "x" * 20000
+    trimmed = truncate_brief(long_brief, 4096)
+    assert len(trimmed) < len(long_brief)
+    assert "truncated" in trimmed
+
+
 def test_add_backlog_tasks_split_moves_source_to_done():
     from backend import state
     from backend.agents.task_context import init_new_task
@@ -2039,6 +2113,11 @@ def test_diagnose_task_api(monkeypatch):
     assert resp.status_code == 200
     body = resp.json()
     assert body["diagnosis"]["rootCause"] == "tests"
+    assert "state" in body
+    board_tasks = [t for lane in body["state"]["board"].values() for t in lane if isinstance(t, dict)]
+    dx_task = next((t for t in board_tasks if t.get("id") == "T-DX"), None)
+    assert dx_task is not None
+    assert dx_task.get("lastDiagnosis", {}).get("rootCause") == "tests"
 
 
 def test_retry_step_same_mode(monkeypatch):

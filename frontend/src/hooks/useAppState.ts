@@ -21,7 +21,7 @@ import type {
   ToolExecutionEvent,
 } from '../types'
 import { EMPTY_BOARD, hasSprintWork } from '../types'
-import { hydrateActivityFromBoard, mergeActivityEvents } from '../utils/activityFromBoard'
+import { hydrateActivityFromBoard, mergeActivityEvents, filterActivityAfterClear, activityTimestampNow } from '../utils/activityFromBoard'
 
 const defaultState: AppState = {
   projectId: '',
@@ -224,6 +224,7 @@ export function useAppState() {
   const [loading, setLoading] = useState(false)
   const [error, setError] = useState<string | null>(null)
   const [activityEvents, setActivityEvents] = useState<ActivityEvent[]>([])
+  const [activityWasCleared, setActivityWasCleared] = useState(false)
   const [pendingTools, setPendingTools] = useState<import('../types').PendingToolRequest[]>([])
   const [pendingApprovals, setPendingApprovals] = useState<PendingToolApproval[]>([])
   const [activeRun, setActiveRun] = useState<AgentRunState | null>(null)
@@ -233,6 +234,8 @@ export function useAppState() {
   const [toolStartTick, setToolStartTick] = useState(0)
   const [sprintProgress, setSprintProgress] = useState<SprintProgress | null>(null)
   const liveActivityRef = useRef<ActivityEvent[]>([])
+  const activityClearedAtRef = useRef<string | null>(null)
+  const lastProjectIdRef = useRef<string>(defaultState.projectId)
   const boardRef = useRef<Board>(defaultState.board)
   const displayRunTimerRef = useRef<number | null>(null)
   const toolHistoryDebounceRef = useRef<number | null>(null)
@@ -250,12 +253,26 @@ export function useAppState() {
 
   useEffect(() => {
     boardRef.current = state.board
-  }, [state.board])
+    if (lastProjectIdRef.current !== state.projectId) {
+      lastProjectIdRef.current = state.projectId
+      activityClearedAtRef.current = null
+      liveActivityRef.current = []
+      setActivityWasCleared(false)
+    }
+  }, [state.board, state.projectId])
 
-  const syncActivityFromBoard = useCallback((board: Board) => {
+  const buildActivityEvents = useCallback((board: Board) => {
     const hydrated = hydrateActivityFromBoard(board)
-    setActivityEvents(mergeActivityEvents(hydrated, liveActivityRef.current))
+    const merged = mergeActivityEvents(hydrated, liveActivityRef.current)
+    return filterActivityAfterClear(merged, activityClearedAtRef.current)
   }, [])
+
+  const syncActivityFromBoard = useCallback(
+    (board: Board) => {
+      setActivityEvents(buildActivityEvents(board))
+    },
+    [buildActivityEvents],
+  )
 
   const refreshPendingTools = useCallback(async () => {
     try {
@@ -308,8 +325,10 @@ export function useAppState() {
   }, [])
 
   const clearActivity = useCallback(() => {
+    activityClearedAtRef.current = activityTimestampNow()
     liveActivityRef.current = []
-    setActivityEvents(hydrateActivityFromBoard(boardRef.current))
+    setActivityEvents([])
+    setActivityWasCleared(true)
   }, [])
 
   const refresh = useCallback(async () => {
@@ -346,12 +365,13 @@ export function useAppState() {
     setState((prev) => ({ ...prev, logs: [...prev.logs, log] }))
   }, [])
 
-  const appendActivity = useCallback((event: ActivityEvent) => {
-    liveActivityRef.current = [...liveActivityRef.current, event].slice(-200)
-    setActivityEvents(
-      mergeActivityEvents(hydrateActivityFromBoard(boardRef.current), liveActivityRef.current),
-    )
-  }, [])
+  const appendActivity = useCallback(
+    (event: ActivityEvent) => {
+      liveActivityRef.current = [...liveActivityRef.current, event].slice(-200)
+      setActivityEvents(buildActivityEvents(boardRef.current))
+    },
+    [buildActivityEvents],
+  )
 
   const clearToolEvents = useCallback(async () => {
     try {
@@ -521,6 +541,7 @@ export function useAppState() {
     refreshToolHistory,
     clearLogs,
     clearActivity,
+    activityWasCleared,
     sseLive,
     toolFailureCount,
     toolRunningCount,

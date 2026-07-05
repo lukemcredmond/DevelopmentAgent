@@ -127,6 +127,24 @@ export default function WorkflowPanel({
       </p>
 
       <label className="text-[11px] text-cat-subtext block">
+        <span className="text-[10px] text-cat-overlay block">Ollama context size (num_ctx)</span>
+        <input
+          type="number"
+          min={4096}
+          max={131072}
+          step={4096}
+          value={settings.ollamaNumCtx ?? 32768}
+          onChange={(e) =>
+            onSettingsChange({ ollamaNumCtx: parseInt(e.target.value, 10) || 32768 })
+          }
+          className="w-full bg-cat-base border border-cat-surface1 rounded p-1 text-white"
+        />
+      </label>
+      <p className="text-[10px] text-cat-overlay leading-relaxed -mt-1">
+        Increase if you see exceed_context_size_error. Higher values use more RAM.
+      </p>
+
+      <label className="text-[11px] text-cat-subtext block">
         <span className="text-[10px] text-cat-overlay block">Max Needs User per sprint</span>
         <input
           type="number"

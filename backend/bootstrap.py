@@ -53,6 +53,9 @@ def load_project_into_state(project_id: str) -> bool:
     from backend.services.mcp_tools import register_mcp_tools_from_settings
 
     register_mcp_tools_from_settings()
+    from backend.agents.registry import configure_agent_tools
+
+    configure_agent_tools()
     return True
 
 
@@ -79,6 +82,9 @@ def initialize() -> None:
         save_current_project_state()
         state.storage.set_active_project_id(state.CURRENT_PROJECT_ID)
 
+    from backend.agents.registry import configure_agent_tools
+
+    configure_agent_tools()
     print("=" * 70)
     print("      STARTING FASTAPI AGENT WEB INTERFACE")
     print("      Local dashboard url: http://127.0.0.1:6767")

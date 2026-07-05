@@ -149,7 +149,7 @@ def diagnose_task_route(task_id: str, payload: DiagnoseTaskPayload):
         result = diagnose_task(task_id, payload.ollamaUrl)
         if not result.get("ok"):
             raise HTTPException(status_code=400, detail=result.get("error", "Diagnosis failed"))
-    return {**build_state_response(), "diagnosis": result.get("diagnosis")}
+    return {"state": build_state_response(), "diagnosis": result.get("diagnosis")}
 
 
 @router.post("/api/tasks/{task_id}/split")

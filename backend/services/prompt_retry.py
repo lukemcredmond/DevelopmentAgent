@@ -31,6 +31,11 @@ def _last_failure_context(task_id: str) -> str:
             parts.append(f"Response: {entry['responseContent'][:500]}")
     task = find_task_by_id(task_id)
     if task:
+        ld = task.get("lastDiagnosis")
+        if isinstance(ld, dict) and ld.get("problem"):
+            parts.append(
+                f"Diagnosis: {ld.get('problem')} → {ld.get('recommendedAction', '')}"
+            )
         recent = list(reversed(task.get("transcript") or []))[:5]
         for entry in recent:
             if entry.get("toolSuccess") is False:

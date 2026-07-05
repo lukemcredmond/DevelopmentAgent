@@ -48,8 +48,11 @@ def cancel_auto_sprint():
 def update_workflow_settings(payload: WorkflowSettingsPayload):
     with state.STATE_LOCK:
         updates = payload.model_dump(exclude_none=True)
-        save_workflow_settings(updates)
+        saved = save_workflow_settings(updates)
         normalize_board_lanes(state.SHARED_BOARD)
+        from backend.agents.registry import configure_agent_tools
+
+        configure_agent_tools(saved)
     return build_state_response()
 
 

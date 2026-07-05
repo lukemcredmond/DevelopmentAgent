@@ -229,6 +229,12 @@ export async function sendChat(
   })
 }
 
+export async function clearChatHistory(): Promise<{ ok: boolean; deleted: number; chatMessages: [] }> {
+  return request<{ ok: boolean; deleted: number; chatMessages: [] }>('/api/chat/clear', {
+    method: 'POST',
+  })
+}
+
 export async function* streamChat(
   payload: ChatPayload,
   signal?: AbortSignal,
@@ -477,7 +483,7 @@ export async function clearToolHistory(): Promise<{ ok: boolean; events: [] }> {
 export async function diagnoseTask(
   taskId: string,
   ollamaUrl: string,
-): Promise<{ diagnosis: import('../types').TaskDiagnosis; state?: import('../types').AppState }> {
+): Promise<{ diagnosis: import('../types').TaskDiagnosis; state: import('../types').AppState }> {
   return request(`/api/tasks/${encodeURIComponent(taskId)}/diagnose`, {
     method: 'POST',
     body: JSON.stringify({ ollamaUrl }),

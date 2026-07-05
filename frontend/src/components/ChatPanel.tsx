@@ -38,6 +38,7 @@ interface ChatPanelProps {
   onRefreshState?: () => void
   onSplitTask?: (taskId: string) => void
   toolEvents?: ToolExecutionEvent[]
+  onClearChat?: () => void | Promise<void>
   hidden?: boolean
 }
 
@@ -109,9 +110,11 @@ export default function ChatPanel({
   onRefreshState,
   onSplitTask,
   toolEvents = [],
+  onClearChat,
   hidden = false,
 }: ChatPanelProps) {
   const [streaming, setStreaming] = useState(false)
+  const [clearing, setClearing] = useState(false)
   const [showFilePicker, setShowFilePicker] = useState(false)
   const bottomRef = useRef<HTMLDivElement>(null)
   const abortRef = useRef<AbortController | null>(null)
@@ -225,6 +228,16 @@ export default function ChatPanel({
     )
   }
 
+  const handleClearChat = async () => {
+    if (!onClearChat || streaming || clearing || messages.length === 0) return
+    setClearing(true)
+    try {
+      await onClearChat()
+    } finally {
+      setClearing(false)
+    }
+  }
+
   return (
     <div
       className={`flex flex-col h-full bg-cat-base overflow-hidden ${hidden ? 'hidden' : ''}`}
@@ -236,7 +249,7 @@ export default function ChatPanel({
         <select
           value={agent}
           onChange={(e) => onAgentChange(e.target.value as AgentId)}
-          disabled={streaming}
+          disabled={streaming || clearing}
           className="bg-cat-surface0 border border-cat-surface1 rounded text-[11px] text-white px-2 py-1"
         >
           {(Object.keys(AGENT_LABELS) as AgentId[]).map((id) => (
@@ -245,6 +258,16 @@ export default function ChatPanel({
             </option>
           ))}
         </select>
+        {onClearChat && messages.length > 0 && (
+          <button
+            type="button"
+            onClick={() => void handleClearChat()}
+            disabled={streaming || clearing}
+            className="text-[10px] px-2 py-0.5 rounded border border-cat-surface1 text-cat-subtext hover:text-white hover:bg-cat-surface0 disabled:opacity-50"
+          >
+            {clearing ? 'Clearing…' : 'Clear'}
+          </button>
+        )}
         <button
           type="button"
           onClick={() => setShowFilePicker((s) => !s)}

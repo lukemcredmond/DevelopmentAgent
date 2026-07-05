@@ -32,6 +32,12 @@ class ToolRegistry:
     def register(self, tool: Tool) -> None:
         self._tools[tool.name] = tool
 
+    def clear(self) -> None:
+        self._tools.clear()
+
+    def tool_names(self) -> List[str]:
+        return list(self._tools.keys())
+
     def get_definitions(self) -> List[Dict[str, Any]]:
         return [
             {
