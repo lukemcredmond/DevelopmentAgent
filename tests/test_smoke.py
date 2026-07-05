@@ -701,6 +701,8 @@ def test_apply_workspace_patch_replaces_unique_snippet():
     from backend.workspace.files import apply_workspace_patch, write_workspace_file
 
     initialize()
+    state.ACTIVE_SPRINT_TASK_ID = None
+    state.STEP_FILE_READS.clear()
     write_workspace_file("patch_test.txt", "hello world")
     result = apply_workspace_patch("patch_test.txt", "world", "there")
     assert "Successfully saved" in result
@@ -708,12 +710,105 @@ def test_apply_workspace_patch_replaces_unique_snippet():
 
 
 def test_apply_workspace_patch_fails_when_old_text_missing():
+    from backend import state
     from backend.workspace.files import apply_workspace_patch, write_workspace_file
 
     initialize()
+    state.ACTIVE_SPRINT_TASK_ID = None
+    state.STEP_FILE_READS.clear()
     write_workspace_file("patch_miss.txt", "alpha beta")
     result = apply_workspace_patch("patch_miss.txt", "gamma", "delta")
     assert result.startswith("Error:")
+    assert "read_file" in result
+
+
+def test_apply_patch_requires_read_file_this_step():
+    from backend import state
+    from backend.workspace.files import apply_workspace_patch, write_workspace_file
+
+    initialize()
+    state.ACTIVE_SPRINT_TASK_ID = "T-PATCH-GATE"
+    state.STEP_FILE_READS.clear()
+    write_workspace_file("gate_test.txt", "line one\nline two")
+    result = apply_workspace_patch("gate_test.txt", "line one", "line 1")
+    assert "requires read_file" in result
+
+
+def test_apply_patch_after_read_file_succeeds():
+    from backend import state
+    from backend.workspace.files import (
+        apply_workspace_patch,
+        read_workspace_file,
+        record_step_file_read,
+        write_workspace_file,
+    )
+
+    initialize()
+    state.ACTIVE_SPRINT_TASK_ID = "T-PATCH-OK"
+    state.STEP_FILE_READS.clear()
+    write_workspace_file("read_patch.txt", "foo bar baz")
+    content = read_workspace_file("read_patch.txt")
+    record_step_file_read("read_patch.txt", content)
+    result = apply_workspace_patch("read_patch.txt", "bar", "qux")
+    assert "Successfully saved" in result
+    assert state.VIRTUAL_FILESYSTEM["read_patch.txt"] == "foo qux baz"
+
+
+def test_apply_patch_after_write_requires_reread():
+    from backend import state
+    from backend.workspace.files import (
+        apply_workspace_patch,
+        read_workspace_file,
+        record_step_file_read,
+        write_workspace_file,
+    )
+
+    initialize()
+    state.ACTIVE_SPRINT_TASK_ID = "T-PATCH-RE"
+    state.STEP_FILE_READS.clear()
+    write_workspace_file("re_read.txt", "original")
+    content = read_workspace_file("re_read.txt")
+    record_step_file_read("re_read.txt", content)
+    write_workspace_file("re_read.txt", "updated content")
+    result = apply_workspace_patch("re_read.txt", "updated", "changed")
+    assert "requires read_file" in result
+
+
+def test_apply_patch_not_found_includes_excerpt():
+    from backend import state
+    from backend.workspace.files import (
+        apply_workspace_patch,
+        record_step_file_read,
+        write_workspace_file,
+    )
+
+    initialize()
+    state.ACTIVE_SPRINT_TASK_ID = "T-PATCH-EX"
+    state.STEP_FILE_READS.clear()
+    write_workspace_file("excerpt.txt", "alpha\nbeta\ngamma")
+    record_step_file_read("excerpt.txt", "alpha\nbeta\ngamma")
+    result = apply_workspace_patch("excerpt.txt", "totally wrong", "x")
+    assert "First lines of current file" in result
+    assert "alpha" in result
+    assert "read_file" in result
+
+
+def test_apply_patch_crlf_normalized():
+    from backend import state
+    from backend.workspace.files import (
+        apply_workspace_patch,
+        record_step_file_read,
+        write_workspace_file,
+    )
+
+    initialize()
+    state.ACTIVE_SPRINT_TASK_ID = "T-PATCH-CRLF"
+    state.STEP_FILE_READS.clear()
+    write_workspace_file("crlf.txt", "hello\r\nworld\r\n")
+    record_step_file_read("crlf.txt", "hello\r\nworld\r\n")
+    result = apply_workspace_patch("crlf.txt", "world\n", "there\n")
+    assert "Successfully saved" in result
+    assert "there" in state.VIRTUAL_FILESYSTEM["crlf.txt"]
 
 
 def test_agent_run_lifecycle():

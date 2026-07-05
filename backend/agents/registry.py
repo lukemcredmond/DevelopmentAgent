@@ -75,7 +75,8 @@ tool_apply_patch = Tool(
     name="apply_patch",
     description=(
         "Replace a unique old_text snippet with new_text in an existing workspace file. "
-        "Prefer for small edits; use write_file for new files or full rewrites."
+        "You must call read_file on the same path in this step first; copy old_text verbatim "
+        "from that read_file output. Prefer for small edits; use write_file for new files."
     ),
     parameters={
         "type": "object",

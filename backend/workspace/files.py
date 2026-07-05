@@ -135,6 +135,7 @@ def write_workspace_file(path: str, content: str, author: Optional[str] = None) 
             "success",
             f"Wrote '{safe_path}' ({nbytes} bytes) → {phys_path}",
         )
+        invalidate_step_file_read(safe_path)
         return f"Successfully saved file physically at: '{phys_path}'"
     except Exception as e:
         msg = f"Error: physical write failed for '{safe_path}': {e}"
@@ -142,17 +143,94 @@ def write_workspace_file(path: str, content: str, author: Optional[str] = None) 
         return msg
 
 
+def clear_step_file_reads() -> None:
+    state.STEP_FILE_READS.clear()
+
+
+def record_step_file_read(path: str, content: str) -> None:
+    try:
+        safe_path = resolve_workspace_path(path)
+    except ValueError:
+        return
+    if not content or content.startswith("Error:"):
+        return
+    state.STEP_FILE_READS[safe_path] = content
+
+
+def invalidate_step_file_read(path: str) -> None:
+    try:
+        safe_path = resolve_workspace_path(path)
+    except ValueError:
+        return
+    state.STEP_FILE_READS.pop(safe_path, None)
+
+
+def _normalize_for_patch_match(text: str) -> str:
+    return text.replace("\r\n", "\n").replace("\r", "\n")
+
+
+def _patch_match_and_replace(current: str, old_text: str, new_text: str) -> tuple[Optional[str], int]:
+    """Return (updated_content, match_count). match_count 0 = not found, >1 = ambiguous."""
+    count = current.count(old_text)
+    if count == 1:
+        return current.replace(old_text, new_text, 1), 1
+    if count > 1:
+        return None, count
+
+    norm_current = _normalize_for_patch_match(current)
+    norm_old = _normalize_for_patch_match(old_text)
+    norm_new = _normalize_for_patch_match(new_text)
+    norm_count = norm_current.count(norm_old)
+    if norm_count == 1:
+        updated_norm = norm_current.replace(norm_old, norm_new, 1)
+        if "\r\n" in current:
+            updated = updated_norm.replace("\n", "\r\n")
+        else:
+            updated = updated_norm
+        return updated, 1
+    return None, norm_count
+
+
+def _patch_not_found_message(path: str, current: str, old_text: str) -> str:
+    lines = current.splitlines()
+    excerpt = "\n".join(f"  {i + 1}| {line}" for i, line in enumerate(lines[:30]))
+    first_line = next((ln.strip() for ln in old_text.splitlines() if ln.strip()), "")
+    hint = ""
+    if first_line and first_line not in current:
+        preview = first_line[:80] + ("…" if len(first_line) > 80 else "")
+        hint = f"\nFirst line of old_text not present in file: {preview!r}"
+    return (
+        f"Error: old_text not found in '{path}' (file has {len(lines)} lines).{hint}\n"
+        f"First lines of current file:\n{excerpt}\n"
+        f"You must read_file('{path}') in this step and copy old_text exactly from that output. "
+        f"Do not use pre-loaded context or analyze output."
+    )
+
+
 def apply_workspace_patch(path: str, old_text: str, new_text: str) -> str:
     """Replace a unique old_text snippet in a file with new_text."""
+    sync_virtual_filesystem_from_disk()
+    try:
+        safe_path = resolve_workspace_path(path)
+    except ValueError as e:
+        return f"Error: {e}"
+
+    if state.ACTIVE_SPRINT_TASK_ID and safe_path not in state.STEP_FILE_READS:
+        return (
+            f"Error: apply_patch requires read_file on '{path}' in this step first. "
+            f"Call read_file, then retry with old_text copied exactly from that output."
+        )
+
     current = read_workspace_file(path)
     if current.startswith("Error:"):
         return f"Error: Cannot patch — {current}"
-    count = current.count(old_text)
+
+    updated, count = _patch_match_and_replace(current, old_text, new_text)
     if count == 0:
-        return f"Error: old_text not found in '{path}'"
+        return _patch_not_found_message(path, current, old_text)
     if count > 1:
         return f"Error: old_text appears {count} times in '{path}' — must be unique"
-    updated = current.replace(old_text, new_text, 1)
+    assert updated is not None
     return write_workspace_file(path, updated)
 
 

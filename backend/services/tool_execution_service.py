@@ -451,6 +451,20 @@ def execute_tool(
             tool_output = agent.registry.invoke(tool_name, arguments)
             success = not is_tool_failure(tool_name, tool_output)
 
+        if success:
+            if tool_name == "read_file":
+                from backend.workspace.files import record_step_file_read
+
+                record_step_file_read(str(arguments.get("path") or ""), tool_output)
+            elif tool_name in ("write_file", "apply_patch"):
+                from backend.workspace.files import invalidate_step_file_read
+
+                path_key = str(
+                    arguments.get("path") or arguments.get("test_script_path") or ""
+                )
+                if path_key:
+                    invalidate_step_file_read(path_key)
+
         duration_ms = int((time.time() - started) * 1000)
         output_preview = tool_output[:500]
 

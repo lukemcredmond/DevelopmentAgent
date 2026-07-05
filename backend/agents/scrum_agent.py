@@ -203,6 +203,13 @@ class ScrumAgent:
                             f"Tool '{tool_name}' failed: {tool_output[:300]}. "
                             "Do not repeat the same arguments. Try a different path, "
                             "command, or approach to achieve the task."
+                            + (
+                                " apply_patch failed — call read_file on the same path, "
+                                "then retry with exact old_text from that result. Never use "
+                                "analyze output or pre-loaded context."
+                                if tool_name == "apply_patch"
+                                else ""
+                            )
                         ),
                     }
                 )

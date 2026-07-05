@@ -39,6 +39,7 @@ def _compose_message(payload: ChatPayload) -> str:
 def _apply_chat_task_context(payload: ChatPayload) -> None:
     if payload.task_id:
         state.ACTIVE_SPRINT_TASK_ID = payload.task_id
+        state.STEP_FILE_READS.clear()
         agent = AGENT_MAP.get(payload.agent)
         if agent:
             state.ACTIVE_SPRINT_AGENT = agent.role

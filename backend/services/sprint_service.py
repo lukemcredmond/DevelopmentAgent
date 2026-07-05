@@ -61,7 +61,8 @@ from backend.workspace.files import (
 )
 
 CONTEXT_INJECT_NOTE = (
-    "File contents above are pre-loaded; use read_file only for files not listed."
+    "Pre-loaded file content may be stale or truncated — always call read_file immediately "
+    "before apply_patch on a path, even when that file appears above."
 )
 
 PLANNING_TASK_ID = "PLANNING"
@@ -341,6 +342,7 @@ def _dev_needs_user(result: str) -> bool:
 def _mark_sprint_step_start() -> str:
     ts = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
     state.SPRINT_STEP_STARTED_AT = ts
+    state.STEP_FILE_READS.clear()
     return ts
 
 
@@ -915,6 +917,8 @@ def _run_developer_step(active_task: Dict[str, Any], brief: str) -> None:
         "Registered tools: read_file, write_file, apply_patch, run_command, update_board, "
         "git_status, git_diff, git_commit, search_code. "
         "Use apply_patch for edits to existing files; write_file for new files. "
+        "Before apply_patch you must read_file on the same path in this step and copy old_text "
+        "verbatim from that read_file result — never from pre-loaded context or analyze output. "
         "Implement using apply_patch and write_file. "
         "Read each tool result before calling update_board — if write_file or apply_patch fails, "
         "try a different path or approach (do not repeat the same failing arguments). "
