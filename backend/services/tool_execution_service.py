@@ -32,7 +32,7 @@ from backend.services.events import publish_event
 from backend.services.logs import add_system_log
 from backend.services.tool_approval import request_tool_approval, tool_requires_approval
 
-ToolSource = Literal["agent", "manual", "replay"]
+ToolSource = Literal["agent", "manual", "replay", "orchestrator", "context_inject"]
 
 
 def _get_agent_map():
@@ -430,6 +430,84 @@ def execute_tool(
         task_id=task_id,
         source=source,
         run_id=effective_run_id,
+    )
+
+
+def log_synthetic_tool_event(
+    task_id: str,
+    agent_role: str,
+    tool_name: str,
+    *,
+    tool_args: Dict[str, Any],
+    tool_output: str,
+    success: bool,
+    source: Literal["orchestrator", "context_inject"],
+    run_id: Optional[str] = None,
+) -> None:
+    """Record orchestrator/context events in transcript, SSE, and active run (no LLM invocation)."""
+    from backend.agents.agent_run import append_recent_tool, get_active_run
+
+    ts = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+    active_run = get_active_run()
+    effective_run_id = run_id or (active_run.run_id if active_run else "orchestrator")
+    output_preview = tool_output[:500]
+
+    publish_event(
+        "tool_start",
+        {
+            "runId": effective_run_id,
+            "taskId": task_id,
+            "agent": agent_role,
+            "toolName": tool_name,
+            "toolArgs": tool_args,
+            "timestamp": ts,
+            "source": source,
+        },
+    )
+
+    publish_event(
+        "tool_end",
+        {
+            "runId": effective_run_id,
+            "taskId": task_id,
+            "agent": agent_role,
+            "toolName": tool_name,
+            "toolArgs": tool_args,
+            "toolSuccess": success,
+            "toolOutput": output_preview,
+            "durationMs": 0,
+            "timestamp": ts,
+            "source": source,
+        },
+    )
+
+    tool_entry = {
+        "toolName": tool_name,
+        "toolSuccess": success,
+        "toolOutput": output_preview,
+        "durationMs": 0,
+        "timestamp": ts,
+    }
+    if active_run:
+        append_recent_tool(tool_entry)
+
+    record_task_transcript(
+        task_id,
+        "tool",
+        tool_output[:4000],
+        agent=agent_role,
+        toolName=tool_name,
+        toolSuccess=success,
+        toolArgs=tool_args,
+        toolOutput=tool_output[:2000],
+        source=source,
+    )
+
+    label = "Auto QA" if source == "orchestrator" else "Context"
+    add_system_log(
+        agent_role,
+        "success" if success else "error",
+        f"{label} {tool_name} — {output_preview[:200]}",
     )
 
 

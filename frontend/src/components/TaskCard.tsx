@@ -67,6 +67,11 @@ export default function TaskCard({
               <i className="fa-solid fa-xmark" />
             </span>
           )}
+          {task.qaEvidence && !task.qaEvidence.passed && task.qaEvidence.playbookRun && (
+            <span className="text-[9px] bg-amber-950/50 text-amber-300 px-1 py-0.5 rounded" title="Tests failed or not run">
+              No tests
+            </span>
+          )}
           {needsUser && (
             <span
               className="text-[9px] bg-amber-950/50 text-amber-300 px-1 py-0.5 rounded"

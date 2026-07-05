@@ -492,6 +492,16 @@ export default function App() {
           </div>
         )}
 
+        {ollamaOk === false && (
+          <div className="mx-4 mt-2 shrink-0 flex items-center gap-2 text-[11px] text-amber-200 bg-amber-950/40 border border-amber-500/40 rounded-lg px-3 py-2">
+            <i className="fa-solid fa-triangle-exclamation shrink-0" />
+            <span>
+              Offline simulation — tools are not running.
+              {sprintRunning ? ' Sprint steps use fallback behavior.' : ' Start Ollama for real agent behavior.'}
+            </span>
+          </div>
+        )}
+
         {pendingTools.length > 0 && (
           <div className="mx-4 mt-2 shrink-0 flex items-center justify-between gap-2 text-[11px] text-amber-200 bg-amber-950/40 border border-amber-500/40 rounded-lg px-3 py-2">
             <span>

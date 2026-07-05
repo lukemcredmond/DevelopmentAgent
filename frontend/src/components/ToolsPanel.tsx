@@ -40,6 +40,12 @@ interface ToolsPanelProps {
 
 function toolEventBadge(ev: ToolExecutionEvent): { label: string; tone: 'ok' | 'findings' | 'failed' } {
   if (ev.status === 'running') return { label: '…', tone: 'ok' }
+  if (ev.toolName === 'context_inject') return { label: 'Context', tone: 'ok' }
+  if (ev.source === 'orchestrator') {
+    return ev.status === 'failed' || ev.toolSuccess === false
+      ? { label: 'Auto QA FAIL', tone: 'failed' }
+      : { label: 'Auto QA', tone: 'ok' }
+  }
   if (ev.runCommandStatus?.startsWith('Findings')) {
     return { label: ev.runCommandStatus, tone: 'findings' }
   }
@@ -47,6 +53,12 @@ function toolEventBadge(ev: ToolExecutionEvent): { label: string; tone: 'ok' | '
     return { label: 'FAILED', tone: 'failed' }
   }
   return { label: ev.runCommandStatus ?? 'OK', tone: 'ok' }
+}
+
+function sourceDisplayLabel(source: ToolExecutionEvent['source']): string {
+  if (source === 'orchestrator') return 'Auto QA'
+  if (source === 'context_inject') return 'Context'
+  return source
 }
 
 function readToolsSubTab(): ToolsSubTab {
@@ -416,7 +428,7 @@ export default function ToolsPanel({
                     )}
                     <span className="text-indigo-300 font-bold">{ev.toolName}</span>
                     <span className="text-cat-overlay text-[10px]">{ev.agent}</span>
-                    <span className="text-cat-overlay text-[10px] uppercase">{ev.source}</span>
+                    <span className="text-cat-overlay text-[10px] uppercase">{sourceDisplayLabel(ev.source)}</span>
                     {ev.durationMs != null && ev.durationMs > 0 && (
                       <span className="text-cat-overlay text-[10px]">{ev.durationMs}ms</span>
                     )}

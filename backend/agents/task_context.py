@@ -236,6 +236,15 @@ def normalize_task(task: Dict[str, Any]) -> Dict[str, Any]:
         }
     elif task.get("qaFailure") is not None:
         task["qaFailure"] = None
+    if task.get("qaEvidence") is not None and isinstance(task["qaEvidence"], dict):
+        qe = task["qaEvidence"]
+        task["qaEvidence"] = {
+            "playbookRun": bool(qe.get("playbookRun")),
+            "commands": [str(c) for c in (qe.get("commands") or [])],
+            "passed": bool(qe.get("passed")),
+        }
+    elif "qaEvidence" not in task:
+        task["qaEvidence"] = None
     if "userQuestion" not in task:
         task["userQuestion"] = None
     if "poRoundTrips" not in task or not isinstance(task.get("poRoundTrips"), (int, float)):
@@ -266,6 +275,7 @@ def init_new_task(task: Dict[str, Any]) -> Dict[str, Any]:
     task.setdefault("blockedBy", [])
     task.setdefault("priority", 100)
     task["qaFailure"] = None
+    task["qaEvidence"] = None
     task["userQuestion"] = None
     task["poRoundTrips"] = 0
     task["stuckLoops"] = 0

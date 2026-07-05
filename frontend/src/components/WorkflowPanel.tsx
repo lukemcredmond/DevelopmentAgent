@@ -66,6 +66,14 @@ export default function WorkflowPanel({
       <label className="flex items-center gap-2 text-[11px] text-cat-subtext cursor-pointer">
         <input
           type="checkbox"
+          checked={settings.requireDevVerification ?? false}
+          onChange={(e) => onSettingsChange({ requireDevVerification: e.target.checked })}
+        />
+        Require dev run_command/run_test before QA
+      </label>
+      <label className="flex items-center gap-2 text-[11px] text-cat-subtext cursor-pointer">
+        <input
+          type="checkbox"
           checked={settings.requireToolApproval ?? false}
           onChange={(e) => onSettingsChange({ requireToolApproval: e.target.checked })}
         />

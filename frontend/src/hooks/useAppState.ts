@@ -76,7 +76,15 @@ function mapAgentRun(raw: Record<string, unknown>): AgentRunState {
 }
 
 function mapToolSource(raw: unknown): ToolExecutionEvent['source'] {
-  if (raw === 'manual' || raw === 'replay' || raw === 'agent') return raw
+  if (
+    raw === 'manual' ||
+    raw === 'replay' ||
+    raw === 'agent' ||
+    raw === 'orchestrator' ||
+    raw === 'context_inject'
+  ) {
+    return raw
+  }
   return 'agent'
 }
 

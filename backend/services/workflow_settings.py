@@ -10,6 +10,7 @@ DEFAULT_WORKFLOW_SETTINGS: Dict[str, Any] = {
     "requireBacklogApproval": False,
     "requireCodeReview": False,
     "requireToolApproval": False,
+    "requireDevVerification": False,
     "toolApprovalTools": ["write_file", "run_command"],
     "mcpServers": [],
     "definitionOfDone": [],

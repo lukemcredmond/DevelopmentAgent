@@ -23,4 +23,7 @@ EVENT_SUBSCRIBERS: List[Any] = []
 PENDING_TOOL_REQUESTS: List[Dict[str, Any]] = []
 PENDING_TOOL_APPROVALS: List[Any] = []
 
+# Timestamp marking the start of the current sprint agent step (for transcript scoping).
+SPRINT_STEP_STARTED_AT: Optional[str] = None
+
 storage = ProjectStorage()

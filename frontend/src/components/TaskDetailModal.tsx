@@ -368,6 +368,33 @@ export default function TaskDetailModal({
             </div>
           )}
 
+          {safeTask.qaEvidence && (
+            <div
+              className={`rounded-lg p-3 border ${
+                safeTask.qaEvidence.passed
+                  ? 'bg-emerald-950/20 border-emerald-500/30'
+                  : 'bg-amber-950/20 border-amber-500/30'
+              }`}
+            >
+              <h4 className="text-xs font-bold text-cat-subtext mb-1">QA test evidence</h4>
+              <p className="text-[11px] text-white">
+                {safeTask.qaEvidence.playbookRun
+                  ? `Playbook: ${safeTask.qaEvidence.passed ? 'passed' : 'failed or incomplete'}`
+                  : 'No automated playbook detected for this project'}
+              </p>
+              {safeTask.qaEvidence.commands.length > 0 && (
+                <ul className="text-[10px] text-cat-subtext mt-1 list-disc pl-4">
+                  {safeTask.qaEvidence.commands.map((cmd) => (
+                    <li key={cmd}>{cmd}</li>
+                  ))}
+                </ul>
+              )}
+              {!safeTask.qaEvidence.passed && safeTask.qaEvidence.playbookRun && (
+                <p className="text-[10px] text-amber-300 mt-1">Tests must pass before Done.</p>
+              )}
+            </div>
+          )}
+
           {onDiscussWithAgent && (
             <button
               type="button"

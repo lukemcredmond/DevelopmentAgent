@@ -2,6 +2,7 @@ import json
 import os
 import random
 import re
+from datetime import datetime
 from typing import Any, Dict, List, Optional
 
 from backend import state
@@ -51,7 +52,17 @@ from backend.services.workflow_settings import (
     get_workflow_settings,
     save_sprint_summary,
 )
-from backend.workspace.files import write_workspace_file
+from backend.services.tool_execution_service import log_synthetic_tool_event
+from backend.workspace.files import (
+    build_sprint_file_context,
+    derive_project_test_commands,
+    run_agent_command,
+    write_workspace_file,
+)
+
+CONTEXT_INJECT_NOTE = (
+    "File contents above are pre-loaded; use read_file only for files not listed."
+)
 
 
 def extract_json_array_from_text(text: str) -> List[Dict[str, Any]]:
@@ -227,9 +238,176 @@ def _dev_needs_user(result: str) -> bool:
     )
 
 
-def _qa_failed(result: str) -> bool:
+def _mark_sprint_step_start() -> str:
+    ts = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+    state.SPRINT_STEP_STARTED_AT = ts
+    return ts
+
+
+def _inject_sprint_context(
+    active_task: Dict[str, Any],
+    brief: str,
+    agent_role: str,
+    instructions: str,
+) -> str:
+    """Build sprint prompt with pre-loaded file contents and log context_inject event."""
+    task_id = active_task["id"]
+    context_block, paths = build_sprint_file_context(active_task)
+    if paths:
+        log_synthetic_tool_event(
+            task_id,
+            agent_role,
+            "context_inject",
+            tool_args={"paths": paths, "fileCount": len(paths)},
+            tool_output=f"Pre-loaded {len(paths)} file(s): {', '.join(paths[:12])}"
+            + ("…" if len(paths) > 12 else ""),
+            success=True,
+            source="context_inject",
+        )
+    base = build_task_prompt(active_task, brief)
+    parts = [base]
+    if context_block:
+        parts.append(context_block)
+        parts.append(CONTEXT_INJECT_NOTE)
+    parts.append(instructions)
+    return "\n".join(parts)
+
+
+def _qa_result_indicates_failure(result: str) -> bool:
     lower = result.lower()
     return any(m in lower for m in ("fail", "failed", "rejected", "does not pass", "not pass"))
+
+
+def _qa_failed(result: str) -> bool:
+    """Legacy helper — prefer _qa_step_passed."""
+    return _qa_result_indicates_failure(result)
+
+
+def _transcript_entries_since(task: Dict[str, Any], step_started: str) -> List[Dict[str, Any]]:
+    entries: List[Dict[str, Any]] = []
+    for entry in task.get("transcript") or []:
+        if not isinstance(entry, dict):
+            continue
+        ts = str(entry.get("timestamp") or "")
+        if step_started and ts and ts < step_started:
+            continue
+        entries.append(entry)
+    return entries
+
+
+def _qa_has_test_evidence(
+    task: Dict[str, Any],
+    playbook: Dict[str, Any],
+    step_started: str,
+) -> bool:
+    if playbook.get("run") and playbook.get("passed"):
+        return True
+    for entry in _transcript_entries_since(task, step_started):
+        if entry.get("toolName") in ("run_test", "run_command"):
+            if entry.get("toolSuccess") is not False:
+                return True
+    return False
+
+
+def _qa_step_passed(
+    task: Dict[str, Any],
+    result: str,
+    playbook: Dict[str, Any],
+    step_started: str,
+) -> tuple[bool, str]:
+    if playbook.get("run") and not playbook.get("passed"):
+        return False, "Automated test playbook failed"
+    if _qa_result_indicates_failure(result):
+        return False, "QA agent reported failure"
+    if _qa_has_test_evidence(task, playbook, step_started):
+        return True, ""
+    if not playbook.get("run"):
+        return False, "No test playbook available and no run_test/run_command evidence"
+    return False, "No successful test evidence in this QA step"
+
+
+def qa_gate_blocks_done(task: Dict[str, Any]) -> tuple[bool, str]:
+    """Return (blocked, reason) when agent tries update_board → Done from QA."""
+    normalize_task(task)
+    evidence = task.get("qaEvidence") or {}
+    step_started = state.SPRINT_STEP_STARTED_AT or ""
+    if evidence.get("playbookRun") and not evidence.get("passed"):
+        return True, "Automated test playbook failed — cannot move to Done."
+    if not _qa_has_test_evidence(task, evidence, step_started):
+        return True, "No test evidence — run_test or run_command must succeed before Done."
+    return False, ""
+
+
+def _run_qa_test_playbook(task_id: str) -> Dict[str, Any]:
+    """Run project test commands before the QA agent evaluates."""
+    commands = derive_project_test_commands()
+    results: List[Dict[str, Any]] = []
+    all_passed = True
+
+    for cmd in commands:
+        output = run_agent_command(cmd)
+        success = output.startswith("[success exit 0]")
+        if not success:
+            all_passed = False
+        results.append({"command": cmd, "success": success, "output": output[:1500]})
+        log_synthetic_tool_event(
+            task_id,
+            "QA Tester",
+            "run_command",
+            tool_args={"command": cmd},
+            tool_output=output,
+            success=success,
+            source="orchestrator",
+        )
+
+    return {
+        "run": bool(commands),
+        "commands": commands,
+        "results": results,
+        "passed": all_passed if commands else False,
+    }
+
+
+def _format_playbook_block(playbook: Dict[str, Any]) -> str:
+    if not playbook.get("run"):
+        return "\n=== AUTOMATED TEST RESULTS (orchestrator) ===\n(no project test commands detected)\n"
+    lines = ["\n=== AUTOMATED TEST RESULTS (orchestrator) ==="]
+    for item in playbook.get("results") or []:
+        status = "PASS" if item.get("success") else "FAIL"
+        lines.append(f"- [{status}] {item.get('command', '?')}")
+        excerpt = str(item.get("output") or "")[:400].replace("\n", " ")
+        if excerpt:
+            lines.append(f"  {excerpt}")
+    lines.append(f"Overall playbook: {'PASSED' if playbook.get('passed') else 'FAILED'}\n")
+    return "\n".join(lines)
+
+
+def _dev_has_verification(task: Dict[str, Any], step_started: str) -> bool:
+    for entry in _transcript_entries_since(task, step_started):
+        if entry.get("toolName") in ("run_test", "run_command") and entry.get("toolSuccess") is not False:
+            return True
+    return False
+
+
+def _audit_dev_verification(task: Dict[str, Any], lane_before: str, task_id: str, step_started: str) -> None:
+    if not get_workflow_settings().get("requireDevVerification"):
+        return
+    lane_after = get_task_lane(task_id) or lane_before
+    target = _dev_complete_lane()
+    if lane_before != "In Progress" or lane_after != target:
+        return
+    files = task.get("files") or []
+    if not files:
+        return
+    if _dev_has_verification(task, step_started):
+        return
+    add_system_log(
+        "Developer",
+        "warning",
+        f"'{task.get('title', task_id)}' advanced without run_command/run_test — "
+        "requireDevVerification is enabled; moving back to In Progress",
+    )
+    move_board_stage(task_id, "In Progress")
 
 
 def _append_tasks(tasks: List[Dict[str, Any]]) -> int:
@@ -501,14 +679,15 @@ def _run_po_clarification(active_task: Dict[str, Any], brief: str) -> None:
 def _run_developer_step(active_task: Dict[str, Any], brief: str) -> None:
     task_id = active_task["id"]
     lane_before = get_task_lane(task_id) or "In Progress"
+    step_started = _mark_sprint_step_start()
     set_active_sprint_context(task_id, "Developer")
     add_system_log("Developer", "info", f"Implementing '{active_task['title']}'…")
     target = _dev_complete_lane()
-    prompt = (
-        build_task_prompt(active_task, brief)
-        + "\nRegistered tools: read_file, write_file, apply_patch, run_command, update_board, git_status, git_diff, git_commit. "
+    instructions = (
+        "Registered tools: read_file, write_file, apply_patch, run_command, update_board, "
+        "git_status, git_diff, git_commit, search_code. "
         "Use apply_patch for edits to existing files; write_file for new files. "
-        "Implement using read_file, apply_patch, and write_file. "
+        "Implement using apply_patch and write_file. "
         "Read each tool result before calling update_board — if write_file or apply_patch fails, "
         "try a different path or approach (do not repeat the same failing arguments). "
         "For Flutter/Dart use run_command with command 'flutter analyze'. "
@@ -519,6 +698,7 @@ def _run_developer_step(active_task: Dict[str, Any], brief: str) -> None:
         "User-only decisions (keys, design) → move to 'Needs User' with a specific userQuestion. "
         f"When complete and files are written → move to '{target}'."
     )
+    prompt = _inject_sprint_context(active_task, brief, "Developer", instructions)
     result = agent_dev.execute_step(prompt, max_iterations=_llm_iterations())
 
     with state.STATE_LOCK:
@@ -558,18 +738,21 @@ def _run_developer_step(active_task: Dict[str, Any], brief: str) -> None:
                         )
         _log_sprint_step_outcome("Developer", task_id, task.get("title", task_id), lane_before, result)
         _audit_dev_files_written(find_task_by_id(task_id) or task, lane_before, task_id)
+        _audit_dev_verification(find_task_by_id(task_id) or task, lane_before, task_id, step_started)
         _check_stuck_and_escalate(task_id, lane_before)
 
 
 def _run_code_review_step(active_task: Dict[str, Any], brief: str) -> None:
     task_id = active_task["id"]
     lane_before = get_task_lane(task_id) or "Code Review"
+    _mark_sprint_step_start()
     set_active_sprint_context(task_id, "Code Reviewer")
     add_system_log("Code Reviewer", "info", f"Reviewing '{active_task['title']}'…")
-    prompt = (
-        build_task_prompt(active_task, brief)
-        + "\nReview with read_file. Pass → 'QA'. Fail → 'In Progress'."
+    instructions = (
+        "Registered tools: read_file, apply_patch, update_board, git_diff, search_code. "
+        "Review with read_file. Pass → 'QA'. Fail → 'In Progress'."
     )
+    prompt = _inject_sprint_context(active_task, brief, "Code Reviewer", instructions)
     result = agent_cr.execute_step(prompt, max_iterations=_llm_iterations())
 
     with state.STATE_LOCK:
@@ -594,32 +777,57 @@ def _run_code_review_step(active_task: Dict[str, Any], brief: str) -> None:
 def _run_qa_step(active_task: Dict[str, Any], brief: str) -> None:
     task_id = active_task["id"]
     lane_before = get_task_lane(task_id) or "QA"
+    step_started = _mark_sprint_step_start()
     set_active_sprint_context(task_id, "QA Tester")
     add_system_log("QA Tester", "info", f"Validating '{active_task['title']}'…")
+
+    playbook = _run_qa_test_playbook(task_id)
+    with state.STATE_LOCK:
+        task_for_evidence = find_task_by_id(task_id)
+        if task_for_evidence:
+            normalize_task(task_for_evidence)
+            task_for_evidence["qaEvidence"] = {
+                "playbookRun": playbook["run"],
+                "commands": playbook["commands"],
+                "passed": playbook["passed"],
+            }
+
     ac = active_task.get("acceptanceCriteria") or []
     ac_block = "\n".join(f"- {c}" for c in ac) if ac else "(see description)"
-    prompt = (
-        build_task_prompt(active_task, brief)
-        + f"\nValidate acceptance criteria:\n{ac_block}\n"
-        + f"{build_dod_block()}"
-        "Registered tools: read_file, run_test, run_command, update_board. "
-        "Use read_file, run_test, and run_command (e.g. 'flutter analyze' for Dart/Flutter). "
-        "Pass → 'Done'. Fail → 'In Progress' with failure details."
+    instructions = (
+        f"Validate acceptance criteria:\n{ac_block}\n"
+        f"{build_dod_block()}"
+        f"{_format_playbook_block(playbook)}"
+        "Registered tools: read_file, run_test, run_command, update_board, search_code. "
+        "Review the automated test results above. Use read_file and run_test for additional checks. "
+        "Pass → 'Done'. Fail → 'In Progress' with failure details. "
+        "You cannot move to Done without passing automated tests or successful run_test/run_command."
     )
+    prompt = _inject_sprint_context(active_task, brief, "QA Tester", instructions)
     result = agent_qa.execute_step(prompt, max_iterations=_llm_iterations())
 
     with state.STATE_LOCK:
         task = find_task_by_id(task_id)
         if not task:
             return
+        normalize_task(task)
+        passed, fail_reason = (False, "") if result == "SIMULATION_FALLBACK" else _qa_step_passed(
+            task, result, playbook, step_started
+        )
+        task["qaEvidence"] = {
+            "playbookRun": playbook["run"],
+            "commands": playbook["commands"],
+            "passed": passed,
+        }
         if result == "SIMULATION_FALLBACK":
             _simulate_qa(task)
         else:
             record_task_decision(task_id, "QA Tester", "qa", result[:500], result)
             if _task_in_lane(task_id, "QA"):
-                if _qa_failed(result):
-                    set_qa_failure(task_id, result[:500], result)
-                    record_task_decision(task_id, "QA Tester", "qa_fail", result[:500], result)
+                if not passed:
+                    reason = fail_reason if fail_reason else result[:500]
+                    set_qa_failure(task_id, reason, result)
+                    record_task_decision(task_id, "QA Tester", "qa_fail", reason, result)
                     move_board_stage(task_id, "In Progress")
                 else:
                     move_board_stage(task_id, "Done")
@@ -704,6 +912,7 @@ def run_sprint_step(brief: str, ollama_url: str) -> None:
             add_system_log("System", "warning", "No active features. Send brief to PO or add a feature.")
     finally:
         clear_active_sprint_context()
+        state.SPRINT_STEP_STARTED_AT = None
         with state.STATE_LOCK:
             save_current_project_state()
             publish_board_update(source="sprint_step")

@@ -69,6 +69,7 @@ class ResolveUserPayload(BaseModel):
 class WorkflowSettingsPayload(BaseModel):
     requireBacklogApproval: Optional[bool] = None
     requireCodeReview: Optional[bool] = None
+    requireDevVerification: Optional[bool] = None
     requireToolApproval: Optional[bool] = None
     toolApprovalTools: Optional[List[str]] = None
     definitionOfDone: Optional[List[str]] = None

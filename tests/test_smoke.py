@@ -1079,3 +1079,117 @@ def test_po_smallest_tasks_guidance_wired():
     src = inspect.getsource(sprint_service.run_po_plan)
     assert "PO_SMALLEST_TASKS_GUIDANCE" in src
 
+
+def test_build_sprint_file_context_includes_task_files():
+    import os
+
+    from backend import state
+    from backend.agents.task_context import init_new_task
+    from backend.bootstrap import initialize
+    from backend.workspace.files import build_sprint_file_context
+
+    initialize()
+    os.makedirs(os.path.join(state.WORKSPACE_DIR, "lib"), exist_ok=True)
+    phys = os.path.join(state.WORKSPACE_DIR, "lib", "main.dart")
+    with open(phys, "w", encoding="utf-8") as f:
+        f.write("void main() {}")
+    task = init_new_task(
+        {
+            "id": "T-CTX",
+            "title": "Ctx",
+            "description": "d",
+            "files": [{"path": "lib/main.dart", "action": "written"}],
+        }
+    )
+    block, paths = build_sprint_file_context(task, max_chars=8000)
+    assert "lib/main.dart" in paths
+    assert "void main()" in block
+    assert "PRE-LOADED FILE CONTEXT" in block
+
+
+def test_build_sprint_file_context_truncates():
+    from backend import state
+    from backend.agents.task_context import init_new_task
+    from backend.bootstrap import initialize
+    from backend.workspace.files import build_sprint_file_context
+
+    initialize()
+    state.VIRTUAL_FILESYSTEM["big.txt"] = "x" * 5000
+    task = init_new_task({"id": "T-TRUNC", "title": "T", "description": "d", "files": ["big.txt"]})
+    block, _paths = build_sprint_file_context(task, max_chars=500)
+    assert "[truncated]" in block or len(block) <= 600
+
+
+def test_derive_project_test_commands():
+    import os
+
+    from backend import state
+    from backend.bootstrap import initialize
+    from backend.workspace.files import derive_project_test_commands
+
+    initialize()
+    ws = state.WORKSPACE_DIR
+    os.makedirs(ws, exist_ok=True)
+
+    open(os.path.join(ws, "pubspec.yaml"), "w", encoding="utf-8").write("name: test\n")
+    cmds = derive_project_test_commands()
+    assert "flutter analyze" in cmds
+    assert "flutter test" in cmds
+
+    os.remove(os.path.join(ws, "pubspec.yaml"))
+    open(os.path.join(ws, "package.json"), "w", encoding="utf-8").write('{"name":"t"}')
+    cmds = derive_project_test_commands()
+    assert cmds == ["npm test"]
+
+    os.remove(os.path.join(ws, "package.json"))
+    os.makedirs(os.path.join(ws, "tests"), exist_ok=True)
+    open(os.path.join(ws, "tests", "test_a.py"), "w", encoding="utf-8").write("def test_x(): pass\n")
+    state.VIRTUAL_FILESYSTEM["tests/test_a.py"] = "def test_x(): pass\n"
+    cmds = derive_project_test_commands()
+    assert "pytest tests/ -q" in cmds
+
+
+def test_qa_step_passed_playbook_failure():
+    from backend.agents.task_context import init_new_task
+    from backend.services import sprint_service
+
+    task = init_new_task({"id": "T-QA1", "title": "Q", "description": "d"})
+    playbook = {"run": True, "commands": ["pytest"], "passed": False, "results": []}
+    passed, reason = sprint_service._qa_step_passed(task, "All good", playbook, "2026-01-01 00:00:00")
+    assert passed is False
+    assert "playbook" in reason.lower()
+
+
+def test_qa_step_passed_playbook_success():
+    from backend.agents.task_context import init_new_task, record_task_transcript
+    from backend.services import sprint_service
+
+    task = init_new_task({"id": "T-QA2", "title": "Q", "description": "d"})
+    playbook = {"run": True, "commands": ["npm test"], "passed": True, "results": []}
+    passed, _reason = sprint_service._qa_step_passed(task, "Looks fine", playbook, "2026-01-01 00:00:00")
+    assert passed is True
+
+
+def test_qa_gate_blocks_update_board_to_done():
+    from backend import state
+    from backend.agents.task_context import init_new_task
+    from backend.bootstrap import initialize
+    from backend.services.sprint_service import qa_gate_blocks_done
+
+    initialize()
+    task = init_new_task({"id": "T-GATE", "title": "G", "description": "d"})
+    task["qaEvidence"] = {"playbookRun": True, "commands": ["npm test"], "passed": False}
+    state.SHARED_BOARD.setdefault("QA", []).append(task)
+    state.ACTIVE_SPRINT_AGENT = "QA Tester"
+    state.SPRINT_STEP_STARTED_AT = "2026-01-01 00:00:00"
+
+    blocked, reason = qa_gate_blocks_done(task)
+    assert blocked is True
+    assert "playbook" in reason.lower() or "test" in reason.lower()
+
+    from backend.agents.registry import _guarded_update_board
+
+    result = _guarded_update_board("T-GATE", "Done")
+    assert "Error:" in result
+    assert "T-GATE" in [t["id"] for t in state.SHARED_BOARD.get("QA", [])]
+

@@ -50,6 +50,12 @@ export interface QaFailure {
   timestamp: string
 }
 
+export interface QaEvidence {
+  playbookRun: boolean
+  commands: string[]
+  passed: boolean
+}
+
 export interface Task {
   id: string
   title: string
@@ -64,6 +70,7 @@ export interface Task {
   relatedTaskIds?: string[]
   gitCommit?: TaskGitCommit | null
   qaFailure?: QaFailure | null
+  qaEvidence?: QaEvidence | null
   userQuestion?: string | null
   poRoundTrips?: number
 }
@@ -73,6 +80,7 @@ export type Board = Partial<Record<BoardLane, Task[]>>
 export interface WorkflowSettings {
   requireBacklogApproval: boolean
   requireCodeReview: boolean
+  requireDevVerification?: boolean
   requireToolApproval?: boolean
   toolApprovalTools?: string[]
   mcpServers?: McpServerConfig[]
@@ -109,7 +117,7 @@ export interface ToolExecutionEvent {
   durationMs?: number
   timestamp: string
   status: 'running' | 'completed' | 'failed'
-  source: 'agent' | 'manual' | 'replay'
+  source: 'agent' | 'manual' | 'replay' | 'orchestrator' | 'context_inject'
   exitCode?: number
   runCommandStatus?: string
 }
@@ -323,6 +331,7 @@ export interface MoveTaskPayload {
 export interface WorkflowSettingsPayload {
   requireBacklogApproval?: boolean
   requireCodeReview?: boolean
+  requireDevVerification?: boolean
   requireToolApproval?: boolean
   toolApprovalTools?: string[]
   mcpServers?: McpServerConfig[]
@@ -472,6 +481,7 @@ export const AGENT_LABELS: Record<AgentId, string> = {
 export const DEFAULT_WORKFLOW_SETTINGS: WorkflowSettings = {
   requireBacklogApproval: false,
   requireCodeReview: false,
+  requireDevVerification: false,
   requireToolApproval: false,
   toolApprovalTools: ['write_file', 'run_command'],
   mcpServers: [],

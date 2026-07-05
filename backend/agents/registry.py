@@ -10,6 +10,7 @@ from backend.workspace.files import (
     read_workspace_file,
     run_agent_command,
     run_tests_on_workspace,
+    search_files,
     write_workspace_file,
 )
 
@@ -110,6 +111,44 @@ tool_test = Tool(
     func=run_tests_on_workspace,
 )
 
+def _format_search_results(query: str, limit: int = 20) -> str:
+    results = search_files(query, limit=limit)
+    if not results:
+        return f"No matches for '{query}'."
+    lines = [f"Search results for '{query}' ({len(results)} match(es)):"]
+    for r in results:
+        lines.append(f"- {r['path']}: {r.get('snippet', '')[:120]}")
+    return "\n".join(lines)
+
+
+def _guarded_update_board(task_id: str, target_lane: str) -> str:
+    from backend.agents.task_context import find_task_by_id, get_task_lane, normalize_task
+    from backend.services.sprint_service import qa_gate_blocks_done
+
+    if target_lane == "Done" and state.ACTIVE_SPRINT_AGENT == "QA Tester":
+        task = find_task_by_id(task_id)
+        if task and get_task_lane(task_id) == "QA":
+            normalize_task(task)
+            blocked, reason = qa_gate_blocks_done(task)
+            if blocked:
+                return f"Error: {reason}"
+    return move_board_stage(task_id, target_lane)
+
+
+tool_search = Tool(
+    name="search_code",
+    description="Search workspace file paths and contents for a query string.",
+    parameters={
+        "type": "object",
+        "properties": {
+            "query": {"type": "string"},
+            "limit": {"type": "integer"},
+        },
+        "required": ["query"],
+    },
+    func=lambda query, limit=20: _format_search_results(query, limit=int(limit) if limit else 20),
+)
+
 tool_board = Tool(
     name="update_board",
     description="Updates Kanban Scrum board column positions.",
@@ -121,7 +160,7 @@ tool_board = Tool(
         },
         "required": ["task_id", "target_lane"],
     },
-    func=move_board_stage,
+    func=_guarded_update_board,
 )
 
 tool_add_backlog_tasks = Tool(
@@ -210,13 +249,6 @@ tool_git_init = Tool(
     func=lambda: git_init(),
 )
 
-tool_git_init = Tool(
-    name="git_init",
-    description="Initializes a git repository in the workspace.",
-    parameters={"type": "object", "properties": {}, "required": []},
-    func=lambda: git_init(),
-)
-
 tool_run_command = Tool(
     name="run_command",
     description=(
@@ -240,6 +272,7 @@ agent_dev.register_tool(tool_write)
 agent_dev.register_tool(tool_apply_patch)
 agent_dev.register_tool(tool_board)
 agent_dev.register_tool(tool_run_command)
+agent_dev.register_tool(tool_search)
 agent_dev.register_tool(tool_git_status)
 agent_dev.register_tool(tool_git_diff)
 agent_dev.register_tool(tool_git_commit)
@@ -247,11 +280,13 @@ agent_dev.register_tool(tool_git_commit)
 agent_cr.register_tool(tool_read)
 agent_cr.register_tool(tool_apply_patch)
 agent_cr.register_tool(tool_board)
+agent_cr.register_tool(tool_search)
 agent_cr.register_tool(tool_git_diff)
 
 agent_qa.register_tool(tool_read)
 agent_qa.register_tool(tool_test)
 agent_qa.register_tool(tool_run_command)
+agent_qa.register_tool(tool_search)
 agent_qa.register_tool(tool_board)
 
 AGENT_MAP = {

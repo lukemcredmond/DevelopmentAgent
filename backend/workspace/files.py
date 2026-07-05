@@ -281,6 +281,113 @@ def get_file_tree() -> List[Dict[str, Any]]:
     return root.get("children", [])
 
 
+def _collect_sprint_context_paths(task: Dict[str, Any]) -> List[str]:
+    """Gather workspace paths relevant to a sprint step."""
+    paths: set[str] = set()
+    for f in task.get("files") or []:
+        if isinstance(f, str):
+            paths.add(f)
+        elif isinstance(f, dict) and f.get("path"):
+            paths.add(str(f["path"]))
+
+    sync_virtual_filesystem_from_disk()
+    ws = state.WORKSPACE_DIR
+
+    for marker in ("pubspec.yaml", "package.json", "README.md", "pyproject.toml", "requirements.txt"):
+        if os.path.isfile(os.path.join(ws, marker)):
+            paths.add(marker)
+
+    tests_dir = os.path.join(ws, "tests")
+    if os.path.isdir(tests_dir):
+        count = 0
+        for root, _dirs, files_in_dir in os.walk(tests_dir):
+            for fn in sorted(files_in_dir):
+                if count >= 8:
+                    break
+                rel = os.path.relpath(os.path.join(root, fn), ws).replace("\\", "/")
+                if not any(ex in rel for ex in ("__pycache__", ".pyc")):
+                    paths.add(rel)
+                    count += 1
+
+    lib_dir = os.path.join(ws, "lib")
+    if os.path.isdir(lib_dir):
+        count = 0
+        for root, _dirs, files_in_dir in os.walk(lib_dir):
+            for fn in sorted(files_in_dir):
+                if count >= 10:
+                    break
+                if fn.endswith((".dart", ".py", ".ts", ".tsx", ".js")):
+                    rel = os.path.relpath(os.path.join(root, fn), ws).replace("\\", "/")
+                    paths.add(rel)
+                    count += 1
+
+    return sorted(paths)
+
+
+def build_sprint_file_context(
+    task: Dict[str, Any],
+    max_chars: int = 12000,
+) -> tuple[str, List[str]]:
+    """Build pre-loaded file contents for sprint agent prompts."""
+    sync_virtual_filesystem_from_disk()
+    candidate_paths = _collect_sprint_context_paths(task)
+    included: List[str] = []
+    blocks: List[str] = []
+    used = 0
+    header = "\n=== PRE-LOADED FILE CONTEXT ===\n"
+
+    for raw_path in candidate_paths:
+        try:
+            safe_path = resolve_workspace_path(raw_path)
+        except ValueError:
+            continue
+        content = state.VIRTUAL_FILESYSTEM.get(safe_path)
+        if content is None:
+            phys = os.path.join(state.WORKSPACE_DIR, safe_path)
+            if os.path.isfile(phys):
+                try:
+                    with open(phys, "r", encoding="utf-8") as f:
+                        content = f.read()
+                except Exception:
+                    continue
+            else:
+                continue
+        block = f"--- FILE: {safe_path} ---\n{content}\n--- END {safe_path} ---"
+        if used + len(block) > max_chars and included:
+            remaining = max_chars - used
+            if remaining > 200:
+                truncated = block[: remaining - 20] + "\n... [truncated]\n"
+                blocks.append(truncated)
+                included.append(safe_path)
+            break
+        blocks.append(block)
+        included.append(safe_path)
+        used += len(block)
+
+    if not blocks:
+        return "", []
+    return header + "\n\n".join(blocks) + "\n", included
+
+
+def derive_project_test_commands() -> List[str]:
+    """Return shell commands to run for the current workspace project type."""
+    sync_virtual_filesystem_from_disk()
+    ws = state.WORKSPACE_DIR
+    commands: List[str] = []
+
+    if os.path.isfile(os.path.join(ws, "pubspec.yaml")):
+        commands.extend(["flutter analyze", "flutter test"])
+    elif os.path.isfile(os.path.join(ws, "package.json")):
+        commands.append("npm test")
+    elif os.path.isdir(os.path.join(ws, "tests")) or os.path.isfile(os.path.join(ws, "pytest.ini")):
+        commands.append("pytest tests/ -q")
+    elif any(p.endswith(".py") for p in state.VIRTUAL_FILESYSTEM):
+        if os.path.isdir(os.path.join(ws, "tests")):
+            commands.append("pytest tests/ -q")
+
+    return commands
+
+
 def build_file_context_block(paths: List[str]) -> str:
     """Builds an explicit context block from workspace file paths for agent prompts."""
     sync_virtual_filesystem_from_disk()
