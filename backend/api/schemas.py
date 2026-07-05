@@ -1,4 +1,4 @@
-from typing import List, Optional
+from typing import Any, Dict, List, Optional
 
 from pydantic import BaseModel, ConfigDict, Field
 
@@ -64,6 +64,13 @@ class ReorderTasksPayload(BaseModel):
 
 class ResolveUserPayload(BaseModel):
     answer: str
+
+
+class InjectToolEvidencePayload(BaseModel):
+    toolName: str = "run_command"
+    toolArgs: Dict[str, Any] = Field(default_factory=dict)
+    toolOutput: str
+    note: str = ""
 
 
 class WorkflowSettingsPayload(BaseModel):

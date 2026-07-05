@@ -415,6 +415,9 @@ def _qa_step_passed(
     playbook: Dict[str, Any],
     step_started: str,
 ) -> tuple[bool, str]:
+    evidence = task.get("qaEvidence") or {}
+    if evidence.get("userOverride"):
+        return True, ""
     if playbook.get("run") and not playbook.get("passed"):
         return False, "Automated test playbook failed"
     if _qa_result_indicates_failure(result):
@@ -430,6 +433,8 @@ def qa_gate_blocks_done(task: Dict[str, Any]) -> tuple[bool, str]:
     """Return (blocked, reason) when agent tries update_board → Done from QA."""
     normalize_task(task)
     evidence = task.get("qaEvidence") or {}
+    if evidence.get("userOverride"):
+        return False, ""
     step_started = state.SPRINT_STEP_STARTED_AT or ""
     if evidence.get("playbookRun") and not evidence.get("passed"):
         return True, "Automated test playbook failed — cannot move to Done."
@@ -438,25 +443,47 @@ def qa_gate_blocks_done(task: Dict[str, Any]) -> tuple[bool, str]:
     return False, ""
 
 
+def _playbook_item_failed(outcome: str) -> bool:
+    return outcome in ("execution_failed", "test_failed")
+
+
+def _playbook_outcome_label(outcome: str) -> str:
+    if outcome == "ok":
+        return "PASS"
+    if outcome == "lint_findings":
+        return "FINDINGS"
+    return "FAIL"
+
+
 def _run_qa_test_playbook(task_id: str) -> Dict[str, Any]:
     """Run project test commands before the QA agent evaluates."""
+    from backend.agents.tool_outcomes import classify_run_command
+
     commands = derive_project_test_commands()
     results: List[Dict[str, Any]] = []
     all_passed = True
 
     for cmd in commands:
         output = run_agent_command(cmd)
-        success = output.startswith("[success exit 0]")
-        if not success:
+        outcome = classify_run_command(cmd, output)
+        tool_success = outcome != "execution_failed"
+        if _playbook_item_failed(outcome):
             all_passed = False
-        results.append({"command": cmd, "success": success, "output": output[:1500]})
+        results.append(
+            {
+                "command": cmd,
+                "success": outcome == "ok",
+                "outcome": outcome,
+                "output": output[:1500],
+            }
+        )
         log_synthetic_tool_event(
             task_id,
             "QA Tester",
             "run_command",
             tool_args={"command": cmd},
             tool_output=output,
-            success=success,
+            success=tool_success,
             source="orchestrator",
         )
 
@@ -473,13 +500,55 @@ def _format_playbook_block(playbook: Dict[str, Any]) -> str:
         return "\n=== AUTOMATED TEST RESULTS (orchestrator) ===\n(no project test commands detected)\n"
     lines = ["\n=== AUTOMATED TEST RESULTS (orchestrator) ==="]
     for item in playbook.get("results") or []:
-        status = "PASS" if item.get("success") else "FAIL"
+        outcome = item.get("outcome")
+        if outcome:
+            status = _playbook_outcome_label(str(outcome))
+        else:
+            status = "PASS" if item.get("success") else "FAIL"
         lines.append(f"- [{status}] {item.get('command', '?')}")
         excerpt = str(item.get("output") or "")[:400].replace("\n", " ")
         if excerpt:
             lines.append(f"  {excerpt}")
     lines.append(f"Overall playbook: {'PASSED' if playbook.get('passed') else 'FAILED'}\n")
     return "\n".join(lines)
+
+
+def inject_tool_evidence_for_task(
+    task_id: str,
+    tool_name: str,
+    tool_args: Dict[str, Any],
+    tool_output: str,
+    *,
+    note: str = "",
+) -> Dict[str, Any]:
+    """Inject user-provided tool output onto a task and unblock QA when appropriate."""
+    from backend.services.tool_execution_service import record_user_tool_evidence
+
+    task = find_task_by_id(task_id)
+    if not task:
+        raise ValueError(f"Task not found: {task_id}")
+
+    result = record_user_tool_evidence(
+        task_id,
+        tool_name,
+        tool_args,
+        tool_output,
+        note=note,
+    )
+
+    task = find_task_by_id(task_id)
+    if task:
+        normalize_task(task)
+        outcome = str(result.get("outcome") or "")
+        if task.get("qaEvidence") and outcome != "execution_failed":
+            evidence = dict(task["qaEvidence"])
+            evidence["userOverride"] = True
+            evidence["passed"] = True
+            task["qaEvidence"] = evidence
+
+    save_current_project_state()
+    publish_board_update(task_id, source="inject_evidence")
+    return result
 
 
 def _dev_has_verification(task: Dict[str, Any], step_started: str) -> bool:

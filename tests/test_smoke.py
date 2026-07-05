@@ -423,25 +423,135 @@ def test_is_tool_failure_detects_common_errors():
 
 def test_run_command_findings_not_tool_failure():
     from backend.agents.tool_outcomes import (
+        classify_run_command,
         is_run_command_failure,
         is_tool_failure,
         run_command_status_label,
     )
 
     analyze_output = (
-        "[failed exit 1]\n"
+        "[findings exit 1]\n"
         "Analyzing workspace...\n"
         "  error • Undefined name 'foo' • lib/main.dart:10:5 • undefined_identifier\n"
     )
+    assert classify_run_command("flutter analyze", analyze_output) == "lint_findings"
     assert not is_run_command_failure(analyze_output)
     assert not is_tool_failure("run_command", analyze_output)
-    assert run_command_status_label(analyze_output, False).startswith("Findings")
+    assert run_command_status_label(analyze_output, True, "flutter analyze").startswith("Findings")
 
     blocked = "[failed exit 1]\n(no output)"
+    assert classify_run_command("flutter analyze", blocked) == "execution_failed"
     assert is_run_command_failure(blocked)
     assert is_tool_failure("run_command", blocked)
 
-    assert run_command_status_label("[success exit 0]\nAll good", True) == "OK"
+    assert run_command_status_label("[success exit 0]\nAll good", True, "flutter analyze") == "OK"
+
+
+def test_run_agent_command_findings_header(monkeypatch):
+    from backend.workspace.files import run_agent_command
+
+    def fake_run(command):
+        return {
+            "success": False,
+            "stdout": "Analyzing workspace...\n  error • bad • lib/main.dart:1:1\n",
+            "stderr": "",
+            "returncode": 1,
+        }
+
+    monkeypatch.setattr(
+        "backend.services.terminal_service.run_command",
+        fake_run,
+    )
+    output = run_agent_command("flutter analyze")
+    assert output.startswith("[findings exit 1]")
+    assert "[failed exit" not in output.split("\n")[0]
+
+
+def test_qa_playbook_analyze_findings_does_not_fail_playbook(monkeypatch):
+    from backend.services import sprint_service
+
+    calls = []
+
+    def fake_run_agent_command(cmd):
+        calls.append(cmd)
+        if "analyze" in cmd:
+            return "[findings exit 1]\nAnalyzing…\nwarning • x\n"
+        return "[success exit 0]\nAll tests passed"
+
+    monkeypatch.setattr(sprint_service, "run_agent_command", fake_run_agent_command)
+    monkeypatch.setattr(
+        sprint_service,
+        "derive_project_test_commands",
+        lambda: ["flutter analyze", "flutter test"],
+    )
+    monkeypatch.setattr(sprint_service, "log_synthetic_tool_event", lambda *a, **k: None)
+
+    playbook = sprint_service._run_qa_test_playbook("T-QA")
+    assert playbook["passed"] is True
+    assert playbook["results"][0]["outcome"] == "lint_findings"
+    assert playbook["results"][1]["outcome"] == "ok"
+
+
+def test_qa_playbook_test_failure_fails_playbook(monkeypatch):
+    from backend.services import sprint_service
+
+    def fake_run_agent_command(cmd):
+        if "test" in cmd:
+            return "[findings exit 1]\nExpected: true\n  Actual: false\n"
+        return "[success exit 0]\nNo issues found"
+
+    monkeypatch.setattr(sprint_service, "run_agent_command", fake_run_agent_command)
+    monkeypatch.setattr(
+        sprint_service,
+        "derive_project_test_commands",
+        lambda: ["flutter analyze", "flutter test"],
+    )
+    logged = []
+
+    def capture_log(*args, **kwargs):
+        logged.append(kwargs)
+
+    monkeypatch.setattr(sprint_service, "log_synthetic_tool_event", capture_log)
+
+    playbook = sprint_service._run_qa_test_playbook("T-QA2")
+    assert playbook["passed"] is False
+    assert playbook["results"][1]["outcome"] == "test_failed"
+    assert logged[1]["success"] is True
+
+
+def test_inject_tool_evidence_api():
+    from backend import state
+    from backend.agents.task_context import init_new_task
+    from backend.services.tool_execution_service import get_tool_history
+
+    initialize()
+    state.TOOL_EXECUTION_LOG.clear()
+    task = init_new_task({"id": "T-INJ", "title": "Inject", "description": "d"})
+    task["qaEvidence"] = {"playbookRun": True, "commands": ["flutter analyze"], "passed": False}
+    state.SHARED_BOARD = {
+        "QA": [task],
+        "Backlog": [],
+        "In Progress": [],
+        "Needs PO": [],
+        "Needs User": [],
+        "Done": [],
+    }
+
+    client = TestClient(app)
+    resp = client.post(
+        "/api/tasks/T-INJ/inject-tool-evidence",
+        json={
+            "toolName": "run_command",
+            "toolArgs": {"command": "flutter analyze"},
+            "toolOutput": "Analyzing project…\nwarning • unused import\n5 issues found",
+            "note": "User pasted analyze output",
+        },
+    )
+    assert resp.status_code == 200
+    updated = state.SHARED_BOARD["QA"][0]
+    assert updated["qaEvidence"]["userOverride"] is True
+    assert updated["qaEvidence"]["passed"] is True
+    assert any(e["taskId"] == "T-INJ" and e.get("source") == "user" for e in get_tool_history())
 
 
 def test_resolve_workspace_path_variants():

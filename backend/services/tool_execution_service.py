@@ -214,7 +214,8 @@ def _history_event_from_transcript(
     run_cmd_status = None
     if tool_name == "run_command" and tool_output:
         exit_code, _ = parse_run_command_exit(tool_output)
-        run_cmd_status = run_command_status_label(tool_output, success)
+        command = str((entry.get("toolArgs") or {}).get("command") or "")
+        run_cmd_status = run_command_status_label(tool_output, success, command)
     return {
         "runId": run_id,
         "taskId": task_id,
@@ -455,7 +456,13 @@ def execute_tool(
 
         exit_code, _ = parse_run_command_exit(tool_output) if tool_name == "run_command" else (None, None)
         run_cmd_status = (
-            run_command_status_label(tool_output, success) if tool_name == "run_command" else None
+            run_command_status_label(
+                tool_output,
+                success,
+                str(arguments.get("command") or ""),
+            )
+            if tool_name == "run_command"
+            else None
         )
 
         tool_entry = {
@@ -564,6 +571,12 @@ def log_synthetic_tool_event(
     active_run = get_active_run()
     effective_run_id = run_id or (active_run.run_id if active_run else "orchestrator")
     output_preview = tool_output[:500]
+    command = str(tool_args.get("command") or "") if tool_name == "run_command" else ""
+    exit_code = None
+    run_cmd_status = None
+    if tool_name == "run_command":
+        exit_code, _ = parse_run_command_exit(tool_output)
+        run_cmd_status = run_command_status_label(tool_output, success, command)
 
     publish_event(
         "tool_start",
@@ -578,20 +591,26 @@ def log_synthetic_tool_event(
         },
     )
 
+    tool_end_payload: Dict[str, Any] = {
+        "runId": effective_run_id,
+        "taskId": task_id,
+        "agent": agent_role,
+        "toolName": tool_name,
+        "toolArgs": tool_args,
+        "toolSuccess": success,
+        "toolOutput": output_preview,
+        "durationMs": 0,
+        "timestamp": ts,
+        "source": source,
+    }
+    if tool_name == "run_command" and exit_code is not None:
+        tool_end_payload["exitCode"] = exit_code
+        if run_cmd_status is not None:
+            tool_end_payload["runCommandStatus"] = run_cmd_status
+
     publish_event(
         "tool_end",
-        {
-            "runId": effective_run_id,
-            "taskId": task_id,
-            "agent": agent_role,
-            "toolName": tool_name,
-            "toolArgs": tool_args,
-            "toolSuccess": success,
-            "toolOutput": output_preview,
-            "durationMs": 0,
-            "timestamp": ts,
-            "source": source,
-        },
+        tool_end_payload,
     )
 
     append_global_tool_event(
@@ -606,6 +625,8 @@ def log_synthetic_tool_event(
             duration_ms=0,
             timestamp=ts,
             source=source,
+            exit_code=exit_code,
+            run_cmd_status=run_cmd_status,
         )
     )
 
@@ -637,6 +658,128 @@ def log_synthetic_tool_event(
         "success" if success else "error",
         f"{label} {tool_name} — {output_preview[:200]}",
     )
+
+
+def record_user_tool_evidence(
+    task_id: str,
+    tool_name: str,
+    tool_args: Dict[str, Any],
+    tool_output: str,
+    *,
+    note: str = "",
+) -> Dict[str, Any]:
+    """Record user-provided tool output on a task transcript and global tool log."""
+    from backend.agents.tool_outcomes import (
+        classify_run_command,
+        normalize_run_command_output,
+        parse_run_command_exit,
+        run_command_status_label,
+    )
+
+    command = str(tool_args.get("command") or "") if tool_name == "run_command" else ""
+    normalized = (
+        normalize_run_command_output(command, tool_output)
+        if tool_name == "run_command"
+        else (tool_output or "").strip()
+    )
+    if tool_name == "run_command":
+        outcome = classify_run_command(command, normalized)
+        success = outcome != "execution_failed"
+    else:
+        outcome = "ok"
+        success = True
+
+    ts = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+    run_id = f"user-inject-{task_id}-{int(time.time() * 1000)}"
+    output_preview = normalized[:500]
+    exit_code = None
+    run_cmd_status = None
+    if tool_name == "run_command":
+        exit_code, _ = parse_run_command_exit(normalized)
+        run_cmd_status = run_command_status_label(normalized, success, command)
+
+    content = format_tool_transcript_content(
+        tool_name, tool_args, normalized, success=success
+    )
+    record_task_transcript(
+        task_id,
+        "tool",
+        content,
+        agent="User",
+        toolName=tool_name,
+        toolSuccess=success,
+        toolArgs=tool_args,
+        toolOutput=normalized[:2000],
+        source="user",
+    )
+
+    append_global_tool_event(
+        _build_history_event(
+            run_id=run_id,
+            task_id=task_id,
+            agent="User",
+            tool_name=tool_name,
+            tool_args=tool_args,
+            tool_output=output_preview,
+            success=success,
+            duration_ms=0,
+            timestamp=ts,
+            source="user",
+            exit_code=exit_code,
+            run_cmd_status=run_cmd_status,
+        )
+    )
+
+    publish_event(
+        "tool_end",
+        {
+            "runId": run_id,
+            "taskId": task_id,
+            "agent": "User",
+            "toolName": tool_name,
+            "toolArgs": tool_args,
+            "toolSuccess": success,
+            "toolOutput": output_preview,
+            "durationMs": 0,
+            "timestamp": ts,
+            "source": "user",
+            **(
+                {"exitCode": exit_code, "runCommandStatus": run_cmd_status}
+                if tool_name == "run_command" and exit_code is not None
+                else {}
+            ),
+        },
+    )
+
+    if note.strip():
+        record_task_decision(
+            task_id,
+            "User",
+            "inject_evidence",
+            note.strip()[:200],
+            normalized[:500],
+        )
+    else:
+        record_task_decision(
+            task_id,
+            "User",
+            "inject_evidence",
+            f"User injected {tool_name} evidence",
+            normalized[:500],
+        )
+
+    add_system_log(
+        "User",
+        "success" if success else "warning",
+        f"Injected {tool_name} evidence on {task_id}",
+    )
+
+    return {
+        "toolOutput": normalized,
+        "toolSuccess": success,
+        "outcome": outcome,
+        "runCommandStatus": run_cmd_status,
+    }
 
 
 def replay_transcript_tools(

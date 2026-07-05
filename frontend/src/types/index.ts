@@ -54,6 +54,7 @@ export interface QaEvidence {
   playbookRun: boolean
   commands: string[]
   passed: boolean
+  userOverride?: boolean
 }
 
 export interface Task {
@@ -117,7 +118,7 @@ export interface ToolExecutionEvent {
   durationMs?: number
   timestamp: string
   status: 'running' | 'completed' | 'failed'
-  source: 'agent' | 'manual' | 'replay' | 'orchestrator' | 'context_inject'
+  source: 'agent' | 'manual' | 'replay' | 'orchestrator' | 'context_inject' | 'user'
   exitCode?: number
   runCommandStatus?: string
 }

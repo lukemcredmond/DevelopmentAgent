@@ -36,17 +36,34 @@ interface ToolsPanelProps {
   onRefreshState?: () => void
   preferredSubTab?: ToolsSubTab
   workspaceDir?: string
+  onInjectToolEvidence?: (
+    taskId: string,
+    payload: {
+      toolName: string
+      toolArgs: Record<string, unknown>
+      toolOutput: string
+      note?: string
+    },
+  ) => void | Promise<void>
 }
 
 function toolEventBadge(ev: ToolExecutionEvent): { label: string; tone: 'ok' | 'findings' | 'failed' } {
   if (ev.status === 'running') return { label: '…', tone: 'ok' }
   if (ev.toolName === 'context_inject') return { label: 'Context', tone: 'ok' }
+  if (ev.source === 'user') return { label: 'User inject', tone: 'ok' }
   if (ev.source === 'orchestrator') {
-    return ev.status === 'failed' || ev.toolSuccess === false
-      ? { label: 'Auto QA FAIL', tone: 'failed' }
-      : { label: 'Auto QA', tone: 'ok' }
+    if (
+      ev.runCommandStatus?.startsWith('Findings') ||
+      ev.runCommandStatus?.startsWith('Tests failed')
+    ) {
+      return { label: ev.runCommandStatus, tone: 'findings' }
+    }
+    if (ev.status === 'failed' || ev.toolSuccess === false) {
+      return { label: 'Auto QA FAIL', tone: 'failed' }
+    }
+    return { label: ev.runCommandStatus ?? 'Auto QA', tone: 'ok' }
   }
-  if (ev.runCommandStatus?.startsWith('Findings')) {
+  if (ev.runCommandStatus?.startsWith('Findings') || ev.runCommandStatus?.startsWith('Tests failed')) {
     return { label: ev.runCommandStatus, tone: 'findings' }
   }
   if (ev.status === 'failed' || ev.runCommandStatus === 'Failed') {
@@ -55,9 +72,24 @@ function toolEventBadge(ev: ToolExecutionEvent): { label: string; tone: 'ok' | '
   return { label: ev.runCommandStatus ?? 'OK', tone: 'ok' }
 }
 
+function runCommandSummaryLine(ev: ToolExecutionEvent): string | null {
+  if (ev.toolName !== 'run_command' || ev.status === 'running') return null
+  if (
+    ev.runCommandStatus?.startsWith('Findings') ||
+    ev.runCommandStatus?.startsWith('Tests failed')
+  ) {
+    return 'Executed with findings — command ran; see output for issues.'
+  }
+  if (ev.status === 'failed' || ev.runCommandStatus === 'Failed' || ev.toolSuccess === false) {
+    return 'Execution failed — command did not run successfully.'
+  }
+  return null
+}
+
 function sourceDisplayLabel(source: ToolExecutionEvent['source']): string {
   if (source === 'orchestrator') return 'Auto QA'
   if (source === 'context_inject') return 'Context'
+  if (source === 'user') return 'User'
   return source
 }
 
@@ -121,6 +153,7 @@ export default function ToolsPanel({
   onRefreshState,
   preferredSubTab,
   workspaceDir,
+  onInjectToolEvidence,
 }: ToolsPanelProps) {
   const [subTab, setSubTab] = useState<ToolsSubTab>(readToolsSubTab)
   const [filter, setFilter] = useState<ToolFilter>('all')
@@ -209,7 +242,17 @@ export default function ToolsPanel({
   }, [subTab, replayTaskId, loadTranscript])
 
   const filtered = useMemo(() => {
-    if (filter === 'failed') return toolEvents.filter((e) => e.status === 'failed')
+    if (filter === 'failed') {
+      return toolEvents.filter((e) => {
+        if (
+          e.runCommandStatus?.startsWith('Findings') ||
+          e.runCommandStatus?.startsWith('Tests failed')
+        ) {
+          return false
+        }
+        return e.status === 'failed' || e.toolSuccess === false
+      })
+    }
     if (filter === 'agent') return toolEvents.filter((e) => e.source === 'agent')
     if (filter === 'manual') return toolEvents.filter((e) => e.source === 'manual')
     if (filter === 'replay') return toolEvents.filter((e) => e.source === 'replay')
@@ -452,6 +495,19 @@ export default function ToolsPanel({
                   </button>
                   {isOpen && (
                     <div className="mt-2 space-y-2 border-t border-cat-surface1/50 pt-2">
+                      {runCommandSummaryLine(ev) && (
+                        <p
+                          className={`text-[10px] px-2 py-1 rounded ${
+                            findings
+                              ? 'bg-amber-950/40 text-amber-200'
+                              : failed
+                                ? 'bg-rose-950/40 text-rose-200'
+                                : 'bg-cat-surface1 text-cat-subtext'
+                          }`}
+                        >
+                          {runCommandSummaryLine(ev)}
+                        </p>
+                      )}
                       {ev.taskId && (
                         <p className="text-cat-overlay text-[10px]">Task: {ev.taskId}</p>
                       )}
@@ -473,6 +529,22 @@ export default function ToolsPanel({
                           {runningEv ? '(running…)' : ev.toolOutput || '(no output)'}
                         </pre>
                       </div>
+                      {onInjectToolEvidence && ev.taskId && ev.toolOutput && !runningEv && (
+                        <button
+                          type="button"
+                          onClick={() =>
+                            void onInjectToolEvidence(ev.taskId!, {
+                              toolName: ev.toolName,
+                              toolArgs: ev.toolArgs ?? {},
+                              toolOutput: ev.toolOutput ?? '',
+                              note: 'Promoted from Tools Execution Log',
+                            })
+                          }
+                          className="text-[10px] text-indigo-300 hover:text-indigo-200 underline"
+                        >
+                          Use as task evidence
+                        </button>
+                      )}
                     </div>
                   )}
                 </div>

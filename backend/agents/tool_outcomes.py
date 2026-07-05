@@ -86,9 +86,39 @@ def summarize_tool_args(name: str, args: Dict[str, Any]) -> str:
 
 
 _RUN_COMMAND_HEADER = re.compile(
-    r"^\[(success|failed) exit (-?\d+)\]",
+    r"^\[(success|failed|findings) exit (-?\d+)\]",
     re.IGNORECASE | re.MULTILINE,
 )
+
+LINT_COMMAND_MARKERS = (
+    "flutter analyze",
+    "dart analyze",
+    "npm run lint",
+    "eslint",
+    "ruff check",
+    " pylint",
+    "mypy",
+)
+
+TEST_COMMAND_MARKERS = (
+    "flutter test",
+    "pytest",
+    "npm test",
+    "npm run test",
+    "jest",
+    "cargo test",
+    "go test",
+)
+
+
+def _is_lint_command(command: str) -> bool:
+    lower = command.lower().strip()
+    return any(marker in lower for marker in LINT_COMMAND_MARKERS)
+
+
+def _is_test_command(command: str) -> bool:
+    lower = command.lower().strip()
+    return any(marker in lower for marker in TEST_COMMAND_MARKERS)
 
 
 def parse_run_command_exit(output: str) -> Tuple[Optional[int], Optional[str]]:
@@ -103,8 +133,8 @@ def parse_run_command_exit(output: str) -> Tuple[Optional[int], Optional[str]]:
     return exit_code, body
 
 
-def is_run_command_failure(output: str) -> bool:
-    """True when run_command did not execute successfully (blocked, timeout, no output)."""
+def _execution_failed_by_output(output: str) -> bool:
+    """True when the shell command did not run successfully (blocked, timeout, empty body)."""
     if not output or not output.strip():
         return True
     lower = output.lower()
@@ -117,9 +147,7 @@ def is_run_command_failure(output: str) -> bool:
 
     exit_code, body = parse_run_command_exit(output)
     if exit_code is None:
-        if output.startswith("Error") or "not registered" in lower:
-            return True
-        return False
+        return output.startswith("Error") or "not registered" in lower
 
     if exit_code == 0:
         return False
@@ -134,13 +162,67 @@ def is_run_command_failure(output: str) -> bool:
     return False
 
 
-def run_command_status_label(output: str, success: bool) -> str:
-    """Human label for run_command log UI: OK, Findings, or Failed."""
+def classify_run_command(command: str, output: str) -> str:
+    """Classify run_command outcome: ok, lint_findings, test_failed, or execution_failed."""
+    if _execution_failed_by_output(output):
+        return "execution_failed"
+
     exit_code, _ = parse_run_command_exit(output)
-    if success or exit_code == 0:
+    if exit_code is None:
+        return "ok"
+    if exit_code == 0:
+        return "ok"
+
+    cmd = (command or "").strip()
+    if _is_test_command(cmd):
+        return "test_failed"
+    if _is_lint_command(cmd):
+        return "lint_findings"
+    return "lint_findings"
+
+
+def format_run_command_output(command: str, returncode: int, body: str) -> str:
+    """Build a classified run_command output string with an honest header."""
+    body_text = (body or "").strip() or "(no output)"
+    preliminary = f"[failed exit {returncode}]\n{body_text}"
+    outcome = classify_run_command(command, preliminary)
+    if outcome == "ok":
+        header = f"[success exit {returncode}]"
+    elif outcome in ("lint_findings", "test_failed"):
+        header = f"[findings exit {returncode}]"
+    else:
+        header = f"[failed exit {returncode}]"
+    return f"{header}\n{body_text[:3000]}"
+
+
+def normalize_run_command_output(command: str, tool_output: str) -> str:
+    """Wrap bare pasted command output with a classified header when missing."""
+    stripped = (tool_output or "").strip()
+    if not stripped:
+        return format_run_command_output(command, -1, "(no output)")
+    if _RUN_COMMAND_HEADER.search(stripped):
+        return stripped
+    returncode = 0
+    if re.search(r"\b(error|warning|issues found)\b", stripped, re.IGNORECASE):
+        returncode = 1
+    return format_run_command_output(command, returncode, stripped)
+
+
+def is_run_command_failure(output: str) -> bool:
+    """True when run_command did not execute successfully (blocked, timeout, no output)."""
+    return classify_run_command("", output) == "execution_failed"
+
+
+def run_command_status_label(output: str, success: bool, command: str = "") -> str:
+    """Human label for run_command log UI: OK, Findings, Tests failed, or Failed."""
+    outcome = classify_run_command(command, output)
+    exit_code, _ = parse_run_command_exit(output)
+    if outcome == "ok":
         return "OK"
-    if exit_code is not None and exit_code > 0 and not is_run_command_failure(output):
-        return f"Findings (exit {exit_code})"
+    if outcome == "lint_findings":
+        return f"Findings (exit {exit_code})" if exit_code is not None else "Findings"
+    if outcome == "test_failed":
+        return f"Tests failed (exit {exit_code})" if exit_code is not None else "Tests failed"
     return "Failed"
 
 

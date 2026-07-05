@@ -358,6 +358,29 @@ export async function resolveUserQuestion(
   )
 }
 
+export async function injectToolEvidence(
+  taskId: string,
+  payload: {
+    toolName?: string
+    toolArgs?: Record<string, unknown>
+    toolOutput: string
+    note?: string
+  },
+): Promise<AppState & { injectResult?: Record<string, unknown> }> {
+  return request<AppState & { injectResult?: Record<string, unknown> }>(
+    `/api/tasks/${encodeURIComponent(taskId)}/inject-tool-evidence`,
+    {
+      method: 'POST',
+      body: JSON.stringify({
+        toolName: payload.toolName ?? 'run_command',
+        toolArgs: payload.toolArgs ?? {},
+        toolOutput: payload.toolOutput,
+        note: payload.note ?? '',
+      }),
+    },
+  )
+}
+
 export async function reorderTasks(
   lane: string,
   taskIds: string[],

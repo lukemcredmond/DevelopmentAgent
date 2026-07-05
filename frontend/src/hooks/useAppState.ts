@@ -100,7 +100,8 @@ function mapToolSource(raw: unknown): ToolExecutionEvent['source'] {
     raw === 'replay' ||
     raw === 'agent' ||
     raw === 'orchestrator' ||
-    raw === 'context_inject'
+    raw === 'context_inject' ||
+    raw === 'user'
   ) {
     return raw
   }

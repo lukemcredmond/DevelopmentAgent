@@ -111,6 +111,15 @@ interface TaskDetailModalProps {
   onApprove?: (taskId: string) => void
   onResolveUser?: (taskId: string, answer: string) => void
   onDiscussWithAgent?: (task: Task, lane: BoardLane | null) => void
+  onInjectToolEvidence?: (
+    taskId: string,
+    payload: {
+      toolName: string
+      toolArgs: Record<string, unknown>
+      toolOutput: string
+      note?: string
+    },
+  ) => void | Promise<void>
   onRelatedTaskClick?: (taskId: string) => void
   getTaskTitle?: (taskId: string) => string | undefined
 }
@@ -200,6 +209,7 @@ export default function TaskDetailModal({
   onApprove,
   onResolveUser,
   onDiscussWithAgent,
+  onInjectToolEvidence,
   onRelatedTaskClick,
   getTaskTitle,
 }: TaskDetailModalProps) {
@@ -208,6 +218,10 @@ export default function TaskDetailModal({
   const [acceptanceCriteria, setAcceptanceCriteria] = useState('')
   const [editing, setEditing] = useState(false)
   const [userAnswer, setUserAnswer] = useState('')
+  const [injectCommand, setInjectCommand] = useState('flutter analyze')
+  const [injectOutput, setInjectOutput] = useState('')
+  const [injectNote, setInjectNote] = useState('')
+  const [injecting, setInjecting] = useState(false)
   const [showAllTranscript, setShowAllTranscript] = useState(false)
   const [showFailuresOnly, setShowFailuresOnly] = useState(false)
 
@@ -392,8 +406,69 @@ export default function TaskDetailModal({
               {!safeTask.qaEvidence.passed && safeTask.qaEvidence.playbookRun && (
                 <p className="text-[10px] text-amber-300 mt-1">Tests must pass before Done.</p>
               )}
+              {safeTask.qaEvidence.userOverride && (
+                <p className="text-[10px] text-emerald-300 mt-1">User-provided evidence accepted.</p>
+              )}
             </div>
           )}
+
+          {onInjectToolEvidence &&
+            (taskLane === 'In Progress' ||
+              taskLane === 'QA' ||
+              (safeTask.qaEvidence && !safeTask.qaEvidence.passed)) && (
+              <div className="bg-indigo-950/20 border border-indigo-500/30 rounded-lg p-3 space-y-2">
+                <h4 className="text-xs font-bold text-indigo-200">Provide command output</h4>
+                <p className="text-[10px] text-cat-subtext">
+                  Paste analyze or test output so the agent can continue on the next sprint step.
+                </p>
+                <label className="flex flex-col gap-1">
+                  <span className="text-[10px] uppercase text-cat-overlay">Command</span>
+                  <input
+                    type="text"
+                    value={injectCommand}
+                    onChange={(e) => setInjectCommand(e.target.value)}
+                    className="bg-cat-base border border-cat-surface1 rounded px-2 py-1 text-[11px] text-white"
+                  />
+                </label>
+                <label className="flex flex-col gap-1">
+                  <span className="text-[10px] uppercase text-cat-overlay">Output</span>
+                  <textarea
+                    value={injectOutput}
+                    onChange={(e) => setInjectOutput(e.target.value)}
+                    rows={5}
+                    placeholder="Analyzing project…&#10;warning • …&#10;error • …"
+                    className="bg-cat-base border border-cat-surface1 rounded px-2 py-1 text-[11px] text-white font-mono"
+                  />
+                </label>
+                <label className="flex flex-col gap-1">
+                  <span className="text-[10px] uppercase text-cat-overlay">Note (optional)</span>
+                  <input
+                    type="text"
+                    value={injectNote}
+                    onChange={(e) => setInjectNote(e.target.value)}
+                    className="bg-cat-base border border-cat-surface1 rounded px-2 py-1 text-[11px] text-white"
+                  />
+                </label>
+                <button
+                  type="button"
+                  disabled={injecting || !injectOutput.trim()}
+                  onClick={() => {
+                    setInjecting(true)
+                    void Promise.resolve(
+                      onInjectToolEvidence(task.id, {
+                        toolName: 'run_command',
+                        toolArgs: { command: injectCommand.trim() || 'flutter analyze' },
+                        toolOutput: injectOutput.trim(),
+                        note: injectNote.trim() || undefined,
+                      }),
+                    ).finally(() => setInjecting(false))
+                  }}
+                  className="w-full bg-indigo-600/40 hover:bg-indigo-600/60 disabled:opacity-50 text-indigo-100 text-xs py-2 px-3 rounded-lg border border-indigo-500/30"
+                >
+                  {injecting ? 'Injecting…' : 'Inject & continue'}
+                </button>
+              </div>
+            )}
 
           {onDiscussWithAgent && (
             <button

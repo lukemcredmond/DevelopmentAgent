@@ -21,6 +21,7 @@ import {
   clearAllTasks,
   resolveToolApproval,
   resolveUserQuestion,
+  injectToolEvidence,
   triggerPlan,
   triggerStep,
   updateConfig,
@@ -115,6 +116,7 @@ export default function App() {
     toolStartTick,
     sprintProgress,
     setSprintProgress,
+    refreshToolHistory,
   } = useAppState()
 
   const [planRunActive, setPlanRunActive] = useState(false)
@@ -188,6 +190,26 @@ export default function App() {
     if (lane === 'Needs User' || lane === 'Needs PO') {
       setChatAgent('po')
     }
+  }
+
+  const handleInjectToolEvidence = async (
+    taskId: string,
+    payload: {
+      toolName: string
+      toolArgs: Record<string, unknown>
+      toolOutput: string
+      note?: string
+    },
+  ) => {
+    await withLoading(async () => {
+      const data = await injectToolEvidence(taskId, payload)
+      handleState(data)
+      void refreshToolHistory()
+      const updated = Object.values(data.board)
+        .flat()
+        .find((t) => t.id === taskId)
+      if (updated) setSelectedTask(updated)
+    })
   }
 
   useEffect(() => {
@@ -667,6 +689,7 @@ export default function App() {
                     onRefreshState={() => void refresh()}
                     preferredSubTab={toolsPreferredSubTab}
                     workspaceDir={state.workspaceDir}
+                    onInjectToolEvidence={(taskId, payload) => handleInjectToolEvidence(taskId, payload)}
                   />
                 )}
                 <ChatPanel
@@ -762,6 +785,7 @@ export default function App() {
           if (related) setSelectedTask(related)
         }}
         onDiscussWithAgent={(task, lane) => handleDiscussWithAgent(task, lane)}
+        onInjectToolEvidence={(taskId, payload) => handleInjectToolEvidence(taskId, payload)}
         getTaskTitle={(taskId) => findTaskOnBoard(state.board, taskId)?.title}
       />
 

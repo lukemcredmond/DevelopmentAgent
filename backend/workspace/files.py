@@ -240,6 +240,7 @@ def run_tests_on_workspace(test_script_path: str) -> str:
 
 def run_agent_command(command: str) -> str:
     """Runs a shell command for sprint agents; returns structured text output."""
+    from backend.agents.tool_outcomes import format_run_command_output
     from backend.services.terminal_service import run_command
 
     result = run_command(command)
@@ -249,9 +250,8 @@ def run_agent_command(command: str) -> str:
     if result.get("stderr"):
         parts.append(result["stderr"])
     body = "\n".join(parts).strip() or "(no output)"
-    status = "success" if result.get("success") else "failed"
     rc = result.get("returncode", -1)
-    return f"[{status} exit {rc}]\n{body[:3000]}"
+    return format_run_command_output(command, rc, body)
 
 
 def get_file_tree() -> List[Dict[str, Any]]:

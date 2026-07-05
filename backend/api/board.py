@@ -5,6 +5,7 @@ from backend.agents.task_context import clear_task_transcript, find_task_by_id, 
 from backend.api.helpers import build_state_response
 from backend.api.schemas import (
     DeleteTaskPayload,
+    InjectToolEvidencePayload,
     ManualTaskPayload,
     MoveTaskPayload,
     ReorderTasksPayload,
@@ -15,7 +16,7 @@ from backend.services.board_lanes import normalize_board_lanes
 from backend.services.board_service import clear_all_board_tasks, move_board_stage, publish_board_update
 from backend.services.logs import add_system_log
 from backend.services.project_service import save_current_project_state
-from backend.services.sprint_service import run_po_add_feature
+from backend.services.sprint_service import inject_tool_evidence_for_task, run_po_add_feature
 
 router = APIRouter()
 
@@ -114,6 +115,26 @@ def resolve_user_question(task_id: str, payload: ResolveUserPayload):
         move_board_stage(task_id, "In Progress")
         add_system_log("System", "success", f"User resolved question for {task_id}")
     return build_state_response()
+
+
+@router.post("/api/tasks/{task_id}/inject-tool-evidence")
+def inject_tool_evidence(task_id: str, payload: InjectToolEvidencePayload):
+    with state.STATE_LOCK:
+        if not find_task_by_id(task_id):
+            raise HTTPException(status_code=404, detail="Task not found")
+        if not payload.toolOutput.strip():
+            raise HTTPException(status_code=400, detail="toolOutput is required")
+        try:
+            result = inject_tool_evidence_for_task(
+                task_id,
+                payload.toolName,
+                payload.toolArgs,
+                payload.toolOutput,
+                note=payload.note,
+            )
+        except ValueError as exc:
+            raise HTTPException(status_code=404, detail=str(exc)) from exc
+    return {**build_state_response(), "injectResult": result}
 
 
 @router.post("/api/tasks/reorder")
