@@ -2,7 +2,12 @@ from backend.agents.scrum_agent import ScrumAgent
 from backend.agents.tools import Tool
 from backend.services.board_service import move_board_stage
 from backend.services.git_service import git_commit, git_diff, git_init, git_status
-from backend.workspace.files import read_workspace_file, run_tests_on_workspace, write_workspace_file
+from backend.workspace.files import (
+    read_workspace_file,
+    run_agent_command,
+    run_tests_on_workspace,
+    write_workspace_file,
+)
 
 agent_po = ScrumAgent(
     role="Product Owner",
@@ -129,11 +134,34 @@ tool_git_init = Tool(
     func=lambda: git_init(),
 )
 
+tool_git_init = Tool(
+    name="git_init",
+    description="Initializes a git repository in the workspace.",
+    parameters={"type": "object", "properties": {}, "required": []},
+    func=lambda: git_init(),
+)
+
+tool_run_command = Tool(
+    name="run_command",
+    description=(
+        "Run a single shell command in the workspace root "
+        "(e.g. flutter analyze, dart fix --apply, npm test)."
+    ),
+    parameters={
+        "type": "object",
+        "properties": {"command": {"type": "string"}},
+        "required": ["command"],
+    },
+    func=lambda command: run_agent_command(command),
+)
+
 agent_po.register_tool(tool_read)
 agent_po.register_tool(tool_board)
 
+agent_dev.register_tool(tool_read)
 agent_dev.register_tool(tool_write)
 agent_dev.register_tool(tool_board)
+agent_dev.register_tool(tool_run_command)
 agent_dev.register_tool(tool_git_status)
 agent_dev.register_tool(tool_git_diff)
 agent_dev.register_tool(tool_git_commit)
@@ -144,6 +172,7 @@ agent_cr.register_tool(tool_git_diff)
 
 agent_qa.register_tool(tool_read)
 agent_qa.register_tool(tool_test)
+agent_qa.register_tool(tool_run_command)
 agent_qa.register_tool(tool_board)
 
 AGENT_MAP = {

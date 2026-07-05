@@ -14,7 +14,7 @@ SHARED_BOARD: Dict[str, List[Dict[str, Any]]] = {k: list(v) for k, v in DEFAULT_
 VIRTUAL_FILESYSTEM: Dict[str, str] = dict(DEFAULT_VIRTUAL_FS)
 SYSTEM_LOGS: List[Dict[str, str]] = []
 
-STATE_LOCK = threading.Lock()
+STATE_LOCK = threading.RLock()
 ACTIVE_SPRINT_TASK_ID: Optional[str] = None
 ACTIVE_SPRINT_AGENT: Optional[str] = None
 SPRINT_CANCEL = False

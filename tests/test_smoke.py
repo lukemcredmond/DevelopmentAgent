@@ -127,3 +127,76 @@ def test_assign_skills_route_registered():
     client = TestClient(app)
     paths = client.get("/openapi.json").json().get("paths", {})
     assert "/api/assign-skills" in paths
+
+
+def test_dev_registry_includes_read_file():
+    from backend.agents.registry import agent_dev
+
+    tool_names = {t["function"]["name"] for t in agent_dev.registry.get_ollama_tools()}
+    assert "read_file" in tool_names
+    assert "run_command" in tool_names
+
+
+def test_transcript_trim_at_max():
+    from backend import state
+    from backend.agents.task_context import init_new_task, record_task_transcript
+    from backend.config import MAX_TASK_TRANSCRIPT
+
+    initialize()
+    task = init_new_task({"id": "T-TR", "title": "Transcript", "description": "d"})
+    state.SHARED_BOARD.setdefault("Backlog", []).append(task)
+    for i in range(MAX_TASK_TRANSCRIPT + 10):
+        record_task_transcript("T-TR", "tool", f"entry {i}")
+    assert len(task["transcript"]) == MAX_TASK_TRANSCRIPT
+    assert task["transcript"][0]["content"].startswith("entry 10")
+
+
+def test_clear_task_transcript():
+    from backend import state
+    from backend.agents.task_context import clear_task_transcript, init_new_task, record_task_transcript
+
+    initialize()
+    task = init_new_task({"id": "T-CLR", "title": "Clear", "description": "d"})
+    state.SHARED_BOARD.setdefault("Backlog", []).append(task)
+    record_task_transcript("T-CLR", "assistant", "hello")
+    assert clear_task_transcript("T-CLR") is True
+    assert task["transcript"] == []
+
+
+def test_run_agent_command_mock(monkeypatch):
+    from backend.workspace.files import run_agent_command
+
+    def fake_run(command):
+        return {
+            "success": True,
+            "stdout": "No issues found!",
+            "stderr": "",
+            "returncode": 0,
+        }
+
+    monkeypatch.setattr(
+        "backend.services.terminal_service.run_command",
+        fake_run,
+    )
+    out = run_agent_command("flutter analyze")
+    assert "success" in out
+    assert "No issues found" in out
+
+
+def test_move_task_while_sprint_unlocked():
+    """Board move API should succeed without holding sprint lock during LLM."""
+    from backend import state
+    from backend.agents.task_context import init_new_task
+
+    initialize()
+    client = TestClient(app)
+    task = init_new_task({"id": "T-MOVE", "title": "Move me", "description": "d"})
+    state.SHARED_BOARD.setdefault("Backlog", []).append(task)
+    state.ACTIVE_SPRINT_TASK_ID = "other"
+    state.ACTIVE_SPRINT_AGENT = "Developer"
+    response = client.post(
+        "/api/tasks/move",
+        json={"task_id": "T-MOVE", "target_lane": "In Progress", "fromLane": "Backlog", "toLane": "In Progress"},
+    )
+    assert response.status_code == 200
+    assert "T-MOVE" in [t["id"] for t in state.SHARED_BOARD.get("In Progress", [])]

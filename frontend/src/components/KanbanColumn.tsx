@@ -9,6 +9,7 @@ interface KanbanColumnProps {
   onTaskClick: (task: Task) => void
   getTaskFileCount: (task: Task) => number
   getTaskDecisionCount: (task: Task) => number
+  dragDisabled?: boolean
 }
 
 export default function KanbanColumn({
@@ -17,6 +18,7 @@ export default function KanbanColumn({
   onTaskClick,
   getTaskFileCount,
   getTaskDecisionCount,
+  dragDisabled = false,
 }: KanbanColumnProps) {
   const { setNodeRef, isOver } = useDroppable({ id: lane })
 
@@ -44,6 +46,7 @@ export default function KanbanColumn({
               fileCount={getTaskFileCount(task)}
               decisionCount={getTaskDecisionCount(task)}
               onClick={() => onTaskClick(task)}
+              dragDisabled={dragDisabled}
             />
           ))}
         </div>

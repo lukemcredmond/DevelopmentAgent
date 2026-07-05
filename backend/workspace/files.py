@@ -125,6 +125,10 @@ def run_tests_on_workspace(test_script_path: str) -> str:
         commands.append(["pytest", phys_path, "-q"])
     elif safe_path.endswith((".js", ".mjs", ".cjs")):
         commands.append(["node", phys_path])
+    elif safe_path == "pubspec.yaml" or safe_path.endswith(".dart"):
+        commands.append(["flutter", "analyze"])
+    elif os.path.exists(os.path.join(state.WORKSPACE_DIR, "pubspec.yaml")):
+        commands.append(["flutter", "analyze"])
     elif os.path.exists(os.path.join(state.WORKSPACE_DIR, "package.json")):
         commands.append(["npm", "test"])
 
@@ -154,6 +158,22 @@ def run_tests_on_workspace(test_script_path: str) -> str:
             return f"❌ QA Validation Failure: Test timed out after {TEST_TIMEOUT_SEC}s for '{test_script_path}'."
 
     return f"❌ QA Validation Failure for '{test_script_path}':\n{last_output[:1500]}"
+
+
+def run_agent_command(command: str) -> str:
+    """Runs a shell command for sprint agents; returns structured text output."""
+    from backend.services.terminal_service import run_command
+
+    result = run_command(command)
+    parts: List[str] = []
+    if result.get("stdout"):
+        parts.append(result["stdout"])
+    if result.get("stderr"):
+        parts.append(result["stderr"])
+    body = "\n".join(parts).strip() or "(no output)"
+    status = "success" if result.get("success") else "failed"
+    rc = result.get("returncode", -1)
+    return f"[{status} exit {rc}]\n{body[:3000]}"
 
 
 def get_file_tree() -> List[Dict[str, Any]]:

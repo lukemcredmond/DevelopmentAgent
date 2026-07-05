@@ -13,6 +13,7 @@ from backend.agents.task_context import (
     build_task_prompt,
     clear_active_sprint_context,
     clear_qa_failure,
+    find_task_by_id,
     increment_po_round_trips,
     init_new_task,
     next_claimable_backlog_task,
@@ -344,7 +345,8 @@ def _apply_po_clarification_result(active_task: Dict[str, Any], result: str) -> 
 
 
 def _run_po_clarification(active_task: Dict[str, Any], brief: str) -> None:
-    set_active_sprint_context(active_task["id"], "Product Owner")
+    task_id = active_task["id"]
+    set_active_sprint_context(task_id, "Product Owner")
     add_system_log("Product Owner", "info", f"Clarifying '{active_task['title']}'…")
     prompt = (
         build_task_prompt(active_task, brief)
@@ -353,59 +355,72 @@ def _run_po_clarification(active_task: Dict[str, Any], brief: str) -> None:
         "Then use update_board to move back to 'In Progress'."
     )
     result = agent_po.execute_step(prompt, max_iterations=_llm_iterations())
-    clarified = False
-    if result == "SIMULATION_FALLBACK":
-        record_task_decision(active_task["id"], "Product Owner", "clarification", "Offline clarification")
-        clarified = True
-    else:
-        record_task_decision(active_task["id"], "Product Owner", "clarification", result[:500], result)
-        clarified = _apply_po_clarification_result(active_task, result)
-    if _task_in_lane(active_task["id"], "Needs PO"):
-        if clarified:
-            move_board_stage(active_task["id"], "In Progress")
-            publish_activity(
-                active_task["id"],
-                "po_clarified",
-                "PO clarified requirements and returned task to Dev",
-                role="assistant",
-                agent="Product Owner",
-                lane="In Progress",
-            )
+
+    with state.STATE_LOCK:
+        task = find_task_by_id(task_id)
+        if not task:
+            return
+        clarified = False
+        if result == "SIMULATION_FALLBACK":
+            record_task_decision(task_id, "Product Owner", "clarification", "Offline clarification")
+            clarified = True
         else:
-            add_system_log(
-                "Product Owner",
-                "warning",
-                f"Clarification incomplete for '{active_task['title']}' — card stays in Needs PO",
-            )
+            record_task_decision(task_id, "Product Owner", "clarification", result[:500], result)
+            clarified = _apply_po_clarification_result(task, result)
+        if _task_in_lane(task_id, "Needs PO"):
+            if clarified:
+                move_board_stage(task_id, "In Progress")
+                publish_activity(
+                    task_id,
+                    "po_clarified",
+                    "PO clarified requirements and returned task to Dev",
+                    role="assistant",
+                    agent="Product Owner",
+                    lane="In Progress",
+                )
+            else:
+                add_system_log(
+                    "Product Owner",
+                    "warning",
+                    f"Clarification incomplete for '{task['title']}' — card stays in Needs PO",
+                )
 
 
 def _run_developer_step(active_task: Dict[str, Any], brief: str) -> None:
-    set_active_sprint_context(active_task["id"], "Developer")
+    task_id = active_task["id"]
+    set_active_sprint_context(task_id, "Developer")
     add_system_log("Developer", "info", f"Implementing '{active_task['title']}'…")
     target = _dev_complete_lane()
     prompt = (
         build_task_prompt(active_task, brief)
-        + "\nImplement using write_file/read_file. "
+        + "\nImplement using write_file and read_file. "
+        "For Flutter/Dart projects use run_command with 'flutter analyze' to check for issues. "
         "Unclear requirements → move to 'Needs PO'. "
         "User-only decisions (keys, design) → move to 'Needs User' and state userQuestion. "
         f"When complete → move to '{target}'."
     )
     result = agent_dev.execute_step(prompt, max_iterations=_llm_iterations())
-    if result == "SIMULATION_FALLBACK":
-        _simulate_dev_work(active_task)
-        return
-    record_task_decision(active_task["id"], "Developer", "work", result[:500], result)
-    if _task_in_lane(active_task["id"], "In Progress"):
+
+    with state.STATE_LOCK:
+        task = find_task_by_id(task_id)
+        if not task:
+            return
+        if result == "SIMULATION_FALLBACK":
+            _simulate_dev_work(task)
+            return
+        record_task_decision(task_id, "Developer", "work", result[:500], result)
+        if not _task_in_lane(task_id, "In Progress"):
+            return
         if _dev_needs_user(result):
-            active_task["userQuestion"] = result[:500]
-            move_board_stage(active_task["id"], "Needs User")
-        elif _dev_needs_po(result, active_task):
-            if _escalate_po_limit(active_task):
+            task["userQuestion"] = result[:500]
+            move_board_stage(task_id, "Needs User")
+        elif _dev_needs_po(result, task):
+            if _escalate_po_limit(task):
                 return
-            increment_po_round_trips(active_task["id"])
-            move_board_stage(active_task["id"], "Needs PO")
+            increment_po_round_trips(task_id)
+            move_board_stage(task_id, "Needs PO")
             publish_activity(
-                active_task["id"],
+                task_id,
                 "dev_escalation",
                 "Developer escalated to PO for clarification",
                 role="assistant",
@@ -413,28 +428,36 @@ def _run_developer_step(active_task: Dict[str, Any], brief: str) -> None:
                 lane="Needs PO",
             )
         else:
-            clear_qa_failure(active_task["id"])
-            move_board_stage(active_task["id"], target)
+            clear_qa_failure(task_id)
+            move_board_stage(task_id, target)
 
 
 def _run_code_review_step(active_task: Dict[str, Any], brief: str) -> None:
-    set_active_sprint_context(active_task["id"], "Code Reviewer")
+    task_id = active_task["id"]
+    set_active_sprint_context(task_id, "Code Reviewer")
     add_system_log("Code Reviewer", "info", f"Reviewing '{active_task['title']}'…")
     prompt = (
         build_task_prompt(active_task, brief)
         + "\nReview with read_file. Pass → 'QA'. Fail → 'In Progress'."
     )
     result = agent_cr.execute_step(prompt, max_iterations=_llm_iterations())
-    if result == "SIMULATION_FALLBACK":
-        _simulate_code_review(active_task)
-        return
-    record_task_decision(active_task["id"], "Code Reviewer", "review", result[:500], result)
-    if _task_in_lane(active_task["id"], "Code Review"):
-        move_board_stage(active_task["id"], "QA")
+
+    with state.STATE_LOCK:
+        if not find_task_by_id(task_id):
+            return
+        if result == "SIMULATION_FALLBACK":
+            task = find_task_by_id(task_id)
+            if task:
+                _simulate_code_review(task)
+            return
+        record_task_decision(task_id, "Code Reviewer", "review", result[:500], result)
+        if _task_in_lane(task_id, "Code Review"):
+            move_board_stage(task_id, "QA")
 
 
 def _run_qa_step(active_task: Dict[str, Any], brief: str) -> None:
-    set_active_sprint_context(active_task["id"], "QA Tester")
+    task_id = active_task["id"]
+    set_active_sprint_context(task_id, "QA Tester")
     add_system_log("QA Tester", "info", f"Validating '{active_task['title']}'…")
     ac = active_task.get("acceptanceCriteria") or []
     ac_block = "\n".join(f"- {c}" for c in ac) if ac else "(see description)"
@@ -442,21 +465,27 @@ def _run_qa_step(active_task: Dict[str, Any], brief: str) -> None:
         build_task_prompt(active_task, brief)
         + f"\nValidate acceptance criteria:\n{ac_block}\n"
         + f"{build_dod_block()}"
-        "Use read_file and run_test. Pass → 'Done'. Fail → 'In Progress' with failure details."
+        "Use read_file, run_test, and run_command (e.g. 'flutter analyze' for Dart/Flutter). "
+        "Pass → 'Done'. Fail → 'In Progress' with failure details."
     )
     result = agent_qa.execute_step(prompt, max_iterations=_llm_iterations())
-    if result == "SIMULATION_FALLBACK":
-        _simulate_qa(active_task)
-        return
-    record_task_decision(active_task["id"], "QA Tester", "qa", result[:500], result)
-    if _task_in_lane(active_task["id"], "QA"):
-        if _qa_failed(result):
-            set_qa_failure(active_task["id"], result[:500], result)
-            record_task_decision(active_task["id"], "QA Tester", "qa_fail", result[:500], result)
-            move_board_stage(active_task["id"], "In Progress")
-        else:
-            move_board_stage(active_task["id"], "Done")
-            _commit_on_done(active_task)
+
+    with state.STATE_LOCK:
+        task = find_task_by_id(task_id)
+        if not task:
+            return
+        if result == "SIMULATION_FALLBACK":
+            _simulate_qa(task)
+            return
+        record_task_decision(task_id, "QA Tester", "qa", result[:500], result)
+        if _task_in_lane(task_id, "QA"):
+            if _qa_failed(result):
+                set_qa_failure(task_id, result[:500], result)
+                record_task_decision(task_id, "QA Tester", "qa_fail", result[:500], result)
+                move_board_stage(task_id, "In Progress")
+            else:
+                move_board_stage(task_id, "Done")
+                _commit_on_done(task)
 
 
 def _sprint_lanes_active() -> List[str]:
@@ -479,34 +508,65 @@ def run_sprint_step(brief: str, ollama_url: str) -> None:
     agent_po.ollama_url = ollama_url
     agent_qa.ollama_url = ollama_url
     agent_cr.ollama_url = ollama_url
-    normalize_board_lanes(state.SHARED_BOARD)
 
-    try:
+    handler: Optional[str] = None
+    active_task: Optional[Dict[str, Any]] = None
+
+    with state.STATE_LOCK:
+        normalize_board_lanes(state.SHARED_BOARD)
         if state.SHARED_BOARD.get("Needs PO"):
-            _run_po_clarification(state.SHARED_BOARD["Needs PO"][0], brief)
+            active_task = dict(state.SHARED_BOARD["Needs PO"][0])
+            handler = "po"
         elif state.SHARED_BOARD.get("Needs User"):
-            add_system_log("System", "info", "Feature waiting in Needs User — resolve via UI.")
+            handler = "needs_user"
         elif state.SHARED_BOARD.get("In Progress"):
-            _run_developer_step(state.SHARED_BOARD["In Progress"][0], brief)
+            active_task = dict(state.SHARED_BOARD["In Progress"][0])
+            handler = "dev"
         elif state.SHARED_BOARD.get("Backlog"):
             task = next_claimable_backlog_task()
             if task:
                 move_board_stage(task["id"], "In Progress")
                 record_task_decision(task["id"], "Developer", "claim", "Claimed from Backlog")
+                active_task = dict(find_task_by_id(task["id"]) or task)
+                handler = "dev"
             else:
                 blocked = [t for t in state.SHARED_BOARD["Backlog"] if not task_dependencies_met(t)]
                 if blocked:
-                    add_system_log("System", "info", f"Backlog blocked — waiting on dependencies for {blocked[0]['id']}")
+                    handler = "blocked"
+                else:
+                    handler = "idle"
         elif get_workflow_settings().get("requireCodeReview") and state.SHARED_BOARD.get("Code Review"):
-            _run_code_review_step(state.SHARED_BOARD["Code Review"][0], brief)
+            active_task = dict(state.SHARED_BOARD["Code Review"][0])
+            handler = "cr"
         elif state.SHARED_BOARD.get("QA"):
-            _run_qa_step(state.SHARED_BOARD["QA"][0], brief)
+            active_task = dict(state.SHARED_BOARD["QA"][0])
+            handler = "qa"
         else:
+            handler = "idle"
+
+    try:
+        if handler == "po" and active_task:
+            _run_po_clarification(active_task, brief)
+        elif handler == "needs_user":
+            add_system_log("System", "info", "Feature waiting in Needs User — resolve via UI.")
+        elif handler == "dev" and active_task:
+            _run_developer_step(active_task, brief)
+        elif handler == "blocked":
+            with state.STATE_LOCK:
+                blocked = [t for t in state.SHARED_BOARD["Backlog"] if not task_dependencies_met(t)]
+            if blocked:
+                add_system_log("System", "info", f"Backlog blocked — waiting on dependencies for {blocked[0]['id']}")
+        elif handler == "cr" and active_task:
+            _run_code_review_step(active_task, brief)
+        elif handler == "qa" and active_task:
+            _run_qa_step(active_task, brief)
+        elif handler == "idle":
             add_system_log("System", "warning", "No active features. Send brief to PO or add a feature.")
     finally:
         clear_active_sprint_context()
-    save_current_project_state()
-    publish_board_update(source="sprint_step")
+        with state.STATE_LOCK:
+            save_current_project_state()
+            publish_board_update(source="sprint_step")
 
 
 def _build_sprint_summary(steps: int, status: str = "completed") -> Dict[str, Any]:
@@ -549,8 +609,8 @@ def run_auto_sprint(brief: str, ollama_url: str, max_steps: int | None = None) -
             if not has_sprint_work():
                 status = "idle"
                 break
-            run_sprint_step(brief, ollama_url)
-            steps += 1
+        run_sprint_step(brief, ollama_url)
+        steps += 1
 
     if state.SPRINT_CANCEL:
         status = "cancelled"

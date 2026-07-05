@@ -1,6 +1,7 @@
+import json
 import os
 import time
-from typing import Any, Dict, Generator, List, Mapping, Optional, Sequence, Union
+from typing import Any, Dict, Generator, List, Mapping, Optional, Sequence, Tuple, Union
 
 from ollama import Client
 from ollama._types import Message
@@ -128,21 +129,29 @@ class ScrumAgent:
         message: Message,
         messages: List[ChatMessage],
         user_prompt: str,
-    ) -> None:
-        if message.content and state.ACTIVE_SPRINT_TASK_ID:
-            record_task_transcript(
-                state.ACTIVE_SPRINT_TASK_ID,
-                "assistant",
-                message.content,
-                agent=self.role,
-            )
-
+        failed_tool_keys: List[Tuple[str, str]],
+    ) -> Optional[str]:
+        """Process tool calls; return early-stop message when same call fails 3x."""
         messages.append(message)
 
         for call in message.tool_calls or []:
             tool_name = call.function.name
             arguments = dict(call.function.arguments)
             tool_output = self.registry.invoke(tool_name, arguments)
+
+            is_failure = (
+                tool_output.startswith("Error")
+                or tool_output.startswith("❌")
+                or "not registered" in tool_output.lower()
+            )
+            if is_failure:
+                key = (tool_name, json.dumps(arguments, sort_keys=True))
+                failed_tool_keys.append(key)
+                if failed_tool_keys.count(key) >= 3:
+                    return (
+                        f"Stopped: tool '{tool_name}' failed repeatedly with the same arguments. "
+                        f"Last error: {tool_output[:200]}"
+                    )
 
             if state.ACTIVE_SPRINT_TASK_ID:
                 self._record_tool_usage(
@@ -159,6 +168,7 @@ class ScrumAgent:
                     "content": tool_output,
                 }
             )
+        return None
 
     def execute_step(self, user_prompt: str, max_iterations: int = 8) -> str:
         tools = self.registry.get_ollama_tools()
@@ -167,6 +177,8 @@ class ScrumAgent:
             {"role": "user", "content": self._build_user_content(user_prompt)},
         ]
 
+        failed_tool_keys: List[Tuple[str, str]] = []
+
         for _ in range(max_iterations):
             response = self._chat(messages, tools=tools or None)
             if response is None:
@@ -174,7 +186,11 @@ class ScrumAgent:
 
             message = response.message
             if message.tool_calls:
-                self._process_tool_calls(message, messages, user_prompt)
+                early_stop = self._process_tool_calls(
+                    message, messages, user_prompt, failed_tool_keys
+                )
+                if early_stop:
+                    return early_stop
                 continue
 
             content = (message.content or "").strip()
