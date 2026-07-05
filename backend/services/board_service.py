@@ -31,7 +31,7 @@ def move_board_stage(task_id: str, target_lane: str) -> str:
         source_lane = None
         for lane, tasks in state.SHARED_BOARD.items():
             for task in tasks:
-                if task["id"] == task_id:
+                if str(task["id"]) == str(task_id):
                     active_task = task
                     source_lane = lane
                     break

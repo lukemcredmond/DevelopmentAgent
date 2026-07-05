@@ -94,7 +94,8 @@ def extract_json_object_from_text(text: str) -> Optional[Dict[str, Any]]:
 
 
 def _task_in_lane(task_id: str, lane: str) -> bool:
-    return task_id in [t["id"] for t in state.SHARED_BOARD.get(lane, [])]
+    needle = str(task_id)
+    return needle in [str(t.get("id", "")) for t in state.SHARED_BOARD.get(lane, [])]
 
 
 def _dev_needs_po(result: str, task: Optional[Dict[str, Any]] = None) -> bool:

@@ -1,9 +1,28 @@
 import os
+import shutil
 from pathlib import Path
 
 ROOT_DIR = Path(__file__).resolve().parent.parent
 FRONTEND_DIST = ROOT_DIR / "frontend" / "dist"
-DB_PATH = str(ROOT_DIR / "scrum_memory.db")
+
+# Runtime data lives outside the repo (override with ALLHANDS_HOME env var).
+ALLHANDS_HOME = Path(os.environ.get("ALLHANDS_HOME", Path.home() / ".allhands"))
+LEGACY_DB_PATH = ROOT_DIR / "scrum_memory.db"
+DB_PATH = str(ALLHANDS_HOME / "scrum_memory.db")
+
+
+def ensure_allhands_home() -> Path:
+    ALLHANDS_HOME.mkdir(parents=True, exist_ok=True)
+    return ALLHANDS_HOME
+
+
+def migrate_legacy_database() -> None:
+    """Copy scrum_memory.db from repo root into ~/.allhands on first run."""
+    ensure_allhands_home()
+    legacy = LEGACY_DB_PATH
+    target = Path(DB_PATH)
+    if legacy.is_file() and not target.is_file():
+        shutil.copy2(legacy, target)
 
 MAX_LOG_ENTRIES = 500
 MAX_TASK_DECISIONS = 50

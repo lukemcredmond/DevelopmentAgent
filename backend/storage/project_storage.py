@@ -11,6 +11,9 @@ class ProjectStorage:
     """Manages workspace projects, board columns, logs, chat, and file revisions."""
 
     def __init__(self, db_path: str = DB_PATH):
+        from backend.config import migrate_legacy_database
+
+        migrate_legacy_database()
         self.db_path = db_path
         self._init_db()
 

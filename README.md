@@ -71,7 +71,7 @@ DevelopmentAgent/
 ├── tests/                 # pytest smoke tests
 ├── workspace/             # Agent-written project files (runtime)
 ├── global_skills/         # Skill markdown library (runtime)
-└── scrum_memory.db        # SQLite persistence (runtime, local-only — not committed)
+Persistence is stored outside the repo at `~/.allhands/scrum_memory.db` (override with the `ALLHANDS_HOME` env var). On first run, an existing `scrum_memory.db` in the project root is copied there automatically.
 ```
 
 ---
@@ -355,7 +355,7 @@ Persisted per project in SQLite (`settings` table, key `workflow:{project_id}`).
 
 - **Backend:** FastAPI modular monolith under `backend/`
 - **Frontend:** Vite + React + TypeScript; `@dnd-kit` Kanban, Monaco editor, xterm.js terminal
-- **Persistence:** SQLite (`scrum_memory.db`) — projects, board, files, logs, chat, revisions, brief changelog
+- **Persistence:** SQLite (`~/.allhands/scrum_memory.db`) — projects, board, files, logs, chat, revisions, brief changelog
 - **Agents:** `ScrumAgent` uses the [Ollama Python SDK](https://github.com/ollama/ollama-python) against your local Ollama server. Tools are registered in `ToolRegistry` and passed via the native `tools` parameter; the agent loop executes `message.tool_calls` and feeds results back until the model finishes.
 - **Security:** Binds localhost only; terminal and subprocess run with workspace cwd constraints
 

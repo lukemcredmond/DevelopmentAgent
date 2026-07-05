@@ -1,6 +1,9 @@
-# Local SQLite persistence
+# Legacy local DB (migrated to ~/.allhands on first run)
 scrum_memory.db
 *.db-journal
+
+# User data directory (when using a repo-local ALLHANDS_HOME override)
+.allhands/
 
 # Agent-written workspace (runtime)
 /workspace/

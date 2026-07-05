@@ -33,15 +33,17 @@ def publish_activity(
 
 
 def find_task_by_id(task_id: str) -> Optional[Dict[str, Any]]:
+    needle = str(task_id)
     for tasks in state.SHARED_BOARD.values():
         for task in tasks:
-            if task.get("id") == task_id:
+            if str(task.get("id", "")) == needle:
                 return task
     return None
 
 
 def is_task_done(task_id: str) -> bool:
-    return any(t.get("id") == task_id for t in state.SHARED_BOARD.get("Done", []))
+    needle = str(task_id)
+    return any(str(t.get("id", "")) == needle for t in state.SHARED_BOARD.get("Done", []))
 
 
 def task_dependencies_met(task: Dict[str, Any]) -> bool:
@@ -51,6 +53,8 @@ def task_dependencies_met(task: Dict[str, Any]) -> bool:
 
 def normalize_task(task: Dict[str, Any]) -> Dict[str, Any]:
     """Ensures task has context fields for file associations, decisions, and transcript."""
+    if task.get("id") is not None:
+        task["id"] = str(task["id"])
     if "files" not in task or not isinstance(task["files"], list):
         task["files"] = []
     if "decisions" not in task or not isinstance(task["decisions"], list):

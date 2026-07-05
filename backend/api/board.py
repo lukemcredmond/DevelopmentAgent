@@ -127,7 +127,10 @@ def reorder_tasks(payload: ReorderTasksPayload):
 def clear_task_transcript_route(task_id: str):
     with state.STATE_LOCK:
         if not clear_task_transcript(task_id):
-            raise HTTPException(status_code=404, detail="Task not found")
+            raise HTTPException(
+                status_code=404,
+                detail=f"Task not found: {task_id}",
+            )
         save_current_project_state()
         add_system_log("System", "info", f"Cleared transcript for {task_id}")
     return build_state_response()
@@ -144,7 +147,7 @@ def delete_task(payload: DeleteTaskPayload):
         removed = False
         for lane, tasks in state.SHARED_BOARD.items():
             for task in list(tasks):
-                if task.get("id") == payload.task_id:
+                if str(task.get("id", "")) == str(payload.task_id):
                     tasks.remove(task)
                     removed = True
                     break

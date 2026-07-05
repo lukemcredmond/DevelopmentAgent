@@ -127,6 +127,7 @@ def test_assign_skills_route_registered():
     client = TestClient(app)
     paths = client.get("/openapi.json").json().get("paths", {})
     assert "/api/assign-skills" in paths
+    assert "/api/tasks/{task_id}/transcript" in paths
 
 
 def test_dev_registry_includes_read_file():
@@ -161,6 +162,43 @@ def test_clear_task_transcript():
     record_task_transcript("T-CLR", "assistant", "hello")
     assert clear_task_transcript("T-CLR") is True
     assert task["transcript"] == []
+
+
+def test_clear_task_transcript_numeric_id():
+    """PO JSON may emit numeric ids; API paths always use strings."""
+    from backend import state
+    from backend.agents.task_context import clear_task_transcript, init_new_task, record_task_transcript
+
+    initialize()
+    task = init_new_task({"id": 1, "title": "Numeric", "description": "d"})
+    state.SHARED_BOARD.setdefault("Backlog", []).append(task)
+    record_task_transcript("1", "assistant", "hello")
+    assert clear_task_transcript("1") is True
+    assert task["transcript"] == []
+    assert task["id"] == "1"
+
+
+def test_clear_task_transcript_api_numeric_id():
+    from backend import state
+    from backend.agents.task_context import init_new_task, record_task_transcript
+
+    initialize()
+    client = TestClient(app)
+    task = init_new_task({"id": 1, "title": "Numeric", "description": "d"})
+    state.SHARED_BOARD.setdefault("Backlog", []).append(task)
+    record_task_transcript("1", "tool", "noise")
+    response = client.delete("/api/tasks/1/transcript")
+    assert response.status_code == 200
+    assert task["transcript"] == []
+
+
+def test_allhands_db_path_outside_repo():
+    from pathlib import Path
+
+    from backend.config import ALLHANDS_HOME, DB_PATH, ROOT_DIR
+
+    assert Path(DB_PATH).parent == ALLHANDS_HOME
+    assert Path(DB_PATH).parent != ROOT_DIR
 
 
 def test_run_agent_command_mock(monkeypatch):
