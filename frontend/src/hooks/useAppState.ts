@@ -2,6 +2,7 @@ import { useCallback, useEffect, useRef, useState } from 'react'
 import {
   cancelSprint,
   clearLogs as clearLogsApi,
+  clearToolHistory,
   fetchPendingApprovals,
   fetchPendingTools,
   fetchState,
@@ -159,22 +160,6 @@ function historyPayloadToEvent(payload: Record<string, unknown>): ToolExecutionE
   }
 }
 
-function mergeToolHistory(
-  existing: ToolExecutionEvent[],
-  incoming: ToolExecutionEvent[],
-): ToolExecutionEvent[] {
-  const byId = new Map<string, ToolExecutionEvent>()
-  for (const e of incoming) {
-    byId.set(e.id, e)
-  }
-  for (const e of existing) {
-    byId.set(e.id, { ...byId.get(e.id), ...e })
-  }
-  return Array.from(byId.values())
-    .sort((a, b) => String(b.timestamp).localeCompare(String(a.timestamp)))
-    .slice(-200)
-}
-
 function applyToolEnd(events: ToolExecutionEvent[], payload: Record<string, unknown>): ToolExecutionEvent[] {
   const id = buildToolEventId(payload)
   const success = payload.toolSuccess !== false
@@ -296,7 +281,8 @@ export function useAppState() {
       const incoming = (data.events ?? []).map((e) =>
         historyPayloadToEvent(e as Record<string, unknown>),
       )
-      setToolEvents((prev) => mergeToolHistory(prev, incoming))
+      incoming.sort((a, b) => String(b.timestamp).localeCompare(String(a.timestamp)))
+      setToolEvents(incoming.slice(0, 200))
     } catch {
       /* history endpoint optional during startup */
     }
@@ -367,7 +353,12 @@ export function useAppState() {
     )
   }, [])
 
-  const clearToolEvents = useCallback(() => {
+  const clearToolEvents = useCallback(async () => {
+    try {
+      await clearToolHistory()
+    } catch {
+      /* clear best-effort */
+    }
     setToolEvents([])
   }, [])
 

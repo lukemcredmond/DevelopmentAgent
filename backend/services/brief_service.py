@@ -17,7 +17,10 @@ WORKFLOW_LANES = [
 PO_SMALLEST_TASKS_GUIDANCE = (
     "Always break work into the smallest achievable backlog items — each card should be "
     "completable in one focused dev pass with testable acceptance criteria. "
-    "Prefer many small cards over few large ones."
+    "Prefer many small cards over few large ones. "
+    "On every add_backlog_tasks entry set workType (planning|implementation|review|qa|user_action), "
+    "requiresDev (true/false), and requiresQa (true/false). "
+    "Planning/decomposition cards must have workType=planning and requiresDev=false."
 )
 
 

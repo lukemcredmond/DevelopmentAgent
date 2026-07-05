@@ -7,12 +7,16 @@ from backend.services.board_service import append_backlog_tasks, move_board_stag
 from backend.services.git_service import git_commit, git_diff, git_init, git_status
 from backend.workspace.files import (
     apply_workspace_patch,
+    delete_workspace_file,
+    glob_workspace,
+    grep_workspace,
     read_workspace_file,
     run_agent_command,
     run_tests_on_workspace,
     search_files,
     write_workspace_file,
 )
+from backend.storage.code_index import format_semantic_search_results
 from backend.workspace.web_search import web_search
 
 agent_po = ScrumAgent(
@@ -27,6 +31,7 @@ agent_po = ScrumAgent(
         "pass split_from_task_id so the original moves to Done with a split note. "
         "Invoke add_backlog_tasks yourself — never instruct the user to call it. "
         "Prefer acting (split, move board) over asking clarifying questions when acceptance criteria exist. "
+        "Use grep and glob_file_search to explore the codebase; prefer grep over search_code for patterns. "
         f"{PO_SMALLEST_TASKS_GUIDANCE}"
     ),
 )
@@ -36,7 +41,7 @@ agent_dev = ScrumAgent(
     model="qwen2.5-coder:14b",
     system_prompt=(
         "You implement features from the backlog. Use apply_patch for edits to existing files "
-        "and write_file for new files. "
+        "and write_file for new files. Use grep and glob_file_search to find symbols and files. "
         "If requirements are unclear, escalate to the Product Owner by moving the task to 'Needs PO'. "
         "When implementation is complete, move the task to 'QA' for validation. "
         "Continue iterating on test failures without asking the user unless blocked repeatedly."
@@ -48,7 +53,8 @@ agent_cr = ScrumAgent(
     model="qwen2.5-coder:7b",
     system_prompt=(
         "You sit between Developer and QA. Audit the newly written files for logical bugs, layout problems, "
-        "styling issues, or security flaws. On success, advance the task to QA. On failure, return to Developer."
+        "styling issues, or security flaws. Use grep to locate relevant code. "
+        "On success, advance the task to QA. On failure, return to Developer."
     ),
 )
 
@@ -116,6 +122,40 @@ tool_test = Tool(
     func=run_tests_on_workspace,
 )
 
+def _format_grep_results(
+    pattern: str,
+    path=None,
+    glob=None,
+    case_insensitive=False,
+    context_lines=0,
+    limit=100,
+) -> str:
+    results = grep_workspace(
+        pattern,
+        path=path,
+        glob=glob,
+        case_insensitive=bool(case_insensitive),
+        context_lines=int(context_lines or 0),
+        limit=int(limit or 100),
+    )
+    if not results:
+        return f"No matches for pattern '{pattern}'."
+    lines = [f"Grep '{pattern}' ({len(results)} match(es)):"]
+    for r in results:
+        loc = f"{r['path']}:{r.get('line', 0)}"
+        lines.append(f"- {loc}: {r.get('content', '')[:200]}")
+    return "\n".join(lines)
+
+
+def _format_glob_results(pattern: str, limit: int = 200) -> str:
+    paths = glob_workspace(pattern, limit=int(limit or 200))
+    if not paths:
+        return f"No files match glob '{pattern}'."
+    lines = [f"Glob '{pattern}' ({len(paths)} file(s)):"]
+    lines.extend(f"- {p}" for p in paths)
+    return "\n".join(lines)
+
+
 def _format_search_results(query: str, limit: int = 20) -> str:
     results = search_files(query, limit=limit)
     if not results:
@@ -142,7 +182,7 @@ def _guarded_update_board(task_id: str, target_lane: str) -> str:
 
 tool_search = Tool(
     name="search_code",
-    description="Search workspace file paths and contents for a query string.",
+    description="Legacy substring search. Prefer grep for patterns and glob_file_search for file discovery.",
     parameters={
         "type": "object",
         "properties": {
@@ -152,6 +192,71 @@ tool_search = Tool(
         "required": ["query"],
     },
     func=lambda query, limit=20: _format_search_results(query, limit=int(limit) if limit else 20),
+)
+
+tool_grep = Tool(
+    name="grep",
+    description=(
+        "Search file contents with regex pattern (ripgrep when available). "
+        "Returns path, line number, and matching line."
+    ),
+    parameters={
+        "type": "object",
+        "properties": {
+            "pattern": {"type": "string"},
+            "path": {"type": "string"},
+            "glob": {"type": "string"},
+            "case_insensitive": {"type": "boolean"},
+            "context_lines": {"type": "integer"},
+            "limit": {"type": "integer"},
+        },
+        "required": ["pattern"],
+    },
+    func=lambda pattern, path=None, glob=None, case_insensitive=False, context_lines=0, limit=100: _format_grep_results(
+        pattern, path, glob, case_insensitive, context_lines, limit
+    ),
+)
+
+tool_glob = Tool(
+    name="glob_file_search",
+    description="Find workspace files matching a glob pattern (e.g. **/*.dart, lib/**/*.py).",
+    parameters={
+        "type": "object",
+        "properties": {
+            "pattern": {"type": "string"},
+            "limit": {"type": "integer"},
+        },
+        "required": ["pattern"],
+    },
+    func=lambda pattern, limit=200: _format_glob_results(pattern, limit),
+)
+
+tool_semantic = Tool(
+    name="semantic_search",
+    description=(
+        "Semantic codebase search via Qdrant embeddings. "
+        "Find code by meaning when grep patterns are unknown."
+    ),
+    parameters={
+        "type": "object",
+        "properties": {
+            "query": {"type": "string"},
+            "limit": {"type": "integer"},
+        },
+        "required": ["query"],
+    },
+    func=lambda query, limit=8: format_semantic_search_results(query, limit=int(limit or 8)),
+)
+
+tool_delete = Tool(
+    name="delete_file",
+    description="Delete a file from the workspace. Requires tool approval when enabled.",
+    parameters={
+        "type": "object",
+        "properties": {"path": {"type": "string"}},
+        "required": ["path"],
+    },
+    func=delete_workspace_file,
 )
 
 tool_web_search = Tool(
@@ -207,6 +312,12 @@ tool_add_backlog_tasks = Tool(
                         },
                         "blockedBy": {"type": "array", "items": {"type": "string"}},
                         "priority": {"type": "number"},
+                        "workType": {
+                            "type": "string",
+                            "enum": ["planning", "implementation", "review", "qa", "user_action"],
+                        },
+                        "requiresDev": {"type": "boolean"},
+                        "requiresQa": {"type": "boolean"},
                     },
                     "required": ["title", "description"],
                 },
@@ -288,14 +399,21 @@ tool_run_command = Tool(
 agent_po.register_tool(tool_read)
 agent_po.register_tool(tool_board)
 agent_po.register_tool(tool_add_backlog_tasks)
+agent_po.register_tool(tool_grep)
+agent_po.register_tool(tool_glob)
+agent_po.register_tool(tool_semantic)
 agent_po.register_tool(tool_search)
 agent_po.register_tool(tool_web_search)
 
 agent_dev.register_tool(tool_read)
 agent_dev.register_tool(tool_write)
 agent_dev.register_tool(tool_apply_patch)
+agent_dev.register_tool(tool_delete)
 agent_dev.register_tool(tool_board)
 agent_dev.register_tool(tool_run_command)
+agent_dev.register_tool(tool_grep)
+agent_dev.register_tool(tool_glob)
+agent_dev.register_tool(tool_semantic)
 agent_dev.register_tool(tool_search)
 agent_dev.register_tool(tool_web_search)
 agent_dev.register_tool(tool_git_status)
@@ -305,11 +423,17 @@ agent_dev.register_tool(tool_git_commit)
 agent_cr.register_tool(tool_read)
 agent_cr.register_tool(tool_apply_patch)
 agent_cr.register_tool(tool_board)
+agent_cr.register_tool(tool_grep)
+agent_cr.register_tool(tool_glob)
+agent_cr.register_tool(tool_semantic)
 agent_cr.register_tool(tool_search)
 
 agent_qa.register_tool(tool_read)
 agent_qa.register_tool(tool_test)
 agent_qa.register_tool(tool_run_command)
+agent_qa.register_tool(tool_grep)
+agent_qa.register_tool(tool_glob)
+agent_qa.register_tool(tool_semantic)
 agent_qa.register_tool(tool_search)
 agent_qa.register_tool(tool_web_search)
 agent_qa.register_tool(tool_board)

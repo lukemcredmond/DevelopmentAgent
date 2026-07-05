@@ -105,6 +105,10 @@ interface TaskDetailModalProps {
   ) => void | Promise<void>
   onRelatedTaskClick?: (taskId: string) => void
   getTaskTitle?: (taskId: string) => string | undefined
+  ollamaUrl?: string
+  onDiagnose?: (taskId: string) => void | Promise<void>
+  onRetryStep?: (taskId: string, mode: 'same' | 'optimized') => void | Promise<void>
+  onViewFileDiff?: (path: string) => void | Promise<void>
 }
 
 function CollapsibleSection({
@@ -196,6 +200,9 @@ export default function TaskDetailModal({
   onInjectToolEvidence,
   onRelatedTaskClick,
   getTaskTitle,
+  onDiagnose,
+  onRetryStep,
+  onViewFileDiff,
 }: TaskDetailModalProps) {
   const [title, setTitle] = useState('')
   const [description, setDescription] = useState('')
@@ -209,6 +216,8 @@ export default function TaskDetailModal({
   const [showAllTranscript, setShowAllTranscript] = useState(false)
   const [showFailuresOnly, setShowFailuresOnly] = useState(false)
   const [splitting, setSplitting] = useState(false)
+  const [diagnosing, setDiagnosing] = useState(false)
+  const [retrying, setRetrying] = useState(false)
 
   useEffect(() => {
     if (task) {
@@ -241,6 +250,13 @@ export default function TaskDetailModal({
   const acList = formatAcceptanceCriteria(safeTask.acceptanceCriteria)
   const blockedBy = safeTask.blockedBy ?? []
   const relatedTaskIds = safeTask.relatedTaskIds ?? []
+  const diagnosis = safeTask.lastDiagnosis
+  const workLabel =
+    safeTask.workType === 'planning' || safeTask.requiresDev === false
+      ? 'PO only'
+      : safeTask.requiresQa === false
+        ? 'Dev (no QA)'
+        : 'Dev + QA'
 
   return (
     <div className="fixed inset-0 bg-black/75 flex items-center justify-center p-4 z-50">
@@ -263,6 +279,7 @@ export default function TaskDetailModal({
               {(task.poRoundTrips ?? 0) > 0 && (
                 <span className="ml-2 text-amber-400">PO↔Dev ×{task.poRoundTrips}</span>
               )}
+              <span className="ml-2 text-violet-300/90">{workLabel}</span>
             </p>
           </div>
           <div className="flex items-center gap-2 shrink-0">
@@ -322,6 +339,75 @@ export default function TaskDetailModal({
             )}
           </CollapsibleSection>
 
+          {diagnosis && (
+            <CollapsibleSection title="Diagnosis" defaultOpen>
+              <p className="text-[11px] text-white mb-2">{diagnosis.summary}</p>
+              <p className="text-[11px] text-rose-200/90 mb-1">
+                <strong className="font-normal text-cat-subtext">Problem: </strong>
+                {diagnosis.problem}
+              </p>
+              <p className="text-[11px] text-cat-subtext mb-1">
+                Root cause: <span className="text-amber-200">{diagnosis.rootCause}</span>
+              </p>
+              <p className="text-[11px] text-emerald-200/90 mb-2">{diagnosis.recommendedAction}</p>
+              {diagnosis.evidence?.length > 0 && (
+                <ul className="text-[10px] text-cat-overlay list-disc pl-4 space-y-0.5">
+                  {diagnosis.evidence.map((ev, i) => (
+                    <li key={i}>{ev}</li>
+                  ))}
+                </ul>
+              )}
+            </CollapsibleSection>
+          )}
+
+          {taskLane !== 'Done' && (onDiagnose || onRetryStep) && (
+            <div className="flex flex-wrap gap-2">
+              {onDiagnose && (
+                <button
+                  type="button"
+                  disabled={diagnosing || sprintRunning}
+                  onClick={() => {
+                    setDiagnosing(true)
+                    void Promise.resolve(onDiagnose(task.id)).finally(() => setDiagnosing(false))
+                  }}
+                  className="text-xs px-3 py-1.5 rounded border border-amber-500/40 text-amber-200 hover:bg-amber-950/30 disabled:opacity-50"
+                >
+                  {diagnosing ? 'Diagnosing…' : 'Diagnose card'}
+                </button>
+              )}
+              {onRetryStep && (
+                <>
+                  <button
+                    type="button"
+                    disabled={retrying || sprintRunning}
+                    onClick={() => {
+                      setRetrying(true)
+                      void Promise.resolve(onRetryStep(task.id, 'same')).finally(() =>
+                        setRetrying(false),
+                      )
+                    }}
+                    className="text-xs px-3 py-1.5 rounded border border-indigo-500/40 text-indigo-200 hover:bg-indigo-950/30 disabled:opacity-50"
+                  >
+                    Retry step
+                  </button>
+                  <button
+                    type="button"
+                    disabled={retrying || sprintRunning}
+                    onClick={() => {
+                      setRetrying(true)
+                      void Promise.resolve(onRetryStep(task.id, 'optimized')).finally(() =>
+                        setRetrying(false),
+                      )
+                    }}
+                    className="text-xs px-3 py-1.5 rounded border border-violet-500/40 text-violet-200 hover:bg-violet-950/30 disabled:opacity-50"
+                  >
+                    Retry (optimized)
+                  </button>
+                </>
+              )}
+            </div>
+          )}
+
           <CollapsibleSection title="Associated Files" badge={files.length} defaultOpen>
             <div className="overflow-y-auto space-y-1 max-h-48">
               {files.length === 0 ? (
@@ -331,24 +417,35 @@ export default function TaskDetailModal({
                 </p>
               ) : (
                 files.map((f, i) => (
-                  <button
-                    key={`${f.path}-${i}`}
-                    type="button"
-                    onClick={() => {
-                      onOpenFile(getTaskFilePath(f))
-                      onClose()
-                    }}
-                    className="w-full text-left text-[11px] font-mono bg-cat-base border border-cat-surface1 rounded px-2 py-1.5 hover:border-indigo-500/50 text-indigo-300 flex items-center justify-between gap-2"
-                  >
-                    <span className="truncate">{getTaskFilePath(f)}</span>
-                    {f.action && (
-                      <span
-                        className={`shrink-0 text-[9px] uppercase px-1.5 py-0.5 rounded ${fileActionBadgeClass(f.action)}`}
+                  <div key={`${f.path}-${i}`} className="flex gap-1">
+                    <button
+                      type="button"
+                      onClick={() => {
+                        onOpenFile(getTaskFilePath(f))
+                        onClose()
+                      }}
+                      className="flex-1 text-left text-[11px] font-mono bg-cat-base border border-cat-surface1 rounded px-2 py-1.5 hover:border-indigo-500/50 text-indigo-300 flex items-center justify-between gap-2"
+                    >
+                      <span className="truncate">{getTaskFilePath(f)}</span>
+                      {f.action && (
+                        <span
+                          className={`shrink-0 text-[9px] uppercase px-1.5 py-0.5 rounded ${fileActionBadgeClass(f.action)}`}
+                        >
+                          {f.action}
+                        </span>
+                      )}
+                    </button>
+                    {onViewFileDiff && (
+                      <button
+                        type="button"
+                        title="View diff"
+                        onClick={() => void onViewFileDiff(getTaskFilePath(f))}
+                        className="shrink-0 text-[10px] px-2 py-1 rounded border border-cat-surface1 text-cat-overlay hover:text-white"
                       >
-                        {f.action}
-                      </span>
+                        Diff
+                      </button>
                     )}
-                  </button>
+                  </div>
                 ))
               )}
             </div>

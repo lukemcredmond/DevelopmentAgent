@@ -15,6 +15,7 @@ from backend.services.tool_aliases import (
 )
 from backend.services.tool_approval import list_pending_approvals, resolve_tool_approval
 from backend.services.tool_execution_service import (
+    clear_tool_log,
     execute_tool,
     get_tool_history,
     get_transcript_tool_entries,
@@ -84,6 +85,12 @@ def _tool_result_dict(result) -> Dict[str, Any]:
 def get_tools_history(limit: int = Query(default=200, ge=1, le=500)):
     with state.STATE_LOCK:
         return {"events": get_tool_history(limit=limit)}
+
+
+@router.post("/api/tools/history/clear")
+def clear_tools_history():
+    with state.STATE_LOCK:
+        return clear_tool_log()
 
 
 @router.get("/api/tools/registry")

@@ -74,6 +74,37 @@ export interface Task {
   qaEvidence?: QaEvidence | null
   userQuestion?: string | null
   poRoundTrips?: number
+  workType?: 'planning' | 'implementation' | 'review' | 'qa' | 'user_action'
+  requiresDev?: boolean
+  requiresQa?: boolean
+  createdBy?: 'po' | 'user' | 'split'
+  lastDiagnosis?: TaskDiagnosis
+}
+
+export interface TaskDiagnosis {
+  summary: string
+  problem: string
+  rootCause: string
+  evidence: string[]
+  recommendedAction: string
+  suggestedAgent: string
+  taskId?: string
+}
+
+export interface LlmDebugEntry {
+  id: string
+  timestamp: string
+  agent: string
+  agentId: string
+  taskId?: string
+  model: string
+  iteration: number
+  requestMessages: unknown[]
+  toolNames: string[]
+  responseContent: string
+  responseToolCalls: unknown[]
+  durationMs: number
+  error?: string
 }
 
 export type Board = Partial<Record<BoardLane, Task[]>>
@@ -95,6 +126,9 @@ export interface WorkflowSettings {
   autonomousMode?: boolean
   maxNeedsUserPerSprint?: number
   enableWebSearch?: boolean
+  enableSemanticSearch?: boolean
+  qdrantUrl?: string
+  embedModel?: string
 }
 
 export interface McpServerConfig {
@@ -363,6 +397,9 @@ export interface WorkflowSettingsPayload {
   autonomousMode?: boolean
   maxNeedsUserPerSprint?: number
   enableWebSearch?: boolean
+  enableSemanticSearch?: boolean
+  qdrantUrl?: string
+  embedModel?: string
 }
 
 export interface SkillsResponse {
@@ -516,7 +553,7 @@ export const DEFAULT_WORKFLOW_SETTINGS: WorkflowSettings = {
   requireCodeReview: false,
   requireDevVerification: false,
   requireToolApproval: false,
-  toolApprovalTools: ['write_file', 'run_command'],
+  toolApprovalTools: ['write_file', 'run_command', 'delete_file'],
   mcpServers: [],
   definitionOfDone: [],
   maxSprintSteps: 20,
@@ -528,6 +565,9 @@ export const DEFAULT_WORKFLOW_SETTINGS: WorkflowSettings = {
   autonomousMode: false,
   maxNeedsUserPerSprint: 2,
   enableWebSearch: false,
+  enableSemanticSearch: true,
+  qdrantUrl: 'http://localhost:6333',
+  embedModel: 'nomic-embed-text',
 }
 
 export const EMPTY_BOARD: Board = {

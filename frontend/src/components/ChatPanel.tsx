@@ -369,8 +369,8 @@ export default function ChatPanel({
           }}
           placeholder={
             taskActionMode
-              ? `Ask ${AGENT_LABELS[agent]} about ${pinnedTask?.id ?? 'this card'}…`
-              : `Message ${AGENT_LABELS[agent]}…`
+              ? `Ask ${AGENT_LABELS[agent]} about ${pinnedTask?.id ?? 'this card'}… (@file to attach)`
+              : `Message ${AGENT_LABELS[agent]}… Use @path or @folder/ to attach context`
           }
           disabled={streaming}
           className="flex-1 bg-cat-surface0 border border-cat-surface1 rounded-lg px-3 py-2 text-xs text-white focus:outline-none focus:border-indigo-500"

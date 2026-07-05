@@ -21,6 +21,7 @@ from backend.agents.task_context import (
     increment_po_round_trips,
     init_new_task,
     next_claimable_backlog_task,
+    next_po_planning_backlog_task,
     normalize_acceptance_criteria,
     normalize_task,
     publish_activity,
@@ -1035,7 +1036,7 @@ def _run_developer_step(active_task: Dict[str, Any], brief: str) -> None:
     target = _dev_complete_lane()
     instructions = (
         "Registered tools: read_file, write_file, apply_patch, run_command, update_board, "
-        "git_status, git_diff, git_commit, search_code. "
+        "grep, glob_file_search, git_status, git_diff, git_commit, search_code. "
         "Use apply_patch for edits to existing files; write_file for new files. "
         "Before apply_patch you must read_file on the same path in this step and copy old_text "
         "verbatim from that read_file result — never from pre-loaded context or analyze output. "
@@ -1110,7 +1111,7 @@ def _run_code_review_step(active_task: Dict[str, Any], brief: str) -> None:
     set_active_sprint_context(task_id, "Code Reviewer")
     add_system_log("Code Reviewer", "info", f"Reviewing '{active_task['title']}'…")
     instructions = (
-        "Registered tools: read_file, apply_patch, update_board, git_diff, search_code. "
+        "Registered tools: read_file, apply_patch, update_board, grep, glob_file_search, git_diff, search_code. "
         "Review with read_file. Pass → 'QA'. Fail → 'In Progress'."
     )
     prompt = _inject_sprint_context(active_task, brief, "Code Reviewer", instructions)
@@ -1159,7 +1160,7 @@ def _run_qa_step(active_task: Dict[str, Any], brief: str) -> None:
         f"Validate acceptance criteria:\n{ac_block}\n"
         f"{build_dod_block()}"
         f"{_format_playbook_block(playbook)}"
-        "Registered tools: read_file, run_test, run_command, update_board, search_code. "
+        "Registered tools: read_file, run_test, run_command, update_board, grep, glob_file_search, search_code. "
         "Review the automated test results above. Use read_file and run_test for additional checks. "
         "Pass → 'Done'. Fail → 'In Progress' with failure details. "
         "You cannot move to Done without passing automated tests or successful run_test/run_command."
@@ -1239,17 +1240,41 @@ def run_sprint_step(brief: str, ollama_url: str) -> None:
                 active_task = dict(find_task_by_id(task["id"]) or task)
                 handler = "dev"
             else:
-                blocked = [t for t in state.SHARED_BOARD["Backlog"] if not task_dependencies_met(t)]
-                if blocked:
-                    handler = "blocked"
+                po_plan = next_po_planning_backlog_task()
+                if po_plan:
+                    move_board_stage(po_plan["id"], "Needs PO")
+                    record_task_decision(
+                        po_plan["id"],
+                        "Product Owner",
+                        "escalation",
+                        "Planning card routed to PO",
+                    )
+                    active_task = dict(find_task_by_id(po_plan["id"]) or po_plan)
+                    handler = "po"
                 else:
-                    handler = "idle"
+                    blocked = [t for t in state.SHARED_BOARD["Backlog"] if not task_dependencies_met(t)]
+                    if blocked:
+                        handler = "blocked"
+                    else:
+                        handler = "idle"
         elif get_workflow_settings().get("requireCodeReview") and state.SHARED_BOARD.get("Code Review"):
             active_task = dict(state.SHARED_BOARD["Code Review"][0])
             handler = "cr"
         elif state.SHARED_BOARD.get("QA"):
-            active_task = dict(state.SHARED_BOARD["QA"][0])
-            handler = "qa"
+            qa_candidate = dict(state.SHARED_BOARD["QA"][0])
+            normalize_task(qa_candidate)
+            if not qa_candidate.get("requiresQa", True):
+                move_board_stage(qa_candidate["id"], "Done")
+                record_task_decision(
+                    qa_candidate["id"],
+                    "System",
+                    "move",
+                    "Skipped QA (requiresQa=false)",
+                )
+                handler = "idle"
+            else:
+                active_task = qa_candidate
+                handler = "qa"
         else:
             handler = "idle"
 

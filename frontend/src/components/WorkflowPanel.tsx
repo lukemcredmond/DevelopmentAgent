@@ -112,6 +112,20 @@ export default function WorkflowPanel({
         <span className="font-mono">WEB_SEARCH_API_KEY</span> for Serper.
       </p>
 
+      <label className="flex items-center gap-2 text-[11px] text-cat-subtext cursor-pointer">
+        <input
+          type="checkbox"
+          checked={settings.enableSemanticSearch ?? true}
+          onChange={(e) => onSettingsChange({ enableSemanticSearch: e.target.checked })}
+        />
+        Enable semantic codebase search (Qdrant)
+      </label>
+      <p className="text-[10px] text-cat-overlay leading-relaxed -mt-1 pl-5">
+        Requires Qdrant at{' '}
+        <span className="font-mono">{settings.qdrantUrl ?? 'http://localhost:6333'}</span> and{' '}
+        <span className="font-mono">ollama pull nomic-embed-text</span>.
+      </p>
+
       <label className="text-[11px] text-cat-subtext block">
         <span className="text-[10px] text-cat-overlay block">Max Needs User per sprint</span>
         <input

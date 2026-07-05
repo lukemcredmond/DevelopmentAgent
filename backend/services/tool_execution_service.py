@@ -119,6 +119,20 @@ def append_global_tool_event(event: Dict[str, Any]) -> None:
         persist_tool_log()
 
 
+def clear_tool_log() -> Dict[str, Any]:
+    """Clear persisted global tool execution log for the current project."""
+    with state.STATE_LOCK:
+        state.TOOL_EXECUTION_LOG.clear()
+        persist_tool_log()
+    return {"ok": True, "events": []}
+
+
+def _event_sort_key(timestamp: str) -> str:
+    """Sort key for tool events — empty timestamps sort last."""
+    ts = (timestamp or "").strip()
+    return ts if ts else "0000-00-00 00:00:00"
+
+
 def _get_agent_map():
     from backend.agents.registry import AGENT_MAP
 
@@ -237,9 +251,7 @@ def _history_event_from_transcript(
 
 
 def get_tool_history(limit: int = 200) -> list[Dict[str, Any]]:
-    """Collect recent tool invocations from global log, task transcripts, and the active run."""
-    from backend.services.feature_similarity import iter_board_tasks
-
+    """Collect recent tool invocations from global log and the active run (not task transcripts)."""
     seen: set[str] = set()
     events: list[Dict[str, Any]] = []
 
@@ -253,15 +265,6 @@ def get_tool_history(limit: int = 200) -> list[Dict[str, Any]]:
     with state.STATE_LOCK:
         for ev in reversed(state.TOOL_EXECUTION_LOG):
             add_event(dict(ev))
-
-    for task in iter_board_tasks():
-        task_id = str(task.get("id") or "")
-        if not task_id:
-            continue
-        for entry in task.get("transcript") or []:
-            if not isinstance(entry, dict) or not entry.get("toolName"):
-                continue
-            add_event(_history_event_from_transcript(task_id, entry))
 
     active_run = get_active_run()
     if active_run:
@@ -285,7 +288,7 @@ def get_tool_history(limit: int = 200) -> list[Dict[str, Any]]:
                 )
             )
 
-    events.sort(key=lambda e: str(e.get("timestamp") or ""), reverse=True)
+    events.sort(key=lambda e: _event_sort_key(str(e.get("timestamp") or "")), reverse=True)
     return events[:limit]
 
 

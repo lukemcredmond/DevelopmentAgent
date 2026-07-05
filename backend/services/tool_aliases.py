@@ -33,12 +33,25 @@ def delete_alias(alias: str, project_id: Optional[str] = None) -> None:
     state.storage.delete_tool_alias(pid, alias)
 
 
+BUILTIN_TOOL_ALIASES: Dict[str, str] = {
+    "Grep": "grep",
+    "grep_search": "grep",
+    "Glob": "glob_file_search",
+    "glob": "glob_file_search",
+    "glob_search": "glob_file_search",
+}
+
+
 def resolve_tool_call(
     alias: str,
     arguments: Dict[str, Any],
     project_id: Optional[str] = None,
 ) -> Tuple[str, Dict[str, Any], bool]:
     """Returns (tool_name, merged_args, was_resolved)."""
+    builtin = BUILTIN_TOOL_ALIASES.get(alias)
+    if builtin:
+        return builtin, arguments, True
+
     aliases = get_aliases(project_id)
     mapping = aliases.get(alias)
     if not mapping:

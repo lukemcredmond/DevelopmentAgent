@@ -311,9 +311,16 @@ export async function searchFiles(query: string): Promise<FileSearchResult[]> {
 }
 
 export async function fetchFileDiff(path: string): Promise<FileDiffResponse> {
-  return request<FileDiffResponse>(
-    `/api/files/diff?path=${encodeURIComponent(path)}`,
-  )
+  const raw = await request<{
+    path: string
+    previous_content?: string
+    content?: string
+  }>(`/api/files/diff?path=${encodeURIComponent(path)}`)
+  return {
+    path: raw.path,
+    oldValue: raw.previous_content ?? '',
+    newValue: raw.content ?? '',
+  }
 }
 
 export async function checkOllamaHealth(
@@ -461,6 +468,82 @@ export async function resolveToolApproval(
 
 export async function fetchToolHistory(): Promise<{ events: Record<string, unknown>[] }> {
   return request<{ events: Record<string, unknown>[] }>('/api/tools/history')
+}
+
+export async function clearToolHistory(): Promise<{ ok: boolean; events: [] }> {
+  return request<{ ok: boolean; events: [] }>('/api/tools/history/clear', { method: 'POST' })
+}
+
+export async function diagnoseTask(
+  taskId: string,
+  ollamaUrl: string,
+): Promise<{ diagnosis: import('../types').TaskDiagnosis; state?: import('../types').AppState }> {
+  return request(`/api/tasks/${encodeURIComponent(taskId)}/diagnose`, {
+    method: 'POST',
+    body: JSON.stringify({ ollamaUrl }),
+  })
+}
+
+export async function fetchLlmLogs(params?: {
+  limit?: number
+  agent?: string
+  taskId?: string
+}): Promise<{ entries: import('../types').LlmDebugEntry[] }> {
+  const q = new URLSearchParams()
+  if (params?.limit) q.set('limit', String(params.limit))
+  if (params?.agent) q.set('agent', params.agent)
+  if (params?.taskId) q.set('taskId', params.taskId)
+  const qs = q.toString()
+  return request(`/api/ollama/logs${qs ? `?${qs}` : ''}`)
+}
+
+export async function clearLlmLogs(): Promise<{ ok: boolean; entries: [] }> {
+  return request('/api/ollama/logs/clear', { method: 'POST' })
+}
+
+export async function checkQdrantHealth(
+  url = 'http://localhost:6333',
+): Promise<{ ok: boolean; collections?: string[]; error?: string }> {
+  return request(`/api/ollama/qdrant-health?url=${encodeURIComponent(url)}`)
+}
+
+export async function retryAgentStep(payload: {
+  taskId: string
+  agentId: string
+  mode: 'same' | 'optimized'
+  ollamaUrl: string
+}): Promise<{ ok: boolean; output?: string; state?: import('../types').AppState }> {
+  return request('/api/agents/retry-step', {
+    method: 'POST',
+    body: JSON.stringify({
+      taskId: payload.taskId,
+      agentId: payload.agentId,
+      mode: payload.mode,
+      ollamaUrl: payload.ollamaUrl,
+    }),
+  })
+}
+
+export async function fetchFileRevisions(
+  path: string,
+  limit = 20,
+): Promise<{ path: string; revisions: Record<string, unknown>[] }> {
+  return request(
+    `/api/files/revisions?path=${encodeURIComponent(path)}&limit=${limit}`,
+  )
+}
+
+export async function reindexCodebase(): Promise<{ ok: boolean; chunks?: number }> {
+  return request('/api/search/reindex', { method: 'POST' })
+}
+
+export async function fetchIndexStatus(): Promise<{
+  ok: boolean
+  available?: boolean
+  chunks?: number
+  qdrantUrl?: string
+}> {
+  return request('/api/search/index-status')
 }
 
 export async function fetchToolRegistry(agent: string): Promise<ToolRegistryResponse> {

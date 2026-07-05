@@ -80,6 +80,16 @@ export default function TaskCard({
               No tests
             </span>
           )}
+          {task.workType === 'planning' || task.requiresDev === false ? (
+            <span className="text-[9px] bg-violet-950/50 text-violet-300 px-1 py-0.5 rounded" title="PO-only card">
+              PO
+            </span>
+          ) : null}
+          {task.requiresQa === false && task.requiresDev !== false && (
+            <span className="text-[9px] bg-slate-800 text-slate-300 px-1 py-0.5 rounded" title="Skips QA">
+              No QA
+            </span>
+          )}
           {needsUser && (
             <span
               className="text-[9px] bg-amber-950/50 text-amber-300 px-1 py-0.5 rounded"

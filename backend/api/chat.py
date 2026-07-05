@@ -10,7 +10,7 @@ from backend.api.schemas import ChatPayload
 from backend.services.brief_service import PO_SMALLEST_TASKS_GUIDANCE
 from backend.services.events import publish_event
 from backend.services.project_service import save_current_project_state
-from backend.workspace.files import build_file_context_block
+from backend.workspace.files import build_file_context_block, expand_chat_mentions
 
 router = APIRouter()
 
@@ -46,7 +46,7 @@ def _compose_message(payload: ChatPayload) -> str:
     context_block = build_file_context_block(payload.context_files)
     if context_block:
         parts.append(context_block)
-    parts.append(f"User message:\n{payload.message}")
+    parts.append(f"User message:\n{expand_chat_mentions(payload.message)}")
     return "\n\n".join(parts)
 
 

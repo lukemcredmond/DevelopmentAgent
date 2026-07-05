@@ -264,6 +264,31 @@ def normalize_task(task: Dict[str, Any]) -> Dict[str, Any]:
             if entry.get("agent") is not None:
                 entry["agent"] = coerce_task_text(entry.get("agent"))
     task["blockedBy"] = [str(b) for b in (task.get("blockedBy") or [])]
+    wt = str(task.get("workType") or "implementation").lower()
+    if wt not in ("planning", "implementation", "review", "qa", "user_action"):
+        wt = "implementation"
+    task["workType"] = wt
+    if "requiresDev" not in task:
+        task["requiresDev"] = wt not in ("planning", "user_action")
+    else:
+        task["requiresDev"] = bool(task["requiresDev"])
+    if "requiresQa" not in task:
+        task["requiresQa"] = wt in ("implementation", "review")
+    else:
+        task["requiresQa"] = bool(task["requiresQa"])
+    cb = str(task.get("createdBy") or "po").lower()
+    task["createdBy"] = cb if cb in ("po", "user", "split") else "po"
+    if task.get("lastDiagnosis") is not None and isinstance(task["lastDiagnosis"], dict):
+        ld = task["lastDiagnosis"]
+        task["lastDiagnosis"] = {
+            "summary": coerce_task_text(ld.get("summary", "")),
+            "problem": coerce_task_text(ld.get("problem", "")),
+            "rootCause": coerce_task_text(ld.get("rootCause", "")),
+            "evidence": [coerce_task_text(e) for e in (ld.get("evidence") or [])],
+            "recommendedAction": coerce_task_text(ld.get("recommendedAction", "")),
+            "suggestedAgent": coerce_task_text(ld.get("suggestedAgent", "")),
+            **({"taskId": str(ld["taskId"])} if ld.get("taskId") else {}),
+        }
     return task
 
 
@@ -280,6 +305,10 @@ def init_new_task(task: Dict[str, Any]) -> Dict[str, Any]:
     task["userQuestion"] = None
     task["poRoundTrips"] = 0
     task["stuckLoops"] = 0
+    task.setdefault("workType", "implementation")
+    task.setdefault("requiresDev", True)
+    task.setdefault("requiresQa", True)
+    task.setdefault("createdBy", "po")
     return normalize_task(task)
 
 
@@ -519,6 +548,22 @@ def next_claimable_backlog_task() -> Optional[Dict[str, Any]]:
     sort_backlog()
     for task in state.SHARED_BOARD.get("Backlog", []):
         normalize_task(task)
+        if not task.get("requiresDev", True):
+            continue
+        if task.get("workType") == "planning":
+            continue
+        if task_dependencies_met(task):
+            return task
+    return None
+
+
+def next_po_planning_backlog_task() -> Optional[Dict[str, Any]]:
+    """First backlog task that needs PO (planning / no dev work)."""
+    sort_backlog()
+    for task in state.SHARED_BOARD.get("Backlog", []):
+        normalize_task(task)
+        if task.get("requiresDev", True) and task.get("workType") != "planning":
+            continue
         if task_dependencies_met(task):
             return task
     return None

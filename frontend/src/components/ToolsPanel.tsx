@@ -39,7 +39,7 @@ const AGENT_OPTIONS: { id: AgentId; label: string }[] = [
 
 interface ToolsPanelProps {
   toolEvents: ToolExecutionEvent[]
-  onClearLog?: () => void
+  onClearLog?: () => void | Promise<void>
   onMergeToolEvent?: (payload: Record<string, unknown>) => void
   board: Board
   selectedTaskId?: string | null
@@ -184,6 +184,7 @@ export default function ToolsPanel({
   const [transcriptEntries, setTranscriptEntries] = useState<TranscriptToolEntry[]>([])
   const [loadingTranscript, setLoadingTranscript] = useState(false)
   const [replaying, setReplaying] = useState(false)
+  const [clearingLog, setClearingLog] = useState(false)
 
   const boardTasks = useMemo(() => listBoardTasks(board), [board])
 
@@ -399,7 +400,10 @@ export default function ToolsPanel({
       {subTab === 'log' && (
         <div className="flex flex-col flex-1 min-h-0">
           <div className="bg-cat-mantle/50 border-b border-cat-surface1 px-4 py-2 flex items-center justify-between shrink-0 gap-2">
-            <span className="text-[10px] text-cat-overlay uppercase tracking-wide">Filters</span>
+            <div className="flex items-center gap-2">
+              <span className="text-[10px] text-cat-overlay uppercase tracking-wide">Filters</span>
+              <span className="text-[9px] text-cat-overlay/80 normal-case">Newest first</span>
+            </div>
             <div className="flex gap-1 flex-wrap justify-end items-center">
               {(
                 [
@@ -436,10 +440,14 @@ export default function ToolsPanel({
               {onClearLog && toolEvents.length > 0 && (
                 <button
                   type="button"
-                  onClick={onClearLog}
-                  className="text-[10px] text-cat-overlay hover:text-cat-subtext ml-1"
+                  disabled={clearingLog}
+                  onClick={() => {
+                    setClearingLog(true)
+                    void Promise.resolve(onClearLog()).finally(() => setClearingLog(false))
+                  }}
+                  className="text-[10px] text-cat-overlay hover:text-cat-subtext ml-1 disabled:opacity-50"
                 >
-                  Clear
+                  {clearingLog ? 'Clearing…' : 'Clear'}
                 </button>
               )}
             </div>

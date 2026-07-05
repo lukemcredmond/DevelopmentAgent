@@ -99,6 +99,26 @@ def _enrich_task_from_po(raw: Dict[str, Any]) -> Dict[str, Any]:
     if not isinstance(task.get("blockedBy"), list):
         task["blockedBy"] = []
     task.setdefault("priority", 100)
+    if "workType" not in task and "work_type" in task:
+        task["workType"] = task.pop("work_type")
+    if "requiresDev" not in task and "requires_dev" in task:
+        task["requiresDev"] = task.pop("requires_dev")
+    if "requiresQa" not in task and "requires_qa" in task:
+        task["requiresQa"] = task.pop("requires_qa")
+    if "createdBy" not in task and "created_by" in task:
+        task["createdBy"] = task.pop("created_by")
+    if "workType" not in task:
+        combined = f"{task.get('title', '')} {task.get('description', '')}".lower()
+        planning_kw = ("decompose", "backlog", "split", "clarify", "plan", "epic", "user stor")
+        if any(k in combined for k in planning_kw):
+            task["workType"] = "planning"
+            task.setdefault("requiresDev", False)
+            task.setdefault("requiresQa", False)
+        else:
+            task.setdefault("workType", "implementation")
+            task.setdefault("requiresDev", True)
+            task.setdefault("requiresQa", True)
+    task.setdefault("createdBy", "po")
     return task
 
 

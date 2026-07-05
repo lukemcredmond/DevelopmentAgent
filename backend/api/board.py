@@ -11,6 +11,7 @@ from backend.api.schemas import (
     ReorderTasksPayload,
     ResolveUserPayload,
     SplitTaskPayload,
+    DiagnoseTaskPayload,
     UpdateTaskPayload,
 )
 from backend.services.board_lanes import normalize_board_lanes
@@ -136,6 +137,19 @@ def inject_tool_evidence(task_id: str, payload: InjectToolEvidencePayload):
         except ValueError as exc:
             raise HTTPException(status_code=404, detail=str(exc)) from exc
     return {**build_state_response(), "injectResult": result}
+
+
+@router.post("/api/tasks/{task_id}/diagnose")
+def diagnose_task_route(task_id: str, payload: DiagnoseTaskPayload):
+    from backend.services.task_diagnosis import diagnose_task
+
+    with state.STATE_LOCK:
+        if not find_task_by_id(task_id):
+            raise HTTPException(status_code=404, detail="Task not found")
+        result = diagnose_task(task_id, payload.ollamaUrl)
+        if not result.get("ok"):
+            raise HTTPException(status_code=400, detail=result.get("error", "Diagnosis failed"))
+    return {**build_state_response(), "diagnosis": result.get("diagnosis")}
 
 
 @router.post("/api/tasks/{task_id}/split")

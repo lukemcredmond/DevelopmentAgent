@@ -11,7 +11,7 @@ DEFAULT_WORKFLOW_SETTINGS: Dict[str, Any] = {
     "requireCodeReview": False,
     "requireToolApproval": False,
     "requireDevVerification": False,
-    "toolApprovalTools": ["write_file", "run_command"],
+    "toolApprovalTools": ["write_file", "run_command", "delete_file"],
     "mcpServers": [],
     "definitionOfDone": [],
     "maxSprintSteps": MAX_SPRINT_STEPS,
@@ -23,6 +23,9 @@ DEFAULT_WORKFLOW_SETTINGS: Dict[str, Any] = {
     "autonomousMode": False,
     "maxNeedsUserPerSprint": 2,
     "enableWebSearch": False,
+    "enableSemanticSearch": True,
+    "qdrantUrl": "http://localhost:6333",
+    "embedModel": "nomic-embed-text",
 }
 
 DEFAULT_SPRINT_SUMMARY: Dict[str, Any] = {

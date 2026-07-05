@@ -106,22 +106,72 @@ class ScrumAgent:
         *,
         stream: bool = False,
         tools: Optional[Sequence[Dict[str, Any]]] = None,
+        iteration: int = 0,
+        task_id: Optional[str] = None,
+        agent_id: Optional[str] = None,
     ):
+        from backend.agents.registry import AGENT_MAP
+        from backend.services.llm_debug_log import append_llm_log_entry
+
         client = self._get_client()
         delays = [0, 1, 2, 4]
+        if agent_id is None:
+            agent_id = next((aid for aid, a in AGENT_MAP.items() if a is self), "dev")
+        tid = task_id or state.ACTIVE_SPRINT_TASK_ID
+        tool_names = [t.get("function", {}).get("name") for t in (tools or []) if isinstance(t, dict)]
 
         for delay in delays:
             if delay:
                 time.sleep(delay)
+            started = time.time()
+            last_error: Optional[str] = None
             try:
-                return client.chat(
+                result = client.chat(
                     model=self.model,
                     messages=list(messages),
                     tools=tools,
                     stream=stream,
                     options=self._chat_options(),
                 )
-            except Exception:
+                duration_ms = int((time.time() - started) * 1000)
+                if not stream and result is not None:
+                    msg = result.message
+                    tool_calls = []
+                    if msg.tool_calls:
+                        for tc in msg.tool_calls:
+                            tool_calls.append(
+                                {
+                                    "name": tc.function.name,
+                                    "arguments": tc.function.arguments,
+                                }
+                            )
+                    append_llm_log_entry(
+                        agent=self.role,
+                        agent_id=agent_id or "dev",
+                        task_id=tid,
+                        model=self.model,
+                        iteration=iteration,
+                        request_messages=messages,
+                        tool_names=[n for n in tool_names if n],
+                        response_content=(msg.content or "") if msg else "",
+                        response_tool_calls=tool_calls,
+                        duration_ms=duration_ms,
+                    )
+                return result
+            except Exception as exc:
+                last_error = str(exc)
+                duration_ms = int((time.time() - started) * 1000)
+                append_llm_log_entry(
+                    agent=self.role,
+                    agent_id=agent_id or "dev",
+                    task_id=tid,
+                    model=self.model,
+                    iteration=iteration,
+                    request_messages=messages,
+                    tool_names=[n for n in tool_names if n],
+                    duration_ms=duration_ms,
+                    error=last_error,
+                )
                 continue
 
         return None
@@ -255,7 +305,12 @@ class ScrumAgent:
                     "info",
                     f"LLM iteration {iteration}/{max_iterations}",
                 )
-                response = self._chat(messages, tools=tools or None)
+                response = self._chat(
+                    messages,
+                    tools=tools or None,
+                    iteration=iteration,
+                    task_id=task_id,
+                )
                 if response is None:
                     self._log_step_exit("Ollama unavailable — SIMULATION_FALLBACK", "warning")
                     finish_run(status="failed", error="SIMULATION_FALLBACK")

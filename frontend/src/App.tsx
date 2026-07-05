@@ -9,7 +9,9 @@ import {
   createProject,
   deleteProject,
   deleteTask,
+  diagnoseTask,
   exportProject,
+  fetchFileDiff,
   fetchSkills,
   importProject,
   loadProject,
@@ -18,6 +20,7 @@ import {
   removeSkill,
   reorderTasks,
   resetWorkspace,
+  retryAgentStep,
   clearAllTasks,
   resolveToolApproval,
   resolveUserQuestion,
@@ -48,6 +51,8 @@ import TerminalPanel from './components/TerminalPanel'
 import ToolResolutionModal from './components/ToolResolutionModal'
 import ToolApprovalModal from './components/ToolApprovalModal'
 import AgentRunBar from './components/AgentRunBar'
+import ModelDebugPanel from './components/ModelDebugPanel'
+import FileDiffModal from './components/FileDiffModal'
 import SprintProgressBar from './components/SprintProgressBar'
 import BottomPanelResize, {
   readBottomPanelHeight,
@@ -61,7 +66,7 @@ import type { AgentId, AppState, BoardLane, ChatMessageRecord, PendingToolApprov
 import { getDisplayLanes } from './types'
 import { findTaskOnBoard } from './utils/taskFormat'
 
-type BottomTab = 'console' | 'activity' | 'tools' | 'chat' | 'terminal' | 'search' | 'git'
+type BottomTab = 'console' | 'activity' | 'tools' | 'model' | 'chat' | 'terminal' | 'search' | 'git'
 
 const WORKSPACE_OPEN_KEY = 'allhands-workspace-open'
 
@@ -164,6 +169,12 @@ export default function App() {
   const [kanbanOpen, setKanbanOpen] = useState(readKanbanOpen)
   const [bottomPanelHeight, setBottomPanelHeight] = useState(readBottomPanelHeight)
   const [panelMaximized, setPanelMaximized] = useState(false)
+  const [retryingStep, setRetryingStep] = useState(false)
+  const [fileDiffModal, setFileDiffModal] = useState<{
+    path: string
+    previousContent: string
+    content: string
+  } | null>(null)
   const [toolsPreferredSubTab, setToolsPreferredSubTab] = useState<
     'log' | 'manual' | 'replay' | undefined
   >(undefined)
@@ -450,6 +461,7 @@ export default function App() {
 
   const bottomTabs: { id: BottomTab; label: string; icon: string; badge?: number }[] = [
     { id: 'console', label: 'Console', icon: 'fa-terminal' },
+    { id: 'model', label: 'Model', icon: 'fa-brain' },
     {
       id: 'tools',
       label: 'Tools',
@@ -751,6 +763,32 @@ export default function App() {
                 currentTool={currentTool}
                 planRunActive={planRunActive}
                 onOpenTools={openToolsTab}
+                retrying={retryingStep}
+                onRetry={
+                  activeRun?.taskId
+                    ? (mode) => {
+                        setRetryingStep(true)
+                        const agentId =
+                          activeRun.agent === 'Product Owner'
+                            ? 'po'
+                            : activeRun.agent === 'Code Reviewer'
+                              ? 'cr'
+                              : activeRun.agent === 'QA Tester'
+                                ? 'qa'
+                                : 'dev'
+                        void retryAgentStep({
+                          taskId: activeRun.taskId,
+                          agentId,
+                          mode,
+                          ollamaUrl,
+                        })
+                          .then((r) => {
+                            if (r.state) handleState(r.state)
+                          })
+                          .finally(() => setRetryingStep(false))
+                      }
+                    : undefined
+                }
               />
               <div className="flex bg-cat-mantle border-b border-cat-surface1 shrink-0 items-stretch">
                 <div className="flex-1 min-w-0 overflow-x-auto">
@@ -809,6 +847,11 @@ export default function App() {
                         if (task) setSelectedTask(task)
                       }}
                     />
+                  </div>
+                )}
+                {bottomTab === 'model' && (
+                  <div className="absolute inset-0 flex flex-col min-h-0">
+                    <ModelDebugPanel taskIdFilter={selectedTask?.id ?? null} />
                   </div>
                 )}
                 {bottomTab === 'tools' && (
@@ -930,7 +973,51 @@ export default function App() {
         onSplit={(taskId) => handleSplitTask(taskId)}
         onInjectToolEvidence={(taskId, payload) => handleInjectToolEvidence(taskId, payload)}
         getTaskTitle={(taskId) => findTaskOnBoard(state.board, taskId)?.title}
+        ollamaUrl={ollamaUrl}
+        onDiagnose={(taskId) =>
+          void withLoading(async () => {
+            const data = await diagnoseTask(taskId, ollamaUrl)
+            if (data.state) handleState(data.state)
+            const updated = Object.values(data.state?.board ?? state.board)
+              .flat()
+              .find((t) => t.id === taskId)
+            if (updated) setSelectedTask(updated)
+          })
+        }
+        onRetryStep={(taskId, mode) =>
+          void withLoading(async () => {
+            const lane = selectedTaskLane
+            const agentId =
+              lane === 'Needs PO' || lane === 'Backlog'
+                ? 'po'
+                : lane === 'QA'
+                  ? 'qa'
+                  : lane === 'Code Review'
+                    ? 'cr'
+                    : 'dev'
+            const data = await retryAgentStep({ taskId, agentId, mode, ollamaUrl })
+            if (data.state) handleState(data.state)
+          })
+        }
+        onViewFileDiff={(path) =>
+          void fetchFileDiff(path).then((d) =>
+            setFileDiffModal({
+              path,
+              previousContent: d.oldValue ?? '',
+              content: d.newValue ?? '',
+            }),
+          )
+        }
       />
+
+      {fileDiffModal && (
+        <FileDiffModal
+          path={fileDiffModal.path}
+          previousContent={fileDiffModal.previousContent}
+          content={fileDiffModal.content}
+          onClose={() => setFileDiffModal(null)}
+        />
+      )}
 
       <SkillModal
         agent={skillModalAgent}

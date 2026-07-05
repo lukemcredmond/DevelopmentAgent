@@ -1,4 +1,8 @@
+import fnmatch
 import os
+import re
+import shutil
+import subprocess
 from typing import Any, Dict, List, Optional
 
 from backend import state
@@ -129,6 +133,12 @@ def write_workspace_file(path: str, content: str, author: Optional[str] = None) 
             )
 
         save_current_project_state()
+        try:
+            from backend.storage.code_index import CodeIndexEngine
+
+            CodeIndexEngine().upsert_file(safe_path, content)
+        except Exception:
+            pass
         nbytes = len(content.encode("utf-8"))
         add_system_log(
             state.ACTIVE_SPRINT_AGENT or "Developer",
@@ -508,6 +518,209 @@ def search_files(query: str, limit: int = 50) -> List[Dict[str, str]]:
             if len(results) >= limit:
                 break
     return results
+
+
+def grep_workspace(
+    pattern: str,
+    path: Optional[str] = None,
+    glob: Optional[str] = None,
+    case_insensitive: bool = False,
+    context_lines: int = 0,
+    limit: int = 100,
+) -> List[Dict[str, Any]]:
+    """Search workspace with ripgrep when available, else regex scan over virtual FS."""
+    if not pattern or not str(pattern).strip():
+        return []
+    sync_virtual_filesystem_from_disk()
+    limit = max(1, min(int(limit or 100), 500))
+    context_lines = max(0, min(int(context_lines or 0), 5))
+    ws = state.WORKSPACE_DIR
+    rg = shutil.which("rg")
+
+    if rg and os.path.isdir(ws):
+        cmd = [rg, "-n", "--no-heading", f"--max-count={limit}"]
+        if case_insensitive:
+            cmd.append("-i")
+        if context_lines:
+            cmd.extend(["-C", str(context_lines)])
+        if glob:
+            cmd.extend(["--glob", glob])
+        search_path = ws
+        if path:
+            try:
+                search_path = os.path.join(ws, resolve_workspace_path(path))
+            except ValueError:
+                search_path = ws
+        cmd.extend([pattern, search_path])
+        try:
+            proc = subprocess.run(
+                cmd,
+                capture_output=True,
+                text=True,
+                timeout=30,
+                cwd=ws,
+            )
+            if proc.returncode in (0, 1):
+                parsed = _parse_rg_output(proc.stdout, ws, limit)
+                if parsed:
+                    return parsed
+        except (subprocess.TimeoutExpired, OSError):
+            pass
+
+    return _grep_fallback(pattern, path, glob, case_insensitive, context_lines, limit)
+
+
+def _parse_rg_output(stdout: str, workspace_root: str, limit: int) -> List[Dict[str, Any]]:
+    results: List[Dict[str, Any]] = []
+    ws_norm = os.path.normpath(workspace_root)
+    for line in stdout.splitlines():
+        if len(results) >= limit:
+            break
+        if line.startswith("--") and len(results) > 0:
+            continue
+        if ":" not in line:
+            continue
+        file_part, rest = line.split(":", 1)
+        if not rest:
+            continue
+        rel = os.path.relpath(file_part, ws_norm).replace("\\", "/")
+        if ":" in rest:
+            line_num_str, content = rest.split(":", 1)
+            try:
+                line_num = int(line_num_str)
+            except ValueError:
+                line_num = 0
+                content = rest
+        else:
+            line_num = 0
+            content = rest
+        results.append({"path": rel, "line": line_num, "content": content.strip()})
+    return results
+
+
+def _grep_fallback(
+    pattern: str,
+    path: Optional[str],
+    glob_pattern: Optional[str],
+    case_insensitive: bool,
+    context_lines: int,
+    limit: int,
+) -> List[Dict[str, Any]]:
+    flags = re.IGNORECASE if case_insensitive else 0
+    try:
+        regex = re.compile(pattern, flags)
+    except re.error:
+        regex = re.compile(re.escape(pattern), flags)
+
+    results: List[Dict[str, Any]] = []
+    prefix = ""
+    if path:
+        try:
+            prefix = resolve_workspace_path(path).rstrip("/")
+        except ValueError:
+            prefix = ""
+
+    for file_path, content in state.VIRTUAL_FILESYSTEM.items():
+        if len(results) >= limit:
+            break
+        if prefix and not (file_path == prefix or file_path.startswith(prefix + "/")):
+            continue
+        if glob_pattern and not fnmatch.fnmatch(file_path, glob_pattern.replace("**/", "*")):
+            if not fnmatch.fnmatch(os.path.basename(file_path), glob_pattern.lstrip("**/")):
+                continue
+        lines = content.splitlines()
+        for i, line in enumerate(lines, start=1):
+            if len(results) >= limit:
+                break
+            if regex.search(line):
+                entry: Dict[str, Any] = {"path": file_path, "line": i, "content": line.strip()}
+                if context_lines:
+                    start = max(0, i - 1 - context_lines)
+                    end = min(len(lines), i + context_lines)
+                    entry["contextBefore"] = lines[start : i - 1]
+                    entry["contextAfter"] = lines[i:end]
+                results.append(entry)
+    return results
+
+
+def glob_workspace(pattern: str, limit: int = 200) -> List[str]:
+    """Find workspace files matching a glob pattern (e.g. **/*.dart)."""
+    if not pattern or not str(pattern).strip():
+        return []
+    sync_virtual_filesystem_from_disk()
+    limit = max(1, min(int(limit or 200), 1000))
+    norm = pattern.replace("\\", "/").lstrip("./")
+    matches: List[str] = []
+    for file_path in sorted(state.VIRTUAL_FILESYSTEM.keys()):
+        if fnmatch.fnmatch(file_path, norm) or fnmatch.fnmatch(file_path, norm.lstrip("**/")):
+            matches.append(file_path)
+            if len(matches) >= limit:
+                break
+    return matches
+
+
+def delete_workspace_file(path: str) -> str:
+    """Delete a file from the workspace (requires approval when gated)."""
+    try:
+        safe_path = resolve_workspace_path(path)
+    except ValueError as e:
+        return f"Error: {e}"
+
+    phys_path = os.path.join(state.WORKSPACE_DIR, safe_path)
+    if safe_path in state.VIRTUAL_FILESYSTEM:
+        del state.VIRTUAL_FILESYSTEM[safe_path]
+    if os.path.isfile(phys_path):
+        try:
+            os.remove(phys_path)
+        except OSError as e:
+            return f"Error: could not delete '{safe_path}': {e}"
+
+    if state.ACTIVE_SPRINT_TASK_ID:
+        record_task_file(state.ACTIVE_SPRINT_TASK_ID, safe_path, "deleted", persist=False)
+        record_task_decision(
+            state.ACTIVE_SPRINT_TASK_ID,
+            state.ACTIVE_SPRINT_AGENT or "Developer",
+            "file",
+            f"Deleted file '{safe_path}'",
+        )
+    save_current_project_state()
+    return f"Deleted '{safe_path}'."
+
+
+def expand_chat_mentions(message: str, max_file_chars: int = 4000, max_folder_files: int = 5) -> str:
+    """Expand @path and @folder/ tokens with inline file context for chat."""
+    import re
+
+    if "@" not in message:
+        return message
+
+    sync_virtual_filesystem_from_disk()
+    pattern = re.compile(r"@([\w./\-]+/?)")
+    expanded_parts: List[str] = [message]
+
+    for match in pattern.finditer(message):
+        token = match.group(1).rstrip("/")
+        if not token:
+            continue
+        if token.endswith("/") or match.group(1).endswith("/"):
+            folder = token.rstrip("/")
+            paths = glob_workspace(f"{folder}/**/*", limit=max_folder_files + 20)
+            paths = [p for p in paths if not p.endswith("/")][:max_folder_files]
+            block = [f"=== @folder {folder}/ ({len(paths)} file(s)) ==="]
+            for p in paths:
+                content = read_workspace_file(p)
+                if content.startswith("Error:"):
+                    continue
+                block.append(f"--- {p} ---\n{content[:max_file_chars // max_folder_files]}")
+            expanded_parts.append("\n".join(block))
+        else:
+            content = read_workspace_file(token)
+            if not content.startswith("Error:"):
+                expanded_parts.append(
+                    f"=== @file {token} ===\n{content[:max_file_chars]}"
+                )
+
+    return "\n\n".join(expanded_parts)
 
 
 def save_file_with_revision(path: str, content: str, author: Optional[str] = None) -> Dict[str, Any]:

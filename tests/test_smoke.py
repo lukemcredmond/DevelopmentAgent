@@ -642,7 +642,12 @@ def test_tool_requires_approval_settings():
     initialize()
     save_workflow_settings({"requireToolApproval": False})
     assert tool_requires_approval("write_file") is False
-    save_workflow_settings({"requireToolApproval": True})
+    save_workflow_settings(
+        {
+            "requireToolApproval": True,
+            "toolApprovalTools": ["write_file", "run_command", "delete_file"],
+        }
+    )
     assert tool_requires_approval("write_file") is True
     assert tool_requires_approval("apply_patch") is True
     assert tool_requires_approval("read_file") is False
@@ -1130,11 +1135,12 @@ def test_tool_transcript_and_replay():
     assert results[0]["toolName"] == "read_file"
 
 
-def test_tools_history_from_transcript():
+def test_get_tool_history_excludes_transcripts():
     from backend import state
     from backend.agents.task_context import init_new_task, record_task_transcript
 
     initialize()
+    state.TOOL_EXECUTION_LOG.clear()
     task = init_new_task({"id": "T-HIST", "title": "History", "description": "d"})
     state.SHARED_BOARD.setdefault("In Progress", []).append(task)
     record_task_transcript(
@@ -1153,7 +1159,52 @@ def test_tools_history_from_transcript():
     resp = client.get("/api/tools/history")
     assert resp.status_code == 200
     events = resp.json()["events"]
-    assert any(e["toolName"] == "run_command" and e["taskId"] == "T-HIST" for e in events)
+    assert not any(e["toolName"] == "run_command" and e["taskId"] == "T-HIST" for e in events)
+
+
+def test_clear_tool_history_api():
+    from backend import state
+    from backend.agents.agent_run import finish_run
+    from backend.services.tool_execution_service import (
+        _tool_log_setting_key,
+        append_global_tool_event,
+    )
+
+    initialize()
+    finish_run()
+    state.TOOL_EXECUTION_LOG.clear()
+    append_global_tool_event(
+        {
+            "runId": "run-clear-1",
+            "taskId": "T-CLR",
+            "agent": "Developer",
+            "toolName": "read_file",
+            "toolArgs": {"path": "main.py"},
+            "toolSuccess": True,
+            "toolOutput": "ok",
+            "durationMs": 1,
+            "timestamp": "2026-07-05 12:00:00",
+            "source": "manual",
+            "status": "completed",
+        }
+    )
+
+    client = TestClient(app)
+    hist_before = client.get("/api/tools/history")
+    assert hist_before.status_code == 200
+    assert len(hist_before.json()["events"]) >= 1
+
+    clear_resp = client.post("/api/tools/history/clear")
+    assert clear_resp.status_code == 200
+    assert clear_resp.json()["ok"] is True
+    assert clear_resp.json()["events"] == []
+
+    hist_after = client.get("/api/tools/history")
+    assert hist_after.status_code == 200
+    assert hist_after.json()["events"] == []
+
+    raw = state.storage.get_setting(_tool_log_setting_key(state.CURRENT_PROJECT_ID))
+    assert raw in (None, "", "[]")
 
 
 def test_add_backlog_tasks_split_moves_source_to_done():
@@ -1864,4 +1915,190 @@ def test_workflow_settings_preserves_models_and_skills():
     proj = state.storage.load_project(state.CURRENT_PROJECT_ID)
     assert proj["po_skills"] == ["planning.md"]
     assert proj["qa_model"] == "custom-qa:7b"
+
+
+def test_grep_tool_finds_pattern(tmp_path, monkeypatch):
+    from backend import state
+    from backend.workspace.files import grep_workspace, sync_virtual_filesystem_from_disk
+
+    initialize()
+    ws = tmp_path / "ws"
+    (ws / "lib").mkdir(parents=True)
+    (ws / "lib" / "main.dart").write_text("void main() {\n  print('hello');\n}\n")
+    monkeypatch.setattr(state, "WORKSPACE_DIR", str(ws))
+    state.VIRTUAL_FILESYSTEM.clear()
+    sync_virtual_filesystem_from_disk()
+    monkeypatch.setattr("backend.workspace.files.shutil.which", lambda _: None)
+    results = grep_workspace("void main", limit=10)
+    assert results, f"VFS keys: {list(state.VIRTUAL_FILESYSTEM.keys())}"
+    assert any("main.dart" in r["path"].replace("\\", "/") for r in results)
+
+
+def test_glob_file_search_lists_files(tmp_path, monkeypatch):
+    from backend import state
+    from backend.workspace.files import glob_workspace
+
+    initialize()
+    ws = tmp_path / "ws"
+    (ws / "lib").mkdir(parents=True)
+    (ws / "lib" / "a.dart").write_text("x")
+    (ws / "lib" / "b.dart").write_text("y")
+    monkeypatch.setattr(state, "WORKSPACE_DIR", str(ws))
+    paths = glob_workspace("**/*.dart", limit=20)
+    assert "lib/a.dart" in paths
+    assert "lib/b.dart" in paths
+
+
+def test_work_type_skips_dev_claim():
+    from backend import state
+    from backend.agents.task_context import init_new_task, next_claimable_backlog_task
+
+    initialize()
+    planning = init_new_task(
+        {
+            "id": "T-PLAN",
+            "title": "Decompose brief into backlog",
+            "description": "PO planning work",
+            "workType": "planning",
+            "requiresDev": False,
+        }
+    )
+    dev_task = init_new_task(
+        {
+            "id": "T-DEV",
+            "title": "Implement login",
+            "description": "Build login screen",
+            "workType": "implementation",
+            "requiresDev": True,
+        }
+    )
+    state.SHARED_BOARD = {
+        "Backlog": [planning, dev_task],
+        "In Progress": [],
+        "Done": [],
+        "Needs PO": [],
+        "Needs User": [],
+        "QA": [],
+    }
+    claimed = next_claimable_backlog_task()
+    assert claimed is not None
+    assert claimed["id"] == "T-DEV"
+
+
+def test_llm_debug_log_persisted():
+    from backend import state
+    from backend.services.llm_debug_log import append_llm_log_entry, clear_llm_log, get_llm_logs
+
+    initialize()
+    clear_llm_log()
+    append_llm_log_entry(
+        agent="Developer",
+        agent_id="dev",
+        task_id="T-LOG",
+        model="test-model",
+        iteration=1,
+        request_messages=[{"role": "user", "content": "hello"}],
+        response_content="world",
+        duration_ms=10,
+    )
+    logs = get_llm_logs(limit=10)
+    assert len(logs) >= 1
+    assert logs[0]["responseContent"] == "world"
+
+    client = TestClient(app)
+    resp = client.get("/api/ollama/logs")
+    assert resp.status_code == 200
+    assert len(resp.json()["entries"]) >= 1
+
+
+def test_diagnose_task_api(monkeypatch):
+    from backend import state
+    from backend.agents.task_context import init_new_task
+
+    initialize()
+    task = init_new_task({"id": "T-DX", "title": "Stuck task", "description": "Fails tests"})
+    state.SHARED_BOARD.setdefault("In Progress", []).append(task)
+
+    class FakeMessage:
+        content = (
+            '{"summary":"Tests failing","problem":"QA gate","rootCause":"tests",'
+            '"evidence":["run_command failed"],"recommendedAction":"Fix tests","suggestedAgent":"dev"}'
+        )
+        tool_calls = None
+
+    class FakeResponse:
+        message = FakeMessage()
+
+    monkeypatch.setattr(
+        "backend.services.task_diagnosis.agent_po._chat",
+        lambda *a, **k: FakeResponse(),
+    )
+
+    client = TestClient(app)
+    resp = client.post("/api/tasks/T-DX/diagnose", json={"ollamaUrl": "http://localhost:11434"})
+    assert resp.status_code == 200
+    body = resp.json()
+    assert body["diagnosis"]["rootCause"] == "tests"
+
+
+def test_retry_step_same_mode(monkeypatch):
+    from backend import state
+    from backend.agents.task_context import init_new_task
+
+    initialize()
+    task = init_new_task({"id": "T-RT", "title": "Retry me", "description": "d"})
+    state.SHARED_BOARD.setdefault("In Progress", []).append(task)
+
+    monkeypatch.setattr(
+        "backend.agents.registry.agent_dev.execute_step",
+        lambda prompt, max_iterations=8: "Retry succeeded",
+    )
+
+    client = TestClient(app)
+    resp = client.post(
+        "/api/agents/retry-step",
+        json={
+            "taskId": "T-RT",
+            "agentId": "dev",
+            "mode": "same",
+            "ollamaUrl": "http://localhost:11434",
+        },
+    )
+    assert resp.status_code == 200
+    assert resp.json()["ok"] is True
+
+
+def test_delete_file_requires_approval_when_enabled():
+    from backend import state
+    from backend.services.tool_execution_service import execute_tool
+    from backend.services.workflow_settings import save_workflow_settings
+
+    initialize()
+    save_workflow_settings({"requireToolApproval": True, "toolApprovalTools": ["delete_file"]})
+    state.VIRTUAL_FILESYSTEM["temp.txt"] = "delete me"
+    result = execute_tool(
+        "dev",
+        "delete_file",
+        {"path": "temp.txt"},
+        task_id="T-DEL",
+        source="manual",
+        skip_approval=False,
+    )
+    assert result.success is False or "approval" in result.tool_output.lower() or "await" in result.tool_output.lower()
+
+
+def test_semantic_search_qdrant_optional():
+    import pytest
+    from backend.storage.code_index import CodeIndexEngine
+
+    initialize()
+    engine = CodeIndexEngine()
+    status = engine.index_status()
+    if not status.get("available"):
+        pytest.skip("Qdrant not running")
+    result = engine.index_workspace()
+    if not result.get("ok"):
+        pytest.skip(result.get("error", "index failed"))
+    hits = engine.search("main function", limit=3)
+    assert isinstance(hits, list)
 

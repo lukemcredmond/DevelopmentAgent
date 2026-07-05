@@ -5,6 +5,8 @@ interface AgentRunBarProps {
   currentTool?: string | null
   planRunActive?: boolean
   onOpenTools?: () => void
+  onRetry?: (mode: 'same' | 'optimized') => void | Promise<void>
+  retrying?: boolean
 }
 
 export default function AgentRunBar({
@@ -12,6 +14,8 @@ export default function AgentRunBar({
   currentTool,
   planRunActive = false,
   onOpenTools,
+  onRetry,
+  retrying = false,
 }: AgentRunBarProps) {
   const hasActiveRun = activeRun != null
   const toolLabel = currentTool || activeRun?.currentTool
@@ -112,7 +116,29 @@ export default function AgentRunBar({
       )}
 
       {activeRun.error && (
-        <p className="mx-4 mb-2 text-[10px] text-rose-300">{activeRun.error}</p>
+        <div className="mx-4 mb-2 flex flex-wrap items-center gap-2">
+          <p className="text-[10px] text-rose-300 flex-1 min-w-[200px]">{activeRun.error}</p>
+          {onRetry && activeRun.status === 'failed' && (
+            <>
+              <button
+                type="button"
+                disabled={retrying}
+                onClick={() => void onRetry('same')}
+                className="text-[10px] px-2 py-1 rounded border border-rose-500/40 text-rose-200 hover:bg-rose-950/40 disabled:opacity-50"
+              >
+                {retrying ? '…' : 'Retry'}
+              </button>
+              <button
+                type="button"
+                disabled={retrying}
+                onClick={() => void onRetry('optimized')}
+                className="text-[10px] px-2 py-1 rounded border border-indigo-500/40 text-indigo-200 hover:bg-indigo-950/40 disabled:opacity-50"
+              >
+                {retrying ? '…' : 'Retry (optimized)'}
+              </button>
+            </>
+          )}
+        </div>
       )}
     </div>
   )

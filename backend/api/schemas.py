@@ -94,6 +94,13 @@ class WorkflowSettingsPayload(BaseModel):
     autonomousMode: Optional[bool] = None
     maxNeedsUserPerSprint: Optional[int] = None
     enableWebSearch: Optional[bool] = None
+    enableSemanticSearch: Optional[bool] = None
+    qdrantUrl: Optional[str] = None
+    embedModel: Optional[str] = None
+
+
+class DiagnoseTaskPayload(BaseModel):
+    ollamaUrl: str = "http://localhost:11434"
 
 
 class DeleteTaskPayload(BaseModel):

@@ -3,6 +3,7 @@ from fastapi import APIRouter, HTTPException
 from backend import state
 from backend.api.schemas import SaveFilePayload, SearchFilesPayload
 from backend.workspace.files import get_file_tree, read_workspace_file, save_file_with_revision, search_files
+from backend.storage.code_index import CodeIndexEngine
 
 router = APIRouter()
 
@@ -82,3 +83,35 @@ def revision_diff(revision_id: str):
             "author": rev.get("author"),
             "created_at": rev.get("created_at"),
         }
+
+
+@router.get("/api/files/revisions")
+def list_file_revisions(path: str, limit: int = 20):
+    with state.STATE_LOCK:
+        revisions = state.storage.get_file_revisions(state.CURRENT_PROJECT_ID, path, limit=limit)
+        return {"path": path, "revisions": revisions}
+
+
+@router.get("/api/search/semantic")
+def semantic_search(q: str, limit: int = 8):
+    with state.STATE_LOCK:
+        engine = CodeIndexEngine()
+        return {"query": q, "results": engine.search(q, limit=limit)}
+
+
+@router.post("/api/search/reindex")
+def reindex_codebase():
+    with state.STATE_LOCK:
+        engine = CodeIndexEngine()
+        result = engine.index_workspace()
+        if not result.get("ok"):
+            from fastapi import HTTPException
+
+            raise HTTPException(status_code=503, detail=result.get("error", "Reindex failed"))
+        return result
+
+
+@router.get("/api/search/index-status")
+def search_index_status():
+    with state.STATE_LOCK:
+        return CodeIndexEngine().index_status()
