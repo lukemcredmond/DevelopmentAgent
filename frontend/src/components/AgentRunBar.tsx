@@ -7,18 +7,40 @@ interface AgentRunBarProps {
 }
 
 export default function AgentRunBar({ activeRun, currentTool, onOpenTools }: AgentRunBarProps) {
-  if (!activeRun) return null
-
-  const toolLabel = currentTool || activeRun.currentTool
-  const isWaitingApproval = activeRun.status === 'awaiting_approval'
+  const hasActiveRun = activeRun != null
+  const toolLabel = currentTool || activeRun?.currentTool
+  const isWaitingApproval = activeRun?.status === 'awaiting_approval'
   const isRunning =
-    activeRun.status === 'thinking' ||
-    activeRun.status === 'tool_executing' ||
-    activeRun.status === 'awaiting_approval'
-  const isDone = activeRun.status === 'completed' || activeRun.status === 'failed'
+    activeRun?.status === 'thinking' ||
+    activeRun?.status === 'tool_executing' ||
+    activeRun?.status === 'awaiting_approval'
+  const isDone =
+    activeRun?.status === 'completed' || activeRun?.status === 'failed'
 
-  if (isDone && !activeRun.error) {
+  if (hasActiveRun && isDone && !activeRun.error) {
     return null
+  }
+
+  if (!hasActiveRun) {
+    return (
+      <div className="shrink-0 border-b border-cat-surface1 bg-cat-mantle/60 text-[11px]">
+        <div className="px-4 py-1.5 flex items-center gap-3 flex-wrap">
+          <span className="text-cat-overlay">
+            Open the <strong className="text-cat-subtext font-normal">Tools</strong> tab to manually
+            run or replay tool calls.
+          </span>
+          {onOpenTools && (
+            <button
+              type="button"
+              onClick={onOpenTools}
+              className="ml-auto shrink-0 text-[10px] font-semibold px-2.5 py-1 rounded border border-indigo-500/50 text-indigo-300 hover:bg-indigo-950/40 hover:text-indigo-200 transition-colors"
+            >
+              Tools →
+            </button>
+          )}
+        </div>
+      </div>
+    )
   }
 
   const statusLabel = isWaitingApproval
@@ -60,7 +82,7 @@ export default function AgentRunBar({ activeRun, currentTool, onOpenTools }: Age
           <button
             type="button"
             onClick={onOpenTools}
-            className="text-[10px] text-indigo-400 hover:text-indigo-300"
+            className="shrink-0 text-[10px] font-semibold px-2.5 py-1 rounded border border-indigo-500/50 text-indigo-300 hover:bg-indigo-950/40 hover:text-indigo-200 transition-colors"
           >
             Tools →
           </button>

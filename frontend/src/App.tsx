@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useState } from 'react'
+import { useCallback, useEffect, useRef, useState } from 'react'
 import {
   addManualTask,
   approveTask,
@@ -44,6 +44,11 @@ import TerminalPanel from './components/TerminalPanel'
 import ToolResolutionModal from './components/ToolResolutionModal'
 import ToolApprovalModal from './components/ToolApprovalModal'
 import AgentRunBar from './components/AgentRunBar'
+import BottomPanelResize, {
+  readBottomPanelHeight,
+  writeBottomPanelHeight,
+} from './components/BottomPanelResize'
+import KanbanToggleBar, { readKanbanOpen, writeKanbanOpen } from './components/KanbanToggleBar'
 import ToolsPanel from './components/ToolsPanel'
 import { useAppState, useAutoSprint } from './hooks/useAppState'
 import { useTheme } from './hooks/useTheme'
@@ -120,6 +125,14 @@ export default function App() {
   const [selectedFile, setSelectedFile] = useState<string | null>('package.json')
   const [showDiff, setShowDiff] = useState(false)
   const [bottomTab, setBottomTab] = useState<BottomTab>('console')
+  const [kanbanOpen, setKanbanOpen] = useState(readKanbanOpen)
+  const [bottomPanelHeight, setBottomPanelHeight] = useState(readBottomPanelHeight)
+  const [panelMaximized, setPanelMaximized] = useState(false)
+  const [toolsPreferredSubTab, setToolsPreferredSubTab] = useState<
+    'log' | 'manual' | 'replay' | undefined
+  >(undefined)
+  const workspaceColumnRef = useRef<HTMLDivElement>(null)
+  const preMaximizeHeightRef = useRef(bottomPanelHeight)
   const [fileTreeKey, setFileTreeKey] = useState(0)
 
   const [selectedTask, setSelectedTask] = useState<Task | null>(null)
@@ -289,15 +302,51 @@ export default function App() {
     }
   }, [toolStartTick])
 
+  useEffect(() => {
+    writeBottomPanelHeight(bottomPanelHeight)
+  }, [bottomPanelHeight])
+
+  const handleToggleKanban = () => {
+    setKanbanOpen((open) => {
+      const next = !open
+      writeKanbanOpen(next)
+      return next
+    })
+  }
+
+  const handleBottomPanelResize = (height: number) => {
+    setPanelMaximized(false)
+    setBottomPanelHeight(height)
+  }
+
+  const openToolsTab = () => {
+    setToolsPreferredSubTab('manual')
+    setBottomTab('tools')
+  }
+
+  const togglePanelMaximize = () => {
+    const col = workspaceColumnRef.current
+    if (!col) return
+    if (panelMaximized) {
+      setBottomPanelHeight(preMaximizeHeightRef.current)
+      setPanelMaximized(false)
+    } else {
+      preMaximizeHeightRef.current = bottomPanelHeight
+      const maxH = Math.max(220, col.clientHeight * 0.65)
+      setBottomPanelHeight(maxH)
+      setPanelMaximized(true)
+    }
+  }
+
   const bottomTabs: { id: BottomTab; label: string; icon: string; badge?: number }[] = [
     { id: 'console', label: 'Console', icon: 'fa-terminal' },
-    { id: 'activity', label: 'Activity', icon: 'fa-wave-square', badge: activityEvents.length || undefined },
     {
       id: 'tools',
       label: 'Tools',
       icon: 'fa-wrench',
       badge: toolRunningCount > 0 ? toolRunningCount : toolFailureCount || undefined,
     },
+    { id: 'activity', label: 'Activity', icon: 'fa-wave-square', badge: activityEvents.length || undefined },
     { id: 'chat', label: 'Chat', icon: 'fa-comments' },
     { id: 'terminal', label: 'Terminal', icon: 'fa-square-terminal' },
     { id: 'search', label: 'Search', icon: 'fa-magnifying-glass' },
@@ -431,19 +480,29 @@ export default function App() {
           </div>
         )}
 
-        <KanbanBoard
+        <KanbanToggleBar
           board={state.board}
           projectName={state.projectName}
-          workspaceDir={state.workspaceDir}
+          open={kanbanOpen}
+          onToggle={handleToggleKanban}
           activeLanes={state.activeLanes}
           workflowSettings={state.workflowSettings}
-          sprintRunning={sprintRunning}
-          onTaskClick={(task) => setSelectedTask(findTaskOnBoard(state.board, task.id) ?? task)}
-          onMoveTask={(taskId, from, to) => void handleMoveTask(taskId, from, to)}
-          onReorderBacklog={(taskIds) =>
-            void withLoading(async () => handleState(await reorderTasks('Backlog', taskIds)))
-          }
         />
+        {kanbanOpen && (
+          <KanbanBoard
+            board={state.board}
+            projectName={state.projectName}
+            workspaceDir={state.workspaceDir}
+            activeLanes={state.activeLanes}
+            workflowSettings={state.workflowSettings}
+            sprintRunning={sprintRunning}
+            onTaskClick={(task) => setSelectedTask(findTaskOnBoard(state.board, task.id) ?? task)}
+            onMoveTask={(taskId, from, to) => void handleMoveTask(taskId, from, to)}
+            onReorderBacklog={(taskIds) =>
+              void withLoading(async () => handleState(await reorderTasks('Backlog', taskIds)))
+            }
+          />
+        )}
 
         <div className="flex-1 grid grid-cols-1 lg:grid-cols-[200px_1fr] min-h-0 overflow-hidden">
           <FileExplorer
@@ -452,7 +511,7 @@ export default function App() {
             refreshKey={fileTreeKey}
           />
 
-          <div className="flex flex-col min-h-0 overflow-hidden">
+          <div ref={workspaceColumnRef} className="flex flex-col min-h-0 overflow-hidden">
             <div className="flex-1 min-h-0 grid grid-rows-1">
               {showDiff ? (
                 <DiffPanel
@@ -471,33 +530,57 @@ export default function App() {
               )}
             </div>
 
-            <div className="h-[40%] min-h-[180px] flex flex-col border-t border-cat-surface1">
+            <BottomPanelResize
+              containerRef={workspaceColumnRef}
+              onResize={handleBottomPanelResize}
+            />
+
+            <div
+              data-bottom-panel
+              style={{ height: bottomPanelHeight }}
+              className="flex flex-col shrink-0 border-t border-cat-surface1 min-h-0"
+            >
               <AgentRunBar
                 activeRun={activeRun}
                 currentTool={currentTool}
-                onOpenTools={() => setBottomTab('tools')}
+                onOpenTools={openToolsTab}
               />
-              <div className="flex bg-cat-mantle border-b border-cat-surface1 shrink-0">
-                {bottomTabs.map((tab) => (
-                  <button
-                    key={tab.id}
-                    type="button"
-                    onClick={() => setBottomTab(tab.id)}
-                    className={`px-4 py-2 text-[11px] font-semibold uppercase tracking-wider border-r border-cat-surface1 transition-colors ${
-                      bottomTab === tab.id
-                        ? 'bg-cat-base text-indigo-400'
-                        : 'text-cat-subtext hover:text-white hover:bg-cat-surface0'
-                    }`}
-                  >
-                    <i className={`fa-solid ${tab.icon} mr-1.5`} />
-                    {tab.label}
-                    {tab.badge != null && tab.badge > 0 && (
-                      <span className="ml-1.5 text-[9px] bg-indigo-950 text-indigo-300 px-1.5 py-0.5 rounded-full">
-                        {tab.badge > 99 ? '99+' : tab.badge}
-                      </span>
-                    )}
-                  </button>
-                ))}
+              <div className="flex bg-cat-mantle border-b border-cat-surface1 shrink-0 items-stretch">
+                <div className="flex-1 min-w-0 overflow-x-auto">
+                  <div className="flex whitespace-nowrap">
+                    {bottomTabs.map((tab) => (
+                      <button
+                        key={tab.id}
+                        type="button"
+                        onClick={() => setBottomTab(tab.id)}
+                        title={tab.label}
+                        className={`px-3 md:px-4 py-2 text-[11px] font-semibold uppercase tracking-wider border-r border-cat-surface1 transition-colors shrink-0 ${
+                          bottomTab === tab.id
+                            ? 'bg-cat-base text-indigo-400'
+                            : 'text-cat-subtext hover:text-white hover:bg-cat-surface0'
+                        }`}
+                      >
+                        <i className={`fa-solid ${tab.icon} md:mr-1.5`} />
+                        <span className="hidden md:inline">{tab.label}</span>
+                        {tab.badge != null && tab.badge > 0 && (
+                          <span className="ml-1.5 text-[9px] bg-indigo-950 text-indigo-300 px-1.5 py-0.5 rounded-full">
+                            {tab.badge > 99 ? '99+' : tab.badge}
+                          </span>
+                        )}
+                      </button>
+                    ))}
+                  </div>
+                </div>
+                <button
+                  type="button"
+                  onClick={togglePanelMaximize}
+                  title={panelMaximized ? 'Restore panel size' : 'Maximize panel'}
+                  className={`shrink-0 px-3 py-2 border-l border-cat-surface1 text-cat-subtext hover:text-white hover:bg-cat-surface0 transition-colors ${
+                    panelMaximized ? 'text-indigo-400' : ''
+                  }`}
+                >
+                  <i className="fa-solid fa-up-right-and-down-left-from-center text-xs" />
+                </button>
               </div>
               <div className="flex-1 min-h-0 overflow-hidden relative">
                 {bottomTab === 'console' && <AgentConsole logs={state.logs} />}
@@ -517,6 +600,7 @@ export default function App() {
                     board={state.board}
                     selectedTaskId={selectedTask?.id}
                     onRefreshState={() => void refresh()}
+                    preferredSubTab={toolsPreferredSubTab}
                   />
                 )}
                 <ChatPanel
