@@ -100,6 +100,11 @@ function mapToolStart(payload: Record<string, unknown>): ToolExecutionEvent {
 function applyToolEnd(events: ToolExecutionEvent[], payload: Record<string, unknown>): ToolExecutionEvent[] {
   const id = buildToolEventId(payload)
   const success = payload.toolSuccess !== false
+  const runCommandStatus =
+    payload.runCommandStatus != null ? String(payload.runCommandStatus) : undefined
+  const exitCodeRaw = payload.exitCode ?? payload.exit_code
+  const exitCode =
+    exitCodeRaw != null && exitCodeRaw !== '' ? Number(exitCodeRaw) : undefined
   const nextEntry: ToolExecutionEvent = {
     id,
     runId: String(payload.runId ?? payload.run_id ?? ''),
@@ -113,6 +118,8 @@ function applyToolEnd(events: ToolExecutionEvent[], payload: Record<string, unkn
     timestamp: String(payload.timestamp ?? new Date().toISOString()),
     status: success ? 'completed' : 'failed',
     source: mapToolSource(payload.source),
+    exitCode: Number.isFinite(exitCode) ? exitCode : undefined,
+    runCommandStatus,
   }
   const idx = events.findIndex((e) => e.id === id)
   if (idx >= 0) {

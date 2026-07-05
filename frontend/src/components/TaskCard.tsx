@@ -1,6 +1,6 @@
 import { useSortable } from '@dnd-kit/sortable'
 import { CSS } from '@dnd-kit/utilities'
-import type { Task } from '../types'
+import type { BoardLane, Task } from '../types'
 import { formatTaskText } from '../utils/taskFormat'
 
 interface TaskCardProps {
@@ -9,6 +9,7 @@ interface TaskCardProps {
   decisionCount: number
   onClick: () => void
   dragDisabled?: boolean
+  lane?: BoardLane
 }
 
 export default function TaskCard({
@@ -17,6 +18,7 @@ export default function TaskCard({
   decisionCount,
   onClick,
   dragDisabled = false,
+  lane,
 }: TaskCardProps) {
   const { attributes, listeners, setNodeRef, transform, transition, isDragging } =
     useSortable({ id: task.id, disabled: dragDisabled })
@@ -31,6 +33,7 @@ export default function TaskCard({
   const relatedCount = (task.relatedTaskIds ?? []).length
   const hasCommit = Boolean(task.gitCommit?.hash)
   const isDone = task.status === 'Done'
+  const needsUser = lane === 'Needs User' || task.status === 'Needs User'
 
   return (
     <button
@@ -62,6 +65,14 @@ export default function TaskCard({
           {task.qaFailure && (
             <span className="text-[9px] bg-rose-950/50 text-rose-300 px-1 py-0.5 rounded" title="QA failed">
               <i className="fa-solid fa-xmark" />
+            </span>
+          )}
+          {needsUser && (
+            <span
+              className="text-[9px] bg-amber-950/50 text-amber-300 px-1 py-0.5 rounded"
+              title="Needs your input"
+            >
+              <i className="fa-solid fa-circle-question" />
             </span>
           )}
           {relatedCount > 0 && (
@@ -96,6 +107,11 @@ export default function TaskCard({
         </div>
       </div>
       <h4 className="font-bold text-white mb-1 leading-tight">{task.title}</h4>
+      {needsUser && (
+        <p className="text-[10px] text-amber-200/90 line-clamp-2 mb-1">
+          {task.userQuestion?.trim() || 'Action required — open for details'}
+        </p>
+      )}
       <p className="text-[11px] text-cat-subtext line-clamp-3">{formatTaskText(task.description)}</p>
     </button>
   )

@@ -574,8 +574,11 @@ def _run_developer_step(active_task: Dict[str, Any], brief: str) -> None:
         "Read each tool result before calling update_board — if write_file or apply_patch fails, "
         "try a different path or approach (do not repeat the same failing arguments). "
         "For Flutter/Dart use run_command with command 'flutter analyze'. "
+        "If analyze returns issues (non-zero exit), fix them with apply_patch/write_file — "
+        "do NOT re-run the same analyze command without fixing code first. "
+        "Analyze findings are not a reason to move to Needs User. "
         "Unclear requirements → move to 'Needs PO'. "
-        "User-only decisions (keys, design) → move to 'Needs User' and state userQuestion. "
+        "User-only decisions (keys, design) → move to 'Needs User' with a specific userQuestion. "
         f"When complete and files are written → move to '{target}'."
     )
     result = agent_dev.execute_step(prompt, max_iterations=_llm_iterations())

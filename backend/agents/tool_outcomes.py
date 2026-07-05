@@ -1,6 +1,7 @@
 """Tool invocation summaries and failure classification."""
 
-from typing import Any, Dict, Optional
+import re
+from typing import Any, Dict, Optional, Tuple
 
 FILE_TOOLS: Dict[str, str] = {
     "read_file": "read",
@@ -84,10 +85,71 @@ def summarize_tool_args(name: str, args: Dict[str, Any]) -> str:
     return ", ".join(parts)
 
 
+_RUN_COMMAND_HEADER = re.compile(
+    r"^\[(success|failed) exit (-?\d+)\]",
+    re.IGNORECASE | re.MULTILINE,
+)
+
+
+def parse_run_command_exit(output: str) -> Tuple[Optional[int], Optional[str]]:
+    """Parse exit code and body from run_agent_command output."""
+    if not output:
+        return None, None
+    match = _RUN_COMMAND_HEADER.search(output.strip())
+    if not match:
+        return None, output
+    exit_code = int(match.group(2))
+    body = output[match.end() :].strip()
+    return exit_code, body
+
+
+def is_run_command_failure(output: str) -> bool:
+    """True when run_command did not execute successfully (blocked, timeout, no output)."""
+    if not output or not output.strip():
+        return True
+    lower = output.lower()
+    if "chained or redirected commands are not allowed" in lower:
+        return True
+    if "directory changes are not allowed" in lower:
+        return True
+    if "command timed out" in lower:
+        return True
+
+    exit_code, body = parse_run_command_exit(output)
+    if exit_code is None:
+        if output.startswith("Error") or "not registered" in lower:
+            return True
+        return False
+
+    if exit_code == 0:
+        return False
+    if exit_code < 0:
+        return True
+
+    body_stripped = (body or "").strip()
+    if len(body_stripped) <= 20:
+        return True
+    if body_stripped == "(no output)":
+        return True
+    return False
+
+
+def run_command_status_label(output: str, success: bool) -> str:
+    """Human label for run_command log UI: OK, Findings, or Failed."""
+    exit_code, _ = parse_run_command_exit(output)
+    if success or exit_code == 0:
+        return "OK"
+    if exit_code is not None and exit_code > 0 and not is_run_command_failure(output):
+        return f"Findings (exit {exit_code})"
+    return "Failed"
+
+
 def is_tool_failure(name: str, output: str) -> bool:
     """True when tool output indicates the invocation did not succeed."""
     if not output:
         return True
+    if name == "run_command":
+        return is_run_command_failure(output)
     lower = output.lower()
     if output.startswith("Error") or output.startswith("❌"):
         return True
@@ -98,8 +160,6 @@ def is_tool_failure(name: str, output: str) -> bool:
     if "path escapes" in lower:
         return True
     if "validation failure" in lower:
-        return True
-    if "[failed exit" in lower:
         return True
     if lower.startswith("error:"):
         return True

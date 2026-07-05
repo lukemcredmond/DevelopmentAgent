@@ -21,12 +21,17 @@ export default function KanbanColumn({
   dragDisabled = false,
 }: KanbanColumnProps) {
   const { setNodeRef, isOver } = useDroppable({ id: lane })
+  const highlightNeedsUser = lane === 'Needs User' && tasks.length > 0
 
   return (
     <div
       ref={setNodeRef}
       className={`bg-cat-base p-2.5 rounded-xl border flex flex-col min-h-[160px] transition-colors ${
-        isOver ? 'border-indigo-500/60' : 'border-cat-surface1'
+        isOver
+          ? 'border-indigo-500/60'
+          : highlightNeedsUser
+            ? 'border-amber-500/50 bg-amber-950/10'
+            : 'border-cat-surface1'
       }`}
     >
       <div className="flex items-center justify-between pb-1.5 border-b border-cat-surface1 mb-2.5">
@@ -47,6 +52,7 @@ export default function KanbanColumn({
               decisionCount={getTaskDecisionCount(task)}
               onClick={() => onTaskClick(task)}
               dragDisabled={dragDisabled}
+              lane={lane}
             />
           ))}
         </div>

@@ -110,6 +110,8 @@ export interface ToolExecutionEvent {
   timestamp: string
   status: 'running' | 'completed' | 'failed'
   source: 'agent' | 'manual' | 'replay'
+  exitCode?: number
+  runCommandStatus?: string
 }
 
 export interface ToolDefinition {

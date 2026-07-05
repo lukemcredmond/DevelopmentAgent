@@ -34,6 +34,18 @@ interface ToolsPanelProps {
   selectedTaskId?: string | null
   onRefreshState?: () => void
   preferredSubTab?: ToolsSubTab
+  workspaceDir?: string
+}
+
+function toolEventBadge(ev: ToolExecutionEvent): { label: string; tone: 'ok' | 'findings' | 'failed' } {
+  if (ev.status === 'running') return { label: '…', tone: 'ok' }
+  if (ev.runCommandStatus?.startsWith('Findings')) {
+    return { label: ev.runCommandStatus, tone: 'findings' }
+  }
+  if (ev.status === 'failed' || ev.runCommandStatus === 'Failed') {
+    return { label: 'FAILED', tone: 'failed' }
+  }
+  return { label: ev.runCommandStatus ?? 'OK', tone: 'ok' }
 }
 
 function readToolsSubTab(): ToolsSubTab {
@@ -53,6 +65,9 @@ function defaultArgsForTool(tool: ToolDefinition | undefined): string {
   const obj: Record<string, string> = {}
   for (const key of Object.keys(props)) {
     obj[key] = required.includes(key) ? '' : ''
+  }
+  if (tool.name === 'read_file' && 'path' in obj) {
+    obj.path = 'lib/main.dart'
   }
   if (Object.keys(obj).length === 0) return '{}'
   return JSON.stringify(
@@ -91,6 +106,7 @@ export default function ToolsPanel({
   selectedTaskId,
   onRefreshState,
   preferredSubTab,
+  workspaceDir,
 }: ToolsPanelProps) {
   const [subTab, setSubTab] = useState<ToolsSubTab>(readToolsSubTab)
   const [filter, setFilter] = useState<ToolFilter>('all')
@@ -345,7 +361,9 @@ export default function ToolsPanel({
             )}
             {filtered.map((ev) => {
               const isOpen = expanded.has(ev.id)
-              const failed = ev.status === 'failed'
+              const badge = toolEventBadge(ev)
+              const failed = badge.tone === 'failed'
+              const findings = badge.tone === 'findings'
               const runningEv = ev.status === 'running'
               return (
                 <div
@@ -353,9 +371,11 @@ export default function ToolsPanel({
                   className={`rounded border p-2 ${
                     failed
                       ? 'border-rose-500/40 bg-rose-950/20'
-                      : runningEv
-                        ? 'border-indigo-500/40 bg-indigo-950/20'
-                        : 'border-cat-surface1 bg-cat-mantle/40'
+                      : findings
+                        ? 'border-amber-500/40 bg-amber-950/20'
+                        : runningEv
+                          ? 'border-indigo-500/40 bg-indigo-950/20'
+                          : 'border-cat-surface1 bg-cat-mantle/40'
                   }`}
                 >
                   <button
@@ -371,10 +391,12 @@ export default function ToolsPanel({
                         className={`text-[9px] font-bold uppercase px-1.5 py-0.5 rounded shrink-0 ${
                           failed
                             ? 'bg-rose-900/60 text-rose-200'
-                            : 'bg-emerald-900/60 text-emerald-200'
+                            : findings
+                              ? 'bg-amber-900/60 text-amber-200'
+                              : 'bg-emerald-900/60 text-emerald-200'
                         }`}
                       >
-                        {failed ? 'FAILED' : 'OK'}
+                        {badge.label}
                       </span>
                     )}
                     <span className="text-indigo-300 font-bold">{ev.toolName}</span>
@@ -419,6 +441,13 @@ export default function ToolsPanel({
 
       {subTab === 'manual' && (
         <div className="flex-1 min-h-0 overflow-y-auto p-4 text-[11px]">
+          {workspaceDir && (
+            <p className="text-[10px] text-cat-overlay mb-3 font-mono">
+              Workspace root: <span className="text-cat-subtext">{workspaceDir}</span>
+              {' — '}use paths relative to this folder (e.g.{' '}
+              <code className="text-indigo-300">lib/main.dart</code>)
+            </p>
+          )}
           {runnerError && (
             <p className="text-rose-300 mb-3 text-[10px] font-mono">{runnerError}</p>
           )}

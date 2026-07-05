@@ -23,6 +23,8 @@ from backend.agents.tool_outcomes import (
     file_path_from_tool,
     format_tool_transcript_content,
     is_tool_failure,
+    parse_run_command_exit,
+    run_command_status_label,
     sanitize_tool_args_for_log,
     summarize_tool_args,
 )
@@ -276,6 +278,11 @@ def execute_tool(
         duration_ms = int((time.time() - started) * 1000)
         output_preview = tool_output[:500]
 
+        exit_code, _ = parse_run_command_exit(tool_output) if tool_name == "run_command" else (None, None)
+        run_cmd_status = (
+            run_command_status_label(tool_output, success) if tool_name == "run_command" else None
+        )
+
         tool_entry = {
             "toolName": tool_name,
             "toolSuccess": success,
@@ -299,6 +306,11 @@ def execute_tool(
                 "durationMs": duration_ms,
                 "timestamp": ts,
                 "source": source,
+                **(
+                    {"exitCode": exit_code, "runCommandStatus": run_cmd_status}
+                    if tool_name == "run_command"
+                    else {}
+                ),
             },
         )
 

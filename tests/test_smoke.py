@@ -421,6 +421,50 @@ def test_is_tool_failure_detects_common_errors():
     assert not is_tool_failure("write_file", "Successfully saved file physically at: '/tmp/x'")
 
 
+def test_run_command_findings_not_tool_failure():
+    from backend.agents.tool_outcomes import (
+        is_run_command_failure,
+        is_tool_failure,
+        run_command_status_label,
+    )
+
+    analyze_output = (
+        "[failed exit 1]\n"
+        "Analyzing workspace...\n"
+        "  error • Undefined name 'foo' • lib/main.dart:10:5 • undefined_identifier\n"
+    )
+    assert not is_run_command_failure(analyze_output)
+    assert not is_tool_failure("run_command", analyze_output)
+    assert run_command_status_label(analyze_output, False).startswith("Findings")
+
+    blocked = "[failed exit 1]\n(no output)"
+    assert is_run_command_failure(blocked)
+    assert is_tool_failure("run_command", blocked)
+
+    assert run_command_status_label("[success exit 0]\nAll good", True) == "OK"
+
+
+def test_resolve_workspace_path_variants():
+    import os
+
+    from backend import state
+    from backend.workspace.files import resolve_workspace_path
+
+    initialize()
+    ws = os.path.realpath(state.WORKSPACE_DIR)
+    sample = os.path.join(ws, "lib", "main.dart")
+    os.makedirs(os.path.dirname(sample), exist_ok=True)
+    with open(sample, "w", encoding="utf-8") as f:
+        f.write("// test")
+
+    assert resolve_workspace_path("lib/main.dart") == "lib/main.dart"
+    assert resolve_workspace_path("./lib/main.dart") == "lib/main.dart"
+    assert resolve_workspace_path("lib\\main.dart") == "lib/main.dart"
+    assert resolve_workspace_path(sample) == "lib/main.dart"
+    basename = os.path.basename(ws.rstrip(os.sep))
+    assert resolve_workspace_path(f"{basename}/lib/main.dart") == "lib/main.dart"
+
+
 def test_write_workspace_file_invalid_path_error_prefix():
     from backend.workspace.files import write_workspace_file
 

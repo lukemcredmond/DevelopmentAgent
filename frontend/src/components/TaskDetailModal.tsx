@@ -48,6 +48,32 @@ function isTranscriptFailure(entry: TaskTranscriptEntry): boolean {
   return false
 }
 
+function deriveNeedsUserReason(task: Task): string {
+  if (task.userQuestion?.trim()) return task.userQuestion.trim()
+  const decisions = task.decisions ?? []
+  for (let i = decisions.length - 1; i >= 0; i--) {
+    const d = decisions[i]
+    if (['stuck_loop', 'po_limit', 'dev_escalation'].includes(d.type)) {
+      return d.detail?.trim() ? `${d.summary}\n${d.detail}` : d.summary
+    }
+    if (/no progress|clarify|needs user/i.test(d.summary)) {
+      return d.summary
+    }
+  }
+  const transcript = task.transcript ?? []
+  for (let i = transcript.length - 1; i >= 0; i--) {
+    const entry = transcript[i]
+    const content = entry.content ?? ''
+    if (
+      (entry.role === 'system' || entry.agent === 'System') &&
+      /no progress|clarify|needs user|stuck loop|could not agree/i.test(content)
+    ) {
+      return content
+    }
+  }
+  return 'Action required — the agent could not proceed without your input.'
+}
+
 function buildCommitUrl(remoteUrl: string, hash: string): string | null {
   let url = remoteUrl.trim()
   if (url.startsWith('git@')) {
@@ -342,11 +368,10 @@ export default function TaskDetailModal({
 
           {taskLane === 'Needs User' && onResolveUser && (
             <div className="bg-amber-950/20 border border-amber-500/30 rounded-lg p-3 space-y-2">
-              {safeTask.userQuestion && (
-                <p className="text-[11px] text-amber-200 max-h-24 overflow-y-auto whitespace-pre-wrap">
-                  {safeTask.userQuestion}
-                </p>
-              )}
+              <h4 className="text-xs font-bold text-amber-300">Why this needs you</h4>
+              <p className="text-[11px] text-amber-200 max-h-24 overflow-y-auto whitespace-pre-wrap">
+                {deriveNeedsUserReason(safeTask)}
+              </p>
               <textarea
                 value={userAnswer}
                 onChange={(e) => setUserAnswer(e.target.value)}

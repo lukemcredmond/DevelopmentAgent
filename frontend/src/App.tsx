@@ -601,6 +601,7 @@ export default function App() {
                     selectedTaskId={selectedTask?.id}
                     onRefreshState={() => void refresh()}
                     preferredSubTab={toolsPreferredSubTab}
+                    workspaceDir={state.workspaceDir}
                   />
                 )}
                 <ChatPanel

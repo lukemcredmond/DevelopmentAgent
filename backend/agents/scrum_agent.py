@@ -20,6 +20,7 @@ from backend.agents.task_context import (
 )
 from backend.agents.tools import ToolRegistry
 from backend.services.logs import add_system_log
+from backend.agents.tool_outcomes import parse_run_command_exit
 from backend.services.tool_execution_service import execute_tool
 from backend.services.workflow_settings import get_workflow_settings
 from backend.storage.memory_engine import SemanticMemoryEngine
@@ -205,6 +206,19 @@ class ScrumAgent:
                         ),
                     }
                 )
+            elif tool_name == "run_command":
+                exit_code, _ = parse_run_command_exit(tool_output)
+                if exit_code is not None and exit_code > 0:
+                    messages.append(
+                        {
+                            "role": "system",
+                            "content": (
+                                "Command completed with findings (non-zero exit). "
+                                "Fix listed issues with apply_patch/write_file, then re-run "
+                                "analyze once. Do not repeat the same command without making changes."
+                            ),
+                        }
+                    )
         return None
 
     def execute_step(self, user_prompt: str, max_iterations: int = 8) -> str:

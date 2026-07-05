@@ -9,13 +9,57 @@ from backend.services.project_service import save_current_project_state
 
 def resolve_workspace_path(path: str) -> str:
     """Returns a safe relative path within the workspace root."""
-    normalized = os.path.normpath(path).replace("\\", "/")
-    if normalized.startswith("..") or os.path.isabs(normalized):
-        raise ValueError(f"Path escapes workspace: {path}")
+    if not path or not str(path).strip():
+        raise ValueError(
+            f"Path is empty. Use relative paths like lib/main.dart (workspace: {state.WORKSPACE_DIR})"
+        )
+
+    raw = str(path).strip().strip('"').strip("'")
+    normalized = os.path.normpath(raw).replace("\\", "/")
+    while normalized.startswith("./"):
+        normalized = normalized[2:]
+
     workspace_root = os.path.realpath(state.WORKSPACE_DIR)
+
+    if os.path.isabs(raw) or (len(raw) > 1 and raw[1] == ":"):
+        try:
+            abs_path = os.path.realpath(raw)
+            if abs_path == workspace_root or abs_path.startswith(workspace_root + os.sep):
+                normalized = os.path.relpath(abs_path, workspace_root).replace("\\", "/")
+            else:
+                raise ValueError(
+                    f"Path escapes workspace: {path}. "
+                    f"Use relative paths like lib/main.dart (workspace: {state.WORKSPACE_DIR})"
+                )
+        except ValueError:
+            raise
+        except OSError:
+            raise ValueError(
+                f"Path escapes workspace: {path}. "
+                f"Use relative paths like lib/main.dart (workspace: {state.WORKSPACE_DIR})"
+            ) from None
+
+    workspace_basename = os.path.basename(workspace_root.rstrip(os.sep)).replace("\\", "/")
+    if workspace_basename and (
+        normalized.startswith(workspace_basename + "/")
+        or normalized == workspace_basename
+    ):
+        stripped = normalized[len(workspace_basename) :].lstrip("/")
+        if stripped:
+            normalized = stripped
+
+    if normalized.startswith("..") or os.path.isabs(normalized):
+        raise ValueError(
+            f"Path escapes workspace: {path}. "
+            f"Use relative paths like lib/main.dart (workspace: {state.WORKSPACE_DIR})"
+        )
+
     full_path = os.path.realpath(os.path.join(workspace_root, normalized))
     if full_path != workspace_root and not full_path.startswith(workspace_root + os.sep):
-        raise ValueError(f"Path escapes workspace: {path}")
+        raise ValueError(
+            f"Path escapes workspace: {path}. "
+            f"Use relative paths like lib/main.dart (workspace: {state.WORKSPACE_DIR})"
+        )
     return normalized
 
 
