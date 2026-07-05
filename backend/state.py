@@ -19,5 +19,6 @@ ACTIVE_SPRINT_TASK_ID: Optional[str] = None
 ACTIVE_SPRINT_AGENT: Optional[str] = None
 SPRINT_CANCEL = False
 EVENT_SUBSCRIBERS: List[Any] = []
+PENDING_TOOL_REQUESTS: List[Dict[str, Any]] = []
 
 storage = ProjectStorage()

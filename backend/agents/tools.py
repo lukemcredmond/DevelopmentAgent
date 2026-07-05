@@ -1,6 +1,8 @@
 import json
 from typing import Any, Callable, Dict, List
 
+from backend import state
+
 
 class Tool:
     """Encapsulates a standard execute function with model definitions."""
@@ -55,8 +57,24 @@ class ToolRegistry:
         ]
 
     def invoke(self, name: str, arguments: Dict[str, Any]) -> str:
+        from backend.services.tool_aliases import queue_pending_tool, resolve_tool_call
+
+        original_name = name
+        resolved_name, resolved_args, was_alias = resolve_tool_call(name, arguments)
+        name = resolved_name
+        arguments = resolved_args
+
         if name not in self._tools:
-            return f"Error: Tool '{name}' is not registered."
+            queue_pending_tool(
+                original_name,
+                arguments,
+                task_id=state.ACTIVE_SPRINT_TASK_ID,
+                agent_role=state.ACTIVE_SPRINT_AGENT,
+            )
+            return (
+                f"Error: Tool '{original_name}' is not registered. "
+                "Map it in the Tool Resolution dialog."
+            )
         try:
             result = self._tools[name].execute(**arguments)
             return json.dumps(result, indent=2) if isinstance(result, (dict, list)) else str(result)

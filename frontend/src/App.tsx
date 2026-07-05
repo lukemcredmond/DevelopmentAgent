@@ -40,9 +40,10 @@ import Sidebar from './components/Sidebar'
 import SkillModal from './components/SkillModal'
 import TaskDetailModal from './components/TaskDetailModal'
 import TerminalPanel from './components/TerminalPanel'
+import ToolResolutionModal from './components/ToolResolutionModal'
 import { useAppState, useAutoSprint } from './hooks/useAppState'
 import { useTheme } from './hooks/useTheme'
-import type { AgentId, AppState, BoardLane, ChatMessageRecord, Task, WorkflowSettings } from './types'
+import type { AgentId, AppState, BoardLane, ChatMessageRecord, PendingToolRequest, Task, WorkflowSettings } from './types'
 import { getDisplayLanes } from './types'
 
 type BottomTab = 'console' | 'activity' | 'chat' | 'terminal' | 'search' | 'git'
@@ -81,7 +82,8 @@ function applyStateFields(
 
 export default function App() {
   const { theme, toggleTheme, isDark } = useTheme()
-  const { state, loading, setLoading, applyState, activityEvents } = useAppState()
+  const { state, loading, setLoading, applyState, activityEvents, pendingTools, refreshPendingTools } =
+    useAppState()
 
   const [ollamaUrl, setOllamaUrl] = useState('http://localhost:11434')
   const [brief, setBrief] = useState('')
@@ -122,6 +124,7 @@ export default function App() {
   const [showSprintSummary, setShowSprintSummary] = useState(false)
   const [ollamaOk, setOllamaOk] = useState<boolean | null>(null)
   const [actionError, setActionError] = useState<string | null>(null)
+  const [pendingToolModal, setPendingToolModal] = useState<PendingToolRequest | null>(null)
 
   const findTaskLane = (taskId: string): BoardLane | null => {
     const lanes = getDisplayLanes(state.activeLanes, state.workflowSettings)
@@ -219,6 +222,12 @@ export default function App() {
     }
   }
 
+  useEffect(() => {
+    if (pendingTools.length > 0 && !pendingToolModal) {
+      setPendingToolModal(pendingTools[0] ?? null)
+    }
+  }, [pendingTools, pendingToolModal])
+
   const handleMoveTask = async (taskId: string, fromLane: BoardLane, toLane: BoardLane) => {
     if (sprintRunning) {
       setActionError('Wait for the current sprint step to finish before moving cards.')
@@ -239,9 +248,9 @@ export default function App() {
     }
   }
 
-  const bottomTabs: { id: BottomTab; label: string; icon: string }[] = [
+  const bottomTabs: { id: BottomTab; label: string; icon: string; badge?: number }[] = [
     { id: 'console', label: 'Console', icon: 'fa-terminal' },
-    { id: 'activity', label: 'Activity', icon: 'fa-wave-square' },
+    { id: 'activity', label: 'Activity', icon: 'fa-wave-square', badge: activityEvents.length || undefined },
     { id: 'chat', label: 'Chat', icon: 'fa-comments' },
     { id: 'terminal', label: 'Terminal', icon: 'fa-square-terminal' },
     { id: 'search', label: 'Search', icon: 'fa-magnifying-glass' },
@@ -360,6 +369,21 @@ export default function App() {
           </div>
         )}
 
+        {pendingTools.length > 0 && (
+          <div className="mx-4 mt-2 shrink-0 flex items-center justify-between gap-2 text-[11px] text-amber-200 bg-amber-950/40 border border-amber-500/40 rounded-lg px-3 py-2">
+            <span>
+              {pendingTools.length} unknown tool call(s) — map them to run_command or other actions.
+            </span>
+            <button
+              type="button"
+              onClick={() => setPendingToolModal(pendingTools[0] ?? null)}
+              className="text-amber-300 hover:text-white shrink-0 text-xs underline"
+            >
+              Resolve
+            </button>
+          </div>
+        )}
+
         <KanbanBoard
           board={state.board}
           projectName={state.projectName}
@@ -415,6 +439,11 @@ export default function App() {
                   >
                     <i className={`fa-solid ${tab.icon} mr-1.5`} />
                     {tab.label}
+                    {tab.badge != null && tab.badge > 0 && (
+                      <span className="ml-1.5 text-[9px] bg-indigo-950 text-indigo-300 px-1.5 py-0.5 rounded-full">
+                        {tab.badge > 99 ? '99+' : tab.badge}
+                      </span>
+                    )}
                   </button>
                 ))}
               </div>
@@ -449,9 +478,10 @@ export default function App() {
                   contextFiles={chatContextFiles}
                   onContextFilesChange={setChatContextFiles}
                 />
-                {bottomTab === 'terminal' && (
-                  <TerminalPanel workspaceDir={state.workspaceDir} />
-                )}
+                <TerminalPanel
+                  hidden={bottomTab !== 'terminal'}
+                  workspaceDir={state.workspaceDir}
+                />
                 {bottomTab === 'search' && (
                   <SearchPanel onOpenFile={setSelectedFile} />
                 )}
@@ -626,6 +656,12 @@ export default function App() {
           </div>
         </div>
       )}
+
+      <ToolResolutionModal
+        pending={pendingToolModal}
+        onClose={() => setPendingToolModal(null)}
+        onResolved={() => void refreshPendingTools()}
+      />
     </div>
   )
 }

@@ -238,3 +238,71 @@ def test_move_task_while_sprint_unlocked():
     )
     assert response.status_code == 200
     assert "T-MOVE" in [t["id"] for t in state.SHARED_BOARD.get("In Progress", [])]
+
+
+def test_normalize_acceptance_criteria_objects():
+    from backend.agents.task_context import init_new_task, normalize_acceptance_criteria
+
+    items = normalize_acceptance_criteria(
+        [{"description": "User can log in", "status": "pending"}, "Plain string"]
+    )
+    assert items == ["User can log in", "Plain string"]
+    task = init_new_task(
+        {
+            "id": "T-AC",
+            "title": "Test",
+            "description": {"description": "Nested desc"},
+            "acceptanceCriteria": [{"description": "AC one", "status": "open"}],
+        }
+    )
+    assert task["description"] == "Nested desc"
+    assert task["acceptanceCriteria"] == ["AC one"]
+
+
+def test_parse_git_status():
+    from backend.services.git_service import parse_git_status
+
+    stdout = "## main\n M lib/main.dart\n?? pubspec.yaml\n"
+    parsed = parse_git_status(stdout)
+    assert parsed["branch"] == "main"
+    assert parsed["clean"] is False
+    assert len(parsed["entries"]) == 2
+    assert parsed["entries"][0]["path"] == "lib/main.dart"
+
+
+def test_terminal_api_response_shape():
+    initialize()
+    client = TestClient(app)
+
+    def fake_run(command):
+        return {"success": True, "stdout": "hello", "stderr": "", "returncode": 0}
+
+    import backend.api.terminal as terminal_mod
+
+    terminal_mod.run_command = fake_run
+    response = client.post("/api/terminal/run", json={"command": "echo hi"})
+    assert response.status_code == 200
+    data = response.json()
+    assert "output" in data
+    assert "exitCode" in data
+    assert data["exitCode"] == 0
+
+
+def test_tool_alias_resolution():
+    from backend import state
+    from backend.services.tool_aliases import resolve_tool_call, save_alias
+
+    initialize()
+    save_alias("flutter_analyze", "run_command", {"command": "flutter analyze"})
+    name, args, resolved = resolve_tool_call("flutter_analyze", {})
+    assert resolved is True
+    assert name == "run_command"
+    assert args["command"] == "flutter analyze"
+
+
+def test_tools_api_routes_registered():
+    initialize()
+    client = TestClient(app)
+    paths = client.get("/openapi.json").json().get("paths", {})
+    assert "/api/tools/pending" in paths
+    assert "/api/tools/aliases" in paths

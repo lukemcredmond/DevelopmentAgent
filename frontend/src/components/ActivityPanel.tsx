@@ -19,7 +19,11 @@ export default function ActivityPanel({ events, onTaskClick }: ActivityPanelProp
       )
     }
     if (filter === 'transcript') {
-      return events.filter((e) => e.kind === 'transcript' || e.kind === 'decision_detail')
+      return events.filter((e) =>
+        ['transcript', 'decision_detail', 'tool', 'pending_tool', 'tool_alias_saved'].includes(
+          e.kind,
+        ),
+      )
     }
     return events
   }, [events, filter])

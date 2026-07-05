@@ -13,10 +13,12 @@ from backend.agents.task_context import (
     build_task_prompt,
     clear_active_sprint_context,
     clear_qa_failure,
+    coerce_task_text,
     find_task_by_id,
     increment_po_round_trips,
     init_new_task,
     next_claimable_backlog_task,
+    normalize_acceptance_criteria,
     normalize_task,
     publish_activity,
     record_task_decision,
@@ -175,8 +177,11 @@ def _enrich_task_from_po(raw: Dict[str, Any]) -> Dict[str, Any]:
     task = dict(raw)
     if "acceptanceCriteria" not in task and "acceptance_criteria" in task:
         task["acceptanceCriteria"] = task.pop("acceptance_criteria")
-    if not isinstance(task.get("acceptanceCriteria"), list):
-        task["acceptanceCriteria"] = []
+    task["acceptanceCriteria"] = normalize_acceptance_criteria(task.get("acceptanceCriteria"))
+    if "description" in task:
+        task["description"] = coerce_task_text(task["description"])
+    if "title" in task:
+        task["title"] = coerce_task_text(task["title"])
     if "blockedBy" not in task and "blocked_by" in task:
         task["blockedBy"] = task.pop("blocked_by")
     if not isinstance(task.get("blockedBy"), list):
@@ -394,8 +399,9 @@ def _run_developer_step(active_task: Dict[str, Any], brief: str) -> None:
     target = _dev_complete_lane()
     prompt = (
         build_task_prompt(active_task, brief)
-        + "\nImplement using write_file and read_file. "
-        "For Flutter/Dart projects use run_command with 'flutter analyze' to check for issues. "
+        + "\nRegistered tools: read_file, write_file, run_command, update_board, git_status, git_diff, git_commit. "
+        "Implement using write_file and read_file. "
+        "For Flutter/Dart use run_command with command 'flutter analyze'. "
         "Unclear requirements → move to 'Needs PO'. "
         "User-only decisions (keys, design) → move to 'Needs User' and state userQuestion. "
         f"When complete → move to '{target}'."
@@ -466,6 +472,7 @@ def _run_qa_step(active_task: Dict[str, Any], brief: str) -> None:
         build_task_prompt(active_task, brief)
         + f"\nValidate acceptance criteria:\n{ac_block}\n"
         + f"{build_dod_block()}"
+        "Registered tools: read_file, run_test, run_command, update_board. "
         "Use read_file, run_test, and run_command (e.g. 'flutter analyze' for Dart/Flutter). "
         "Pass → 'Done'. Fail → 'In Progress' with failure details."
     )

@@ -1,5 +1,6 @@
 import { useEffect, useState, type ReactNode } from 'react'
 import type { BoardLane, Task, TaskFile } from '../types'
+import { formatAcceptanceCriteria, formatTaskText } from '../utils/taskFormat'
 
 function getTaskFilePath(f: TaskFile | string): string {
   return typeof f === 'string' ? f : f.path
@@ -76,9 +77,9 @@ export default function TaskDetailModal({
 
   useEffect(() => {
     if (task) {
-      setTitle(task.title)
-      setDescription(task.description)
-      setAcceptanceCriteria((task.acceptanceCriteria ?? []).join('\n'))
+      setTitle(formatTaskText(task.title))
+      setDescription(formatTaskText(task.description))
+      setAcceptanceCriteria(formatAcceptanceCriteria(task.acceptanceCriteria).join('\n'))
       setEditing(false)
       setUserAnswer('')
       setShowAllTranscript(false)
@@ -93,7 +94,7 @@ export default function TaskDetailModal({
   const transcriptCount = allTranscript.length
   const transcriptCollapsedDefault = transcriptCount > 20
   const visibleTranscript = showAllTranscript ? allTranscript : allTranscript.slice(0, 50)
-  const acList = task.acceptanceCriteria ?? []
+  const acList = formatAcceptanceCriteria(task.acceptanceCriteria)
   const blockedBy = task.blockedBy ?? []
 
   return (
@@ -152,7 +153,7 @@ export default function TaskDetailModal({
               />
             ) : (
               <p className="text-xs text-cat-subtext max-h-32 overflow-y-auto whitespace-pre-wrap">
-                {task.description}
+                {formatTaskText(task.description)}
               </p>
             )}
           </CollapsibleSection>

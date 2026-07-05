@@ -35,6 +35,30 @@ def git_status() -> Dict[str, Any]:
     return _run_git(["status", "--short", "--branch"])
 
 
+def parse_git_status(stdout: str) -> Dict[str, Any]:
+    """Parse `git status --short --branch` into structured entries."""
+    entries: list[Dict[str, str]] = []
+    branch = "main"
+    for line in stdout.splitlines():
+        if line.startswith("##"):
+            part = line[2:].strip().split("...")[0]
+            branch = part or branch
+            continue
+        if not line.strip():
+            continue
+        if len(line) >= 4:
+            status = line[:2]
+            path = line[3:].strip()
+            if " -> " in path:
+                path = path.split(" -> ", 1)[1]
+            entries.append({"status": status, "path": path})
+    return {
+        "branch": branch,
+        "entries": entries,
+        "clean": len(entries) == 0,
+    }
+
+
 def git_diff(path: Optional[str] = None) -> Dict[str, Any]:
     args = ["diff"]
     if path:

@@ -258,8 +258,29 @@ export interface TerminalRunPayload {
 }
 
 export interface TerminalRunResponse {
-  output: string
-  exitCode: number
+  output?: string
+  exitCode?: number
+  success?: boolean
+  stdout?: string
+  stderr?: string
+  returncode?: number
+}
+
+export interface PendingToolRequest {
+  id: string
+  projectId: string
+  taskId?: string
+  agentRole?: string
+  alias: string
+  arguments: Record<string, unknown>
+  status: string
+  timestamp: string
+}
+
+export interface ResolvePendingToolPayload {
+  targetTool: string
+  defaultArgs?: Record<string, string>
+  saveMapping?: boolean
 }
 
 export interface SprintRunPayload {
@@ -276,8 +297,10 @@ export interface GitStatusEntry {
 
 export interface GitStatusResponse {
   branch?: string
-  entries: GitStatusEntry[]
+  entries?: GitStatusEntry[]
   clean?: boolean
+  success?: boolean
+  stderr?: string
 }
 
 export type AppEventType =
@@ -288,6 +311,7 @@ export type AppEventType =
   | 'task'
   | 'sprint'
   | 'activity'
+  | 'pending_tool'
   | 'connected'
 
 export interface AppEvent {

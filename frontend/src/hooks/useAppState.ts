@@ -1,7 +1,9 @@
 import { useCallback, useEffect, useRef, useState } from 'react'
-import { cancelSprint, fetchState, runSprint, subscribeEvents } from '../api/client'
+import { cancelSprint, fetchPendingTools, fetchState, runSprint, subscribeEvents } from '../api/client'
 import type { ActivityEvent, AppState, Board, SystemLog } from '../types'
 import { EMPTY_BOARD, hasSprintWork } from '../types'
+import { hydrateActivityFromBoard, mergeActivityEvents } from '../utils/activityFromBoard'
+import type { PendingToolRequest } from '../types'
 
 const defaultState: AppState = {
   projectId: '',
@@ -23,8 +25,6 @@ const defaultState: AppState = {
   projectsList: [],
 }
 
-const MAX_ACTIVITY = 200
-
 function patchBoardFromEvent(data: unknown, prev: AppState): AppState | null {
   if (!data || typeof data !== 'object') return null
   const payload = data as { board?: Board }
@@ -37,28 +37,59 @@ export function useAppState() {
   const [loading, setLoading] = useState(false)
   const [error, setError] = useState<string | null>(null)
   const [activityEvents, setActivityEvents] = useState<ActivityEvent[]>([])
+  const [pendingTools, setPendingTools] = useState<PendingToolRequest[]>([])
+  const liveActivityRef = useRef<ActivityEvent[]>([])
+  const boardRef = useRef<Board>(defaultState.board)
+
+  useEffect(() => {
+    boardRef.current = state.board
+  }, [state.board])
+
+  const syncActivityFromBoard = useCallback((board: Board) => {
+    const hydrated = hydrateActivityFromBoard(board)
+    setActivityEvents(mergeActivityEvents(hydrated, liveActivityRef.current))
+  }, [])
+
+  const refreshPendingTools = useCallback(async () => {
+    try {
+      const data = await fetchPendingTools()
+      setPendingTools(data.pending ?? [])
+    } catch {
+      setPendingTools([])
+    }
+  }, [])
 
   const refresh = useCallback(async () => {
     try {
       const data = await fetchState()
       setState(data)
+      syncActivityFromBoard(data.board)
       setError(null)
+      void refreshPendingTools()
     } catch (e) {
       setError(e instanceof Error ? e.message : 'Failed to fetch state')
     }
-  }, [])
+  }, [syncActivityFromBoard, refreshPendingTools])
 
-  const applyState = useCallback((data: AppState) => {
-    setState(data)
-    setError(null)
-  }, [])
+  const applyState = useCallback(
+    (data: AppState) => {
+      setState(data)
+      syncActivityFromBoard(data.board)
+      setError(null)
+      void refreshPendingTools()
+    },
+    [syncActivityFromBoard, refreshPendingTools],
+  )
 
   const appendLog = useCallback((log: SystemLog) => {
     setState((prev) => ({ ...prev, logs: [...prev.logs, log] }))
   }, [])
 
   const appendActivity = useCallback((event: ActivityEvent) => {
-    setActivityEvents((prev) => [...prev.slice(-(MAX_ACTIVITY - 1)), event])
+    liveActivityRef.current = [...liveActivityRef.current, event].slice(-200)
+    setActivityEvents(
+      mergeActivityEvents(hydrateActivityFromBoard(boardRef.current), liveActivityRef.current),
+    )
   }, [])
 
   useEffect(() => {
@@ -66,24 +97,36 @@ export function useAppState() {
   }, [refresh])
 
   useEffect(() => {
+    syncActivityFromBoard(state.board)
+  }, [state.board, syncActivityFromBoard])
+
+  useEffect(() => {
     const source = subscribeEvents((event) => {
       if (event.type === 'state' && event.data) {
-        setState(event.data as AppState)
+        const data = event.data as AppState
+        setState(data)
+        syncActivityFromBoard(data.board)
       } else if (event.type === 'log' && event.data) {
         appendLog(event.data as SystemLog)
       } else if (event.type === 'board') {
-        setState((prev) => patchBoardFromEvent(event.data, prev) ?? prev)
+        setState((prev) => {
+          const next = patchBoardFromEvent(event.data, prev) ?? prev
+          syncActivityFromBoard(next.board)
+          return next
+        })
       } else if (event.type === 'files') {
         void refresh()
       } else if (event.type === 'sprint') {
         void refresh()
       } else if (event.type === 'activity' && event.data) {
         appendActivity(event.data as ActivityEvent)
+      } else if (event.type === 'pending_tool' && event.data) {
+        void refreshPendingTools()
       }
     })
 
     return () => source.close()
-  }, [refresh, appendLog, appendActivity])
+  }, [refresh, appendLog, appendActivity, syncActivityFromBoard, refreshPendingTools])
 
   return {
     state,
@@ -97,6 +140,8 @@ export function useAppState() {
     appendLog,
     activityEvents,
     appendActivity,
+    pendingTools,
+    refreshPendingTools,
   }
 }
 

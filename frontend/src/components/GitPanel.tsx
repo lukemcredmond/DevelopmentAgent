@@ -66,6 +66,9 @@ export default function GitPanel() {
                 <span className="font-mono text-indigo-300">{status.branch}</span>
               </div>
             )}
+            {!status.success && status.stderr && (
+              <p className="text-xs text-rose-400 mb-2">{status.stderr}</p>
+            )}
             {status.clean && (
               <p className="text-xs text-emerald-400">
                 <i className="fa-solid fa-check mr-1" />
@@ -73,7 +76,7 @@ export default function GitPanel() {
               </p>
             )}
             <div className="space-y-1 font-mono text-[11px]">
-              {status.entries.map((entry) => (
+              {(status.entries ?? []).map((entry) => (
                 <div key={entry.path} className="flex gap-2">
                   <span className={`shrink-0 w-4 ${statusColor(entry.status)}`}>
                     {entry.status.slice(0, 2)}
@@ -82,7 +85,7 @@ export default function GitPanel() {
                 </div>
               ))}
             </div>
-            {status.entries.length === 0 && !status.clean && (
+            {(status.entries ?? []).length === 0 && !status.clean && (
               <p className="text-xs text-cat-overlay italic">No changes detected.</p>
             )}
           </>

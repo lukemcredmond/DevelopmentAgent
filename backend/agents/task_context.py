@@ -1,4 +1,5 @@
 import datetime
+import json
 from typing import Any, Dict, List, Optional
 
 from backend.config import MAX_TASK_DECISIONS, MAX_TASK_TRANSCRIPT
@@ -51,10 +52,45 @@ def task_dependencies_met(task: Dict[str, Any]) -> bool:
     return all(is_task_done(dep_id) for dep_id in blocked_by)
 
 
+def coerce_task_text(value: Any) -> str:
+    """Coerce PO/LLM field values to plain strings for storage and UI."""
+    if value is None:
+        return ""
+    if isinstance(value, str):
+        return value
+    if isinstance(value, (int, float, bool)):
+        return str(value)
+    if isinstance(value, dict):
+        for key in ("description", "text", "criteria", "title", "summary"):
+            if key in value and value[key]:
+                return coerce_task_text(value[key])
+        return json.dumps(value, ensure_ascii=False)
+    if isinstance(value, list):
+        return ", ".join(coerce_task_text(v) for v in value if v is not None)
+    return str(value)
+
+
+def normalize_acceptance_criteria(items: Any) -> List[str]:
+    if not isinstance(items, list):
+        return []
+    result: List[str] = []
+    for item in items:
+        text = coerce_task_text(item).strip()
+        if text:
+            result.append(text)
+    return result
+
+
 def normalize_task(task: Dict[str, Any]) -> Dict[str, Any]:
     """Ensures task has context fields for file associations, decisions, and transcript."""
     if task.get("id") is not None:
         task["id"] = str(task["id"])
+    if "title" in task:
+        task["title"] = coerce_task_text(task["title"])
+    if "description" in task:
+        task["description"] = coerce_task_text(task["description"])
+    if task.get("userQuestion") is not None:
+        task["userQuestion"] = coerce_task_text(task["userQuestion"])
     if "files" not in task or not isinstance(task["files"], list):
         task["files"] = []
     if "decisions" not in task or not isinstance(task["decisions"], list):
@@ -63,6 +99,8 @@ def normalize_task(task: Dict[str, Any]) -> Dict[str, Any]:
         task["transcript"] = []
     if "acceptanceCriteria" not in task or not isinstance(task["acceptanceCriteria"], list):
         task["acceptanceCriteria"] = []
+    else:
+        task["acceptanceCriteria"] = normalize_acceptance_criteria(task["acceptanceCriteria"])
     if "blockedBy" not in task or not isinstance(task["blockedBy"], list):
         task["blockedBy"] = []
     if "priority" not in task or not isinstance(task["priority"], (int, float)):

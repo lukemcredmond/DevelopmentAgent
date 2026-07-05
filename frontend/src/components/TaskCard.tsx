@@ -1,6 +1,7 @@
 import { useSortable } from '@dnd-kit/sortable'
 import { CSS } from '@dnd-kit/utilities'
 import type { Task } from '../types'
+import { formatTaskText } from '../utils/taskFormat'
 
 interface TaskCardProps {
   task: Task
@@ -75,7 +76,7 @@ export default function TaskCard({
         </div>
       </div>
       <h4 className="font-bold text-white mb-1 leading-tight">{task.title}</h4>
-      <p className="text-[11px] text-cat-subtext line-clamp-3">{task.description}</p>
+      <p className="text-[11px] text-cat-subtext line-clamp-3">{formatTaskText(task.description)}</p>
     </button>
   )
 }

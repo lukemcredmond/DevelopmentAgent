@@ -90,6 +90,31 @@ class ProjectStorage:
                 )
                 """
             )
+            conn.execute(
+                """
+                CREATE TABLE IF NOT EXISTS tool_aliases (
+                    project_id TEXT NOT NULL,
+                    alias TEXT NOT NULL,
+                    target_tool TEXT NOT NULL,
+                    default_args TEXT,
+                    PRIMARY KEY (project_id, alias)
+                )
+                """
+            )
+            conn.execute(
+                """
+                CREATE TABLE IF NOT EXISTS pending_tool_requests (
+                    id TEXT PRIMARY KEY,
+                    project_id TEXT NOT NULL,
+                    task_id TEXT,
+                    agent_role TEXT,
+                    alias TEXT NOT NULL,
+                    arguments TEXT,
+                    status TEXT DEFAULT 'pending',
+                    created_at DATETIME DEFAULT CURRENT_TIMESTAMP
+                )
+                """
+            )
             conn.commit()
 
     def save_project(
@@ -194,6 +219,8 @@ class ProjectStorage:
             cursor.execute("DELETE FROM chat_messages WHERE project_id = ?", (proj_id,))
             cursor.execute("DELETE FROM file_revisions WHERE project_id = ?", (proj_id,))
             cursor.execute("DELETE FROM brief_changelog WHERE project_id = ?", (proj_id,))
+            cursor.execute("DELETE FROM tool_aliases WHERE project_id = ?", (proj_id,))
+            cursor.execute("DELETE FROM pending_tool_requests WHERE project_id = ?", (proj_id,))
             cursor.execute("DELETE FROM projects WHERE id = ?", (proj_id,))
             conn.commit()
             return cursor.rowcount > 0
@@ -374,3 +401,126 @@ class ProjectStorage:
             )
             row = cursor.fetchone()
             return dict(row) if row else None
+
+    def get_tool_aliases(self, project_id: str) -> Dict[str, Dict[str, Any]]:
+        with sqlite3.connect(self.db_path) as conn:
+            conn.row_factory = sqlite3.Row
+            cursor = conn.cursor()
+            cursor.execute(
+                "SELECT alias, target_tool, default_args FROM tool_aliases WHERE project_id = ?",
+                (project_id,),
+            )
+            result: Dict[str, Dict[str, Any]] = {}
+            for row in cursor.fetchall():
+                args = json.loads(row["default_args"]) if row["default_args"] else {}
+                result[row["alias"]] = {"tool": row["target_tool"], "args": args}
+            return result
+
+    def save_tool_alias(
+        self,
+        project_id: str,
+        alias: str,
+        target_tool: str,
+        default_args: Dict[str, Any],
+    ) -> None:
+        with sqlite3.connect(self.db_path) as conn:
+            conn.execute(
+                """
+                INSERT INTO tool_aliases (project_id, alias, target_tool, default_args)
+                VALUES (?, ?, ?, ?)
+                ON CONFLICT(project_id, alias) DO UPDATE SET
+                    target_tool=excluded.target_tool,
+                    default_args=excluded.default_args
+                """,
+                (project_id, alias, target_tool, json.dumps(default_args)),
+            )
+            conn.commit()
+
+    def delete_tool_alias(self, project_id: str, alias: str) -> None:
+        with sqlite3.connect(self.db_path) as conn:
+            conn.execute(
+                "DELETE FROM tool_aliases WHERE project_id = ? AND alias = ?",
+                (project_id, alias),
+            )
+            conn.commit()
+
+    def save_pending_tool_request(self, request: Dict[str, Any]) -> None:
+        with sqlite3.connect(self.db_path) as conn:
+            conn.execute(
+                """
+                INSERT INTO pending_tool_requests
+                (id, project_id, task_id, agent_role, alias, arguments, status)
+                VALUES (?, ?, ?, ?, ?, ?, ?)
+                ON CONFLICT(id) DO UPDATE SET status=excluded.status
+                """,
+                (
+                    request["id"],
+                    request["projectId"],
+                    request.get("taskId"),
+                    request.get("agentRole"),
+                    request["alias"],
+                    json.dumps(request.get("arguments") or {}),
+                    request.get("status", "pending"),
+                ),
+            )
+            conn.commit()
+
+    def list_pending_tool_requests(
+        self,
+        project_id: str,
+        status: str = "pending",
+    ) -> List[Dict[str, Any]]:
+        with sqlite3.connect(self.db_path) as conn:
+            conn.row_factory = sqlite3.Row
+            cursor = conn.cursor()
+            cursor.execute(
+                "SELECT id, project_id, task_id, agent_role, alias, arguments, status, created_at "
+                "FROM pending_tool_requests WHERE project_id = ? AND status = ? ORDER BY created_at DESC",
+                (project_id, status),
+            )
+            rows = []
+            for row in cursor.fetchall():
+                rows.append(
+                    {
+                        "id": row["id"],
+                        "projectId": row["project_id"],
+                        "taskId": row["task_id"],
+                        "agentRole": row["agent_role"],
+                        "alias": row["alias"],
+                        "arguments": json.loads(row["arguments"]) if row["arguments"] else {},
+                        "status": row["status"],
+                        "timestamp": row["created_at"],
+                    }
+                )
+            return rows
+
+    def get_pending_tool_request(self, request_id: str) -> Optional[Dict[str, Any]]:
+        with sqlite3.connect(self.db_path) as conn:
+            conn.row_factory = sqlite3.Row
+            cursor = conn.cursor()
+            cursor.execute(
+                "SELECT id, project_id, task_id, agent_role, alias, arguments, status, created_at "
+                "FROM pending_tool_requests WHERE id = ?",
+                (request_id,),
+            )
+            row = cursor.fetchone()
+            if not row:
+                return None
+            return {
+                "id": row["id"],
+                "projectId": row["project_id"],
+                "taskId": row["task_id"],
+                "agentRole": row["agent_role"],
+                "alias": row["alias"],
+                "arguments": json.loads(row["arguments"]) if row["arguments"] else {},
+                "status": row["status"],
+                "timestamp": row["created_at"],
+            }
+
+    def update_pending_tool_status(self, request_id: str, status: str) -> None:
+        with sqlite3.connect(self.db_path) as conn:
+            conn.execute(
+                "UPDATE pending_tool_requests SET status = ? WHERE id = ?",
+                (status, request_id),
+            )
+            conn.commit()

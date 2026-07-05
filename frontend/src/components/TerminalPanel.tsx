@@ -6,14 +6,43 @@ import '@xterm/xterm/css/xterm.css'
 
 interface TerminalPanelProps {
   workspaceDir: string
+  hidden?: boolean
 }
 
-export default function TerminalPanel({ workspaceDir }: TerminalPanelProps) {
+function terminalOutput(result: {
+  output?: string
+  exitCode?: number
+  stdout?: string
+  stderr?: string
+  returncode?: number
+}): { text: string; exitCode: number } {
+  const text =
+    result.output ??
+    [result.stdout, result.stderr].filter(Boolean).join('\n').trim() ??
+    '(no output)'
+  const exitCode = result.exitCode ?? result.returncode ?? -1
+  return { text, exitCode }
+}
+
+export default function TerminalPanel({ workspaceDir, hidden = false }: TerminalPanelProps) {
   const containerRef = useRef<HTMLDivElement>(null)
   const terminalRef = useRef<Terminal | null>(null)
   const fitRef = useRef<FitAddon | null>(null)
   const [command, setCommand] = useState('')
   const [history, setHistory] = useState<string[]>([])
+
+  const safeFit = () => {
+    const container = containerRef.current
+    const fit = fitRef.current
+    if (!container || !fit || container.offsetWidth === 0 || container.offsetHeight === 0) {
+      return
+    }
+    try {
+      fit.fit()
+    } catch {
+      /* xterm not ready */
+    }
+  }
 
   useEffect(() => {
     if (!containerRef.current) return
@@ -33,7 +62,6 @@ export default function TerminalPanel({ workspaceDir }: TerminalPanelProps) {
     const fit = new FitAddon()
     term.loadAddon(fit)
     term.open(containerRef.current)
-    fit.fit()
 
     term.writeln('\x1b[1;34mAll Hands Terminal\x1b[0m — type a command below')
     term.writeln(`cwd: ${workspaceDir}`)
@@ -42,14 +70,26 @@ export default function TerminalPanel({ workspaceDir }: TerminalPanelProps) {
     terminalRef.current = term
     fitRef.current = fit
 
-    const onResize = () => fit.fit()
-    window.addEventListener('resize', onResize)
+    const raf = requestAnimationFrame(() => safeFit())
+    const observer = new ResizeObserver(() => safeFit())
+    observer.observe(containerRef.current)
+    window.addEventListener('resize', safeFit)
 
     return () => {
-      window.removeEventListener('resize', onResize)
+      cancelAnimationFrame(raf)
+      observer.disconnect()
+      window.removeEventListener('resize', safeFit)
       term.dispose()
+      terminalRef.current = null
+      fitRef.current = null
     }
   }, [workspaceDir])
+
+  useEffect(() => {
+    if (!hidden) {
+      requestAnimationFrame(() => safeFit())
+    }
+  }, [hidden])
 
   const execute = async () => {
     const cmd = command.trim()
@@ -62,10 +102,11 @@ export default function TerminalPanel({ workspaceDir }: TerminalPanelProps) {
 
     try {
       const result = await runTerminal({ command: cmd, cwd: workspaceDir })
-      if (result.output) {
-        term.writeln(result.output.replace(/\n/g, '\r\n'))
+      const { text, exitCode } = terminalOutput(result)
+      if (text) {
+        term.writeln(text.replace(/\n/g, '\r\n'))
       }
-      term.writeln(`\x1b[90m[exit ${result.exitCode}]\x1b[0m`)
+      term.writeln(`\x1b[90m[exit ${exitCode}]\x1b[0m`)
     } catch {
       term.writeln('\x1b[31mError: /api/terminal/run unavailable\x1b[0m')
     }
@@ -73,7 +114,9 @@ export default function TerminalPanel({ workspaceDir }: TerminalPanelProps) {
   }
 
   return (
-    <div className="flex flex-col h-full bg-cat-base overflow-hidden">
+    <div
+      className={`flex flex-col h-full bg-cat-base overflow-hidden ${hidden ? 'hidden' : ''}`}
+    >
       <div className="px-4 py-2 border-b border-cat-surface1 shrink-0">
         <h3 className="text-xs font-bold uppercase tracking-wider text-cat-subtext">
           Terminal

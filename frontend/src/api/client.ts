@@ -368,6 +368,20 @@ export async function cancelSprint(): Promise<{ ok: boolean }> {
   return request<{ ok: boolean }>('/api/sprint/cancel', { method: 'POST' })
 }
 
+export async function fetchPendingTools(): Promise<{ pending: import('../types').PendingToolRequest[] }> {
+  return request<{ pending: import('../types').PendingToolRequest[] }>('/api/tools/pending')
+}
+
+export async function resolvePendingTool(
+  requestId: string,
+  payload: import('../types').ResolvePendingToolPayload,
+): Promise<{ ok: boolean }> {
+  return request<{ ok: boolean }>(`/api/tools/pending/${encodeURIComponent(requestId)}/resolve`, {
+    method: 'POST',
+    body: JSON.stringify(payload),
+  })
+}
+
 export async function fetchGitStatus(): Promise<GitStatusResponse> {
   return request<GitStatusResponse>('/api/git/status')
 }
@@ -409,6 +423,10 @@ export function subscribeEvents(
 
   source.addEventListener('activity', (e) => {
     onEvent({ type: 'activity', data: JSON.parse(e.data) })
+  })
+
+  source.addEventListener('pending_tool', (e) => {
+    onEvent({ type: 'pending_tool', data: JSON.parse(e.data) })
   })
 
   source.onerror = (err) => {

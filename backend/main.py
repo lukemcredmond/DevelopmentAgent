@@ -5,7 +5,7 @@ from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import FileResponse
 from fastapi.staticfiles import StaticFiles
 
-from backend.api import board, chat, files, git, ollama, projects, skills, sprint, state as state_routes, terminal
+from backend.api import board, chat, files, git, ollama, projects, skills, sprint, state as state_routes, terminal, tools
 from backend.config import CORS_ORIGINS, FRONTEND_DIST
 
 app = FastAPI(title="All Hands Local Scrum Engine", version="1.0.0")
@@ -28,6 +28,7 @@ app.include_router(files.router)
 app.include_router(ollama.router)
 app.include_router(terminal.router)
 app.include_router(git.router)
+app.include_router(tools.router)
 
 if FRONTEND_DIST.is_dir():
     assets_dir = FRONTEND_DIST / "assets"

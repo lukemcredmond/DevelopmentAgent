@@ -11,4 +11,15 @@ router = APIRouter()
 def terminal_run(payload: TerminalPayload):
     with state.STATE_LOCK:
         result = run_command(payload.command)
-        return result
+        stdout = result.get("stdout") or ""
+        stderr = result.get("stderr") or ""
+        output = "\n".join(part for part in (stdout, stderr) if part).strip()
+        returncode = result.get("returncode", -1)
+        return {
+            "output": output or "(no output)",
+            "exitCode": returncode,
+            "success": result.get("success", False),
+            "stdout": stdout,
+            "stderr": stderr,
+            "returncode": returncode,
+        }
