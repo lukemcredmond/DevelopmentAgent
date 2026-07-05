@@ -352,19 +352,15 @@ def _inject_sprint_context(
     agent_role: str,
     instructions: str,
 ) -> str:
-    """Build sprint prompt with pre-loaded file contents and log context_inject event."""
+    """Build sprint prompt with pre-loaded file contents (no Tools log row per step)."""
     task_id = active_task["id"]
     context_block, paths = build_sprint_file_context(active_task)
     if paths:
-        log_synthetic_tool_event(
-            task_id,
+        add_system_log(
             agent_role,
-            "context_inject",
-            tool_args={"paths": paths, "fileCount": len(paths)},
-            tool_output=f"Pre-loaded {len(paths)} file(s): {', '.join(paths[:12])}"
-            + ("…" if len(paths) > 12 else ""),
-            success=True,
-            source="context_inject",
+            "info",
+            f"Pre-loaded {len(paths)} file(s) for {task_id}: {', '.join(paths[:8])}"
+            + ("…" if len(paths) > 8 else ""),
         )
     base = build_task_prompt(active_task, brief)
     parts = [base]
@@ -840,6 +836,74 @@ def run_po_add_feature(title: str, description: str, ollama_url: str) -> None:
             _append_tasks([{"title": title, "description": description}])
 
     save_current_project_state()
+
+
+def run_po_split_task(task_id: str, ollama_url: str, guidance: str = "") -> Dict[str, Any]:
+    """Split a card into subtasks via PO tool call or JSON fallback."""
+    task = find_task_by_id(task_id)
+    if not task:
+        raise ValueError(f"Task not found: {task_id}")
+
+    normalize_task(task)
+    agent_po.ollama_url = ollama_url
+    set_active_sprint_context(task_id, "Product Owner")
+    add_system_log("Product Owner", "info", f"Splitting task '{task.get('title', task_id)}'…")
+
+    try:
+        backlog_before_ids = {t["id"] for t in state.SHARED_BOARD.get("Backlog", [])}
+        prompt = build_task_prompt(task, state.PROJECT_BRIEF)
+        extra = f"\nAdditional guidance: {guidance.strip()}" if guidance.strip() else ""
+        po_output = agent_po.execute_step(
+            f"{PO_SMALLEST_TASKS_GUIDANCE}\n\n{prompt}\n\n"
+            "Split this card into 2–5 smaller developer-ready backlog tasks."
+            f"{extra}\n"
+            f"You MUST call add_backlog_tasks with split_from_task_id={task_id!r}.\n"
+            "Invoke the tool yourself — never tell the user to call add_backlog_tasks.\n"
+            "If you cannot use tools, reply with ONLY a JSON array (title, description, acceptanceCriteria).",
+            max_iterations=_llm_iterations(),
+        )
+
+        added = 0
+        new_task_ids: List[str] = []
+        if _po_chat_used_add_backlog_tool(task_id):
+            backlog_after = state.SHARED_BOARD.get("Backlog", [])
+            new_task_ids = [t["id"] for t in backlog_after if t["id"] not in backlog_before_ids]
+            added = len(new_task_ids)
+        elif po_output and po_output != "SIMULATION_FALLBACK":
+            added = apply_backlog_from_po_response(po_output, task_id)
+            backlog_after = state.SHARED_BOARD.get("Backlog", [])
+            new_task_ids = [t["id"] for t in backlog_after if t["id"] not in backlog_before_ids]
+        else:
+            added = apply_backlog_from_po_response(
+                json.dumps(
+                    [
+                        {
+                            "title": f"{task.get('title', 'Subtask')} (part 1)",
+                            "description": task.get("description", "")[:500],
+                            "acceptanceCriteria": ["Deliver first slice of the feature"],
+                        },
+                        {
+                            "title": f"{task.get('title', 'Subtask')} (part 2)",
+                            "description": task.get("description", "")[:500],
+                            "acceptanceCriteria": ["Deliver remaining scope"],
+                        },
+                    ]
+                ),
+                task_id,
+            )
+            backlog_after = state.SHARED_BOARD.get("Backlog", [])
+            new_task_ids = [t["id"] for t in backlog_after if t["id"] not in backlog_before_ids]
+
+        save_current_project_state()
+        publish_board_update(task_id, source="split")
+        add_system_log(
+            "Product Owner",
+            "success" if added else "warning",
+            f"Split {task_id}: added {added} subtask(s)" if added else f"Split {task_id}: no subtasks added",
+        )
+        return {"added": added, "taskId": task_id, "taskIds": new_task_ids}
+    finally:
+        clear_active_sprint_context()
 
 
 def _apply_po_clarification_result(active_task: Dict[str, Any], result: str) -> bool:

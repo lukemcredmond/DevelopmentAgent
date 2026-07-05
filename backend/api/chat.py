@@ -15,6 +15,20 @@ from backend.workspace.files import build_file_context_block
 router = APIRouter()
 
 
+def _split_intent(message: str) -> bool:
+    lower = message.lower()
+    keywords = (
+        "split",
+        "break down",
+        "subtask",
+        "sub-task",
+        "decompose",
+        "smaller task",
+        "smaller card",
+    )
+    return any(k in lower for k in keywords)
+
+
 def _compose_message(payload: ChatPayload) -> str:
     parts: list[str] = []
     if payload.task_id:
@@ -25,8 +39,8 @@ def _compose_message(payload: ChatPayload) -> str:
                 parts.append(PO_SMALLEST_TASKS_GUIDANCE)
                 parts.append(
                     "When the user asks to break down or split this card, call add_backlog_tasks "
-                    "with split_from_task_id set to this task's ID. Each subtask needs clear "
-                    "acceptance criteria. Do not only print JSON — call add_backlog_tasks. "
+                    "with split_from_task_id set to this task's ID yourself — never instruct the user "
+                    "to call add_backlog_tasks. Each subtask needs clear acceptance criteria. "
                     "If you must reply with JSON, it must be a bare array."
                 )
     context_block = build_file_context_block(payload.context_files)
@@ -66,6 +80,7 @@ def chat_with_agent(payload: ChatPayload):
         composed = _compose_message(payload)
         _apply_chat_task_context(payload)
 
+    split_hint = None
     try:
         response = agent.execute_step(composed)
     finally:
@@ -73,7 +88,11 @@ def chat_with_agent(payload: ChatPayload):
             if payload.agent == "po" and payload.task_id:
                 from backend.services.sprint_service import apply_backlog_from_po_response
 
-                apply_backlog_from_po_response(response, payload.task_id)
+                added = apply_backlog_from_po_response(response, payload.task_id)
+                if _split_intent(payload.message) and added == 0:
+                    split_hint = (
+                        "Split didn't apply automatically — use Split into subtasks on the card detail."
+                    )
             _finalize_chat_task_context(payload)
             state.storage.save_chat_message(
                 state.CURRENT_PROJECT_ID, "assistant", response, agent=agent.role
@@ -84,11 +103,14 @@ def chat_with_agent(payload: ChatPayload):
 
                 publish_board_update(payload.task_id, source="chat")
 
-    return {
+    result = {
         "agent": payload.agent,
         "response": response,
         "messages": state.storage.get_chat_messages(state.CURRENT_PROJECT_ID),
     }
+    if split_hint:
+        result["splitHint"] = split_hint
+    return result
 
 
 @router.post("/api/chat/stream")

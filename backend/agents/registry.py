@@ -24,6 +24,7 @@ agent_po = ScrumAgent(
         "Use update_board to move tasks from 'Needs PO' back to 'In Progress' when clarification is done. "
         "Use add_backlog_tasks to add new stories to the Backlog; when splitting a large or stuck card, "
         "pass split_from_task_id so the original moves to Done with a split note. "
+        "Invoke add_backlog_tasks yourself — never instruct the user to call it. "
         f"{PO_SMALLEST_TASKS_GUIDANCE}"
     ),
 )

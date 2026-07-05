@@ -22,6 +22,7 @@ import {
   resolveToolApproval,
   resolveUserQuestion,
   injectToolEvidence,
+  splitTask,
   triggerPlan,
   triggerStep,
   updateConfig,
@@ -113,7 +114,6 @@ export default function App() {
     mergeToolEvent,
     toolFailureCount,
     toolRunningCount,
-    toolStartTick,
     sprintProgress,
     setSprintProgress,
     refreshToolHistory,
@@ -169,6 +169,7 @@ export default function App() {
   const [showSprintSummary, setShowSprintSummary] = useState(false)
   const [ollamaOk, setOllamaOk] = useState<boolean | null>(null)
   const [actionError, setActionError] = useState<string | null>(null)
+  const [actionNotice, setActionNotice] = useState<string | null>(null)
   const [pendingToolModal, setPendingToolModal] = useState<PendingToolRequest | null>(null)
   const [approvalModal, setApprovalModal] = useState<PendingToolApproval | null>(null)
 
@@ -209,6 +210,33 @@ export default function App() {
         .flat()
         .find((t) => t.id === taskId)
       if (updated) setSelectedTask(updated)
+    })
+  }
+
+  const handleSplitTask = async (taskId: string) => {
+    await withLoading(async () => {
+      setActionError(null)
+      try {
+        const data = await splitTask(taskId, { ollamaUrl })
+        handleState(data)
+        const added = data.splitResult?.added ?? 0
+        setSelectedTask(null)
+        if (added > 0) {
+          setActionNotice(
+            `Added ${added} subtask${added === 1 ? '' : 's'}; original card moved to Done.`,
+          )
+        } else {
+          setActionError('Split completed but no subtasks were added — try again or refine the card.')
+        }
+      } catch (err) {
+        const message =
+          err instanceof ApiError
+            ? err.detail
+            : err instanceof Error
+              ? err.message
+              : 'Failed to split task.'
+        setActionError(message)
+      }
     })
   }
 
@@ -344,13 +372,6 @@ export default function App() {
       setActionError(message)
     }
   }
-
-  useEffect(() => {
-    if (toolStartTick > 0) {
-      setToolsPreferredSubTab('log')
-      setBottomTab('tools')
-    }
-  }, [toolStartTick])
 
   useEffect(() => {
     writeBottomPanelHeight(bottomPanelHeight)
@@ -532,6 +553,20 @@ export default function App() {
               type="button"
               onClick={() => setActionError(null)}
               className="text-rose-300 hover:text-white shrink-0"
+              aria-label="Dismiss"
+            >
+              <i className="fa-solid fa-xmark" />
+            </button>
+          </div>
+        )}
+
+        {actionNotice && (
+          <div className="mx-4 mt-2 shrink-0 flex items-center justify-between gap-2 text-[11px] text-emerald-200 bg-emerald-950/40 border border-emerald-500/40 rounded-lg px-3 py-2">
+            <span>{actionNotice}</span>
+            <button
+              type="button"
+              onClick={() => setActionNotice(null)}
+              className="text-emerald-300 hover:text-white shrink-0"
               aria-label="Dismiss"
             >
               <i className="fa-solid fa-xmark" />
@@ -785,6 +820,7 @@ export default function App() {
           if (related) setSelectedTask(related)
         }}
         onDiscussWithAgent={(task, lane) => handleDiscussWithAgent(task, lane)}
+        onSplit={(taskId) => handleSplitTask(taskId)}
         onInjectToolEvidence={(taskId, payload) => handleInjectToolEvidence(taskId, payload)}
         getTaskTitle={(taskId) => findTaskOnBoard(state.board, taskId)?.title}
       />

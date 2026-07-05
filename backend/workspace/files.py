@@ -375,29 +375,33 @@ def _collect_sprint_context_paths(task: Dict[str, Any]) -> List[str]:
         if os.path.isfile(os.path.join(ws, marker)):
             paths.add(marker)
 
-    tests_dir = os.path.join(ws, "tests")
-    if os.path.isdir(tests_dir):
-        count = 0
-        for root, _dirs, files_in_dir in os.walk(tests_dir):
-            for fn in sorted(files_in_dir):
-                if count >= 8:
-                    break
-                rel = os.path.relpath(os.path.join(root, fn), ws).replace("\\", "/")
-                if not any(ex in rel for ex in ("__pycache__", ".pyc")):
-                    paths.add(rel)
-                    count += 1
-
-    lib_dir = os.path.join(ws, "lib")
-    if os.path.isdir(lib_dir):
-        count = 0
-        for root, _dirs, files_in_dir in os.walk(lib_dir):
-            for fn in sorted(files_in_dir):
-                if count >= 10:
-                    break
-                if fn.endswith((".dart", ".py", ".ts", ".tsx", ".js")):
+    task_file_count = sum(
+        1 for f in (task.get("files") or []) if f
+    )
+    if task_file_count == 0:
+        tests_dir = os.path.join(ws, "tests")
+        if os.path.isdir(tests_dir):
+            count = 0
+            for root, _dirs, files_in_dir in os.walk(tests_dir):
+                for fn in sorted(files_in_dir):
+                    if count >= 2:
+                        break
                     rel = os.path.relpath(os.path.join(root, fn), ws).replace("\\", "/")
-                    paths.add(rel)
-                    count += 1
+                    if not any(ex in rel for ex in ("__pycache__", ".pyc")):
+                        paths.add(rel)
+                        count += 1
+
+        lib_dir = os.path.join(ws, "lib")
+        if os.path.isdir(lib_dir):
+            count = 0
+            for root, _dirs, files_in_dir in os.walk(lib_dir):
+                for fn in sorted(files_in_dir):
+                    if count >= 3:
+                        break
+                    if fn.endswith((".dart", ".py", ".ts", ".tsx", ".js")):
+                        rel = os.path.relpath(os.path.join(root, fn), ws).replace("\\", "/")
+                        paths.add(rel)
+                        count += 1
 
     return sorted(paths)
 

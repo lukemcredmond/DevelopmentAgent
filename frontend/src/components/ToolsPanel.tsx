@@ -14,8 +14,18 @@ import type {
   TranscriptToolEntry,
 } from '../types'
 
-type ToolFilter = 'all' | 'failed' | 'agent' | 'manual' | 'replay' | 'orchestrator' | 'context_inject'
+type ToolFilter = 'all' | 'work' | 'failed' | 'agent' | 'manual' | 'replay' | 'orchestrator' | 'context_inject'
 type ToolsSubTab = 'log' | 'manual' | 'replay'
+
+const WORK_SOURCES = new Set(['agent', 'orchestrator', 'manual', 'user'])
+
+interface ManualRunResult {
+  toolName: string
+  success: boolean
+  output: string
+  durationMs?: number
+  timestamp: string
+}
 
 const TOOLS_SUBTAB_KEY = 'allhands-tools-subtab'
 const SCROLL_THRESHOLD_PX = 48
@@ -156,7 +166,7 @@ export default function ToolsPanel({
   onInjectToolEvidence,
 }: ToolsPanelProps) {
   const [subTab, setSubTab] = useState<ToolsSubTab>(readToolsSubTab)
-  const [filter, setFilter] = useState<ToolFilter>('all')
+  const [filter, setFilter] = useState<ToolFilter>('work')
   const [expanded, setExpanded] = useState<Set<string>>(new Set())
   const scrollRef = useRef<HTMLDivElement>(null)
   const stickToBottomRef = useRef(true)
@@ -168,6 +178,7 @@ export default function ToolsPanel({
   const [taskIdInput, setTaskIdInput] = useState(selectedTaskId ?? '')
   const [running, setRunning] = useState(false)
   const [runnerError, setRunnerError] = useState<string | null>(null)
+  const [lastManualResult, setLastManualResult] = useState<ManualRunResult | null>(null)
 
   const [replayTaskId, setReplayTaskId] = useState(selectedTaskId ?? '')
   const [transcriptEntries, setTranscriptEntries] = useState<TranscriptToolEntry[]>([])
@@ -254,6 +265,7 @@ export default function ToolsPanel({
       })
     }
     if (filter === 'agent') return toolEvents.filter((e) => e.source === 'agent')
+    if (filter === 'work') return toolEvents.filter((e) => WORK_SOURCES.has(e.source ?? ''))
     if (filter === 'manual') return toolEvents.filter((e) => e.source === 'manual')
     if (filter === 'replay') return toolEvents.filter((e) => e.source === 'replay')
     if (filter === 'orchestrator') return toolEvents.filter((e) => e.source === 'orchestrator')
@@ -322,6 +334,13 @@ export default function ToolsPanel({
         timestamp: result.timestamp,
         source: result.source ?? 'manual',
       })
+      setLastManualResult({
+        toolName: result.toolName,
+        success: result.toolSuccess !== false,
+        output: result.toolOutput ?? '',
+        durationMs: result.durationMs,
+        timestamp: result.timestamp ?? new Date().toISOString(),
+      })
       onRefreshState?.()
     } catch (e) {
       setRunnerError(e instanceof Error ? e.message : 'Tool execution failed')
@@ -384,6 +403,7 @@ export default function ToolsPanel({
             <div className="flex gap-1 flex-wrap justify-end items-center">
               {(
                 [
+                  'work',
                   'all',
                   'failed',
                   'agent',
@@ -403,7 +423,13 @@ export default function ToolsPanel({
                       : 'text-cat-overlay hover:text-cat-subtext'
                   }`}
                 >
-                  {f === 'orchestrator' ? 'Auto QA' : f === 'context_inject' ? 'Context' : f}
+                  {f === 'orchestrator'
+                    ? 'Auto QA'
+                    : f === 'context_inject'
+                      ? 'Context'
+                      : f === 'work'
+                        ? 'Work'
+                        : f}
                   {f === 'failed' && failureCount > 0 ? ` (${failureCount})` : ''}
                 </button>
               ))}
@@ -425,24 +451,49 @@ export default function ToolsPanel({
           >
             {filtered.length === 0 && (
               <p className="text-cat-overlay text-center py-8">
-                No tool executions yet. Agent tools appear here during sprints; history loads from
-                task transcripts. Use the{' '}
-                <button
-                  type="button"
-                  onClick={() => setSubTab('manual')}
-                  className="text-indigo-400 hover:text-indigo-300 underline"
-                >
-                  Manual Test
-                </button>{' '}
-                or{' '}
-                <button
-                  type="button"
-                  onClick={() => setSubTab('replay')}
-                  className="text-indigo-400 hover:text-indigo-300 underline"
-                >
-                  Replay
-                </button>{' '}
-                tabs to test tools without a sprint.
+                {filter === 'work' || filter === 'agent' ? (
+                  <>
+                    No agent tool calls yet this session — Context preload events are hidden by default.
+                    Use the{' '}
+                    <button
+                      type="button"
+                      onClick={() => setFilter('context_inject')}
+                      className="text-indigo-400 hover:text-indigo-300 underline"
+                    >
+                      Context
+                    </button>{' '}
+                    filter to see file pre-load activity, or run tools from{' '}
+                    <button
+                      type="button"
+                      onClick={() => setSubTab('manual')}
+                      className="text-indigo-400 hover:text-indigo-300 underline"
+                    >
+                      Manual Test
+                    </button>
+                    .
+                  </>
+                ) : (
+                  <>
+                    No tool executions yet. Agent tools appear here during sprints; history loads from
+                    task transcripts. Use the{' '}
+                    <button
+                      type="button"
+                      onClick={() => setSubTab('manual')}
+                      className="text-indigo-400 hover:text-indigo-300 underline"
+                    >
+                      Manual Test
+                    </button>{' '}
+                    or{' '}
+                    <button
+                      type="button"
+                      onClick={() => setSubTab('replay')}
+                      className="text-indigo-400 hover:text-indigo-300 underline"
+                    >
+                      Replay
+                    </button>{' '}
+                    tabs to test tools without a sprint.
+                  </>
+                )}
               </p>
             )}
             {filtered.map((ev) => {
@@ -630,6 +681,39 @@ export default function ToolsPanel({
                 {running ? 'Running…' : 'Run tool'}
               </button>
             </div>
+            {lastManualResult && (
+              <div className="md:col-span-2 border border-cat-surface1 rounded-lg overflow-hidden">
+                <div className="flex items-center justify-between gap-2 px-3 py-2 bg-cat-base/50 border-b border-cat-surface1">
+                  <div className="flex items-center gap-2 flex-wrap">
+                    <span className="text-[10px] uppercase text-cat-overlay">Result</span>
+                    <span
+                      className={`text-[9px] font-bold uppercase px-1.5 py-0.5 rounded ${
+                        lastManualResult.success
+                          ? 'bg-emerald-900/60 text-emerald-200'
+                          : 'bg-rose-900/60 text-rose-200'
+                      }`}
+                    >
+                      {lastManualResult.success ? 'OK' : 'Failed'}
+                    </span>
+                    <span className="text-indigo-300 font-bold text-[11px]">{lastManualResult.toolName}</span>
+                    {lastManualResult.durationMs != null && lastManualResult.durationMs > 0 && (
+                      <span className="text-cat-overlay text-[10px]">{lastManualResult.durationMs}ms</span>
+                    )}
+                    <span className="text-cat-overlay text-[10px]">{lastManualResult.timestamp}</span>
+                  </div>
+                  <button
+                    type="button"
+                    onClick={() => void navigator.clipboard.writeText(lastManualResult.output)}
+                    className="text-[10px] text-indigo-400 hover:text-indigo-300 shrink-0"
+                  >
+                    Copy output
+                  </button>
+                </div>
+                <pre className="p-3 text-[10px] text-cat-subtext whitespace-pre-wrap max-h-64 overflow-y-auto font-mono">
+                  {lastManualResult.output || '(empty output)'}
+                </pre>
+              </div>
+            )}
           </div>
         </div>
       )}

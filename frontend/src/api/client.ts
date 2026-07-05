@@ -358,6 +358,22 @@ export async function resolveUserQuestion(
   )
 }
 
+export async function splitTask(
+  taskId: string,
+  payload: { ollamaUrl?: string; guidance?: string } = {},
+): Promise<AppState & { splitResult?: { added: number; taskId: string; taskIds: string[] } }> {
+  return request<AppState & { splitResult?: { added: number; taskId: string; taskIds: string[] } }>(
+    `/api/tasks/${encodeURIComponent(taskId)}/split`,
+    {
+      method: 'POST',
+      body: JSON.stringify({
+        ollama_url: payload.ollamaUrl ?? 'http://localhost:11434',
+        guidance: payload.guidance ?? '',
+      }),
+    },
+  )
+}
+
 export async function injectToolEvidence(
   taskId: string,
   payload: {

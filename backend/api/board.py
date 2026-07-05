@@ -10,13 +10,14 @@ from backend.api.schemas import (
     MoveTaskPayload,
     ReorderTasksPayload,
     ResolveUserPayload,
+    SplitTaskPayload,
     UpdateTaskPayload,
 )
 from backend.services.board_lanes import normalize_board_lanes
 from backend.services.board_service import clear_all_board_tasks, move_board_stage, publish_board_update
 from backend.services.logs import add_system_log
 from backend.services.project_service import save_current_project_state
-from backend.services.sprint_service import inject_tool_evidence_for_task, run_po_add_feature
+from backend.services.sprint_service import inject_tool_evidence_for_task, run_po_add_feature, run_po_split_task
 
 router = APIRouter()
 
@@ -135,6 +136,28 @@ def inject_tool_evidence(task_id: str, payload: InjectToolEvidencePayload):
         except ValueError as exc:
             raise HTTPException(status_code=404, detail=str(exc)) from exc
     return {**build_state_response(), "injectResult": result}
+
+
+@router.post("/api/tasks/{task_id}/split")
+def split_task(task_id: str, payload: SplitTaskPayload):
+    from backend.agents.agent_run import get_active_run
+
+    with state.STATE_LOCK:
+        if get_active_run() is not None:
+            raise HTTPException(
+                status_code=409,
+                detail="Cannot split a task while an agent sprint step is running.",
+            )
+        task = find_task_by_id(task_id)
+        if not task:
+            raise HTTPException(status_code=404, detail="Task not found")
+        if any(t.get("id") == task_id for t in state.SHARED_BOARD.get("Done", [])):
+            raise HTTPException(status_code=400, detail="Cannot split a Done task")
+        try:
+            split_result = run_po_split_task(task_id, payload.ollama_url, payload.guidance)
+        except ValueError as exc:
+            raise HTTPException(status_code=404, detail=str(exc)) from exc
+    return {**build_state_response(), "splitResult": split_result}
 
 
 @router.post("/api/tasks/reorder")

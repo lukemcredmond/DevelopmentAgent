@@ -42,6 +42,7 @@ def test_openapi_routes_registered():
     assert "/api/sprint/plan-and-run" in paths
     assert "/api/workflow/settings" in paths
     assert "/api/tasks/reorder" in paths
+    assert "/api/tasks/{task_id}/split" in paths
 
 
 def test_workflow_settings_defaults():
@@ -1218,6 +1219,7 @@ def test_chat_compose_includes_task_context():
     assert "Which API should we use?" in composed
     assert "Please split this card" in composed
     assert "add_backlog_tasks" in composed
+    assert "never instruct" in composed
     assert "bare array" in composed
 
 
@@ -1258,6 +1260,96 @@ def test_chat_po_applies_json_backlog_split(monkeypatch):
     assert resp.status_code == 200
     assert len(state.SHARED_BOARD.get("Backlog", [])) == 2
     assert any(t["id"] == "T-PO-CHAT" for t in state.SHARED_BOARD.get("Done", []))
+
+
+def test_split_task_api_adds_subtasks(monkeypatch):
+    from backend import state
+    from backend.agents.agent_run import finish_run
+    from backend.agents.registry import agent_po
+    from backend.agents.task_context import init_new_task
+
+    initialize()
+    finish_run()
+    source = init_new_task({"id": "T-SPLIT-API", "title": "Big card", "description": "Too big"})
+    state.SHARED_BOARD = {
+        "Needs User": [source],
+        "Backlog": [],
+        "Done": [],
+        "In Progress": [],
+        "Needs PO": [],
+        "Code Review": [],
+        "QA": [],
+    }
+
+    json_response = """[
+        {"title": "Sub A", "description": "Part A", "acceptanceCriteria": ["A ok"]},
+        {"title": "Sub B", "description": "Part B", "acceptanceCriteria": ["B ok"]}
+    ]"""
+
+    monkeypatch.setattr(agent_po, "execute_step", lambda prompt, max_iterations=8: json_response)
+
+    client = TestClient(app)
+    resp = client.post(
+        "/api/tasks/T-SPLIT-API/split",
+        json={"ollama_url": "http://localhost:11434"},
+    )
+    assert resp.status_code == 200
+    data = resp.json()
+    assert data["splitResult"]["added"] == 2
+    assert len(data["splitResult"]["taskIds"]) == 2
+    assert len(state.SHARED_BOARD.get("Backlog", [])) == 2
+    assert any(t["id"] == "T-SPLIT-API" for t in state.SHARED_BOARD.get("Done", []))
+
+
+def test_inject_sprint_context_no_tool_log_event():
+    from backend import state
+    from backend.agents.task_context import init_new_task
+    from backend.services.sprint_service import _inject_sprint_context
+    from backend.services.tool_execution_service import get_tool_history
+
+    initialize()
+    state.TOOL_EXECUTION_LOG.clear()
+    task = init_new_task({"id": "T-CTX", "title": "Ctx", "description": "d"})
+    _inject_sprint_context(task, state.PROJECT_BRIEF, "Developer", "Implement the feature.")
+    events = get_tool_history()
+    assert not any(e.get("source") == "context_inject" for e in events)
+
+
+def test_collect_sprint_context_paths_capped(tmp_path, monkeypatch):
+    from backend import state
+    from backend.agents.task_context import init_new_task
+    from backend.workspace.files import _collect_sprint_context_paths
+
+    initialize()
+    ws = tmp_path / "ws"
+    (ws / "lib").mkdir(parents=True)
+    (ws / "tests").mkdir()
+    for i in range(10):
+        (ws / "lib" / f"file{i}.dart").write_text("x")
+    for i in range(10):
+        (ws / "tests" / f"test{i}.py").write_text("x")
+    (ws / "package.json").write_text("{}")
+    monkeypatch.setattr(state, "WORKSPACE_DIR", str(ws))
+
+    task_no_files = init_new_task({"id": "T-NF", "title": "NF", "description": "d"})
+    paths = _collect_sprint_context_paths(task_no_files)
+    lib_paths = [p for p in paths if p.startswith("lib/")]
+    test_paths = [p for p in paths if p.startswith("tests/")]
+    assert len(lib_paths) <= 3
+    assert len(test_paths) <= 2
+
+    task_with_files = init_new_task(
+        {
+            "id": "T-WF",
+            "title": "WF",
+            "description": "d",
+        }
+    )
+    task_with_files["files"] = [{"path": "lib/main.dart", "action": "read"}]
+    paths2 = _collect_sprint_context_paths(task_with_files)
+    assert "lib/main.dart" in paths2
+    extra_lib = [p for p in paths2 if p.startswith("lib/") and p != "lib/main.dart"]
+    assert len(extra_lib) == 0
 
 
 def test_global_tool_log_in_history():

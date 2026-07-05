@@ -111,6 +111,7 @@ interface TaskDetailModalProps {
   onApprove?: (taskId: string) => void
   onResolveUser?: (taskId: string, answer: string) => void
   onDiscussWithAgent?: (task: Task, lane: BoardLane | null) => void
+  onSplit?: (taskId: string) => void | Promise<void>
   onInjectToolEvidence?: (
     taskId: string,
     payload: {
@@ -209,6 +210,7 @@ export default function TaskDetailModal({
   onApprove,
   onResolveUser,
   onDiscussWithAgent,
+  onSplit,
   onInjectToolEvidence,
   onRelatedTaskClick,
   getTaskTitle,
@@ -224,6 +226,7 @@ export default function TaskDetailModal({
   const [injecting, setInjecting] = useState(false)
   const [showAllTranscript, setShowAllTranscript] = useState(false)
   const [showFailuresOnly, setShowFailuresOnly] = useState(false)
+  const [splitting, setSplitting] = useState(false)
 
   useEffect(() => {
     if (task) {
@@ -469,6 +472,25 @@ export default function TaskDetailModal({
                 </button>
               </div>
             )}
+
+          {onSplit && taskLane !== 'Done' && (
+            <button
+              type="button"
+              disabled={sprintRunning || splitting}
+              title={
+                sprintRunning
+                  ? 'Wait for the current sprint step to finish'
+                  : 'Split this card into smaller backlog tasks via the Product Owner'
+              }
+              onClick={() => {
+                setSplitting(true)
+                void Promise.resolve(onSplit(task.id)).finally(() => setSplitting(false))
+              }}
+              className="w-full bg-violet-950/40 hover:bg-violet-950/60 disabled:opacity-50 text-violet-200 text-xs py-2 px-3 rounded-lg border border-violet-500/30"
+            >
+              {splitting ? 'Splitting…' : 'Split into subtasks'}
+            </button>
+          )}
 
           {onDiscussWithAgent && (
             <button

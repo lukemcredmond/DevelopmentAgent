@@ -73,6 +73,11 @@ class InjectToolEvidencePayload(BaseModel):
     note: str = ""
 
 
+class SplitTaskPayload(BaseModel):
+    ollama_url: str = "http://localhost:11434"
+    guidance: str = ""
+
+
 class WorkflowSettingsPayload(BaseModel):
     requireBacklogApproval: Optional[bool] = None
     requireCodeReview: Optional[bool] = None
