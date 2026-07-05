@@ -45,6 +45,7 @@ import { useAppState, useAutoSprint } from './hooks/useAppState'
 import { useTheme } from './hooks/useTheme'
 import type { AgentId, AppState, BoardLane, ChatMessageRecord, PendingToolRequest, Task, WorkflowSettings } from './types'
 import { getDisplayLanes } from './types'
+import { findTaskOnBoard } from './utils/taskFormat'
 
 type BottomTab = 'console' | 'activity' | 'chat' | 'terminal' | 'search' | 'git'
 
@@ -391,7 +392,7 @@ export default function App() {
           activeLanes={state.activeLanes}
           workflowSettings={state.workflowSettings}
           sprintRunning={sprintRunning}
-          onTaskClick={setSelectedTask}
+          onTaskClick={(task) => setSelectedTask(findTaskOnBoard(state.board, task.id) ?? task)}
           onMoveTask={(taskId, from, to) => void handleMoveTask(taskId, from, to)}
           onReorderBacklog={(taskIds) =>
             void withLoading(async () => handleState(await reorderTasks('Backlog', taskIds)))
@@ -453,15 +454,8 @@ export default function App() {
                   <ActivityPanel
                     events={activityEvents}
                     onTaskClick={(taskId) => {
-                      for (const lane of Object.keys(state.board)) {
-                        const task = (state.board[lane as BoardLane] ?? []).find(
-                          (t) => t.id === taskId,
-                        )
-                        if (task) {
-                          setSelectedTask(task)
-                          break
-                        }
-                      }
+                      const task = findTaskOnBoard(state.board, taskId)
+                      if (task) setSelectedTask(task)
                     }}
                   />
                 )}

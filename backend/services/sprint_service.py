@@ -15,6 +15,7 @@ from backend.agents.task_context import (
     clear_qa_failure,
     coerce_task_text,
     find_task_by_id,
+    get_task_lane,
     increment_po_round_trips,
     init_new_task,
     next_claimable_backlog_task,
@@ -126,6 +127,60 @@ def _dev_needs_po(result: str, task: Optional[Dict[str, Any]] = None) -> bool:
         if stripped.startswith("blocked on requirements:"):
             return True
     return False
+
+
+def _check_stuck_and_escalate(task_id: str, lane_before: str) -> None:
+    """Escalate when a sprint step completes without moving the card."""
+    task = find_task_by_id(task_id)
+    if not task:
+        return
+    normalize_task(task)
+    lane_after = get_task_lane(task_id) or lane_before
+
+    if lane_before != lane_after:
+        task["stuckLoops"] = 0
+        return
+
+    task["stuckLoops"] = int(task.get("stuckLoops", 0)) + 1
+    ws = get_workflow_settings()
+    max_stuck = int(ws.get("maxStuckSteps", 3))
+    if task["stuckLoops"] < max_stuck:
+        return
+
+    task["stuckLoops"] = 0
+    max_po = int(ws.get("maxPoRoundTrips", 3))
+    if int(task.get("poRoundTrips", 0)) >= max_po:
+        msg = (
+            f"Agents made no progress after {max_stuck} steps in '{lane_after}'. "
+            "Please clarify requirements or make a decision."
+        )
+        task["userQuestion"] = msg
+        move_board_stage(task_id, "Needs User")
+        publish_activity(
+            task_id,
+            "stuck_loop",
+            msg,
+            role="system",
+            agent="System",
+            lane="Needs User",
+        )
+        add_system_log("System", "warning", f"{task_id}: stuck loop → Needs User")
+    else:
+        msg = (
+            f"Agents made no progress after {max_stuck} steps in '{lane_after}' — "
+            "escalating to PO for clarification."
+        )
+        increment_po_round_trips(task_id)
+        move_board_stage(task_id, "Needs PO")
+        publish_activity(
+            task_id,
+            "stuck_loop",
+            msg,
+            role="system",
+            agent="System",
+            lane="Needs PO",
+        )
+        add_system_log("System", "warning", f"{task_id}: stuck loop → Needs PO")
 
 
 def _escalate_po_limit(task: Dict[str, Any]) -> bool:
@@ -352,6 +407,7 @@ def _apply_po_clarification_result(active_task: Dict[str, Any], result: str) -> 
 
 def _run_po_clarification(active_task: Dict[str, Any], brief: str) -> None:
     task_id = active_task["id"]
+    lane_before = get_task_lane(task_id) or "Needs PO"
     set_active_sprint_context(task_id, "Product Owner")
     add_system_log("Product Owner", "info", f"Clarifying '{active_task['title']}'…")
     prompt = (
@@ -390,10 +446,12 @@ def _run_po_clarification(active_task: Dict[str, Any], brief: str) -> None:
                     "warning",
                     f"Clarification incomplete for '{task['title']}' — card stays in Needs PO",
                 )
+        _check_stuck_and_escalate(task_id, lane_before)
 
 
 def _run_developer_step(active_task: Dict[str, Any], brief: str) -> None:
     task_id = active_task["id"]
+    lane_before = get_task_lane(task_id) or "In Progress"
     set_active_sprint_context(task_id, "Developer")
     add_system_log("Developer", "info", f"Implementing '{active_task['title']}'…")
     target = _dev_complete_lane()
@@ -414,33 +472,33 @@ def _run_developer_step(active_task: Dict[str, Any], brief: str) -> None:
             return
         if result == "SIMULATION_FALLBACK":
             _simulate_dev_work(task)
-            return
-        record_task_decision(task_id, "Developer", "work", result[:500], result)
-        if not _task_in_lane(task_id, "In Progress"):
-            return
-        if _dev_needs_user(result):
-            task["userQuestion"] = result[:500]
-            move_board_stage(task_id, "Needs User")
-        elif _dev_needs_po(result, task):
-            if _escalate_po_limit(task):
-                return
-            increment_po_round_trips(task_id)
-            move_board_stage(task_id, "Needs PO")
-            publish_activity(
-                task_id,
-                "dev_escalation",
-                "Developer escalated to PO for clarification",
-                role="assistant",
-                agent="Developer",
-                lane="Needs PO",
-            )
         else:
-            clear_qa_failure(task_id)
-            move_board_stage(task_id, target)
+            record_task_decision(task_id, "Developer", "work", result[:500], result)
+            if _task_in_lane(task_id, "In Progress"):
+                if _dev_needs_user(result):
+                    task["userQuestion"] = result[:500]
+                    move_board_stage(task_id, "Needs User")
+                elif _dev_needs_po(result, task):
+                    if not _escalate_po_limit(task):
+                        increment_po_round_trips(task_id)
+                        move_board_stage(task_id, "Needs PO")
+                        publish_activity(
+                            task_id,
+                            "dev_escalation",
+                            "Developer escalated to PO for clarification",
+                            role="assistant",
+                            agent="Developer",
+                            lane="Needs PO",
+                        )
+                else:
+                    clear_qa_failure(task_id)
+                    move_board_stage(task_id, target)
+        _check_stuck_and_escalate(task_id, lane_before)
 
 
 def _run_code_review_step(active_task: Dict[str, Any], brief: str) -> None:
     task_id = active_task["id"]
+    lane_before = get_task_lane(task_id) or "Code Review"
     set_active_sprint_context(task_id, "Code Reviewer")
     add_system_log("Code Reviewer", "info", f"Reviewing '{active_task['title']}'…")
     prompt = (
@@ -456,14 +514,16 @@ def _run_code_review_step(active_task: Dict[str, Any], brief: str) -> None:
             task = find_task_by_id(task_id)
             if task:
                 _simulate_code_review(task)
-            return
-        record_task_decision(task_id, "Code Reviewer", "review", result[:500], result)
-        if _task_in_lane(task_id, "Code Review"):
-            move_board_stage(task_id, "QA")
+        else:
+            record_task_decision(task_id, "Code Reviewer", "review", result[:500], result)
+            if _task_in_lane(task_id, "Code Review"):
+                move_board_stage(task_id, "QA")
+        _check_stuck_and_escalate(task_id, lane_before)
 
 
 def _run_qa_step(active_task: Dict[str, Any], brief: str) -> None:
     task_id = active_task["id"]
+    lane_before = get_task_lane(task_id) or "QA"
     set_active_sprint_context(task_id, "QA Tester")
     add_system_log("QA Tester", "info", f"Validating '{active_task['title']}'…")
     ac = active_task.get("acceptanceCriteria") or []
@@ -484,16 +544,17 @@ def _run_qa_step(active_task: Dict[str, Any], brief: str) -> None:
             return
         if result == "SIMULATION_FALLBACK":
             _simulate_qa(task)
-            return
-        record_task_decision(task_id, "QA Tester", "qa", result[:500], result)
-        if _task_in_lane(task_id, "QA"):
-            if _qa_failed(result):
-                set_qa_failure(task_id, result[:500], result)
-                record_task_decision(task_id, "QA Tester", "qa_fail", result[:500], result)
-                move_board_stage(task_id, "In Progress")
-            else:
-                move_board_stage(task_id, "Done")
-                _commit_on_done(task)
+        else:
+            record_task_decision(task_id, "QA Tester", "qa", result[:500], result)
+            if _task_in_lane(task_id, "QA"):
+                if _qa_failed(result):
+                    set_qa_failure(task_id, result[:500], result)
+                    record_task_decision(task_id, "QA Tester", "qa_fail", result[:500], result)
+                    move_board_stage(task_id, "In Progress")
+                else:
+                    move_board_stage(task_id, "Done")
+                    _commit_on_done(task)
+        _check_stuck_and_escalate(task_id, lane_before)
 
 
 def _sprint_lanes_active() -> List[str]:

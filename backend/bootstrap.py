@@ -20,6 +20,7 @@ def load_project_into_state(project_id: str) -> bool:
     state.WORKSPACE_DIR = proj["workspace_dir"]
     state.SHARED_BOARD = normalize_board_lanes(proj["board_state"])
     normalize_board_tasks()
+    save_current_project_state()
 
     state.VIRTUAL_FILESYSTEM = proj["files"]
 

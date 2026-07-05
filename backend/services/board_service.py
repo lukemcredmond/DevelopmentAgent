@@ -39,6 +39,8 @@ def move_board_stage(task_id: str, target_lane: str) -> str:
                 break
 
         if active_task and source_lane is not None:
+            if source_lane == target_lane:
+                return f"Task {task_id} is already in '{target_lane}'."
             state.SHARED_BOARD[source_lane].remove(active_task)
             active_task["status"] = target_lane
             if target_lane not in state.SHARED_BOARD:

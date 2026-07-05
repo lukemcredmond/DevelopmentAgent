@@ -1,4 +1,5 @@
 import type { ActivityEvent, Board, Task, TaskDecision, TaskTranscriptEntry } from '../types'
+import { formatTaskText } from './taskFormat'
 
 const MAX_ACTIVITY = 200
 
@@ -9,11 +10,11 @@ function activityKey(event: ActivityEvent): string {
 function transcriptToEvent(task: Task, entry: TaskTranscriptEntry): ActivityEvent {
   return {
     taskId: String(task.id),
-    taskTitle: task.title,
+    taskTitle: formatTaskText(task.title),
     kind: entry.role === 'tool' ? 'tool' : 'transcript',
-    role: entry.role,
-    agent: entry.agent ?? entry.role,
-    content: entry.content,
+    role: formatTaskText(entry.role),
+    agent: formatTaskText(entry.agent ?? entry.role),
+    content: formatTaskText(entry.content),
     lane: typeof task.status === 'string' ? task.status : undefined,
     timestamp: entry.timestamp,
   }
@@ -25,11 +26,11 @@ function decisionToEvent(task: Task, decision: TaskDecision): ActivityEvent {
     : decision.summary
   return {
     taskId: String(task.id),
-    taskTitle: task.title,
+    taskTitle: formatTaskText(task.title),
     kind: 'decision',
     role: 'decision',
-    agent: decision.agent,
-    content,
+    agent: formatTaskText(decision.agent),
+    content: formatTaskText(content),
     lane: typeof task.status === 'string' ? task.status : undefined,
     timestamp: decision.timestamp,
   }

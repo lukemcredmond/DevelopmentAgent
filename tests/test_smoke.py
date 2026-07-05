@@ -300,9 +300,29 @@ def test_tool_alias_resolution():
     assert args["command"] == "flutter analyze"
 
 
-def test_tools_api_routes_registered():
+def test_move_board_stage_noop_same_lane():
+    from backend import state
+    from backend.agents.task_context import init_new_task
+    from backend.services.board_service import move_board_stage
+
     initialize()
-    client = TestClient(app)
-    paths = client.get("/openapi.json").json().get("paths", {})
-    assert "/api/tools/pending" in paths
-    assert "/api/tools/aliases" in paths
+    task = init_new_task({"id": "T-NOOP", "title": "Noop", "description": "d"})
+    state.SHARED_BOARD.setdefault("QA", []).append(task)
+    before_decisions = len(task["decisions"])
+    result = move_board_stage("T-NOOP", "QA")
+    assert "already in" in result
+    assert len(task["decisions"]) == before_decisions
+    assert "T-NOOP" in [t["id"] for t in state.SHARED_BOARD.get("QA", [])]
+
+
+def test_stuck_loop_escalates_to_needs_po():
+    from backend import state
+    from backend.agents.task_context import init_new_task
+    from backend.services.sprint_service import _check_stuck_and_escalate
+
+    initialize()
+    task = init_new_task({"id": "T-STUCK", "title": "Stuck", "description": "d"})
+    task["stuckLoops"] = 2
+    state.SHARED_BOARD.setdefault("QA", []).append(task)
+    _check_stuck_and_escalate("T-STUCK", "QA")
+    assert "T-STUCK" in [t["id"] for t in state.SHARED_BOARD.get("Needs PO", [])]

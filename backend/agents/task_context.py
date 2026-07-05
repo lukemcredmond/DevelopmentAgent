@@ -22,7 +22,7 @@ def publish_activity(
         "activity",
         {
             "taskId": task_id,
-            "taskTitle": task.get("title", task_id) if task else task_id,
+            "taskTitle": coerce_task_text(task.get("title", task_id)) if task else task_id,
             "kind": kind,
             "role": role,
             "agent": agent or role,
@@ -39,6 +39,15 @@ def find_task_by_id(task_id: str) -> Optional[Dict[str, Any]]:
         for task in tasks:
             if str(task.get("id", "")) == needle:
                 return task
+    return None
+
+
+def get_task_lane(task_id: str) -> Optional[str]:
+    needle = str(task_id)
+    for lane, tasks in state.SHARED_BOARD.items():
+        for task in tasks:
+            if str(task.get("id", "")) == needle:
+                return lane
     return None
 
 
@@ -105,12 +114,33 @@ def normalize_task(task: Dict[str, Any]) -> Dict[str, Any]:
         task["blockedBy"] = []
     if "priority" not in task or not isinstance(task["priority"], (int, float)):
         task["priority"] = 100
-    if "qaFailure" not in task:
+    if task.get("qaFailure") is not None and isinstance(task["qaFailure"], dict):
+        qf = task["qaFailure"]
+        task["qaFailure"] = {
+            "reason": coerce_task_text(qf.get("reason")),
+            "output": coerce_task_text(qf.get("output", "")),
+            "timestamp": coerce_task_text(qf.get("timestamp", "")),
+        }
+    elif task.get("qaFailure") is not None:
         task["qaFailure"] = None
     if "userQuestion" not in task:
         task["userQuestion"] = None
     if "poRoundTrips" not in task or not isinstance(task.get("poRoundTrips"), (int, float)):
         task["poRoundTrips"] = 0
+    if "stuckLoops" not in task or not isinstance(task.get("stuckLoops"), (int, float)):
+        task["stuckLoops"] = 0
+    for decision in task.get("decisions") or []:
+        if isinstance(decision, dict):
+            decision["summary"] = coerce_task_text(decision.get("summary"))
+            decision["detail"] = coerce_task_text(decision.get("detail", ""))
+            decision["agent"] = coerce_task_text(decision.get("agent", ""))
+    for entry in task.get("transcript") or []:
+        if isinstance(entry, dict):
+            entry["content"] = coerce_task_text(entry.get("content"))
+            entry["role"] = coerce_task_text(entry.get("role", ""))
+            if entry.get("agent") is not None:
+                entry["agent"] = coerce_task_text(entry.get("agent"))
+    task["blockedBy"] = [str(b) for b in (task.get("blockedBy") or [])]
     return task
 
 
@@ -125,6 +155,7 @@ def init_new_task(task: Dict[str, Any]) -> Dict[str, Any]:
     task["qaFailure"] = None
     task["userQuestion"] = None
     task["poRoundTrips"] = 0
+    task["stuckLoops"] = 0
     return normalize_task(task)
 
 

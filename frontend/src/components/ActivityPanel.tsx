@@ -1,5 +1,6 @@
 import { useMemo, useState } from 'react'
 import type { ActivityEvent } from '../types'
+import { formatTaskText } from '../utils/taskFormat'
 
 type ActivityFilter = 'all' | 'po_bounce' | 'transcript'
 
@@ -15,7 +16,7 @@ export default function ActivityPanel({ events, onTaskClick }: ActivityPanelProp
   const filtered = useMemo(() => {
     if (filter === 'po_bounce') {
       return events.filter((e) =>
-        ['po_round_trip', 'dev_escalation', 'po_clarified', 'po_limit'].includes(e.kind),
+        ['po_round_trip', 'dev_escalation', 'po_clarified', 'po_limit', 'stuck_loop'].includes(e.kind),
       )
     }
     if (filter === 'transcript') {
@@ -67,10 +68,11 @@ export default function ActivityPanel({ events, onTaskClick }: ActivityPanelProp
         {[...filtered].reverse().map((event, i) => {
           const idx = filtered.length - 1 - i
           const isOpen = expanded.has(idx)
+          const contentStr = formatTaskText(event.content)
           const preview =
-            event.content.length > 120 && !isOpen
-              ? `${event.content.slice(0, 120)}…`
-              : event.content
+            contentStr.length > 120 && !isOpen
+              ? `${contentStr.slice(0, 120)}…`
+              : contentStr
           return (
             <button
               key={`${event.timestamp}-${event.taskId}-${idx}`}
@@ -80,7 +82,7 @@ export default function ActivityPanel({ events, onTaskClick }: ActivityPanelProp
             >
               <div className="flex items-center justify-between opacity-75 mb-1 text-[10px] gap-2">
                 <span className="font-bold text-indigo-300 truncate">
-                  {event.agent} · {event.taskTitle}
+                  {formatTaskText(event.agent)} · {formatTaskText(event.taskTitle)}
                 </span>
                 <span className="shrink-0">{event.timestamp}</span>
               </div>

@@ -1,6 +1,6 @@
 import { useEffect, useState, type ReactNode } from 'react'
 import type { BoardLane, Task, TaskFile } from '../types'
-import { formatAcceptanceCriteria, formatTaskText } from '../utils/taskFormat'
+import { formatAcceptanceCriteria, formatTaskText, sanitizeTaskForUi } from '../utils/taskFormat'
 
 function getTaskFilePath(f: TaskFile | string): string {
   return typeof f === 'string' ? f : f.path
@@ -88,14 +88,15 @@ export default function TaskDetailModal({
 
   if (!task) return null
 
-  const files = task.files ?? []
-  const decisions = [...(task.decisions ?? [])].reverse()
-  const allTranscript = [...(task.transcript ?? [])].reverse()
+  const safeTask = sanitizeTaskForUi(task)
+  const files = safeTask.files ?? []
+  const decisions = [...(safeTask.decisions ?? [])].reverse()
+  const allTranscript = [...(safeTask.transcript ?? [])].reverse()
   const transcriptCount = allTranscript.length
   const transcriptCollapsedDefault = transcriptCount > 20
   const visibleTranscript = showAllTranscript ? allTranscript : allTranscript.slice(0, 50)
-  const acList = formatAcceptanceCriteria(task.acceptanceCriteria)
-  const blockedBy = task.blockedBy ?? []
+  const acList = formatAcceptanceCriteria(safeTask.acceptanceCriteria)
+  const blockedBy = safeTask.blockedBy ?? []
 
   return (
     <div className="fixed inset-0 bg-black/75 flex items-center justify-center p-4 z-50">
@@ -110,7 +111,7 @@ export default function TaskDetailModal({
                 className="text-base font-bold text-white bg-cat-base border border-cat-surface1 rounded px-2 py-1 w-full"
               />
             ) : (
-              <h3 className="text-base font-bold text-white truncate">{task.title}</h3>
+              <h3 className="text-base font-bold text-white truncate">{safeTask.title}</h3>
             )}
             <p className="text-[10px] text-indigo-300 font-mono mt-0.5">
               {task.id} · {task.status}
@@ -186,24 +187,24 @@ export default function TaskDetailModal({
             </div>
           )}
 
-          {task.qaFailure && (
+          {safeTask.qaFailure && (
             <div className="bg-rose-950/30 border border-rose-500/30 rounded-lg p-3">
               <h4 className="text-xs font-bold text-rose-300 mb-1">Last QA Failure</h4>
-              <p className="text-[11px] text-white max-h-16 overflow-y-auto">{task.qaFailure.reason}</p>
-              {task.qaFailure.output && (
+              <p className="text-[11px] text-white max-h-16 overflow-y-auto">{safeTask.qaFailure.reason}</p>
+              {safeTask.qaFailure.output && (
                 <pre className="text-[10px] text-cat-subtext mt-1 whitespace-pre-wrap font-mono max-h-24 overflow-y-auto">
-                  {task.qaFailure.output}
+                  {safeTask.qaFailure.output}
                 </pre>
               )}
-              <p className="text-[10px] text-cat-overlay mt-1">{task.qaFailure.timestamp}</p>
+              <p className="text-[10px] text-cat-overlay mt-1">{safeTask.qaFailure.timestamp}</p>
             </div>
           )}
 
           {taskLane === 'Needs User' && onResolveUser && (
             <div className="bg-amber-950/20 border border-amber-500/30 rounded-lg p-3 space-y-2">
-              {task.userQuestion && (
+              {safeTask.userQuestion && (
                 <p className="text-[11px] text-amber-200 max-h-24 overflow-y-auto whitespace-pre-wrap">
-                  {task.userQuestion}
+                  {safeTask.userQuestion}
                 </p>
               )}
               <textarea
