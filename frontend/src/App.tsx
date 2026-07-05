@@ -107,6 +107,7 @@ export default function App() {
     currentTool,
     toolEvents,
     clearToolEvents,
+    mergeToolEvent,
     toolFailureCount,
     toolRunningCount,
     toolStartTick,
@@ -147,6 +148,7 @@ export default function App() {
   const [chatInput, setChatInput] = useState('')
   const [chatMessages, setChatMessages] = useState<ChatUiMessage[]>([])
   const [chatContextFiles, setChatContextFiles] = useState<string[]>([])
+  const [chatPinnedTask, setChatPinnedTask] = useState<Task | null>(null)
 
   const [showNewProject, setShowNewProject] = useState(false)
   const [newProjName, setNewProjName] = useState('')
@@ -171,6 +173,16 @@ export default function App() {
   }
 
   const selectedTaskLane = selectedTask ? findTaskLane(selectedTask.id) : null
+  const chatPinnedLane = chatPinnedTask ? findTaskLane(chatPinnedTask.id) : null
+
+  const handleDiscussWithAgent = (task: Task, lane: BoardLane | null) => {
+    setChatPinnedTask(task)
+    setSelectedTask(null)
+    setBottomTab('chat')
+    if (lane === 'Needs User' || lane === 'Needs PO') {
+      setChatAgent('po')
+    }
+  }
 
   useEffect(() => {
     if (!selectedTask) return
@@ -597,6 +609,7 @@ export default function App() {
                   <ToolsPanel
                     toolEvents={toolEvents}
                     onClearLog={clearToolEvents}
+                    onMergeToolEvent={mergeToolEvent}
                     board={state.board}
                     selectedTaskId={selectedTask?.id}
                     onRefreshState={() => void refresh()}
@@ -616,6 +629,10 @@ export default function App() {
                   onMessagesChange={setChatMessages}
                   contextFiles={chatContextFiles}
                   onContextFilesChange={setChatContextFiles}
+                  pinnedTask={chatPinnedTask}
+                  pinnedLane={chatPinnedLane}
+                  onClearPinnedTask={() => setChatPinnedTask(null)}
+                  onRefreshState={() => void refresh()}
                 />
                 <TerminalPanel
                   hidden={bottomTab !== 'terminal'}
@@ -692,6 +709,7 @@ export default function App() {
           const related = findTaskOnBoard(state.board, taskId)
           if (related) setSelectedTask(related)
         }}
+        onDiscussWithAgent={(task, lane) => handleDiscussWithAgent(task, lane)}
         getTaskTitle={(taskId) => findTaskOnBoard(state.board, taskId)?.title}
       />
 

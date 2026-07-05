@@ -110,6 +110,7 @@ interface TaskDetailModalProps {
   onClearTranscript?: (taskId: string) => void
   onApprove?: (taskId: string) => void
   onResolveUser?: (taskId: string, answer: string) => void
+  onDiscussWithAgent?: (task: Task, lane: BoardLane | null) => void
   onRelatedTaskClick?: (taskId: string) => void
   getTaskTitle?: (taskId: string) => string | undefined
 }
@@ -198,6 +199,7 @@ export default function TaskDetailModal({
   onClearTranscript,
   onApprove,
   onResolveUser,
+  onDiscussWithAgent,
   onRelatedTaskClick,
   getTaskTitle,
 }: TaskDetailModalProps) {
@@ -364,6 +366,19 @@ export default function TaskDetailModal({
               )}
               <p className="text-[10px] text-cat-overlay mt-1">{safeTask.qaFailure.timestamp}</p>
             </div>
+          )}
+
+          {onDiscussWithAgent && (
+            <button
+              type="button"
+              onClick={() => onDiscussWithAgent(task, taskLane)}
+              className="w-full bg-indigo-950/40 hover:bg-indigo-950/60 text-indigo-200 text-xs py-2 px-3 rounded-lg border border-indigo-500/30"
+            >
+              Discuss with agent…
+              {(taskLane === 'Needs User' || taskLane === 'Needs PO') && (
+                <span className="text-indigo-400/80"> (opens PO chat — can split into subtasks)</span>
+              )}
+            </button>
           )}
 
           {taskLane === 'Needs User' && onResolveUser && (

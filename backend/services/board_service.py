@@ -1,9 +1,19 @@
 from typing import Any, Dict, List, Optional
 
 from backend import state
-from backend.agents.task_context import find_task_by_id, record_task_decision
+from backend.agents.task_context import (
+    all_task_ids,
+    assign_unique_task_id,
+    coerce_task_text,
+    find_task_by_id,
+    init_new_task,
+    normalize_acceptance_criteria,
+    record_task_decision,
+    sort_backlog,
+)
 from backend.services.events import publish_event
 from backend.services.project_service import save_current_project_state
+from backend.services.workflow_settings import get_workflow_settings
 
 
 def publish_board_update(
@@ -59,3 +69,125 @@ def move_board_stage(task_id: str, target_lane: str) -> str:
         save_current_project_state()
         publish_board_update(task_id, target_lane, source="move")
         return f"Successfully moved task {task_id} to '{target_lane}'."
+
+
+def _enrich_task_from_po(raw: Dict[str, Any]) -> Dict[str, Any]:
+    task = dict(raw)
+    if "acceptanceCriteria" not in task and "acceptance_criteria" in task:
+        task["acceptanceCriteria"] = task.pop("acceptance_criteria")
+    task["acceptanceCriteria"] = normalize_acceptance_criteria(task.get("acceptanceCriteria"))
+    if "description" in task:
+        task["description"] = coerce_task_text(task["description"])
+    if "title" in task:
+        task["title"] = coerce_task_text(task["title"])
+    if "blockedBy" not in task and "blocked_by" in task:
+        task["blockedBy"] = task.pop("blocked_by")
+    if not isinstance(task.get("blockedBy"), list):
+        task["blockedBy"] = []
+    task.setdefault("priority", 100)
+    return task
+
+
+def _new_task_lane() -> str:
+    ws = get_workflow_settings()
+    return "Pending Approval" if ws.get("requireBacklogApproval") else "Backlog"
+
+
+def append_backlog_tasks(
+    tasks: List[Dict[str, Any]],
+    *,
+    split_from_task_id: Optional[str] = None,
+) -> str:
+    """Add tasks to Backlog (or Pending Approval). Optionally split a source task to Done."""
+    if not tasks:
+        return "Error: No tasks provided."
+
+    from backend.services.feature_similarity import iter_board_tasks, link_related_features
+
+    with state.STATE_LOCK:
+        lane = _new_task_lane()
+        state.SHARED_BOARD.setdefault(lane, [])
+        existing_ids = all_task_ids()
+        prepared: List[Dict[str, Any]] = []
+        id_map: Dict[str, str] = {}
+
+        for i, raw in enumerate(tasks):
+            task = _enrich_task_from_po(raw)
+            po_ref = task.get("id")
+            new_id = assign_unique_task_id(task, preserve_po_ref=True, existing_ids=existing_ids)
+            if po_ref is not None:
+                id_map[str(po_ref)] = new_id
+            elif str(i) not in id_map:
+                id_map[str(i)] = new_id
+            prepared.append(task)
+
+        batch_ids = {str(t["id"]) for t in prepared}
+        prior_candidates = iter_board_tasks(exclude_ids=batch_ids)
+        added_tasks: List[Dict[str, Any]] = []
+        source_id = str(split_from_task_id) if split_from_task_id else None
+
+        for task in prepared:
+            remapped: List[str] = []
+            for ref in task.get("blockedBy") or []:
+                ref_str = str(ref)
+                if ref_str in id_map:
+                    remapped.append(id_map[ref_str])
+                elif ref_str in existing_ids:
+                    remapped.append(ref_str)
+                else:
+                    remapped.append(ref_str)
+            task["blockedBy"] = remapped
+            if source_id:
+                related = list(task.get("relatedTaskIds") or [])
+                if source_id not in related:
+                    related.append(source_id)
+                task["relatedTaskIds"] = related
+            init_new_task(task)
+            link_related_features(
+                task,
+                exclude_ids=batch_ids,
+                candidates=prior_candidates + added_tasks,
+            )
+            task["status"] = lane
+            state.SHARED_BOARD[lane].append(task)
+            added_tasks.append(task)
+
+        if lane == "Backlog":
+            sort_backlog()
+
+        if source_id:
+            source_task = find_task_by_id(source_id)
+            if source_task:
+                n = len(added_tasks)
+                record_task_decision(
+                    source_id,
+                    state.ACTIVE_SPRINT_AGENT or "Product Owner",
+                    "split",
+                    f"Split into {n} subtask(s)",
+                    f"Original card replaced by: {', '.join(t['id'] for t in added_tasks)}",
+                )
+                related = list(source_task.get("relatedTaskIds") or [])
+                for t in added_tasks:
+                    tid = str(t["id"])
+                    if tid not in related:
+                        related.append(tid)
+                source_task["relatedTaskIds"] = related
+                # Inline move to avoid nested lock re-entry issues during board mutation
+                needle = source_id
+                for ln in list(state.SHARED_BOARD.keys()):
+                    state.SHARED_BOARD[ln] = [
+                        t for t in state.SHARED_BOARD[ln] if str(t.get("id", "")) != needle
+                    ]
+                source_task["status"] = "Done"
+                state.SHARED_BOARD.setdefault("Done", []).append(source_task)
+                record_task_decision(
+                    source_id,
+                    state.ACTIVE_SPRINT_AGENT or "Product Owner",
+                    "move",
+                    "Moved from split source to 'Done'",
+                )
+
+        save_current_project_state()
+        publish_board_update(source="append_tasks")
+        ids = ", ".join(str(t["id"]) for t in added_tasks)
+        return f"Added {len(added_tasks)} task(s) to '{lane}': {ids}."

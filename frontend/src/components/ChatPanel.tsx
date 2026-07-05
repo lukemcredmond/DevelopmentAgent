@@ -1,6 +1,6 @@
 import { useEffect, useRef, useState } from 'react'
-import { streamChat } from '../api/client'
-import type { AgentId } from '../types'
+import { sendChat, streamChat } from '../api/client'
+import type { AgentId, BoardLane, Task } from '../types'
 import { AGENT_LABELS } from '../types'
 
 export interface ChatUiMessage {
@@ -23,7 +23,15 @@ interface ChatPanelProps {
   ) => void
   contextFiles: string[]
   onContextFilesChange: (files: string[]) => void
+  pinnedTask?: Task | null
+  pinnedLane?: BoardLane | null
+  onClearPinnedTask?: () => void
+  onRefreshState?: () => void
   hidden?: boolean
+}
+
+function isAbortError(err: unknown): boolean {
+  return err instanceof DOMException && err.name === 'AbortError'
 }
 
 export default function ChatPanel({
@@ -37,6 +45,10 @@ export default function ChatPanel({
   onMessagesChange,
   contextFiles,
   onContextFilesChange,
+  pinnedTask,
+  pinnedLane,
+  onClearPinnedTask,
+  onRefreshState,
   hidden = false,
 }: ChatPanelProps) {
   const [streaming, setStreaming] = useState(false)
@@ -44,9 +56,21 @@ export default function ChatPanel({
   const bottomRef = useRef<HTMLDivElement>(null)
   const abortRef = useRef<AbortController | null>(null)
 
+  const taskActionMode = Boolean(pinnedTask)
+
   useEffect(() => {
     bottomRef.current?.scrollIntoView({ behavior: 'smooth' })
   }, [messages])
+
+  useEffect(() => {
+    return () => {
+      abortRef.current?.abort()
+    }
+  }, [])
+
+  const stopStreaming = () => {
+    abortRef.current?.abort()
+  }
 
   const sendMessage = async () => {
     const text = input.trim()
@@ -68,34 +92,58 @@ export default function ChatPanel({
     ])
 
     abortRef.current = new AbortController()
+    const chatPayload = {
+      agent,
+      message: text,
+      contextFiles: contextFiles.length > 0 ? contextFiles : undefined,
+      ollama_url: ollamaUrl,
+      taskId: pinnedTask?.id,
+    }
 
     try {
-      let full = ''
-      for await (const token of streamChat(
-        {
-          agent,
-          message: text,
-          contextFiles: contextFiles.length > 0 ? contextFiles : undefined,
-          ollama_url: ollamaUrl,
-        },
-        abortRef.current.signal,
-      )) {
-        full += token
-        const content = full
+      if (taskActionMode) {
+        const res = await sendChat(chatPayload, abortRef.current.signal)
+        const content = res.response ?? res.reply ?? ''
         onMessagesChange((prev) =>
           prev.map((m) => (m.id === assistantId ? { ...m, content } : m)),
         )
+        onRefreshState?.()
+      } else {
+        let full = ''
+        for await (const token of streamChat(chatPayload, abortRef.current.signal)) {
+          full += token
+          const content = full
+          onMessagesChange((prev) =>
+            prev.map((m) => (m.id === assistantId ? { ...m, content } : m)),
+          )
+        }
       }
-    } catch {
-      onMessagesChange((prev) =>
-        prev.map((m) =>
-          m.id === assistantId
-            ? { ...m, content: m.content || '(Stream unavailable — check /api/chat/stream)' }
-            : m,
-        ),
-      )
+    } catch (err) {
+      if (isAbortError(err)) {
+        onMessagesChange((prev) =>
+          prev.map((m) =>
+            m.id === assistantId
+              ? { ...m, content: m.content ? `${m.content}\n(Stopped)` : '(Stopped)' }
+              : m,
+          ),
+        )
+      } else {
+        onMessagesChange((prev) =>
+          prev.map((m) =>
+            m.id === assistantId
+              ? {
+                  ...m,
+                  content:
+                    m.content ||
+                    (err instanceof Error ? err.message : '(Chat unavailable — check /api/chat)'),
+                }
+              : m,
+          ),
+        )
+      }
     } finally {
       setStreaming(false)
+      abortRef.current = null
     }
   }
 
@@ -111,13 +159,14 @@ export default function ChatPanel({
     <div
       className={`flex flex-col h-full bg-cat-base overflow-hidden ${hidden ? 'hidden' : ''}`}
     >
-      <div className="px-4 py-2 border-b border-cat-surface1 flex items-center gap-3 shrink-0">
+      <div className="px-4 py-2 border-b border-cat-surface1 flex items-center gap-3 shrink-0 flex-wrap">
         <h3 className="text-xs font-bold uppercase tracking-wider text-cat-subtext">
           Agent Chat
         </h3>
         <select
           value={agent}
           onChange={(e) => onAgentChange(e.target.value as AgentId)}
+          disabled={streaming}
           className="bg-cat-surface0 border border-cat-surface1 rounded text-[11px] text-white px-2 py-1"
         >
           {(Object.keys(AGENT_LABELS) as AgentId[]).map((id) => (
@@ -133,6 +182,29 @@ export default function ChatPanel({
         >
           @ Files ({contextFiles.length})
         </button>
+        {taskActionMode && pinnedTask && (
+          <div className="flex items-center gap-2 ml-auto text-[10px] bg-amber-950/30 border border-amber-500/30 rounded px-2 py-1 max-w-[55%]">
+            <span className="text-amber-200 truncate">
+              Discussing: {pinnedTask.id} — {pinnedTask.title}
+              {pinnedLane ? ` (${pinnedLane})` : ''}
+            </span>
+            {onClearPinnedTask && (
+              <button
+                type="button"
+                onClick={onClearPinnedTask}
+                className="text-amber-400 hover:text-amber-200 shrink-0"
+                title="Clear pinned task"
+              >
+                ×
+              </button>
+            )}
+          </div>
+        )}
+        {taskActionMode && (
+          <span className="text-[9px] text-cat-overlay uppercase tracking-wide">
+            Task mode — agent can use tools
+          </span>
+        )}
       </div>
 
       {showFilePicker && (
@@ -190,23 +262,34 @@ export default function ChatPanel({
             if (e.key === '@') setShowFilePicker(true)
             if (e.key === 'Enter' && !e.shiftKey) void sendMessage()
           }}
-          placeholder={`Message ${AGENT_LABELS[agent]}…`}
+          placeholder={
+            taskActionMode
+              ? `Ask ${AGENT_LABELS[agent]} about ${pinnedTask?.id ?? 'this card'}…`
+              : `Message ${AGENT_LABELS[agent]}…`
+          }
           disabled={streaming}
           className="flex-1 bg-cat-surface0 border border-cat-surface1 rounded-lg px-3 py-2 text-xs text-white focus:outline-none focus:border-indigo-500"
         />
-        <button
-          type="button"
-          onClick={() => void sendMessage()}
-          disabled={streaming || !input.trim()}
-          className="bg-indigo-600 hover:bg-indigo-500 disabled:opacity-50 text-white px-4 py-2 rounded-lg text-xs"
-        >
-          {streaming ? (
-            <i className="fa-solid fa-spinner animate-spin" />
-          ) : (
+        {streaming ? (
+          <button
+            type="button"
+            onClick={stopStreaming}
+            className="bg-rose-700 hover:bg-rose-600 text-white px-4 py-2 rounded-lg text-xs font-bold"
+          >
+            Stop
+          </button>
+        ) : (
+          <button
+            type="button"
+            onClick={() => void sendMessage()}
+            disabled={!input.trim()}
+            className="bg-indigo-600 hover:bg-indigo-500 disabled:opacity-50 text-white px-4 py-2 rounded-lg text-xs"
+          >
             <i className="fa-solid fa-paper-plane" />
-          )}
-        </button>
+          </button>
+        )}
       </div>
     </div>
   )
+
 }

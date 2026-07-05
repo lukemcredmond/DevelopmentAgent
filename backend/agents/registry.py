@@ -2,7 +2,7 @@ from backend.agents.scrum_agent import ScrumAgent
 from backend.agents.task_context import record_task_git_commit
 from backend.agents.tools import Tool
 from backend import state
-from backend.services.board_service import move_board_stage
+from backend.services.board_service import append_backlog_tasks, move_board_stage
 from backend.services.git_service import git_commit, git_diff, git_init, git_status
 from backend.workspace.files import (
     apply_workspace_patch,
@@ -19,7 +19,9 @@ agent_po = ScrumAgent(
         "You are the Product Owner. You decompose project briefs into backlog features (user stories) "
         "as JSON arrays. When developers ask questions, you clarify requirements and acceptance criteria. "
         "When the user adds features, refine them into clear developer-ready stories. "
-        "Use update_board to move tasks from 'Needs PO' back to 'In Progress' when clarification is done."
+        "Use update_board to move tasks from 'Needs PO' back to 'In Progress' when clarification is done. "
+        "Use add_backlog_tasks to add new stories to the Backlog; when splitting a large or stuck card, "
+        "pass split_from_task_id so the original moves to Done with a split note."
     ),
 )
 
@@ -120,6 +122,41 @@ tool_board = Tool(
     func=move_board_stage,
 )
 
+tool_add_backlog_tasks = Tool(
+    name="add_backlog_tasks",
+    description=(
+        "Add one or more new tasks to the Backlog. When breaking a large card into subtasks, "
+        "set split_from_task_id to the source task ID — the source moves to Done with a split note."
+    ),
+    parameters={
+        "type": "object",
+        "properties": {
+            "tasks": {
+                "type": "array",
+                "items": {
+                    "type": "object",
+                    "properties": {
+                        "title": {"type": "string"},
+                        "description": {"type": "string"},
+                        "acceptanceCriteria": {
+                            "type": "array",
+                            "items": {"type": "string"},
+                        },
+                        "blockedBy": {"type": "array", "items": {"type": "string"}},
+                        "priority": {"type": "number"},
+                    },
+                    "required": ["title", "description"],
+                },
+            },
+            "split_from_task_id": {"type": "string"},
+        },
+        "required": ["tasks"],
+    },
+    func=lambda tasks, split_from_task_id=None: append_backlog_tasks(
+        tasks, split_from_task_id=split_from_task_id
+    ),
+)
+
 tool_git_status = Tool(
     name="git_status",
     description="Returns git status for the workspace repository.",
@@ -194,6 +231,7 @@ tool_run_command = Tool(
 
 agent_po.register_tool(tool_read)
 agent_po.register_tool(tool_board)
+agent_po.register_tool(tool_add_backlog_tasks)
 
 agent_dev.register_tool(tool_read)
 agent_dev.register_tool(tool_write)

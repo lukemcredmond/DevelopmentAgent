@@ -370,11 +370,14 @@ export interface ChatPayload {
   message: string
   contextFiles?: string[]
   ollama_url?: string
+  taskId?: string
 }
 
 export interface ChatResponse {
-  reply: string
   agent: AgentId
+  response: string
+  reply?: string
+  messages?: unknown[]
 }
 
 export interface TerminalRunPayload {

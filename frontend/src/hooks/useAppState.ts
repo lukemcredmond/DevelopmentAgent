@@ -4,6 +4,7 @@ import {
   fetchPendingApprovals,
   fetchPendingTools,
   fetchState,
+  fetchToolHistory,
   runSprint,
   subscribeEvents,
 } from '../api/client'
@@ -95,6 +96,54 @@ function mapToolStart(payload: Record<string, unknown>): ToolExecutionEvent {
     status: 'running',
     source: mapToolSource(payload.source),
   }
+}
+
+function historyPayloadToEvent(payload: Record<string, unknown>): ToolExecutionEvent {
+  const success = payload.toolSuccess !== false
+  const statusRaw = payload.status
+  const status: ToolExecutionEvent['status'] =
+    statusRaw === 'running'
+      ? 'running'
+      : success
+        ? 'completed'
+        : 'failed'
+  const runCommandStatus =
+    payload.runCommandStatus != null ? String(payload.runCommandStatus) : undefined
+  const exitCodeRaw = payload.exitCode ?? payload.exit_code
+  const exitCode =
+    exitCodeRaw != null && exitCodeRaw !== '' ? Number(exitCodeRaw) : undefined
+  return {
+    id: buildToolEventId(payload),
+    runId: String(payload.runId ?? payload.run_id ?? ''),
+    taskId: payload.taskId != null ? String(payload.taskId) : undefined,
+    agent: String(payload.agent ?? ''),
+    toolName: String(payload.toolName ?? '?'),
+    toolArgs: (payload.toolArgs ?? payload.tool_args) as Record<string, unknown> | undefined,
+    toolSuccess: success,
+    toolOutput: String(payload.toolOutput ?? ''),
+    durationMs: Number(payload.durationMs ?? payload.duration_ms ?? 0),
+    timestamp: String(payload.timestamp ?? new Date().toISOString()),
+    status,
+    source: mapToolSource(payload.source),
+    exitCode: Number.isFinite(exitCode) ? exitCode : undefined,
+    runCommandStatus,
+  }
+}
+
+function mergeToolHistory(
+  existing: ToolExecutionEvent[],
+  incoming: ToolExecutionEvent[],
+): ToolExecutionEvent[] {
+  const byId = new Map<string, ToolExecutionEvent>()
+  for (const e of incoming) {
+    byId.set(e.id, e)
+  }
+  for (const e of existing) {
+    byId.set(e.id, { ...byId.get(e.id), ...e })
+  }
+  return Array.from(byId.values())
+    .sort((a, b) => String(b.timestamp).localeCompare(String(a.timestamp)))
+    .slice(-200)
 }
 
 function applyToolEnd(events: ToolExecutionEvent[], payload: Record<string, unknown>): ToolExecutionEvent[] {
@@ -252,12 +301,29 @@ export function useAppState() {
     setToolEvents([])
   }, [])
 
+  const refreshToolHistory = useCallback(async () => {
+    try {
+      const data = await fetchToolHistory()
+      const incoming = (data.events ?? []).map((e) =>
+        historyPayloadToEvent(e as Record<string, unknown>),
+      )
+      setToolEvents((prev) => mergeToolHistory(prev, incoming))
+    } catch {
+      /* history endpoint optional during startup */
+    }
+  }, [])
+
+  const mergeToolEvent = useCallback((payload: Record<string, unknown>) => {
+    setToolEvents((prev) => applyToolEnd(prev, payload))
+  }, [])
+
   const toolFailureCount = toolEvents.filter((e) => e.status === 'failed').length
   const toolRunningCount = toolEvents.filter((e) => e.status === 'running').length
 
   useEffect(() => {
     void refresh()
-  }, [refresh])
+    void refreshToolHistory()
+  }, [refresh, refreshToolHistory])
 
   useEffect(() => {
     syncActivityFromBoard(state.board)
@@ -277,10 +343,12 @@ export function useAppState() {
           syncActivityFromBoard(next.board)
           return next
         })
+        void refreshToolHistory()
       } else if (event.type === 'files') {
         void refresh()
       } else if (event.type === 'sprint') {
         void refresh()
+        void refreshToolHistory()
         setActiveRun(null)
         setCurrentTool(null)
         setDisplayRun(null)
@@ -355,6 +423,7 @@ export function useAppState() {
     syncActivityFromBoard,
     refreshPendingTools,
     refreshPendingApprovals,
+    refreshToolHistory,
     scheduleDisplayRunClear,
   ])
 
@@ -380,6 +449,8 @@ export function useAppState() {
     currentTool,
     toolEvents,
     clearToolEvents,
+    mergeToolEvent,
+    refreshToolHistory,
     toolFailureCount,
     toolRunningCount,
     toolStartTick,

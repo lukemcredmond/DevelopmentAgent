@@ -31,7 +31,7 @@ from backend.agents.task_context import (
     task_dependencies_met,
 )
 from backend.services.board_lanes import normalize_board_lanes
-from backend.services.board_service import move_board_stage, publish_board_update
+from backend.services.board_service import append_backlog_tasks, move_board_stage, publish_board_update
 from backend.services.brief_service import (
     append_brief_text,
     append_feature_to_brief,
@@ -231,76 +231,11 @@ def _qa_failed(result: str) -> bool:
     return any(m in lower for m in ("fail", "failed", "rejected", "does not pass", "not pass"))
 
 
-def _enrich_task_from_po(raw: Dict[str, Any]) -> Dict[str, Any]:
-    task = dict(raw)
-    if "acceptanceCriteria" not in task and "acceptance_criteria" in task:
-        task["acceptanceCriteria"] = task.pop("acceptance_criteria")
-    task["acceptanceCriteria"] = normalize_acceptance_criteria(task.get("acceptanceCriteria"))
-    if "description" in task:
-        task["description"] = coerce_task_text(task["description"])
-    if "title" in task:
-        task["title"] = coerce_task_text(task["title"])
-    if "blockedBy" not in task and "blocked_by" in task:
-        task["blockedBy"] = task.pop("blocked_by")
-    if not isinstance(task.get("blockedBy"), list):
-        task["blockedBy"] = []
-    task.setdefault("priority", 100)
-    return task
-
-
-def _new_task_lane() -> str:
-    ws = get_workflow_settings()
-    return "Pending Approval" if ws.get("requireBacklogApproval") else "Backlog"
-
-
 def _append_tasks(tasks: List[Dict[str, Any]]) -> int:
-    lane = _new_task_lane()
-    state.SHARED_BOARD.setdefault(lane, [])
-    existing_ids = all_task_ids()
-    prepared: List[Dict[str, Any]] = []
-    id_map: Dict[str, str] = {}
-
-    for i, raw in enumerate(tasks):
-        task = _enrich_task_from_po(raw)
-        po_ref = task.get("id")
-        new_id = assign_unique_task_id(task, preserve_po_ref=True, existing_ids=existing_ids)
-        if po_ref is not None:
-            id_map[str(po_ref)] = new_id
-        elif str(i) not in id_map:
-            id_map[str(i)] = new_id
-        prepared.append(task)
-
-    batch_ids = {str(t["id"]) for t in prepared}
-    prior_candidates = iter_board_tasks(exclude_ids=batch_ids)
-    added_tasks: List[Dict[str, Any]] = []
-
-    added = 0
-    for task in prepared:
-        remapped: List[str] = []
-        for ref in task.get("blockedBy") or []:
-            ref_str = str(ref)
-            if ref_str in id_map:
-                remapped.append(id_map[ref_str])
-            elif ref_str in existing_ids:
-                remapped.append(ref_str)
-            else:
-                remapped.append(ref_str)
-        task["blockedBy"] = remapped
-        init_new_task(task)
-        link_related_features(
-            task,
-            exclude_ids=batch_ids,
-            candidates=prior_candidates + added_tasks,
-        )
-        task["status"] = lane
-        state.SHARED_BOARD[lane].append(task)
-        added_tasks.append(task)
-        added += 1
-    if lane == "Backlog":
-        sort_backlog()
-    if added:
-        publish_board_update(source="append_tasks")
-    return added
+    if not tasks:
+        return 0
+    append_backlog_tasks(tasks)
+    return len(tasks)
 
 
 def _dev_complete_lane() -> str:

@@ -30,6 +30,7 @@ const AGENT_OPTIONS: { id: AgentId; label: string }[] = [
 interface ToolsPanelProps {
   toolEvents: ToolExecutionEvent[]
   onClearLog?: () => void
+  onMergeToolEvent?: (payload: Record<string, unknown>) => void
   board: Board
   selectedTaskId?: string | null
   onRefreshState?: () => void
@@ -102,6 +103,7 @@ function listBoardTasks(board: Board): Task[] {
 export default function ToolsPanel({
   toolEvents,
   onClearLog,
+  onMergeToolEvent,
   board,
   selectedTaskId,
   onRefreshState,
@@ -245,11 +247,23 @@ export default function ToolsPanel({
     }
     setRunning(true)
     try {
-      await executeTool({
+      const { result } = await executeTool({
         agent: agentId,
         toolName: selectedTool,
         arguments: args,
         taskId: taskIdInput.trim() || undefined,
+      })
+      onMergeToolEvent?.({
+        runId: result.runId ?? 'manual',
+        taskId: (result.taskId ?? taskIdInput.trim()) || 'system',
+        agent: result.agent,
+        toolName: result.toolName,
+        toolArgs: result.toolArgs,
+        toolSuccess: result.toolSuccess,
+        toolOutput: result.toolOutput,
+        durationMs: result.durationMs,
+        timestamp: result.timestamp,
+        source: result.source ?? 'manual',
       })
       onRefreshState?.()
     } catch (e) {
@@ -340,7 +354,8 @@ export default function ToolsPanel({
           >
             {filtered.length === 0 && (
               <p className="text-cat-overlay text-center py-8">
-                No tool executions yet. Use the{' '}
+                No tool executions yet. Agent tools appear here during sprints; history loads from
+                task transcripts. Use the{' '}
                 <button
                   type="button"
                   onClick={() => setSubTab('manual')}

@@ -922,3 +922,94 @@ def test_tool_transcript_and_replay():
     results = replay_resp.json()["results"]
     assert results[0]["source"] == "replay"
     assert results[0]["toolName"] == "read_file"
+
+
+def test_tools_history_from_transcript():
+    from backend import state
+    from backend.agents.task_context import init_new_task, record_task_transcript
+
+    initialize()
+    task = init_new_task({"id": "T-HIST", "title": "History", "description": "d"})
+    state.SHARED_BOARD.setdefault("In Progress", []).append(task)
+    record_task_transcript(
+        "T-HIST",
+        "tool",
+        "run_command → flutter analyze ✓",
+        agent="Developer",
+        toolName="run_command",
+        toolSuccess=True,
+        toolArgs={"command": "flutter analyze"},
+        toolOutput="[success exit 0]\nNo issues",
+        source="agent",
+    )
+
+    client = TestClient(app)
+    resp = client.get("/api/tools/history")
+    assert resp.status_code == 200
+    events = resp.json()["events"]
+    assert any(e["toolName"] == "run_command" and e["taskId"] == "T-HIST" for e in events)
+
+
+def test_add_backlog_tasks_split_moves_source_to_done():
+    from backend import state
+    from backend.agents.task_context import init_new_task
+    from backend.services.board_service import append_backlog_tasks
+
+    initialize()
+    source = init_new_task({"id": "T-SPLIT", "title": "Big feature", "description": "Too large"})
+    state.SHARED_BOARD = {
+        "Needs User": [source],
+        "Backlog": [],
+        "Done": [],
+        "In Progress": [],
+        "Needs PO": [],
+        "QA": [],
+    }
+
+    result = append_backlog_tasks(
+        [
+            {
+                "title": "Subtask A",
+                "description": "Part A",
+                "acceptanceCriteria": ["A works"],
+            },
+            {
+                "title": "Subtask B",
+                "description": "Part B",
+                "acceptanceCriteria": ["B works"],
+            },
+        ],
+        split_from_task_id="T-SPLIT",
+    )
+    assert "Added 2 task(s)" in result
+    assert any(t["id"] == "T-SPLIT" for t in state.SHARED_BOARD.get("Done", []))
+    assert len(state.SHARED_BOARD.get("Backlog", [])) == 2
+    backlog = state.SHARED_BOARD["Backlog"]
+    assert all("T-SPLIT" in (t.get("relatedTaskIds") or []) for t in backlog)
+
+
+def test_chat_compose_includes_task_context():
+    from backend import state
+    from backend.agents.task_context import init_new_task
+    from backend.api.chat import _compose_message
+    from backend.api.schemas import ChatPayload
+
+    initialize()
+    task = init_new_task(
+        {
+            "id": "T-CHAT",
+            "title": "Chat card",
+            "description": "Needs clarification",
+        }
+    )
+    task["userQuestion"] = "Which API should we use?"
+    state.SHARED_BOARD.setdefault("Needs User", []).append(task)
+    state.PROJECT_BRIEF = "Build an app"
+
+    composed = _compose_message(
+        ChatPayload(message="Please split this card", agent="po", task_id="T-CHAT")
+    )
+    assert "T-CHAT" in composed
+    assert "Which API should we use?" in composed
+    assert "Please split this card" in composed
+

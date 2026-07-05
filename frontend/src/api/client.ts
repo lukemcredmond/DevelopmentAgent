@@ -210,10 +210,14 @@ export async function triggerStep(payload: BriefPayload): Promise<AppState> {
   })
 }
 
-export async function sendChat(payload: ChatPayload): Promise<ChatResponse> {
+export async function sendChat(
+  payload: ChatPayload,
+  signal?: AbortSignal,
+): Promise<ChatResponse> {
   return request<ChatResponse>('/api/chat', {
     method: 'POST',
     body: JSON.stringify(payload),
+    signal,
   })
 }
 
@@ -406,6 +410,10 @@ export async function resolveToolApproval(
       body: JSON.stringify({ approved }),
     },
   )
+}
+
+export async function fetchToolHistory(): Promise<{ events: Record<string, unknown>[] }> {
+  return request<{ events: Record<string, unknown>[] }>('/api/tools/history')
 }
 
 export async function fetchToolRegistry(agent: string): Promise<ToolRegistryResponse> {

@@ -113,6 +113,85 @@ def list_agent_tools(agent_id: str) -> list[Dict[str, Any]]:
     return agent.registry.get_definitions()
 
 
+def _history_event_from_transcript(
+    task_id: str,
+    entry: Dict[str, Any],
+) -> Dict[str, Any]:
+    tool_name = str(entry.get("toolName") or "?")
+    tool_output = str(entry.get("toolOutput") or entry.get("content") or "")
+    success = entry.get("toolSuccess") is not False
+    if entry.get("toolSuccess") is None and entry.get("role") == "tool":
+        content = str(entry.get("content") or "")
+        success = "✗" not in content and " FAILED " not in content.upper()
+    ts = str(entry.get("timestamp") or "")
+    source = entry.get("source") or "agent"
+    run_id = f"{task_id}-history"
+    exit_code = None
+    run_cmd_status = None
+    if tool_name == "run_command" and tool_output:
+        exit_code, _ = parse_run_command_exit(tool_output)
+        run_cmd_status = run_command_status_label(tool_output, success)
+    return {
+        "runId": run_id,
+        "taskId": task_id,
+        "agent": str(entry.get("agent") or "Agent"),
+        "toolName": tool_name,
+        "toolArgs": entry.get("toolArgs") or {},
+        "toolSuccess": success,
+        "toolOutput": tool_output[:500],
+        "durationMs": 0,
+        "timestamp": ts,
+        "source": source,
+        "status": "failed" if not success else "completed",
+        **(
+            {"exitCode": exit_code, "runCommandStatus": run_cmd_status}
+            if tool_name == "run_command" and exit_code is not None
+            else {}
+        ),
+    }
+
+
+def get_tool_history(limit: int = 200) -> list[Dict[str, Any]]:
+    """Collect recent tool invocations from task transcripts and the active run."""
+    from backend.services.feature_similarity import iter_board_tasks
+
+    events: list[Dict[str, Any]] = []
+    for task in iter_board_tasks():
+        task_id = str(task.get("id") or "")
+        if not task_id:
+            continue
+        for entry in task.get("transcript") or []:
+            if not isinstance(entry, dict) or not entry.get("toolName"):
+                continue
+            events.append(_history_event_from_transcript(task_id, entry))
+
+    active_run = get_active_run()
+    if active_run:
+        for rt in active_run.recent_tools:
+            ts = str(rt.get("timestamp") or "")
+            tool_name = str(rt.get("toolName") or "?")
+            success = rt.get("toolSuccess") is not False
+            tool_output = str(rt.get("toolOutput") or "")
+            events.append(
+                {
+                    "runId": active_run.run_id,
+                    "taskId": active_run.task_id,
+                    "agent": active_run.agent,
+                    "toolName": tool_name,
+                    "toolArgs": {},
+                    "toolSuccess": success,
+                    "toolOutput": tool_output[:500],
+                    "durationMs": int(rt.get("durationMs") or 0),
+                    "timestamp": ts,
+                    "source": "agent",
+                    "status": "failed" if not success else "completed",
+                }
+            )
+
+    events.sort(key=lambda e: str(e.get("timestamp") or ""), reverse=True)
+    return events[:limit]
+
+
 def get_transcript_tool_entries(task_id: str) -> list[Dict[str, Any]]:
     task = find_task_by_id(task_id)
     if not task:
