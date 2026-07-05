@@ -1,13 +1,22 @@
 import { useEffect, useRef, useState } from 'react'
-import { sendChat, streamChat } from '../api/client'
-import type { AgentId, BoardLane, Task } from '../types'
+import { sendChat } from '../api/client'
+import type { AgentId, BoardLane, Task, ToolExecutionEvent } from '../types'
 import { AGENT_LABELS } from '../types'
+
+export interface ChatToolCallDisplay {
+  toolName: string
+  status: 'running' | 'completed' | 'failed'
+  toolOutput?: string
+  toolArgs?: Record<string, unknown>
+}
 
 export interface ChatUiMessage {
   id: string
   role: 'user' | 'assistant'
   content: string
   agent?: AgentId
+  toolCalls?: ChatToolCallDisplay[]
+  splitHint?: string
 }
 
 interface ChatPanelProps {
@@ -27,11 +36,60 @@ interface ChatPanelProps {
   pinnedLane?: BoardLane | null
   onClearPinnedTask?: () => void
   onRefreshState?: () => void
+  onSplitTask?: (taskId: string) => void
+  toolEvents?: ToolExecutionEvent[]
   hidden?: boolean
 }
 
 function isAbortError(err: unknown): boolean {
   return err instanceof DOMException && err.name === 'AbortError'
+}
+
+function mapToolEvents(events: ToolExecutionEvent[]): ChatToolCallDisplay[] {
+  return events.map((e) => ({
+    toolName: e.toolName,
+    status: e.status,
+    toolOutput: e.toolOutput,
+    toolArgs: e.toolArgs,
+  }))
+}
+
+function ToolCallBlock({ call }: { call: ChatToolCallDisplay }) {
+  const [open, setOpen] = useState(false)
+  const failed = call.status === 'failed'
+  const running = call.status === 'running'
+  return (
+    <div
+      className={`text-left text-[10px] rounded border mb-1 ${
+        failed
+          ? 'border-rose-500/50 bg-rose-950/20'
+          : running
+            ? 'border-indigo-500/40 bg-indigo-950/20'
+            : 'border-cat-surface1 bg-cat-surface0/50'
+      }`}
+    >
+      <button
+        type="button"
+        onClick={() => setOpen((o) => !o)}
+        className="w-full px-2 py-1 flex items-center justify-between gap-2 text-left"
+      >
+        <span className="font-mono text-indigo-300">{call.toolName}</span>
+        <span className={failed ? 'text-rose-300' : running ? 'text-indigo-300' : 'text-emerald-400'}>
+          {call.status}
+        </span>
+      </button>
+      {open && (
+        <div className="px-2 pb-2 font-mono text-cat-subtext whitespace-pre-wrap max-h-32 overflow-y-auto">
+          {call.toolArgs && Object.keys(call.toolArgs).length > 0 && (
+            <pre className="text-[9px] text-cat-overlay mb-1">
+              {JSON.stringify(call.toolArgs, null, 2)}
+            </pre>
+          )}
+          {call.toolOutput?.slice(0, 800) ?? '(no output)'}
+        </div>
+      )}
+    </div>
+  )
 }
 
 export default function ChatPanel({
@@ -49,6 +107,8 @@ export default function ChatPanel({
   pinnedLane,
   onClearPinnedTask,
   onRefreshState,
+  onSplitTask,
+  toolEvents = [],
   hidden = false,
 }: ChatPanelProps) {
   const [streaming, setStreaming] = useState(false)
@@ -59,8 +119,8 @@ export default function ChatPanel({
   const taskActionMode = Boolean(pinnedTask)
 
   useEffect(() => {
-    bottomRef.current?.scrollIntoView({ behavior: 'smooth' })
-  }, [messages])
+    bottomRef.current?.scrollIntoView({ behavior: 'auto' })
+  }, [messages, toolEvents.length])
 
   useEffect(() => {
     return () => {
@@ -100,24 +160,34 @@ export default function ChatPanel({
       taskId: pinnedTask?.id,
     }
 
+    const toolBaseline = toolEvents.length
+
     try {
-      if (taskActionMode) {
-        const res = await sendChat(chatPayload, abortRef.current.signal)
-        const content = res.response ?? res.reply ?? ''
-        onMessagesChange((prev) =>
-          prev.map((m) => (m.id === assistantId ? { ...m, content } : m)),
-        )
-        onRefreshState?.()
-      } else {
-        let full = ''
-        for await (const token of streamChat(chatPayload, abortRef.current.signal)) {
-          full += token
-          const content = full
-          onMessagesChange((prev) =>
-            prev.map((m) => (m.id === assistantId ? { ...m, content } : m)),
-          )
-        }
-      }
+      const res = await sendChat(chatPayload, abortRef.current.signal)
+      const content = res.response ?? res.reply ?? ''
+      const fromApi = (res.toolCalls ?? []).map((e) => ({
+        toolName: String(e.toolName ?? '?'),
+        status: (e.status === 'failed' || e.toolSuccess === false
+          ? 'failed'
+          : 'completed') as ChatToolCallDisplay['status'],
+        toolOutput: e.toolOutput,
+        toolArgs: e.toolArgs,
+      }))
+      const capturedTools =
+        fromApi.length > 0 ? fromApi : mapToolEvents(toolEvents.slice(toolBaseline))
+      onMessagesChange((prev) =>
+        prev.map((m) =>
+          m.id === assistantId
+            ? {
+                ...m,
+                content,
+                toolCalls: capturedTools.length > 0 ? capturedTools : undefined,
+                splitHint: res.splitHint,
+              }
+            : m,
+        ),
+      )
+      onRefreshState?.()
     } catch (err) {
       if (isAbortError(err)) {
         onMessagesChange((prev) =>
@@ -200,12 +270,17 @@ export default function ChatPanel({
             )}
           </div>
         )}
-        {taskActionMode && (
-          <span className="text-[9px] text-cat-overlay uppercase tracking-wide">
-            Task mode — agent can use tools
-          </span>
-        )}
+        <span className="text-[9px] text-cat-overlay uppercase tracking-wide">
+          Tools run inline — see blocks below assistant replies
+        </span>
       </div>
+
+      {agent === 'po' && pinnedTask && (
+        <p className="px-4 py-1.5 text-[10px] text-violet-300/90 bg-violet-950/20 border-b border-violet-500/20 shrink-0">
+          To split this card, use <strong>Split into subtasks</strong> on the task detail — not a chat
+          command. PO chat can still invoke split via tools when pinned to a card.
+        </p>
+      )}
 
       {showFilePicker && (
         <div className="border-b border-cat-surface1 max-h-32 overflow-y-auto p-2 space-y-1">
@@ -239,6 +314,13 @@ export default function ChatPanel({
                 {AGENT_LABELS[msg.agent]}
               </span>
             )}
+            {msg.toolCalls && msg.toolCalls.length > 0 && (
+              <div className="mb-1 space-y-0.5">
+                {msg.toolCalls.map((call, i) => (
+                  <ToolCallBlock key={`${msg.id}-tool-${i}`} call={call} />
+                ))}
+              </div>
+            )}
             <div
               className={`inline-block text-xs rounded-lg px-3 py-2 whitespace-pre-wrap ${
                 msg.role === 'user'
@@ -248,8 +330,31 @@ export default function ChatPanel({
             >
               {msg.content || (streaming ? '…' : '')}
             </div>
+            {msg.splitHint && (
+              <div className="mt-1 text-[10px] text-amber-200 bg-amber-950/30 border border-amber-500/30 rounded px-2 py-1.5">
+                {msg.splitHint}
+                {pinnedTask && onSplitTask && (
+                  <button
+                    type="button"
+                    onClick={() => onSplitTask(pinnedTask.id)}
+                    className="ml-2 text-violet-300 hover:text-violet-200 underline"
+                  >
+                    Split now
+                  </button>
+                )}
+              </div>
+            )}
           </div>
         ))}
+        {streaming &&
+          toolEvents
+            .slice(-3)
+            .filter((e) => e.status === 'running')
+            .map((e) => (
+              <div key={e.id} className="max-w-[90%]">
+                <ToolCallBlock call={mapToolEvents([e])[0]} />
+              </div>
+            ))}
         <div ref={bottomRef} />
       </div>
 
@@ -291,5 +396,4 @@ export default function ChatPanel({
       </div>
     </div>
   )
-
 }

@@ -1722,3 +1722,78 @@ def test_run_plan_and_run_cancel_skips_sprint(monkeypatch):
     assert not auto_called
     assert summary.get("status") == "cancelled"
 
+
+def test_clear_logs_api():
+    from backend import state
+    from backend.services.logs import add_system_log
+
+    initialize()
+    client = TestClient(app)
+    add_system_log("System", "info", "before clear")
+    assert len(state.SYSTEM_LOGS) >= 1
+
+    clear_resp = client.post("/api/logs/clear")
+    assert clear_resp.status_code == 200
+    assert clear_resp.json().get("ok") is True
+    assert clear_resp.json().get("logs") == []
+
+    state_resp = client.get("/api/state")
+    assert state_resp.status_code == 200
+    assert state_resp.json().get("logs") == []
+
+
+def test_web_search_disabled_by_default():
+    from backend.workspace.web_search import web_search
+
+    initialize()
+    result = web_search("python asyncio tutorial")
+    assert "disabled" in result.lower()
+
+
+def test_web_search_mocked(monkeypatch):
+    from backend.services.workflow_settings import save_workflow_settings
+    from backend.workspace import web_search as ws_mod
+
+    initialize()
+    save_workflow_settings({"enableWebSearch": True})
+
+    class FakeResp:
+        text = (
+            '<a class="result__a">Example</a>'
+            '<div class="result__snippet">Async patterns in Python</div>'
+        )
+
+        def raise_for_status(self):
+            return None
+
+    monkeypatch.setattr(ws_mod.requests, "get", lambda *a, **k: FakeResp())
+    result = ws_mod.web_search("python asyncio", max_results=3)
+    assert "Example" in result or "Async" in result
+
+
+def test_autonomous_mode_needs_user_cap():
+    from backend import state
+    from backend.agents.task_context import init_new_task
+    from backend.services.sprint_service import _try_move_to_needs_user
+    from backend.services.workflow_settings import save_workflow_settings
+
+    initialize()
+    save_workflow_settings({"autonomousMode": True, "maxNeedsUserPerSprint": 1})
+    state.SPRINT_NEEDS_USER_COUNT = 0
+    state.SHARED_BOARD = {
+        "Backlog": [],
+        "In Progress": [init_new_task({"id": "T1", "title": "Task", "description": "Desc"})],
+        "Needs PO": [],
+        "Needs User": [],
+        "QA": [],
+        "Done": [],
+    }
+    task = state.SHARED_BOARD["In Progress"][0]
+    assert _try_move_to_needs_user(task["id"], task, "Need input") is True
+    assert len(state.SHARED_BOARD.get("Needs User", [])) == 1
+
+    task2 = init_new_task({"id": "T2", "title": "Task 2", "description": "Desc"})
+    state.SHARED_BOARD["In Progress"].append(task2)
+    assert _try_move_to_needs_user(task2["id"], task2, "Need input again") is False
+    assert len(state.SHARED_BOARD.get("Needs User", [])) == 1
+

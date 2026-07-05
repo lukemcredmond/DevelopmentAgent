@@ -7,11 +7,12 @@ type ActivityFilter = 'all' | 'po_bounce' | 'transcript' | 'failures'
 interface ActivityPanelProps {
   events: ActivityEvent[]
   onTaskClick?: (taskId: string) => void
+  onClear?: () => void
 }
 
 const SCROLL_THRESHOLD_PX = 48
 
-export default function ActivityPanel({ events, onTaskClick }: ActivityPanelProps) {
+export default function ActivityPanel({ events, onTaskClick, onClear }: ActivityPanelProps) {
   const [filter, setFilter] = useState<ActivityFilter>('all')
   const [expanded, setExpanded] = useState<Set<number>>(new Set())
   const scrollRef = useRef<HTMLDivElement>(null)
@@ -58,7 +59,7 @@ export default function ActivityPanel({ events, onTaskClick }: ActivityPanelProp
   useEffect(() => {
     const el = scrollRef.current
     if (!el || !stickToBottomRef.current) return
-    el.scrollTo({ top: el.scrollHeight, behavior: 'smooth' })
+    el.scrollTo({ top: el.scrollHeight, behavior: 'auto' })
   }, [filtered.length, events.length])
 
   const toggleExpand = (index: number) => {
@@ -76,7 +77,16 @@ export default function ActivityPanel({ events, onTaskClick }: ActivityPanelProp
         <h3 className="text-xs font-bold uppercase tracking-wider text-cat-subtext">
           Agent Activity
         </h3>
-        <div className="flex gap-1 flex-wrap justify-end">
+        <div className="flex gap-1 flex-wrap justify-end items-center">
+          {onClear && events.length > 0 && (
+            <button
+              type="button"
+              onClick={onClear}
+              className="text-[9px] px-2 py-0.5 rounded border border-cat-surface1 text-cat-subtext hover:text-white hover:bg-cat-surface0 mr-1"
+            >
+              Clear
+            </button>
+          )}
           {(['all', 'po_bounce', 'transcript', 'failures'] as const).map((f) => (
             <button
               key={f}

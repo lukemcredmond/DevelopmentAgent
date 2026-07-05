@@ -75,6 +75,7 @@ export default function BottomPanelResize({ onResize, containerRef }: BottomPane
       role="separator"
       aria-orientation="horizontal"
       aria-label="Resize bottom panel"
+      title="Drag up to enlarge panel"
       onPointerDown={handlePointerDown}
       className="shrink-0 h-1 cursor-row-resize bg-cat-surface1 hover:bg-indigo-500/50 active:bg-indigo-500/70 transition-colors group flex items-center justify-center"
     >

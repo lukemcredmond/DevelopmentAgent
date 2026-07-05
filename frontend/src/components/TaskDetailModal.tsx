@@ -492,7 +492,12 @@ export default function TaskDetailModal({
             )}
 
           {onSplit && taskLane !== 'Done' && (
-            <button
+            <div className="space-y-1">
+              <p className="text-[10px] text-cat-overlay leading-relaxed">
+                Splits this card into subtasks on the backlog (same as the PO agent{' '}
+                <span className="font-mono text-violet-300">add_backlog_tasks</span> tool).
+              </p>
+              <button
               type="button"
               disabled={sprintRunning || splitting}
               title={
@@ -508,6 +513,7 @@ export default function TaskDetailModal({
             >
               {splitting ? 'Splitting…' : 'Split into subtasks'}
             </button>
+            </div>
           )}
 
           {onDiscussWithAgent && (

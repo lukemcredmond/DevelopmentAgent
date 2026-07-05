@@ -71,6 +71,10 @@ export async function fetchState(): Promise<AppState> {
   return request<AppState>('/api/state')
 }
 
+export async function clearLogs(): Promise<{ ok: boolean; logs: [] }> {
+  return request<{ ok: boolean; logs: [] }>('/api/logs/clear', { method: 'POST' })
+}
+
 export async function updateConfig(payload: ConfigPayload): Promise<AppState> {
   return request<AppState>('/api/config', {
     method: 'POST',

@@ -13,6 +13,7 @@ from backend.workspace.files import (
     search_files,
     write_workspace_file,
 )
+from backend.workspace.web_search import web_search
 
 agent_po = ScrumAgent(
     role="Product Owner",
@@ -25,6 +26,7 @@ agent_po = ScrumAgent(
         "Use add_backlog_tasks to add new stories to the Backlog; when splitting a large or stuck card, "
         "pass split_from_task_id so the original moves to Done with a split note. "
         "Invoke add_backlog_tasks yourself — never instruct the user to call it. "
+        "Prefer acting (split, move board) over asking clarifying questions when acceptance criteria exist. "
         f"{PO_SMALLEST_TASKS_GUIDANCE}"
     ),
 )
@@ -36,7 +38,8 @@ agent_dev = ScrumAgent(
         "You implement features from the backlog. Use apply_patch for edits to existing files "
         "and write_file for new files. "
         "If requirements are unclear, escalate to the Product Owner by moving the task to 'Needs PO'. "
-        "When implementation is complete, move the task to 'QA' for validation."
+        "When implementation is complete, move the task to 'QA' for validation. "
+        "Continue iterating on test failures without asking the user unless blocked repeatedly."
     ),
 )
 
@@ -149,6 +152,23 @@ tool_search = Tool(
         "required": ["query"],
     },
     func=lambda query, limit=20: _format_search_results(query, limit=int(limit) if limit else 20),
+)
+
+tool_web_search = Tool(
+    name="web_search",
+    description=(
+        "Search the public web for documentation, APIs, or examples. "
+        "Requires enableWebSearch in workflow settings."
+    ),
+    parameters={
+        "type": "object",
+        "properties": {
+            "query": {"type": "string"},
+            "max_results": {"type": "integer"},
+        },
+        "required": ["query"],
+    },
+    func=lambda query, max_results=5: web_search(query, max_results=int(max_results) if max_results else 5),
 )
 
 tool_board = Tool(
@@ -268,6 +288,8 @@ tool_run_command = Tool(
 agent_po.register_tool(tool_read)
 agent_po.register_tool(tool_board)
 agent_po.register_tool(tool_add_backlog_tasks)
+agent_po.register_tool(tool_search)
+agent_po.register_tool(tool_web_search)
 
 agent_dev.register_tool(tool_read)
 agent_dev.register_tool(tool_write)
@@ -275,6 +297,7 @@ agent_dev.register_tool(tool_apply_patch)
 agent_dev.register_tool(tool_board)
 agent_dev.register_tool(tool_run_command)
 agent_dev.register_tool(tool_search)
+agent_dev.register_tool(tool_web_search)
 agent_dev.register_tool(tool_git_status)
 agent_dev.register_tool(tool_git_diff)
 agent_dev.register_tool(tool_git_commit)
@@ -283,12 +306,12 @@ agent_cr.register_tool(tool_read)
 agent_cr.register_tool(tool_apply_patch)
 agent_cr.register_tool(tool_board)
 agent_cr.register_tool(tool_search)
-agent_cr.register_tool(tool_git_diff)
 
 agent_qa.register_tool(tool_read)
 agent_qa.register_tool(tool_test)
 agent_qa.register_tool(tool_run_command)
 agent_qa.register_tool(tool_search)
+agent_qa.register_tool(tool_web_search)
 agent_qa.register_tool(tool_board)
 
 AGENT_MAP = {

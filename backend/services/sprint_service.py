@@ -246,6 +246,55 @@ def _dev_needs_po(result: str, task: Optional[Dict[str, Any]] = None) -> bool:
     return False
 
 
+def _autonomous_mode_active() -> bool:
+    return bool(get_workflow_settings().get("autonomousMode"))
+
+
+def _autonomous_instruction_suffix() -> str:
+    if not _autonomous_mode_active():
+        return ""
+    return (
+        " Autonomous mode: act without asking the user when acceptance criteria exist; "
+        "only escalate to Needs User for true user-only decisions (secrets, irreversible design)."
+    )
+
+
+def _needs_user_cap_reached() -> bool:
+    if not _autonomous_mode_active():
+        return False
+    cap = int(get_workflow_settings().get("maxNeedsUserPerSprint", 2))
+    return state.SPRINT_NEEDS_USER_COUNT >= cap
+
+
+def _try_move_to_needs_user(
+    task_id: str,
+    task: Dict[str, Any],
+    msg: str,
+    *,
+    kind: str = "stuck_loop",
+) -> bool:
+    if _needs_user_cap_reached():
+        add_system_log(
+            "System",
+            "warning",
+            f"{task_id}: Needs User blocked by autonomous cap ({state.SPRINT_NEEDS_USER_COUNT}) — {msg[:120]}",
+        )
+        return False
+    task["userQuestion"] = msg
+    move_board_stage(task_id, "Needs User")
+    state.SPRINT_NEEDS_USER_COUNT += 1
+    publish_activity(
+        task_id,
+        kind,
+        msg,
+        role="system",
+        agent="System",
+        lane="Needs User",
+    )
+    add_system_log("System", "warning", f"{task_id}: {msg}")
+    return True
+
+
 def _check_stuck_and_escalate(task_id: str, lane_before: str) -> None:
     """Escalate when a sprint step completes without moving the card."""
     task = find_task_by_id(task_id)
@@ -271,17 +320,7 @@ def _check_stuck_and_escalate(task_id: str, lane_before: str) -> None:
             f"Agents made no progress after {max_stuck} steps in '{lane_after}'. "
             "Please clarify requirements or make a decision."
         )
-        task["userQuestion"] = msg
-        move_board_stage(task_id, "Needs User")
-        publish_activity(
-            task_id,
-            "stuck_loop",
-            msg,
-            role="system",
-            agent="System",
-            lane="Needs User",
-        )
-        add_system_log("System", "warning", f"{task_id}: stuck loop → Needs User")
+        _try_move_to_needs_user(task_id, task, msg)
     else:
         msg = (
             f"Agents made no progress after {max_stuck} steps in '{lane_after}' — "
@@ -310,17 +349,8 @@ def _escalate_po_limit(task: Dict[str, Any]) -> bool:
         f"PO and Dev could not agree after {max_trips} rounds — "
         "please clarify requirements."
     )
-    task["userQuestion"] = msg
-    move_board_stage(task["id"], "Needs User")
-    publish_activity(
-        task["id"],
-        "po_limit",
-        msg,
-        role="system",
-        agent="System",
-        lane="Needs User",
-    )
-    add_system_log("System", "warning", f"{task['id']}: {msg}")
+    if not _try_move_to_needs_user(task["id"], task, msg, kind="po_limit"):
+        return False
     return True
 
 
@@ -1019,6 +1049,7 @@ def _run_developer_step(active_task: Dict[str, Any], brief: str) -> None:
         "Unclear requirements → move to 'Needs PO'. "
         "User-only decisions (keys, design) → move to 'Needs User' with a specific userQuestion. "
         f"When complete and files are written → move to '{target}'."
+        f"{_autonomous_instruction_suffix()}"
     )
     prompt = _inject_sprint_context(active_task, brief, "Developer", instructions)
     result = agent_dev.execute_step(prompt, max_iterations=_llm_iterations())
@@ -1033,8 +1064,16 @@ def _run_developer_step(active_task: Dict[str, Any], brief: str) -> None:
             record_task_decision(task_id, "Developer", "work", result[:500], result)
             if _task_in_lane(task_id, "In Progress"):
                 if _dev_needs_user(result):
-                    task["userQuestion"] = result[:500]
-                    move_board_stage(task_id, "Needs User")
+                    if not _needs_user_cap_reached():
+                        task["userQuestion"] = result[:500]
+                        move_board_stage(task_id, "Needs User")
+                        state.SPRINT_NEEDS_USER_COUNT += 1
+                    else:
+                        add_system_log(
+                            "Developer",
+                            "warning",
+                            f"{task_id}: autonomous cap — staying In Progress instead of Needs User",
+                        )
                 elif _dev_needs_po(result, task):
                     if not _escalate_po_limit(task):
                         increment_po_round_trips(task_id)
@@ -1272,6 +1311,7 @@ def _build_sprint_summary(steps: int, status: str = "completed") -> Dict[str, An
 
 def run_auto_sprint(brief: str, ollama_url: str, max_steps: int | None = None) -> Dict[str, Any]:
     state.SPRINT_CANCEL = False
+    state.SPRINT_NEEDS_USER_COUNT = 0
     ws = get_workflow_settings()
     limit = max_steps if max_steps is not None else int(ws.get("maxSprintSteps", 20))
     state.SPRINT_PROGRESS_MAX = limit
@@ -1311,6 +1351,7 @@ def run_plan_and_run(brief: str, ollama_url: str, max_steps: int | None = None) 
     ws = get_workflow_settings()
     limit = max_steps if max_steps is not None else int(ws.get("maxSprintSteps", 20))
     state.SPRINT_CANCEL = False
+    state.SPRINT_NEEDS_USER_COUNT = 0
     state.SPRINT_PROGRESS_MAX = limit
     state.SPRINT_PROGRESS_STEP = 0
 

@@ -25,9 +25,15 @@ interface BriefPanelProps {
   brief: string
   onBriefChange: (value: string) => void
   onOpenManualTask: () => void
+  autonomousMode?: boolean
 }
 
-export default function BriefPanel({ brief, onBriefChange, onOpenManualTask }: BriefPanelProps) {
+export default function BriefPanel({
+  brief,
+  onBriefChange,
+  onOpenManualTask,
+  autonomousMode = false,
+}: BriefPanelProps) {
   const [open, setOpen] = useState(readBriefOpen)
 
   useEffect(() => {
@@ -68,6 +74,12 @@ export default function BriefPanel({ brief, onBriefChange, onOpenManualTask }: B
       </div>
       {open && (
         <div className="p-4 space-y-2">
+          {autonomousMode && (
+            <p className="text-[11px] text-violet-300 bg-violet-950/25 border border-violet-500/30 rounded-lg px-3 py-2">
+              Autonomous mode — sprint will proceed with minimal prompts. Needs User stops are
+              capped per sprint.
+            </p>
+          )}
           <p className="text-[11px] text-cat-overlay leading-relaxed">
             Describe your project. Plan & Run automates PO → Dev → QA. Developer questions go to
             Needs PO; user decisions go to Needs User.

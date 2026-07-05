@@ -89,6 +89,12 @@ export interface WorkflowSettings {
   maxSprintSteps: number
   maxLlmIterationsPerStep: number
   maxPoRoundTrips: number
+  maxStuckSteps?: number
+  maxToolFailuresPerStep?: number
+  autoStartSprint?: boolean
+  autonomousMode?: boolean
+  maxNeedsUserPerSprint?: number
+  enableWebSearch?: boolean
 }
 
 export interface McpServerConfig {
@@ -351,6 +357,12 @@ export interface WorkflowSettingsPayload {
   maxSprintSteps?: number
   maxLlmIterationsPerStep?: number
   maxPoRoundTrips?: number
+  maxStuckSteps?: number
+  maxToolFailuresPerStep?: number
+  autoStartSprint?: boolean
+  autonomousMode?: boolean
+  maxNeedsUserPerSprint?: number
+  enableWebSearch?: boolean
 }
 
 export interface SkillsResponse {
@@ -399,6 +411,14 @@ export interface ChatResponse {
   response: string
   reply?: string
   messages?: unknown[]
+  splitHint?: string
+  toolCalls?: Array<{
+    toolName?: string
+    toolArgs?: Record<string, unknown>
+    toolOutput?: string
+    toolSuccess?: boolean
+    status?: string
+  }>
 }
 
 export interface TerminalRunPayload {
@@ -502,6 +522,12 @@ export const DEFAULT_WORKFLOW_SETTINGS: WorkflowSettings = {
   maxSprintSteps: 20,
   maxLlmIterationsPerStep: 8,
   maxPoRoundTrips: 3,
+  maxStuckSteps: 3,
+  maxToolFailuresPerStep: 5,
+  autoStartSprint: true,
+  autonomousMode: false,
+  maxNeedsUserPerSprint: 2,
+  enableWebSearch: false,
 }
 
 export const EMPTY_BOARD: Board = {

@@ -19,6 +19,10 @@ DEFAULT_WORKFLOW_SETTINGS: Dict[str, Any] = {
     "maxPoRoundTrips": 3,
     "maxStuckSteps": 3,
     "maxToolFailuresPerStep": 5,
+    "autoStartSprint": True,
+    "autonomousMode": False,
+    "maxNeedsUserPerSprint": 2,
+    "enableWebSearch": False,
 }
 
 DEFAULT_SPRINT_SUMMARY: Dict[str, Any] = {

@@ -137,6 +137,9 @@ export default function App() {
     sprintProgress,
     setSprintProgress,
     refreshToolHistory,
+    clearLogs,
+    clearActivity,
+    sseLive,
   } = useAppState()
 
   const [planRunActive, setPlanRunActive] = useState(false)
@@ -637,6 +640,7 @@ export default function App() {
           brief={brief}
           onBriefChange={setBrief}
           onOpenManualTask={() => setShowManualTask(true)}
+          autonomousMode={state.workflowSettings?.autonomousMode ?? false}
         />
 
         <KanbanToggleBar
@@ -663,7 +667,7 @@ export default function App() {
           />
         )}
 
-        <div className="flex-1 flex flex-col min-h-0 overflow-hidden">
+        <div ref={workspaceColumnRef} className="flex-1 flex flex-col min-h-0 overflow-hidden">
           {showWorkspace ? (
             <div className="flex-1 min-h-0 grid grid-cols-1 lg:grid-cols-[200px_1fr] overflow-hidden">
               <FileExplorer
@@ -719,7 +723,7 @@ export default function App() {
             )
           )}
 
-          <div ref={workspaceColumnRef} className="flex flex-col min-h-0 overflow-hidden shrink-0">
+          <div className="flex flex-col min-h-0 overflow-hidden flex-1 justify-end">
             <BottomPanelResize
               containerRef={workspaceColumnRef}
               onResize={handleBottomPanelResize}
@@ -727,7 +731,7 @@ export default function App() {
 
             <div
               data-bottom-panel
-              style={{ height: bottomPanelHeight }}
+              style={{ height: bottomPanelHeight, maxHeight: '100%' }}
               className="flex flex-col shrink-0 border-t border-cat-surface1 min-h-0"
             >
               <SprintProgressBar progress={sprintProgress} planRunActive={planRunActive} />
@@ -774,29 +778,42 @@ export default function App() {
                   <i className="fa-solid fa-up-right-and-down-left-from-center text-xs" />
                 </button>
               </div>
-              <div className="flex-1 min-h-0 overflow-hidden relative">
-                {bottomTab === 'console' && <AgentConsole logs={state.logs} />}
+              <div className="flex-1 min-h-0 flex flex-col relative overflow-hidden">
+                {bottomTab === 'console' && (
+                  <div className="absolute inset-0 flex flex-col min-h-0">
+                    <AgentConsole
+                      logs={state.logs}
+                      onClear={() => void clearLogs()}
+                      sseLive={sseLive}
+                    />
+                  </div>
+                )}
                 {bottomTab === 'activity' && (
-                  <ActivityPanel
-                    events={activityEvents}
-                    onTaskClick={(taskId) => {
-                      const task = findTaskOnBoard(state.board, taskId)
-                      if (task) setSelectedTask(task)
-                    }}
-                  />
+                  <div className="absolute inset-0 flex flex-col min-h-0">
+                    <ActivityPanel
+                      events={activityEvents}
+                      onClear={clearActivity}
+                      onTaskClick={(taskId) => {
+                        const task = findTaskOnBoard(state.board, taskId)
+                        if (task) setSelectedTask(task)
+                      }}
+                    />
+                  </div>
                 )}
                 {bottomTab === 'tools' && (
-                  <ToolsPanel
-                    toolEvents={toolEvents}
-                    onClearLog={clearToolEvents}
-                    onMergeToolEvent={mergeToolEvent}
-                    board={state.board}
-                    selectedTaskId={selectedTask?.id}
-                    onRefreshState={() => void refresh()}
-                    preferredSubTab={toolsPreferredSubTab}
-                    workspaceDir={state.workspaceDir}
-                    onInjectToolEvidence={(taskId, payload) => handleInjectToolEvidence(taskId, payload)}
-                  />
+                  <div className="absolute inset-0 flex flex-col min-h-0">
+                    <ToolsPanel
+                      toolEvents={toolEvents}
+                      onClearLog={clearToolEvents}
+                      onMergeToolEvent={mergeToolEvent}
+                      board={state.board}
+                      selectedTaskId={selectedTask?.id}
+                      onRefreshState={() => void refresh()}
+                      preferredSubTab={toolsPreferredSubTab}
+                      workspaceDir={state.workspaceDir}
+                      onInjectToolEvidence={(taskId, payload) => handleInjectToolEvidence(taskId, payload)}
+                    />
+                  </div>
                 )}
                 <ChatPanel
                   hidden={bottomTab !== 'chat'}
@@ -814,15 +831,23 @@ export default function App() {
                   pinnedLane={chatPinnedLane}
                   onClearPinnedTask={() => setChatPinnedTask(null)}
                   onRefreshState={() => void refresh()}
+                  onSplitTask={(taskId) => void handleSplitTask(taskId)}
+                  toolEvents={toolEvents}
                 />
                 <TerminalPanel
                   hidden={bottomTab !== 'terminal'}
                   workspaceDir={state.workspaceDir}
                 />
                 {bottomTab === 'search' && (
-                  <SearchPanel onOpenFile={handleOpenFile} />
+                  <div className="absolute inset-0 flex flex-col min-h-0">
+                    <SearchPanel onOpenFile={handleOpenFile} />
+                  </div>
                 )}
-                {bottomTab === 'git' && <GitPanel />}
+                {bottomTab === 'git' && (
+                  <div className="absolute inset-0 flex flex-col min-h-0">
+                    <GitPanel />
+                  </div>
+                )}
               </div>
             </div>
           </div>

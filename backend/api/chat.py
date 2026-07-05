@@ -51,12 +51,12 @@ def _compose_message(payload: ChatPayload) -> str:
 
 
 def _apply_chat_task_context(payload: ChatPayload) -> None:
-    if payload.task_id:
-        state.ACTIVE_SPRINT_TASK_ID = payload.task_id
-        state.STEP_FILE_READS.clear()
-        agent = AGENT_MAP.get(payload.agent)
-        if agent:
-            state.ACTIVE_SPRINT_AGENT = agent.role
+    chat_task_id = payload.task_id or f"chat-{payload.agent}"
+    state.ACTIVE_SPRINT_TASK_ID = chat_task_id
+    state.STEP_FILE_READS.clear()
+    agent = AGENT_MAP.get(payload.agent)
+    if agent:
+        state.ACTIVE_SPRINT_AGENT = agent.role
 
 
 def _finalize_chat_task_context(payload: ChatPayload) -> None:
@@ -64,6 +64,18 @@ def _finalize_chat_task_context(payload: ChatPayload) -> None:
         save_current_project_state()
     state.ACTIVE_SPRINT_TASK_ID = None
     state.ACTIVE_SPRINT_AGENT = None
+
+
+def _split_hint_for_response(message: str, response: str, added: int) -> str | None:
+    if added > 0:
+        return None
+    lower_resp = response.lower()
+    if _split_intent(message) or "add_backlog_tasks" in lower_resp:
+        return (
+            "Split didn't apply automatically — open the task and use **Split into subtasks** "
+            "on the card detail (not a chat command)."
+        )
+    return None
 
 
 @router.post("/api/chat")
@@ -81,18 +93,21 @@ def chat_with_agent(payload: ChatPayload):
         _apply_chat_task_context(payload)
 
     split_hint = None
+    tool_calls: list = []
+    with state.STATE_LOCK:
+        log_len_before = len(state.TOOL_EXECUTION_LOG)
     try:
         response = agent.execute_step(composed)
     finally:
         with state.STATE_LOCK:
+            tool_calls = [dict(e) for e in state.TOOL_EXECUTION_LOG[log_len_before:]]
             if payload.agent == "po" and payload.task_id:
                 from backend.services.sprint_service import apply_backlog_from_po_response
 
                 added = apply_backlog_from_po_response(response, payload.task_id)
-                if _split_intent(payload.message) and added == 0:
-                    split_hint = (
-                        "Split didn't apply automatically — use Split into subtasks on the card detail."
-                    )
+                split_hint = _split_hint_for_response(payload.message, response, added)
+            elif payload.agent == "po" and "add_backlog_tasks" in response.lower():
+                split_hint = _split_hint_for_response(payload.message, response, 0)
             _finalize_chat_task_context(payload)
             state.storage.save_chat_message(
                 state.CURRENT_PROJECT_ID, "assistant", response, agent=agent.role
@@ -110,6 +125,8 @@ def chat_with_agent(payload: ChatPayload):
     }
     if split_hint:
         result["splitHint"] = split_hint
+    if tool_calls:
+        result["toolCalls"] = tool_calls
     return result
 
 
@@ -127,20 +144,38 @@ def chat_stream(payload: ChatPayload):
             )
             composed = _compose_message(payload)
             _apply_chat_task_context(payload)
-            messages = [{"role": "user", "content": composed}]
 
-        full = ""
+        split_hint = None
+        tool_calls: list = []
+        with state.STATE_LOCK:
+            log_len_before = len(state.TOOL_EXECUTION_LOG)
         try:
-            for chunk in agent.stream_messages(messages):
-                full += chunk
-                yield f"data: {json.dumps({'chunk': chunk})}\n\n"
+            response = agent.execute_step(composed)
         finally:
             with state.STATE_LOCK:
+                tool_calls = [dict(e) for e in state.TOOL_EXECUTION_LOG[log_len_before:]]
+                if payload.agent == "po" and payload.task_id:
+                    from backend.services.sprint_service import apply_backlog_from_po_response
+
+                    added = apply_backlog_from_po_response(response, payload.task_id)
+                    split_hint = _split_hint_for_response(payload.message, response, added)
+                elif payload.agent == "po" and "add_backlog_tasks" in response.lower():
+                    split_hint = _split_hint_for_response(payload.message, response, 0)
                 _finalize_chat_task_context(payload)
                 state.storage.save_chat_message(
-                    state.CURRENT_PROJECT_ID, "assistant", full, agent=agent.role
+                    state.CURRENT_PROJECT_ID, "assistant", response, agent=agent.role
                 )
-                publish_event("chat", {"agent": payload.agent, "response": full[:500]})
-            yield f"data: {json.dumps({'done': True, 'response': full})}\n\n"
+                publish_event("chat", {"agent": payload.agent, "response": response[:500]})
+                if payload.task_id:
+                    from backend.services.board_service import publish_board_update
+
+                    publish_board_update(payload.task_id, source="chat")
+
+        payload_out: dict = {"done": True, "response": response}
+        if split_hint:
+            payload_out["splitHint"] = split_hint
+        if tool_calls:
+            payload_out["toolCalls"] = tool_calls
+        yield f"data: {json.dumps(payload_out)}\n\n"
 
     return StreamingResponse(generate(), media_type="text/event-stream")

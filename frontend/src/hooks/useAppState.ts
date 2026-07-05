@@ -1,6 +1,7 @@
 import { useCallback, useEffect, useRef, useState } from 'react'
 import {
   cancelSprint,
+  clearLogs as clearLogsApi,
   fetchPendingApprovals,
   fetchPendingTools,
   fetchState,
@@ -249,6 +250,8 @@ export function useAppState() {
   const liveActivityRef = useRef<ActivityEvent[]>([])
   const boardRef = useRef<Board>(defaultState.board)
   const displayRunTimerRef = useRef<number | null>(null)
+  const toolHistoryDebounceRef = useRef<number | null>(null)
+  const [sseLive, setSseLive] = useState(true)
 
   const scheduleDisplayRunClear = useCallback(() => {
     if (displayRunTimerRef.current) {
@@ -297,6 +300,30 @@ export function useAppState() {
     } catch {
       /* history endpoint optional during startup */
     }
+  }, [])
+
+  const debouncedRefreshToolHistory = useCallback(() => {
+    if (toolHistoryDebounceRef.current) {
+      window.clearTimeout(toolHistoryDebounceRef.current)
+    }
+    toolHistoryDebounceRef.current = window.setTimeout(() => {
+      toolHistoryDebounceRef.current = null
+      void refreshToolHistory()
+    }, 300)
+  }, [refreshToolHistory])
+
+  const clearLogs = useCallback(async () => {
+    try {
+      await clearLogsApi()
+      setState((prev) => ({ ...prev, logs: [] }))
+    } catch {
+      setState((prev) => ({ ...prev, logs: [] }))
+    }
+  }, [])
+
+  const clearActivity = useCallback(() => {
+    liveActivityRef.current = []
+    setActivityEvents(hydrateActivityFromBoard(boardRef.current))
   }, [])
 
   const refresh = useCallback(async () => {
@@ -362,6 +389,7 @@ export function useAppState() {
 
   useEffect(() => {
     const source = subscribeEvents((event) => {
+      setSseLive(true)
       if (event.type === 'state' && event.data) {
         const data = event.data as AppState
         setState(data)
@@ -374,7 +402,7 @@ export function useAppState() {
           syncActivityFromBoard(next.board)
           return next
         })
-        void refreshToolHistory()
+        debouncedRefreshToolHistory()
       } else if (event.type === 'files') {
         void refresh()
       } else if (event.type === 'sprint') {
@@ -384,8 +412,12 @@ export function useAppState() {
         setCurrentTool(null)
         setDisplayRun(null)
       } else if (event.type === 'sprint_progress' && event.data) {
-        setSprintProgress(mapSprintProgress(event.data as Record<string, unknown>))
-        void refreshToolHistory()
+        const progress = mapSprintProgress(event.data as Record<string, unknown>)
+        setSprintProgress(progress)
+        debouncedRefreshToolHistory()
+        if (progress.phase === 'done' || progress.status === 'done') {
+          void refresh()
+        }
       } else if (event.type === 'activity' && event.data) {
         appendActivity(event.data as ActivityEvent)
       } else if (event.type === 'pending_tool' && event.data) {
@@ -440,7 +472,7 @@ export function useAppState() {
         setDisplayRun((prev) => mergeRun(prev))
         setCurrentTool(null)
         setToolEvents((prev) => applyToolEnd(prev, payload))
-        void refreshToolHistory()
+        debouncedRefreshToolHistory()
       } else if (event.type === 'tool_approval_required' && event.data) {
         const approval = mapApprovalFromEvent(event.data as Record<string, unknown>)
         setPendingApprovals((prev) =>
@@ -450,7 +482,16 @@ export function useAppState() {
       }
     })
 
-    return () => source.close()
+    const onError = () => setSseLive(false)
+    source.addEventListener('error', onError)
+
+    return () => {
+      source.removeEventListener('error', onError)
+      source.close()
+      if (toolHistoryDebounceRef.current) {
+        window.clearTimeout(toolHistoryDebounceRef.current)
+      }
+    }
   }, [
     refresh,
     appendLog,
@@ -459,6 +500,7 @@ export function useAppState() {
     refreshPendingTools,
     refreshPendingApprovals,
     refreshToolHistory,
+    debouncedRefreshToolHistory,
     scheduleDisplayRunClear,
   ])
 
@@ -486,6 +528,9 @@ export function useAppState() {
     clearToolEvents,
     mergeToolEvent,
     refreshToolHistory,
+    clearLogs,
+    clearActivity,
+    sseLive,
     toolFailureCount,
     toolRunningCount,
     toolStartTick,

@@ -30,6 +30,7 @@ SPRINT_STEP_STARTED_AT: Optional[str] = None
 # Current step counters for sprint_progress SSE (set by run_auto_sprint / plan-and-run).
 SPRINT_PROGRESS_STEP: int = 0
 SPRINT_PROGRESS_MAX: int = 20
+SPRINT_NEEDS_USER_COUNT: int = 0
 
 # Paths read via read_file during the current sprint agent step (safe_path -> content).
 STEP_FILE_READS: Dict[str, str] = {}

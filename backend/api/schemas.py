@@ -89,6 +89,11 @@ class WorkflowSettingsPayload(BaseModel):
     maxLlmIterationsPerStep: Optional[int] = None
     maxPoRoundTrips: Optional[int] = None
     maxToolFailuresPerStep: Optional[int] = None
+    maxStuckSteps: Optional[int] = None
+    autoStartSprint: Optional[bool] = None
+    autonomousMode: Optional[bool] = None
+    maxNeedsUserPerSprint: Optional[int] = None
+    enableWebSearch: Optional[bool] = None
 
 
 class DeleteTaskPayload(BaseModel):

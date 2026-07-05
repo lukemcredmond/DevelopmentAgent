@@ -86,6 +86,46 @@ export default function WorkflowPanel({
         <span className="text-indigo-300">run_command</span> pause until you approve in the modal.
       </p>
 
+      <label className="flex items-center gap-2 text-[11px] text-cat-subtext cursor-pointer">
+        <input
+          type="checkbox"
+          checked={settings.autonomousMode ?? false}
+          onChange={(e) => onSettingsChange({ autonomousMode: e.target.checked })}
+        />
+        Autonomous sprint mode (minimal user input)
+      </label>
+      <p className="text-[10px] text-cat-overlay leading-relaxed -mt-1 pl-5">
+        When enabled, agents prefer acting over asking. Needs User moves are capped per sprint (
+        {settings.maxNeedsUserPerSprint ?? 2} by default).
+      </p>
+
+      <label className="flex items-center gap-2 text-[11px] text-cat-subtext cursor-pointer">
+        <input
+          type="checkbox"
+          checked={settings.enableWebSearch ?? false}
+          onChange={(e) => onSettingsChange({ enableWebSearch: e.target.checked })}
+        />
+        Enable web search tool for agents
+      </label>
+      <p className="text-[10px] text-cat-overlay leading-relaxed -mt-1 pl-5">
+        Uses DuckDuckGo HTML search locally, or set{' '}
+        <span className="font-mono">WEB_SEARCH_API_KEY</span> for Serper.
+      </p>
+
+      <label className="text-[11px] text-cat-subtext block">
+        <span className="text-[10px] text-cat-overlay block">Max Needs User per sprint</span>
+        <input
+          type="number"
+          min={0}
+          max={10}
+          value={settings.maxNeedsUserPerSprint ?? 2}
+          onChange={(e) =>
+            onSettingsChange({ maxNeedsUserPerSprint: parseInt(e.target.value, 10) || 0 })
+          }
+          className="w-full bg-cat-base border border-cat-surface1 rounded p-1 text-white"
+        />
+      </label>
+
       <div className="grid grid-cols-3 gap-2 text-[11px]">
         <label>
           <span className="text-[10px] text-cat-overlay block">Max sprint steps</span>

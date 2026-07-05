@@ -3,6 +3,8 @@ import type { SystemLog } from '../types'
 
 interface AgentConsoleProps {
   logs: SystemLog[]
+  onClear?: () => void
+  sseLive?: boolean
 }
 
 const SCROLL_THRESHOLD_PX = 48
@@ -17,7 +19,7 @@ function isActionableWarning(text: string): boolean {
   )
 }
 
-export default function AgentConsole({ logs }: AgentConsoleProps) {
+export default function AgentConsole({ logs, onClear, sseLive = true }: AgentConsoleProps) {
   const scrollRef = useRef<HTMLDivElement>(null)
   const stickToBottomRef = useRef(true)
 
@@ -31,16 +33,36 @@ export default function AgentConsole({ logs }: AgentConsoleProps) {
   useEffect(() => {
     const el = scrollRef.current
     if (!el || !stickToBottomRef.current) return
-    el.scrollTo({ top: el.scrollHeight, behavior: 'smooth' })
+    el.scrollTo({ top: el.scrollHeight, behavior: 'auto' })
   }, [logs.length])
 
   return (
     <div className="flex flex-col h-full overflow-hidden bg-[#0f0f15]">
-      <div className="bg-cat-mantle border-b border-cat-surface1 px-4 py-2 flex items-center justify-between shrink-0">
+      <div className="bg-cat-mantle border-b border-cat-surface1 px-4 py-2 flex items-center justify-between shrink-0 gap-2">
         <h3 className="text-xs font-bold uppercase tracking-wider text-cat-subtext">
           Agent Console Event Stream
         </h3>
-        <span className="text-[10px] text-cat-overlay">{logs.length} events</span>
+        <div className="flex items-center gap-2">
+          <span
+            className={`text-[9px] uppercase px-1.5 py-0.5 rounded ${
+              sseLive
+                ? 'text-emerald-400 bg-emerald-950/30'
+                : 'text-amber-400 bg-amber-950/30'
+            }`}
+          >
+            {sseLive ? 'Live' : 'Reconnecting…'}
+          </span>
+          <span className="text-[10px] text-cat-overlay">{logs.length} events</span>
+          {onClear && logs.length > 0 && (
+            <button
+              type="button"
+              onClick={onClear}
+              className="text-[10px] px-2 py-0.5 rounded border border-cat-surface1 text-cat-subtext hover:text-white hover:bg-cat-surface0"
+            >
+              Clear
+            </button>
+          )}
+        </div>
       </div>
       <div
         ref={scrollRef}
