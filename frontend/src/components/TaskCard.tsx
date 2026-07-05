@@ -7,6 +7,7 @@ interface TaskCardProps {
   fileCount: number
   decisionCount: number
   onClick: () => void
+  dragDisabled?: boolean
 }
 
 export default function TaskCard({
@@ -14,9 +15,10 @@ export default function TaskCard({
   fileCount,
   decisionCount,
   onClick,
+  dragDisabled = false,
 }: TaskCardProps) {
   const { attributes, listeners, setNodeRef, transform, transition, isDragging } =
-    useSortable({ id: task.id })
+    useSortable({ id: task.id, disabled: dragDisabled })
 
   const style = {
     transform: CSS.Transform.toString(transform),
@@ -34,7 +36,9 @@ export default function TaskCard({
       {...attributes}
       {...listeners}
       onClick={onClick}
-      className="w-full text-left bg-cat-surface0 p-2.5 rounded-lg border border-cat-surface1 hover:border-indigo-500/50 transition-all text-xs cursor-grab active:cursor-grabbing"
+      className={`w-full text-left bg-cat-surface0 p-2.5 rounded-lg border border-cat-surface1 hover:border-indigo-500/50 transition-all text-xs ${
+        dragDisabled ? 'cursor-not-allowed opacity-70' : 'cursor-grab active:cursor-grabbing'
+      }`}
     >
       <div className="flex items-center justify-between mb-1.5">
         <span className="text-[10px] bg-indigo-950 text-indigo-300 px-1.5 py-0.5 rounded font-mono font-bold">

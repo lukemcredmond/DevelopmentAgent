@@ -1,7 +1,7 @@
 from fastapi import APIRouter, HTTPException
 
 from backend import state
-from backend.agents.task_context import find_task_by_id, normalize_task, record_task_decision, sort_backlog
+from backend.agents.task_context import clear_task_transcript, find_task_by_id, normalize_task, record_task_decision, sort_backlog
 from backend.api.helpers import build_state_response
 from backend.api.schemas import (
     DeleteTaskPayload,
@@ -120,6 +120,16 @@ def reorder_tasks(payload: ReorderTasksPayload):
         state.SHARED_BOARD[lane] = reordered
         save_current_project_state()
         publish_board_update(source="reorder")
+    return build_state_response()
+
+
+@router.delete("/api/tasks/{task_id}/transcript")
+def clear_task_transcript_route(task_id: str):
+    with state.STATE_LOCK:
+        if not clear_task_transcript(task_id):
+            raise HTTPException(status_code=404, detail="Task not found")
+        save_current_project_state()
+        add_system_log("System", "info", f"Cleared transcript for {task_id}")
     return build_state_response()
 
 

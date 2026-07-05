@@ -62,6 +62,7 @@ export default function KanbanBoard({
   }
 
   const handleDragStart = (event: DragStartEvent) => {
+    if (sprintRunning) return
     const taskId = String(event.active.id)
     for (const lane of lanes) {
       const task = (board[lane] ?? []).find((t) => t.id === taskId)
@@ -73,6 +74,10 @@ export default function KanbanBoard({
   }
 
   const handleDragEnd = (event: DragEndEvent) => {
+    if (sprintRunning) {
+      setActiveTask(null)
+      return
+    }
     setActiveTask(null)
     const { active, over } = event
     if (!over) return
@@ -120,7 +125,7 @@ export default function KanbanBoard({
 
       {sprintRunning && (
         <div className="mb-2 text-[10px] text-amber-300 bg-amber-950/30 border border-amber-500/30 rounded px-2 py-1 shrink-0">
-          Sprint running — you can move cards between steps
+          Sprint step in progress — wait for it to finish before moving or deleting cards
         </div>
       )}
 
@@ -144,6 +149,7 @@ export default function KanbanBoard({
               onTaskClick={onTaskClick}
               getTaskFileCount={getTaskFileCount}
               getTaskDecisionCount={getTaskDecisionCount}
+              dragDisabled={sprintRunning}
             />
           ))}
         </div>

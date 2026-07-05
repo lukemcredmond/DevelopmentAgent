@@ -1,7 +1,7 @@
 import datetime
 from typing import Any, Dict, List, Optional
 
-from backend.config import MAX_TASK_DECISIONS
+from backend.config import MAX_TASK_DECISIONS, MAX_TASK_TRANSCRIPT
 from backend import state
 from backend.services.events import publish_event
 from backend.services.workflow_settings import get_workflow_settings
@@ -165,6 +165,8 @@ def record_task_transcript(
             "content": content[:4000],
         }
     )
+    if len(task["transcript"]) > MAX_TASK_TRANSCRIPT:
+        task["transcript"] = task["transcript"][-MAX_TASK_TRANSCRIPT:]
     publish_activity(
         task_id,
         "transcript",
@@ -172,6 +174,15 @@ def record_task_transcript(
         role=role,
         agent=agent or role,
     )
+
+
+def clear_task_transcript(task_id: str) -> bool:
+    task = find_task_by_id(task_id)
+    if not task:
+        return False
+    normalize_task(task)
+    task["transcript"] = []
+    return True
 
 
 def increment_po_round_trips(task_id: str) -> int:

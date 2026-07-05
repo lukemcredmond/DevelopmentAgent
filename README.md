@@ -10,6 +10,7 @@ Local multi-agent AI development workspace with Kanban board, Ollama-powered age
 - Node.js 18+
 - [Ollama](https://ollama.com/) (optional; offline simulation fallbacks exist when Ollama is unreachable)
 - Git (optional; used for auto-commit on Done and the Git panel)
+- [Flutter SDK](https://docs.flutter.dev/get-started/install) on `PATH` (optional; required for Dev/QA agents to run `flutter analyze` via the `run_command` tool — point workspace at your Flutter project root where `pubspec.yaml` lives)
 
 Recommended models:
 

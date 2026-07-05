@@ -173,6 +173,13 @@ export async function deleteTask(taskId: string): Promise<AppState> {
   })
 }
 
+export async function clearTaskTranscript(taskId: string): Promise<AppState> {
+  return request<AppState>(
+    `/api/tasks/${encodeURIComponent(taskId)}/transcript`,
+    { method: 'DELETE' },
+  )
+}
+
 export async function moveTask(payload: MoveTaskPayload): Promise<AppState> {
   return request<AppState>('/api/tasks/move', {
     method: 'POST',
