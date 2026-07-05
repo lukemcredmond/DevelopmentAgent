@@ -13,6 +13,7 @@ SKILLS_DIR = "./global_skills"
 SHARED_BOARD: Dict[str, List[Dict[str, Any]]] = {k: list(v) for k, v in DEFAULT_BOARD.items()}
 VIRTUAL_FILESYSTEM: Dict[str, str] = dict(DEFAULT_VIRTUAL_FS)
 SYSTEM_LOGS: List[Dict[str, str]] = []
+TOOL_EXECUTION_LOG: List[Dict[str, Any]] = []
 
 STATE_LOCK = threading.RLock()
 ACTIVE_SPRINT_TASK_ID: Optional[str] = None
@@ -25,5 +26,9 @@ PENDING_TOOL_APPROVALS: List[Any] = []
 
 # Timestamp marking the start of the current sprint agent step (for transcript scoping).
 SPRINT_STEP_STARTED_AT: Optional[str] = None
+
+# Current step counters for sprint_progress SSE (set by run_auto_sprint / plan-and-run).
+SPRINT_PROGRESS_STEP: int = 0
+SPRINT_PROGRESS_MAX: int = 20
 
 storage = ProjectStorage()

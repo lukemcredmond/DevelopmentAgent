@@ -14,7 +14,7 @@ import type {
   TranscriptToolEntry,
 } from '../types'
 
-type ToolFilter = 'all' | 'failed' | 'agent' | 'manual' | 'replay'
+type ToolFilter = 'all' | 'failed' | 'agent' | 'manual' | 'replay' | 'orchestrator' | 'context_inject'
 type ToolsSubTab = 'log' | 'manual' | 'replay'
 
 const TOOLS_SUBTAB_KEY = 'allhands-tools-subtab'
@@ -68,7 +68,7 @@ function readToolsSubTab(): ToolsSubTab {
   } catch {
     /* ignore */
   }
-  return 'manual'
+  return 'log'
 }
 
 function defaultArgsForTool(tool: ToolDefinition | undefined): string {
@@ -213,6 +213,8 @@ export default function ToolsPanel({
     if (filter === 'agent') return toolEvents.filter((e) => e.source === 'agent')
     if (filter === 'manual') return toolEvents.filter((e) => e.source === 'manual')
     if (filter === 'replay') return toolEvents.filter((e) => e.source === 'replay')
+    if (filter === 'orchestrator') return toolEvents.filter((e) => e.source === 'orchestrator')
+    if (filter === 'context_inject') return toolEvents.filter((e) => e.source === 'context_inject')
     return toolEvents
   }, [toolEvents, filter])
 
@@ -323,7 +325,11 @@ export default function ToolsPanel({
                 : 'text-cat-overlay hover:text-cat-subtext'
             }`}
           >
-            {tab === 'log' ? 'Execution Log' : tab === 'manual' ? 'Manual Test' : 'Replay'}
+            {tab === 'log'
+              ? `Execution Log${toolEvents.length > 0 ? ` (${toolEvents.length})` : ''}`
+              : tab === 'manual'
+                ? 'Manual Test'
+                : 'Replay'}
           </button>
         ))}
       </div>
@@ -333,7 +339,17 @@ export default function ToolsPanel({
           <div className="bg-cat-mantle/50 border-b border-cat-surface1 px-4 py-2 flex items-center justify-between shrink-0 gap-2">
             <span className="text-[10px] text-cat-overlay uppercase tracking-wide">Filters</span>
             <div className="flex gap-1 flex-wrap justify-end items-center">
-              {(['all', 'failed', 'agent', 'manual', 'replay'] as const).map((f) => (
+              {(
+                [
+                  'all',
+                  'failed',
+                  'agent',
+                  'orchestrator',
+                  'context_inject',
+                  'manual',
+                  'replay',
+                ] as const
+              ).map((f) => (
                 <button
                   key={f}
                   type="button"
@@ -344,7 +360,7 @@ export default function ToolsPanel({
                       : 'text-cat-overlay hover:text-cat-subtext'
                   }`}
                 >
-                  {f}
+                  {f === 'orchestrator' ? 'Auto QA' : f === 'context_inject' ? 'Context' : f}
                   {f === 'failed' && failureCount > 0 ? ` (${failureCount})` : ''}
                 </button>
               ))}

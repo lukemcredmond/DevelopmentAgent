@@ -64,6 +64,106 @@ CONTEXT_INJECT_NOTE = (
     "File contents above are pre-loaded; use read_file only for files not listed."
 )
 
+PLANNING_TASK_ID = "PLANNING"
+
+_HANDLER_AGENT: Dict[str, str] = {
+    "po": "Product Owner",
+    "dev": "Developer",
+    "cr": "Code Reviewer",
+    "qa": "QA Tester",
+    "needs_user": "System",
+    "blocked": "System",
+    "idle": "System",
+}
+
+
+def publish_sprint_progress(
+    *,
+    phase: str,
+    step: int = 0,
+    max_steps: int = 20,
+    agent: str = "System",
+    task_id: str = "",
+    task_title: str = "",
+    lane: str = "",
+    status: Optional[str] = None,
+) -> None:
+    """Broadcast live Plan & Run / sprint step progress to SSE clients."""
+    payload: Dict[str, Any] = {
+        "phase": phase,
+        "step": step,
+        "maxSteps": max_steps,
+        "agent": agent,
+        "taskId": task_id,
+        "taskTitle": task_title,
+        "lane": lane,
+    }
+    if status:
+        payload["status"] = status
+    publish_event("sprint_progress", payload)
+
+
+def _emit_sprint_step_progress(
+    handler: str,
+    active_task: Optional[Dict[str, Any]],
+) -> None:
+    step = state.SPRINT_PROGRESS_STEP or 0
+    max_steps = state.SPRINT_PROGRESS_MAX or int(get_workflow_settings().get("maxSprintSteps", 20))
+    task_id = str(active_task.get("id", "")) if active_task else ""
+    task_title = str(active_task.get("title", handler)) if active_task else handler
+    lane = get_task_lane(task_id) if task_id else ""
+    publish_sprint_progress(
+        phase="sprint_step",
+        step=step,
+        max_steps=max_steps,
+        agent=_HANDLER_AGENT.get(handler, "System"),
+        task_id=task_id,
+        task_title=task_title,
+        lane=lane or "",
+    )
+
+
+def _po_chat_used_add_backlog_tool(task_id: str) -> bool:
+    from backend.agents.task_context import find_task_by_id
+
+    task = find_task_by_id(task_id)
+    if not task:
+        return False
+    for entry in reversed(task.get("transcript") or []):
+        if not isinstance(entry, dict):
+            continue
+        if entry.get("toolName") == "add_backlog_tasks" and entry.get("toolSuccess") is not False:
+            return True
+    return False
+
+
+def apply_backlog_from_po_response(response: str, task_id: str) -> int:
+    """Apply JSON subtasks from PO chat when the model embeds an array instead of calling add_backlog_tasks."""
+    from backend.agents.task_context import find_task_by_id
+
+    if not task_id or not find_task_by_id(task_id):
+        return 0
+    if _po_chat_used_add_backlog_tool(task_id):
+        return 0
+    try:
+        parsed = extract_json_array_from_text(response)
+    except ValueError:
+        return 0
+    valid = [t for t in parsed if t.get("title") and t.get("description")]
+    if not valid:
+        return 0
+    existing = existing_backlog_titles()
+    new_tasks = [t for t in valid if t.get("title") not in existing]
+    if not new_tasks:
+        return 0
+    append_backlog_tasks(new_tasks, split_from_task_id=task_id)
+    add_system_log(
+        "Product Owner",
+        "success",
+        f"PO chat added {len(new_tasks)} subtask(s) from JSON (split from {task_id})",
+    )
+    return len(new_tasks)
+
 
 def extract_json_array_from_text(text: str) -> List[Dict[str, Any]]:
     bt = "```"
@@ -548,23 +648,72 @@ def _simulate_qa(active_task: Dict[str, Any]) -> None:
 
 
 def run_po_plan(brief: str, ollama_url: str) -> None:
+    max_steps = int(get_workflow_settings().get("maxSprintSteps", 20))
+    if state.SPRINT_CANCEL:
+        add_system_log("System", "info", "Plan & Run cancelled before PO planning.")
+        publish_sprint_progress(
+            phase="cancelled",
+            step=0,
+            max_steps=max_steps,
+            agent="Product Owner",
+            task_id=PLANNING_TASK_ID,
+            task_title="Cancelled",
+        )
+        return
+
     set_project_brief(brief, source="user")
     agent_po.ollama_url = ollama_url
     normalize_board_lanes(state.SHARED_BOARD)
     existing = existing_backlog_titles()
     existing_hint = ", ".join(existing) if existing else "(none yet)"
+
+    publish_sprint_progress(
+        phase="po_plan",
+        step=0,
+        max_steps=max_steps,
+        agent="Product Owner",
+        task_id=PLANNING_TASK_ID,
+        task_title="Decomposing brief into backlog…",
+        lane="Backlog",
+    )
     add_system_log("Product Owner", "info", "Decomposing project brief into features…")
 
-    po_output = agent_po.execute_step(
-        f"{PO_SMALLEST_TASKS_GUIDANCE}\n\n"
-        "You are the Product Owner. Decompose the project brief into developer-ready features. "
-        "Reply with ONLY a JSON array. Each object must have: title, description, "
-        "acceptanceCriteria (string array), optional id (hint only — the system assigns TASK-{GUID}), "
-        "optional blockedBy (array of id values from the same JSON array), optional priority (number, lower=higher).\n"
-        f"Existing titles (do NOT duplicate): {existing_hint}\n"
-        f"{build_dod_block()}\nProject brief:\n{brief}",
-        max_iterations=_llm_iterations(),
-    )
+    po_output = ""
+    try:
+        set_active_sprint_context(PLANNING_TASK_ID, "Product Owner")
+        if state.SPRINT_CANCEL:
+            add_system_log("System", "info", "Cancel requested — skipping PO Ollama call.")
+            return
+        add_system_log(
+            "Product Owner",
+            "info",
+            "PO calling Ollama (this may take 1–3 min on first run)…",
+        )
+        po_output = agent_po.execute_step(
+            f"{PO_SMALLEST_TASKS_GUIDANCE}\n\n"
+            "You are the Product Owner. Decompose the project brief into developer-ready features. "
+            "Reply with ONLY a JSON array. Each object must have: title, description, "
+            "acceptanceCriteria (string array), optional id (hint only — the system assigns TASK-{GUID}), "
+            "optional blockedBy (array of id values from the same JSON array), optional priority (number, lower=higher).\n"
+            f"Existing titles (do NOT duplicate): {existing_hint}\n"
+            f"{build_dod_block()}\nProject brief:\n{brief}",
+            max_iterations=_llm_iterations(),
+        )
+        add_system_log("Product Owner", "info", "PO received response, parsing backlog…")
+    finally:
+        clear_active_sprint_context()
+
+    if state.SPRINT_CANCEL:
+        add_system_log("System", "info", "Plan & Run cancelled during PO planning.")
+        publish_sprint_progress(
+            phase="cancelled",
+            step=0,
+            max_steps=max_steps,
+            agent="Product Owner",
+            task_id=PLANNING_TASK_ID,
+            task_title="Cancelled during PO plan",
+        )
+        return
 
     if po_output == "SIMULATION_FALLBACK":
         tasks = [
@@ -573,7 +722,7 @@ def run_po_plan(brief: str, ollama_url: str) -> None:
         ]
         count = _append_tasks(tasks)
         add_system_log("Product Owner", "success", f"Added {count} feature(s) (offline).")
-    else:
+    elif po_output:
         try:
             parsed = extract_json_array_from_text(po_output)
             new_tasks = [t for t in parsed if t.get("title") not in existing]
@@ -581,6 +730,16 @@ def run_po_plan(brief: str, ollama_url: str) -> None:
             add_system_log("Product Owner", "success", f"PO created {count} new feature(s).")
         except (ValueError, json.JSONDecodeError) as e:
             add_system_log("Product Owner", "error", f"Failed to parse PO output: {e}")
+
+    publish_sprint_progress(
+        phase="po_plan",
+        step=0,
+        max_steps=max_steps,
+        agent="Product Owner",
+        task_id=PLANNING_TASK_ID,
+        task_title="PO plan complete",
+        lane="Backlog",
+    )
 
 
 def run_po_add_feature(title: str, description: str, ollama_url: str) -> None:
@@ -892,6 +1051,8 @@ def run_sprint_step(brief: str, ollama_url: str) -> None:
         else:
             handler = "idle"
 
+    _emit_sprint_step_progress(handler or "idle", active_task)
+
     try:
         if handler == "po" and active_task:
             _run_po_clarification(active_task, brief)
@@ -950,6 +1111,7 @@ def run_auto_sprint(brief: str, ollama_url: str, max_steps: int | None = None) -
     state.SPRINT_CANCEL = False
     ws = get_workflow_settings()
     limit = max_steps if max_steps is not None else int(ws.get("maxSprintSteps", 20))
+    state.SPRINT_PROGRESS_MAX = limit
     steps = 0
     status = "completed"
 
@@ -958,12 +1120,20 @@ def run_auto_sprint(brief: str, ollama_url: str, max_steps: int | None = None) -
             if not has_sprint_work():
                 status = "idle"
                 break
+        state.SPRINT_PROGRESS_STEP = steps + 1
         run_sprint_step(brief, ollama_url)
         steps += 1
 
     if state.SPRINT_CANCEL:
         status = "cancelled"
         add_system_log("System", "info", "Auto sprint cancelled.")
+        publish_sprint_progress(
+            phase="cancelled",
+            step=steps,
+            max_steps=limit,
+            agent="System",
+            task_title="Sprint cancelled",
+        )
     elif status != "idle" and steps >= limit:
         status = "max_steps"
         add_system_log("System", "info", f"Auto sprint finished after {steps} step(s) (max steps).")
@@ -975,6 +1145,43 @@ def run_auto_sprint(brief: str, ollama_url: str, max_steps: int | None = None) -
 
 
 def run_plan_and_run(brief: str, ollama_url: str, max_steps: int | None = None) -> Dict[str, Any]:
+    ws = get_workflow_settings()
+    limit = max_steps if max_steps is not None else int(ws.get("maxSprintSteps", 20))
+    state.SPRINT_CANCEL = False
+    state.SPRINT_PROGRESS_MAX = limit
+    state.SPRINT_PROGRESS_STEP = 0
+
+    publish_sprint_progress(
+        phase="po_plan",
+        step=0,
+        max_steps=limit,
+        agent="Product Owner",
+        task_id=PLANNING_TASK_ID,
+        task_title="Plan & Run started",
+        lane="Backlog",
+    )
+    add_system_log("System", "info", "Plan & Run started — PO planning, then sprint steps…")
+
     with state.STATE_LOCK:
         run_po_plan(brief, ollama_url)
-    return run_auto_sprint(brief, ollama_url, max_steps=max_steps)
+
+    if state.SPRINT_CANCEL:
+        summary = _build_sprint_summary(0, "cancelled")
+        publish_sprint_progress(
+            phase="cancelled",
+            step=0,
+            max_steps=limit,
+            agent="System",
+            task_title="Plan & Run cancelled",
+        )
+        return summary
+
+    summary = run_auto_sprint(brief, ollama_url, max_steps=max_steps)
+    publish_sprint_progress(
+        phase="done",
+        step=int(summary.get("stepsRun", 0)),
+        max_steps=limit,
+        agent="System",
+        task_title=f"Plan & Run finished ({summary.get('status', 'completed')})",
+    )
+    return summary

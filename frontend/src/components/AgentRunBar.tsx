@@ -3,10 +3,16 @@ import type { AgentRunState } from '../types'
 interface AgentRunBarProps {
   activeRun: AgentRunState | null
   currentTool?: string | null
+  planRunActive?: boolean
   onOpenTools?: () => void
 }
 
-export default function AgentRunBar({ activeRun, currentTool, onOpenTools }: AgentRunBarProps) {
+export default function AgentRunBar({
+  activeRun,
+  currentTool,
+  planRunActive = false,
+  onOpenTools,
+}: AgentRunBarProps) {
   const hasActiveRun = activeRun != null
   const toolLabel = currentTool || activeRun?.currentTool
   const isWaitingApproval = activeRun?.status === 'awaiting_approval'
@@ -25,10 +31,20 @@ export default function AgentRunBar({ activeRun, currentTool, onOpenTools }: Age
     return (
       <div className="shrink-0 border-b border-cat-surface1 bg-cat-mantle/60 text-[11px]">
         <div className="px-4 py-1.5 flex items-center gap-3 flex-wrap">
-          <span className="text-cat-overlay">
-            Open the <strong className="text-cat-subtext font-normal">Tools</strong> tab to manually
-            run or replay tool calls.
-          </span>
+          {planRunActive ? (
+            <>
+              <span className="inline-block w-2 h-2 rounded-full bg-violet-400 animate-pulse shrink-0" />
+              <span className="text-violet-200">
+                Plan &amp; Run in progress — see <strong className="font-normal">Console</strong>{' '}
+                for live logs
+              </span>
+            </>
+          ) : (
+            <span className="text-cat-overlay">
+              Open the <strong className="text-cat-subtext font-normal">Tools</strong> tab to
+              manually run or replay tool calls.
+            </span>
+          )}
           {onOpenTools && (
             <button
               type="button"

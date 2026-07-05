@@ -14,6 +14,7 @@ import type {
   AppState,
   Board,
   PendingToolApproval,
+  SprintProgress,
   SystemLog,
   ToolExecutionEvent,
 } from '../types'
@@ -45,6 +46,24 @@ function patchBoardFromEvent(data: unknown, prev: AppState): AppState | null {
   const payload = data as { board?: Board }
   if (!payload.board) return null
   return { ...prev, board: payload.board }
+}
+
+function mapSprintProgress(data: Record<string, unknown>): SprintProgress {
+  const phase = String(data.phase ?? 'po_plan')
+  const validPhases = ['po_plan', 'sprint_step', 'done', 'cancelled'] as const
+  const phaseVal = validPhases.includes(phase as SprintProgress['phase'])
+    ? (phase as SprintProgress['phase'])
+    : 'po_plan'
+  return {
+    phase: phaseVal,
+    step: Number(data.step ?? 0),
+    maxSteps: Number(data.maxSteps ?? data.max_steps ?? 20),
+    agent: String(data.agent ?? ''),
+    taskId: String(data.taskId ?? data.task_id ?? ''),
+    taskTitle: String(data.taskTitle ?? data.task_title ?? ''),
+    lane: String(data.lane ?? ''),
+    status: data.status != null ? String(data.status) : undefined,
+  }
 }
 
 function mapAgentRun(raw: Record<string, unknown>): AgentRunState {
@@ -225,6 +244,7 @@ export function useAppState() {
   const [currentTool, setCurrentTool] = useState<string | null>(null)
   const [toolEvents, setToolEvents] = useState<ToolExecutionEvent[]>([])
   const [toolStartTick, setToolStartTick] = useState(0)
+  const [sprintProgress, setSprintProgress] = useState<SprintProgress | null>(null)
   const liveActivityRef = useRef<ActivityEvent[]>([])
   const boardRef = useRef<Board>(defaultState.board)
   const displayRunTimerRef = useRef<number | null>(null)
@@ -266,6 +286,18 @@ export function useAppState() {
     }
   }, [])
 
+  const refreshToolHistory = useCallback(async () => {
+    try {
+      const data = await fetchToolHistory()
+      const incoming = (data.events ?? []).map((e) =>
+        historyPayloadToEvent(e as Record<string, unknown>),
+      )
+      setToolEvents((prev) => mergeToolHistory(prev, incoming))
+    } catch {
+      /* history endpoint optional during startup */
+    }
+  }, [])
+
   const refresh = useCallback(async () => {
     try {
       const data = await fetchState()
@@ -276,10 +308,11 @@ export function useAppState() {
       setError(null)
       void refreshPendingTools()
       void refreshPendingApprovals()
+      void refreshToolHistory()
     } catch (e) {
       setError(e instanceof Error ? e.message : 'Failed to fetch state')
     }
-  }, [syncActivityFromBoard, refreshPendingTools, refreshPendingApprovals])
+  }, [syncActivityFromBoard, refreshPendingTools, refreshPendingApprovals, refreshToolHistory])
 
   const applyState = useCallback(
     (data: AppState) => {
@@ -290,8 +323,9 @@ export function useAppState() {
       setError(null)
       void refreshPendingTools()
       void refreshPendingApprovals()
+      void refreshToolHistory()
     },
-    [syncActivityFromBoard, refreshPendingTools, refreshPendingApprovals],
+    [syncActivityFromBoard, refreshPendingTools, refreshPendingApprovals, refreshToolHistory],
   )
 
   const appendLog = useCallback((log: SystemLog) => {
@@ -307,18 +341,6 @@ export function useAppState() {
 
   const clearToolEvents = useCallback(() => {
     setToolEvents([])
-  }, [])
-
-  const refreshToolHistory = useCallback(async () => {
-    try {
-      const data = await fetchToolHistory()
-      const incoming = (data.events ?? []).map((e) =>
-        historyPayloadToEvent(e as Record<string, unknown>),
-      )
-      setToolEvents((prev) => mergeToolHistory(prev, incoming))
-    } catch {
-      /* history endpoint optional during startup */
-    }
   }, [])
 
   const mergeToolEvent = useCallback((payload: Record<string, unknown>) => {
@@ -360,6 +382,9 @@ export function useAppState() {
         setActiveRun(null)
         setCurrentTool(null)
         setDisplayRun(null)
+      } else if (event.type === 'sprint_progress' && event.data) {
+        setSprintProgress(mapSprintProgress(event.data as Record<string, unknown>))
+        void refreshToolHistory()
       } else if (event.type === 'activity' && event.data) {
         appendActivity(event.data as ActivityEvent)
       } else if (event.type === 'pending_tool' && event.data) {
@@ -414,6 +439,7 @@ export function useAppState() {
         setDisplayRun((prev) => mergeRun(prev))
         setCurrentTool(null)
         setToolEvents((prev) => applyToolEnd(prev, payload))
+        void refreshToolHistory()
       } else if (event.type === 'tool_approval_required' && event.data) {
         const approval = mapApprovalFromEvent(event.data as Record<string, unknown>)
         setPendingApprovals((prev) =>
@@ -462,6 +488,8 @@ export function useAppState() {
     toolFailureCount,
     toolRunningCount,
     toolStartTick,
+    sprintProgress,
+    setSprintProgress,
   }
 }
 

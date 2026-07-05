@@ -24,9 +24,10 @@ def _compose_message(payload: ChatPayload) -> str:
             if payload.agent == "po":
                 parts.append(PO_SMALLEST_TASKS_GUIDANCE)
                 parts.append(
-                    "When the user asks to break down or split this card, use add_backlog_tasks "
+                    "When the user asks to break down or split this card, call add_backlog_tasks "
                     "with split_from_task_id set to this task's ID. Each subtask needs clear "
-                    "acceptance criteria."
+                    "acceptance criteria. Do not only print JSON — call add_backlog_tasks. "
+                    "If you must reply with JSON, it must be a bare array."
                 )
     context_block = build_file_context_block(payload.context_files)
     if context_block:
@@ -68,6 +69,10 @@ def chat_with_agent(payload: ChatPayload):
         response = agent.execute_step(composed)
     finally:
         with state.STATE_LOCK:
+            if payload.agent == "po" and payload.task_id:
+                from backend.services.sprint_service import apply_backlog_from_po_response
+
+                apply_backlog_from_po_response(response, payload.task_id)
             _finalize_chat_task_context(payload)
             state.storage.save_chat_message(
                 state.CURRENT_PROJECT_ID, "assistant", response, agent=agent.role

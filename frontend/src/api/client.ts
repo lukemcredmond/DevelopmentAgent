@@ -500,6 +500,26 @@ export function subscribeEvents(
     onEvent({ type: 'pending_tool', data: JSON.parse(e.data) })
   })
 
+  source.addEventListener('sprint_progress', (e) => {
+    onEvent({ type: 'sprint_progress', data: JSON.parse(e.data) })
+  })
+
+  source.addEventListener('agent_run', (e) => {
+    onEvent({ type: 'agent_run', data: JSON.parse(e.data) })
+  })
+
+  source.addEventListener('tool_start', (e) => {
+    onEvent({ type: 'tool_start', data: JSON.parse(e.data) })
+  })
+
+  source.addEventListener('tool_end', (e) => {
+    onEvent({ type: 'tool_end', data: JSON.parse(e.data) })
+  })
+
+  source.addEventListener('tool_approval_required', (e) => {
+    onEvent({ type: 'tool_approval_required', data: JSON.parse(e.data) })
+  })
+
   source.onerror = (err) => {
     onError?.(err)
   }

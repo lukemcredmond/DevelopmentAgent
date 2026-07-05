@@ -45,6 +45,7 @@ import TerminalPanel from './components/TerminalPanel'
 import ToolResolutionModal from './components/ToolResolutionModal'
 import ToolApprovalModal from './components/ToolApprovalModal'
 import AgentRunBar from './components/AgentRunBar'
+import SprintProgressBar from './components/SprintProgressBar'
 import BottomPanelResize, {
   readBottomPanelHeight,
   writeBottomPanelHeight,
@@ -112,7 +113,11 @@ export default function App() {
     toolFailureCount,
     toolRunningCount,
     toolStartTick,
+    sprintProgress,
+    setSprintProgress,
   } = useAppState()
+
+  const [planRunActive, setPlanRunActive] = useState(false)
 
   const [ollamaUrl, setOllamaUrl] = useState('http://localhost:11434')
   const [brief, setBrief] = useState('')
@@ -216,6 +221,15 @@ export default function App() {
   const { autoSprint, setAutoSprint, autoSprintPaused, sprintRunning, stopAutoSprint } =
     useAutoSprint(brief, ollamaUrl, state.board, state.workflowSettings, handleState)
 
+  const orchestratedActive = sprintRunning || planRunActive
+
+  useEffect(() => {
+    if (!planRunActive) return
+    if ((state.board.Backlog?.length ?? 0) > 0) {
+      setKanbanOpen(true)
+    }
+  }, [planRunActive, state.board.Backlog?.length])
+
   useEffect(() => {
     applyStateFields(state, setters)
     setLocalFiles(state.files)
@@ -290,7 +304,7 @@ export default function App() {
   }, [pendingApprovals, approvalModal])
 
   const handleMoveTask = async (taskId: string, fromLane: BoardLane, toLane: BoardLane) => {
-    if (sprintRunning) {
+    if (orchestratedActive) {
       setActionError('Wait for the current sprint step to finish before moving cards.')
       return
     }
@@ -311,6 +325,7 @@ export default function App() {
 
   useEffect(() => {
     if (toolStartTick > 0) {
+      setToolsPreferredSubTab('log')
       setBottomTab('tools')
     }
   }, [toolStartTick])
@@ -333,7 +348,7 @@ export default function App() {
   }
 
   const openToolsTab = () => {
-    setToolsPreferredSubTab('manual')
+    setToolsPreferredSubTab('log')
     setBottomTab('tools')
   }
 
@@ -383,7 +398,7 @@ export default function App() {
         ollamaOk={ollamaOk}
         autoSprint={autoSprint}
         autoSprintPaused={autoSprintPaused}
-        sprintRunning={sprintRunning}
+        sprintRunning={orchestratedActive}
         isDark={isDark}
         onOllamaUrlChange={setOllamaUrl}
         onBriefChange={setBrief}
@@ -415,13 +430,23 @@ export default function App() {
         }
         onPlanAndRun={() =>
           void withLoading(async () => {
-            const data = await planAndRun({
-              brief,
-              ollama_url: ollamaUrl,
-              max_steps: state.workflowSettings?.maxSprintSteps ?? 20,
-            })
-            handleState(data)
-            if (data.lastSprintSummary) setShowSprintSummary(true)
+            setPlanRunActive(true)
+            setSprintProgress(null)
+            setBottomTab('console')
+            if (bottomPanelHeight < 180) {
+              setBottomPanelHeight(220)
+            }
+            try {
+              const data = await planAndRun({
+                brief,
+                ollama_url: ollamaUrl,
+                max_steps: state.workflowSettings?.maxSprintSteps ?? 20,
+              })
+              handleState(data)
+              if (data.lastSprintSummary) setShowSprintSummary(true)
+            } finally {
+              setPlanRunActive(false)
+            }
           })
         }
         onStep={() =>
@@ -443,7 +468,7 @@ export default function App() {
             return
           }
           void withLoading(async () => {
-            if (sprintRunning) await stopAutoSprint()
+            if (orchestratedActive) await stopAutoSprint()
             handleState(await clearAllTasks())
             setSelectedTask(null)
           })
@@ -497,7 +522,7 @@ export default function App() {
             <i className="fa-solid fa-triangle-exclamation shrink-0" />
             <span>
               Offline simulation — tools are not running.
-              {sprintRunning ? ' Sprint steps use fallback behavior.' : ' Start Ollama for real agent behavior.'}
+              {orchestratedActive ? ' Sprint steps use fallback behavior.' : ' Start Ollama for real agent behavior.'}
             </span>
           </div>
         )}
@@ -532,7 +557,7 @@ export default function App() {
             workspaceDir={state.workspaceDir}
             activeLanes={state.activeLanes}
             workflowSettings={state.workflowSettings}
-            sprintRunning={sprintRunning}
+            sprintRunning={orchestratedActive}
             onTaskClick={(task) => setSelectedTask(findTaskOnBoard(state.board, task.id) ?? task)}
             onMoveTask={(taskId, from, to) => void handleMoveTask(taskId, from, to)}
             onReorderBacklog={(taskIds) =>
@@ -577,9 +602,11 @@ export default function App() {
               style={{ height: bottomPanelHeight }}
               className="flex flex-col shrink-0 border-t border-cat-surface1 min-h-0"
             >
+              <SprintProgressBar progress={sprintProgress} planRunActive={planRunActive} />
               <AgentRunBar
                 activeRun={activeRun}
                 currentTool={currentTool}
+                planRunActive={planRunActive}
                 onOpenTools={openToolsTab}
               />
               <div className="flex bg-cat-mantle border-b border-cat-surface1 shrink-0 items-stretch">
@@ -676,7 +703,7 @@ export default function App() {
       <TaskDetailModal
         task={selectedTask}
         taskLane={selectedTaskLane}
-        sprintRunning={sprintRunning}
+        sprintRunning={orchestratedActive}
         onClose={() => setSelectedTask(null)}
         onOpenFile={setSelectedFile}
         onUpdate={(taskId, title, description, acceptanceCriteria) =>
@@ -711,7 +738,7 @@ export default function App() {
         }
         onDelete={(taskId) =>
           void withLoading(async () => {
-            if (sprintRunning) {
+            if (orchestratedActive) {
               setActionError('Wait for the current sprint step to finish before deleting cards.')
               return
             }

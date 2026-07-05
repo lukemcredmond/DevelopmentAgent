@@ -389,7 +389,11 @@ export default function Sidebar({
               disabled={loading || !brief.trim()}
               className="w-full bg-violet-600 hover:bg-violet-500 disabled:opacity-50 text-white font-medium py-2 rounded-lg text-xs transition-colors flex items-center justify-center gap-2"
             >
-              <i className="fa-solid fa-rocket" />
+              {loading ? (
+                <i className="fa-solid fa-spinner animate-spin" />
+              ) : (
+                <i className="fa-solid fa-rocket" />
+              )}
               Plan & Run (Brief → PO → Sprint)
             </button>
             <button
@@ -430,10 +434,15 @@ export default function Sidebar({
                   onClick={onCancelSprint}
                   className="text-xs text-rose-400 hover:text-rose-300"
                 >
-                  Cancel
+                  Cancel run
                 </button>
               )}
             </div>
+            {sprintRunning && (
+              <p className="text-[10px] text-violet-300/90 italic">
+                Sprint active — watch Console and the progress bar below the editor.
+              </p>
+            )}
             {autoSprint && autoSprintPaused && !sprintRunning && (
               <p className="text-[10px] text-amber-400/90 italic">
                 Paused — waiting for backlog work

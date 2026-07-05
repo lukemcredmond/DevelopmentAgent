@@ -1012,6 +1012,97 @@ def test_chat_compose_includes_task_context():
     assert "T-CHAT" in composed
     assert "Which API should we use?" in composed
     assert "Please split this card" in composed
+    assert "add_backlog_tasks" in composed
+    assert "bare array" in composed
+
+
+def test_chat_po_applies_json_backlog_split(monkeypatch):
+    from backend import state
+    from backend.agents.registry import agent_po
+    from backend.agents.task_context import init_new_task
+
+    initialize()
+    source = init_new_task({"id": "T-PO-CHAT", "title": "Big card", "description": "Too big"})
+    state.SHARED_BOARD = {
+        "Needs User": [source],
+        "Backlog": [],
+        "Done": [],
+        "In Progress": [],
+        "Needs PO": [],
+        "Code Review": [],
+        "QA": [],
+    }
+
+    json_response = """[
+        {"title": "Sub A", "description": "Part A", "acceptanceCriteria": ["A ok"]},
+        {"title": "Sub B", "description": "Part B", "acceptanceCriteria": ["B ok"]}
+    ]"""
+
+    monkeypatch.setattr(agent_po, "execute_step", lambda prompt, max_iterations=8: json_response)
+
+    client = TestClient(app)
+    resp = client.post(
+        "/api/chat",
+        json={
+            "message": "Please split this card into smaller tasks",
+            "agent": "po",
+            "task_id": "T-PO-CHAT",
+            "ollama_url": "http://localhost:11434",
+        },
+    )
+    assert resp.status_code == 200
+    assert len(state.SHARED_BOARD.get("Backlog", [])) == 2
+    assert any(t["id"] == "T-PO-CHAT" for t in state.SHARED_BOARD.get("Done", []))
+
+
+def test_global_tool_log_in_history():
+    from backend import state
+    from backend.services.tool_execution_service import execute_tool, get_tool_history
+
+    initialize()
+    state.TOOL_EXECUTION_LOG.clear()
+    execute_tool(
+        "dev",
+        "read_file",
+        {"path": "package.json"},
+        task_id="T-GLOG",
+        source="manual",
+        skip_approval=True,
+    )
+    events = get_tool_history()
+    assert any(
+        e["toolName"] == "read_file" and e["taskId"] == "T-GLOG" and e["source"] == "manual"
+        for e in events
+    )
+
+
+def test_log_synthetic_tool_in_history():
+    from backend import state
+    from backend.agents.task_context import init_new_task
+    from backend.services.tool_execution_service import get_tool_history, log_synthetic_tool_event
+
+    initialize()
+    state.TOOL_EXECUTION_LOG.clear()
+    task = init_new_task({"id": "T-SYN", "title": "Syn", "description": "d"})
+    state.SHARED_BOARD.setdefault("In Progress", []).append(task)
+    log_synthetic_tool_event(
+        "T-SYN",
+        "QA Tester",
+        "run_command",
+        tool_args={"command": "flutter test"},
+        tool_output="[success exit 0]\nAll tests passed",
+        success=True,
+        source="orchestrator",
+        run_id="run-qa-1",
+    )
+    events = get_tool_history()
+    assert any(
+        e["toolName"] == "run_command"
+        and e["taskId"] == "T-SYN"
+        and e["source"] == "orchestrator"
+        and e["runId"] == "run-qa-1"
+        for e in events
+    )
 
 
 def test_clear_all_board_tasks():
@@ -1192,4 +1283,76 @@ def test_qa_gate_blocks_update_board_to_done():
     result = _guarded_update_board("T-GATE", "Done")
     assert "Error:" in result
     assert "T-GATE" in [t["id"] for t in state.SHARED_BOARD.get("QA", [])]
+
+
+def test_publish_sprint_progress_emits_event():
+    from backend.services import sprint_service
+
+    captured = []
+
+    def fake_publish(event_type, data):
+        captured.append((event_type, data))
+
+    sprint_service.publish_event = fake_publish
+    sprint_service.publish_sprint_progress(
+        phase="po_plan",
+        step=0,
+        max_steps=10,
+        agent="Product Owner",
+        task_id="PLANNING",
+        task_title="Test",
+    )
+    assert captured
+    assert captured[0][0] == "sprint_progress"
+    assert captured[0][1]["phase"] == "po_plan"
+
+
+def test_run_po_plan_sets_planning_context(monkeypatch):
+    from backend import state
+    from backend.bootstrap import initialize
+    from backend.services import sprint_service
+
+    initialize()
+    state.SPRINT_CANCEL = False
+    progress_events = []
+    monkeypatch.setattr(
+        sprint_service,
+        "publish_event",
+        lambda t, d: progress_events.append((t, d)) if t == "sprint_progress" else None,
+    )
+
+    def fake_execute_step(prompt, max_iterations=8):
+        assert state.ACTIVE_SPRINT_TASK_ID == sprint_service.PLANNING_TASK_ID
+        assert state.ACTIVE_SPRINT_AGENT == "Product Owner"
+        return "SIMULATION_FALLBACK"
+
+    monkeypatch.setattr(sprint_service.agent_po, "execute_step", fake_execute_step)
+    sprint_service.run_po_plan("Build a todo app", "http://localhost:11434")
+
+    assert any(e[1].get("phase") == "po_plan" for e in progress_events)
+    assert state.ACTIVE_SPRINT_TASK_ID is None
+
+
+def test_run_plan_and_run_cancel_skips_sprint(monkeypatch):
+    from backend import state
+    from backend.bootstrap import initialize
+    from backend.services import sprint_service
+
+    initialize()
+
+    auto_called = []
+
+    def fake_auto_sprint(brief, ollama_url, max_steps=None):
+        auto_called.append(True)
+        return {"stepsRun": 0, "status": "cancelled"}
+
+    def fake_po_plan(brief, ollama_url):
+        state.SPRINT_CANCEL = True
+
+    monkeypatch.setattr(sprint_service, "run_auto_sprint", fake_auto_sprint)
+    monkeypatch.setattr(sprint_service, "run_po_plan", fake_po_plan)
+
+    summary = sprint_service.run_plan_and_run("brief", "http://localhost:11434", max_steps=5)
+    assert not auto_called
+    assert summary.get("status") == "cancelled"
 

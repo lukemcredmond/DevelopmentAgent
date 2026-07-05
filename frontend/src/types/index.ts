@@ -210,6 +210,17 @@ export interface SprintSummary {
   status?: 'completed' | 'idle' | 'cancelled' | 'max_steps'
 }
 
+export interface SprintProgress {
+  phase: 'po_plan' | 'sprint_step' | 'done' | 'cancelled'
+  step: number
+  maxSteps: number
+  agent: string
+  taskId: string
+  taskTitle: string
+  lane: string
+  status?: string
+}
+
 export interface ActivityEvent {
   taskId: string
   taskTitle: string
@@ -453,6 +464,7 @@ export type AppEventType =
   | 'tool_end'
   | 'agent_run'
   | 'tool_approval_required'
+  | 'sprint_progress'
   | 'connected'
 
 export interface AppEvent {

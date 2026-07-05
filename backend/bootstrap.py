@@ -39,6 +39,10 @@ def load_project_into_state(project_id: str) -> bool:
     if saved_logs:
         state.SYSTEM_LOGS[:] = saved_logs
 
+    from backend.services.tool_execution_service import load_tool_log_for_project
+
+    load_tool_log_for_project(project_id)
+
     state.storage.set_active_project_id(state.CURRENT_PROJECT_ID)
     from backend.services.tool_aliases import load_pending_tools_for_project
 

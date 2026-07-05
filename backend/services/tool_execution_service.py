@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import json
 import time
 from contextlib import contextmanager
 from dataclasses import dataclass
@@ -33,6 +34,89 @@ from backend.services.logs import add_system_log
 from backend.services.tool_approval import request_tool_approval, tool_requires_approval
 
 ToolSource = Literal["agent", "manual", "replay", "orchestrator", "context_inject"]
+
+MAX_TOOL_LOG_ENTRIES = 500
+
+
+def _tool_log_setting_key(project_id: str) -> str:
+    return f"tool_log:{project_id}"
+
+
+def _dedupe_key(event: Dict[str, Any]) -> str:
+    return "|".join(
+        [
+            str(event.get("runId") or ""),
+            str(event.get("taskId") or ""),
+            str(event.get("toolName") or ""),
+            str(event.get("timestamp") or ""),
+        ]
+    )
+
+
+def _build_history_event(
+    *,
+    run_id: str,
+    task_id: str,
+    agent: str,
+    tool_name: str,
+    tool_args: Dict[str, Any],
+    tool_output: str,
+    success: bool,
+    duration_ms: int,
+    timestamp: str,
+    source: str,
+    exit_code: Optional[int] = None,
+    run_cmd_status: Optional[str] = None,
+) -> Dict[str, Any]:
+    event: Dict[str, Any] = {
+        "runId": run_id,
+        "taskId": task_id,
+        "agent": agent,
+        "toolName": tool_name,
+        "toolArgs": tool_args,
+        "toolSuccess": success,
+        "toolOutput": tool_output[:500],
+        "durationMs": duration_ms,
+        "timestamp": timestamp,
+        "source": source,
+        "status": "failed" if not success else "completed",
+    }
+    if tool_name == "run_command" and exit_code is not None:
+        event["exitCode"] = exit_code
+        if run_cmd_status is not None:
+            event["runCommandStatus"] = run_cmd_status
+    return event
+
+
+def persist_tool_log() -> None:
+    if not state.CURRENT_PROJECT_ID:
+        return
+    state.storage.set_setting(
+        _tool_log_setting_key(state.CURRENT_PROJECT_ID),
+        json.dumps(state.TOOL_EXECUTION_LOG),
+    )
+
+
+def load_tool_log_for_project(project_id: str) -> None:
+    raw = state.storage.get_setting(_tool_log_setting_key(project_id))
+    state.TOOL_EXECUTION_LOG.clear()
+    if not raw:
+        return
+    try:
+        loaded = json.loads(raw)
+        if isinstance(loaded, list):
+            state.TOOL_EXECUTION_LOG.extend(loaded[-MAX_TOOL_LOG_ENTRIES:])
+    except json.JSONDecodeError:
+        pass
+
+
+def append_global_tool_event(event: Dict[str, Any]) -> None:
+    with state.STATE_LOCK:
+        state.TOOL_EXECUTION_LOG.append(event)
+        overflow = len(state.TOOL_EXECUTION_LOG) - MAX_TOOL_LOG_ENTRIES
+        if overflow > 0:
+            del state.TOOL_EXECUTION_LOG[:overflow]
+        persist_tool_log()
 
 
 def _get_agent_map():
@@ -125,7 +209,7 @@ def _history_event_from_transcript(
         success = "✗" not in content and " FAILED " not in content.upper()
     ts = str(entry.get("timestamp") or "")
     source = entry.get("source") or "agent"
-    run_id = f"{task_id}-history"
+    run_id = str(entry.get("runId") or f"{task_id}-tx-{ts}-{tool_name}")
     exit_code = None
     run_cmd_status = None
     if tool_name == "run_command" and tool_output:
@@ -152,10 +236,23 @@ def _history_event_from_transcript(
 
 
 def get_tool_history(limit: int = 200) -> list[Dict[str, Any]]:
-    """Collect recent tool invocations from task transcripts and the active run."""
+    """Collect recent tool invocations from global log, task transcripts, and the active run."""
     from backend.services.feature_similarity import iter_board_tasks
 
+    seen: set[str] = set()
     events: list[Dict[str, Any]] = []
+
+    def add_event(ev: Dict[str, Any]) -> None:
+        key = _dedupe_key(ev)
+        if key in seen:
+            return
+        seen.add(key)
+        events.append(ev)
+
+    with state.STATE_LOCK:
+        for ev in reversed(state.TOOL_EXECUTION_LOG):
+            add_event(dict(ev))
+
     for task in iter_board_tasks():
         task_id = str(task.get("id") or "")
         if not task_id:
@@ -163,7 +260,7 @@ def get_tool_history(limit: int = 200) -> list[Dict[str, Any]]:
         for entry in task.get("transcript") or []:
             if not isinstance(entry, dict) or not entry.get("toolName"):
                 continue
-            events.append(_history_event_from_transcript(task_id, entry))
+            add_event(_history_event_from_transcript(task_id, entry))
 
     active_run = get_active_run()
     if active_run:
@@ -172,20 +269,19 @@ def get_tool_history(limit: int = 200) -> list[Dict[str, Any]]:
             tool_name = str(rt.get("toolName") or "?")
             success = rt.get("toolSuccess") is not False
             tool_output = str(rt.get("toolOutput") or "")
-            events.append(
-                {
-                    "runId": active_run.run_id,
-                    "taskId": active_run.task_id,
-                    "agent": active_run.agent,
-                    "toolName": tool_name,
-                    "toolArgs": {},
-                    "toolSuccess": success,
-                    "toolOutput": tool_output[:500],
-                    "durationMs": int(rt.get("durationMs") or 0),
-                    "timestamp": ts,
-                    "source": "agent",
-                    "status": "failed" if not success else "completed",
-                }
+            add_event(
+                _build_history_event(
+                    run_id=active_run.run_id,
+                    task_id=active_run.task_id,
+                    agent=active_run.agent,
+                    tool_name=tool_name,
+                    tool_args={},
+                    tool_output=tool_output,
+                    success=success,
+                    duration_ms=int(rt.get("durationMs") or 0),
+                    timestamp=ts,
+                    source="agent",
+                )
             )
 
     events.sort(key=lambda e: str(e.get("timestamp") or ""), reverse=True)
@@ -393,6 +489,23 @@ def execute_tool(
             },
         )
 
+        append_global_tool_event(
+            _build_history_event(
+                run_id=effective_run_id,
+                task_id=task_id or "system",
+                agent=agent_role,
+                tool_name=tool_name,
+                tool_args=safe_args,
+                tool_output=output_preview,
+                success=success,
+                duration_ms=duration_ms,
+                timestamp=ts,
+                source=source,
+                exit_code=exit_code,
+                run_cmd_status=run_cmd_status,
+            )
+        )
+
         if task_id and source == "agent":
             publish_activity(
                 task_id,
@@ -479,6 +592,21 @@ def log_synthetic_tool_event(
             "timestamp": ts,
             "source": source,
         },
+    )
+
+    append_global_tool_event(
+        _build_history_event(
+            run_id=effective_run_id,
+            task_id=task_id,
+            agent=agent_role,
+            tool_name=tool_name,
+            tool_args=tool_args,
+            tool_output=output_preview,
+            success=success,
+            duration_ms=0,
+            timestamp=ts,
+            source=source,
+        )
     )
 
     tool_entry = {
