@@ -277,6 +277,10 @@ export default function Sidebar({
               ))}
             </div>
 
+            <p className="text-[10px] text-cat-overlay leading-relaxed pt-1">
+              Model changes apply after <strong className="text-cat-subtext">Save Custom Configurations</strong>.
+            </p>
+
             <button
               type="button"
               onClick={() =>

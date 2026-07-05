@@ -1743,9 +1743,11 @@ def test_clear_logs_api():
 
 
 def test_web_search_disabled_by_default():
+    from backend.services.workflow_settings import save_workflow_settings
     from backend.workspace.web_search import web_search
 
     initialize()
+    save_workflow_settings({"enableWebSearch": False})
     result = web_search("python asyncio tutorial")
     assert "disabled" in result.lower()
 
@@ -1796,4 +1798,70 @@ def test_autonomous_mode_needs_user_cap():
     state.SHARED_BOARD["In Progress"].append(task2)
     assert _try_move_to_needs_user(task2["id"], task2, "Need input again") is False
     assert len(state.SHARED_BOARD.get("Needs User", [])) == 1
+
+
+def test_load_project_preserves_skills_in_db():
+    from backend import state
+    from backend.agents.registry import agent_dev, agent_po
+    from backend.bootstrap import initialize, load_project_into_state
+    from backend.services.project_service import save_current_project_state
+
+    initialize()
+    pid = state.CURRENT_PROJECT_ID
+
+    agent_po.assigned_skills = ["po_skill.md"]
+    agent_dev.assigned_skills = ["dev_skill.md"]
+    agent_po.model = "custom-po:7b"
+    agent_dev.model = "custom-dev:14b"
+    save_current_project_state()
+
+    agent_po.assigned_skills = []
+    agent_dev.assigned_skills = []
+    agent_po.model = "llama3:8b"
+    agent_dev.model = "qwen2.5-coder:14b"
+
+    assert load_project_into_state(pid) is True
+
+    proj = state.storage.load_project(pid)
+    assert proj is not None
+    assert proj["po_skills"] == ["po_skill.md"]
+    assert proj["dev_skills"] == ["dev_skill.md"]
+    assert proj["po_model"] == "custom-po:7b"
+    assert proj["dev_model"] == "custom-dev:14b"
+    assert agent_po.assigned_skills == ["po_skill.md"]
+    assert agent_dev.assigned_skills == ["dev_skill.md"]
+    assert agent_po.model == "custom-po:7b"
+
+
+def test_workflow_settings_preserves_models_and_skills():
+    from backend import state
+    from backend.agents.registry import agent_po, agent_qa
+    from backend.bootstrap import initialize
+    from backend.services.project_service import save_current_project_state
+
+    initialize()
+    client = TestClient(app)
+
+    agent_po.assigned_skills = ["planning.md"]
+    agent_qa.assigned_skills = ["testing.md"]
+    agent_po.model = "custom-po:8b"
+    agent_qa.model = "custom-qa:7b"
+    save_current_project_state()
+
+    response = client.post(
+        "/api/workflow/settings",
+        json={"autonomousMode": True, "enableWebSearch": True},
+    )
+    assert response.status_code == 200
+    data = response.json()
+    assert data["assignedSkills"]["po"] == ["planning.md"]
+    assert data["assignedSkills"]["qa"] == ["testing.md"]
+    assert data["models"]["po"] == "custom-po:8b"
+    assert data["models"]["qa"] == "custom-qa:7b"
+    assert data["workflowSettings"]["autonomousMode"] is True
+    assert data["workflowSettings"]["enableWebSearch"] is True
+
+    proj = state.storage.load_project(state.CURRENT_PROJECT_ID)
+    assert proj["po_skills"] == ["planning.md"]
+    assert proj["qa_model"] == "custom-qa:7b"
 

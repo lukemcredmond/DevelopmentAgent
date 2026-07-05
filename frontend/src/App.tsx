@@ -118,6 +118,7 @@ export default function App() {
   const { theme, toggleTheme, isDark } = useTheme()
   const {
     state,
+    setState,
     loading,
     setLoading,
     applyState,
@@ -300,7 +301,6 @@ export default function App() {
   const handleState = useCallback(
     (data: AppState) => {
       applyState(data)
-      applyStateFields(data, setters)
       setLocalFiles(data.files)
       setFileTreeKey((k) => k + 1)
     },
@@ -494,7 +494,11 @@ export default function App() {
           void withLoading(async () => handleState(await loadProject(id)))
         }
         onSaveConfig={(payload) =>
-          void withLoading(async () => handleState(await updateConfig(payload)))
+          void withLoading(async () => {
+            const data = await updateConfig(payload)
+            handleState(data)
+            applyStateFields(data, setters)
+          })
         }
         onOpenNewProject={() => setShowNewProject(true)}
         onOpenSkillModal={(agent) => void openSkillModal(agent)}
@@ -576,9 +580,16 @@ export default function App() {
           })
         }}
         onWorkflowSettingsChange={(partial: Partial<WorkflowSettings>) =>
-          void withLoading(async () =>
-            handleState(await updateWorkflowSettings(partial)),
-          )
+          void withLoading(async () => {
+            const data = await updateWorkflowSettings(partial)
+            setState((prev) => ({
+              ...prev,
+              workflowSettings: data.workflowSettings,
+              activeLanes: data.activeLanes,
+              notifications: data.notifications,
+              board: data.board,
+            }))
+          })
         }
       />
 
