@@ -22,6 +22,62 @@ export function formatAcceptanceCriteria(items: unknown[] | undefined): string[]
   return (items ?? []).map((item) => formatTaskText(item).trim()).filter(Boolean)
 }
 
+const FILE_TOOL_ACTIONS: Record<string, string> = {
+  read_file: 'read',
+  write_file: 'written',
+  apply_patch: 'written',
+  run_test: 'tested',
+}
+
+const FILE_ACTION_RANK: Record<string, number> = {
+  written: 0,
+  tested: 1,
+  read: 2,
+  context: 3,
+  touched: 4,
+}
+
+function normalizeTaskFileEntry(f: import('../types').TaskFile | string): import('../types').TaskFile {
+  return typeof f === 'string' ? { path: f, action: 'touched' } : f
+}
+
+/** Merge task.files with file-tool transcript entries (dedupe by path, prefer stronger action). */
+export function deriveTaskFiles(task: import('../types').Task): import('../types').TaskFile[] {
+  const byPath = new Map<string, import('../types').TaskFile>()
+
+  for (const raw of task.files ?? []) {
+    const f = normalizeTaskFileEntry(raw)
+    if (!f.path) continue
+    byPath.set(f.path, f)
+  }
+
+  for (const entry of task.transcript ?? []) {
+    const toolName = entry.toolName
+    if (!toolName || !FILE_TOOL_ACTIONS[toolName]) continue
+    const args = entry.toolArgs ?? {}
+    const path = (args.path ?? args.test_script_path) as string | undefined
+    if (!path || typeof path !== 'string') continue
+    const action = FILE_TOOL_ACTIONS[toolName]!
+    const existing = byPath.get(path)
+    const existingRank = FILE_ACTION_RANK[existing?.action ?? 'touched'] ?? 99
+    const newRank = FILE_ACTION_RANK[action] ?? 99
+    if (!existing || newRank < existingRank) {
+      byPath.set(path, {
+        path,
+        action,
+        lastTouchedAt: entry.timestamp ?? existing?.lastTouchedAt,
+      })
+    }
+  }
+
+  return [...byPath.values()].sort((a, b) => {
+    const ar = FILE_ACTION_RANK[a.action ?? 'touched'] ?? 99
+    const br = FILE_ACTION_RANK[b.action ?? 'touched'] ?? 99
+    if (ar !== br) return ar - br
+    return (b.lastTouchedAt ?? '').localeCompare(a.lastTouchedAt ?? '')
+  })
+}
+
 /** Clone and sanitize a task for safe React rendering. */
 export function sanitizeTaskForUi(task: import('../types').Task): import('../types').Task {
   return {

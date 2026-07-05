@@ -1315,6 +1315,75 @@ def test_inject_sprint_context_no_tool_log_event():
     assert not any(e.get("source") == "context_inject" for e in events)
 
 
+def test_inject_sprint_context_records_task_files(monkeypatch):
+    from backend import state
+    from backend.agents.task_context import init_new_task
+    from backend.services.sprint_service import _inject_sprint_context
+
+    initialize()
+    task = init_new_task({"id": "T-CTX-F", "title": "Ctx files", "description": "d"})
+    state.SHARED_BOARD.setdefault("In Progress", []).append(task)
+
+    monkeypatch.setattr(
+        "backend.services.sprint_service.build_sprint_file_context",
+        lambda active_task, max_chars=12000: ("=== context ===", ["lib/main.dart", "package.json"]),
+    )
+
+    _inject_sprint_context(task, state.PROJECT_BRIEF, "Developer", "Implement.")
+    stored = next(t for t in state.SHARED_BOARD["In Progress"] if t["id"] == "T-CTX-F")
+    paths = {f["path"] for f in stored.get("files", [])}
+    assert "lib/main.dart" in paths
+    assert "package.json" in paths
+    assert any(
+        f.get("action") == "context"
+        for f in stored["files"]
+        if f.get("path") == "lib/main.dart"
+    )
+
+
+def test_build_state_response_syncs_transcript_files():
+    from backend import state
+    from backend.agents.task_context import init_new_task
+
+    initialize()
+    task = init_new_task({"id": "T-SYNC", "title": "Sync", "description": "d"})
+    task["files"] = []
+    task["transcript"] = [
+        {
+            "timestamp": "2026-01-01 12:00:00",
+            "role": "tool",
+            "content": "read_file",
+            "toolName": "read_file",
+            "toolSuccess": True,
+            "toolArgs": {"path": "lib/widget.dart"},
+        }
+    ]
+    state.SHARED_BOARD = {
+        "In Progress": [task],
+        "Backlog": [],
+        "Done": [],
+        "Needs PO": [],
+        "Needs User": [],
+        "Code Review": [],
+        "QA": [],
+    }
+
+    client = TestClient(app)
+    resp = client.get("/api/state")
+    assert resp.status_code == 200
+    synced = None
+    for lane_tasks in resp.json()["board"].values():
+        if not isinstance(lane_tasks, list):
+            continue
+        for t in lane_tasks:
+            if t.get("id") == "T-SYNC":
+                synced = t
+                break
+    assert synced is not None
+    paths = {f["path"] for f in synced.get("files", [])}
+    assert "lib/widget.dart" in paths
+
+
 def test_collect_sprint_context_paths_capped(tmp_path, monkeypatch):
     from backend import state
     from backend.agents.task_context import init_new_task

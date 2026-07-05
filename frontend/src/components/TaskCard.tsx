@@ -1,7 +1,7 @@
 import { useSortable } from '@dnd-kit/sortable'
 import { CSS } from '@dnd-kit/utilities'
 import type { BoardLane, Task } from '../types'
-import { formatTaskText } from '../utils/taskFormat'
+import { deriveTaskFiles, formatTaskText } from '../utils/taskFormat'
 
 interface TaskCardProps {
   task: Task
@@ -34,6 +34,14 @@ export default function TaskCard({
   const hasCommit = Boolean(task.gitCommit?.hash)
   const isDone = task.status === 'Done'
   const needsUser = lane === 'Needs User' || task.status === 'Needs User'
+  const filePaths = deriveTaskFiles(task).map((f) => f.path).slice(0, 2)
+
+  function truncatePath(path: string): string {
+    if (path.length <= 28) return path
+    const parts = path.split('/')
+    if (parts.length <= 1) return `…${path.slice(-24)}`
+    return `…/${parts.slice(-2).join('/')}`
+  }
 
   return (
     <button
@@ -118,6 +126,19 @@ export default function TaskCard({
         </p>
       )}
       <p className="text-[11px] text-cat-subtext line-clamp-3">{formatTaskText(task.description)}</p>
+      {filePaths.length > 0 && (
+        <div className="flex flex-wrap gap-1 mt-1.5">
+          {filePaths.map((path) => (
+            <span
+              key={path}
+              className="text-[9px] font-mono bg-slate-800/80 text-slate-300 px-1.5 py-0.5 rounded truncate max-w-full"
+              title={path}
+            >
+              {truncatePath(path)}
+            </span>
+          ))}
+        </div>
+      )}
     </button>
   )
 }

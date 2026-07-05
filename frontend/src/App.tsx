@@ -31,6 +31,7 @@ import {
 } from './api/client'
 import ActivityPanel from './components/ActivityPanel'
 import AgentConsole from './components/AgentConsole'
+import BriefPanel from './components/BriefPanel'
 import ChatPanel, { type ChatUiMessage } from './components/ChatPanel'
 import CodeEditor from './components/CodeEditor'
 import DiffPanel from './components/DiffPanel'
@@ -61,6 +62,25 @@ import { getDisplayLanes } from './types'
 import { findTaskOnBoard } from './utils/taskFormat'
 
 type BottomTab = 'console' | 'activity' | 'tools' | 'chat' | 'terminal' | 'search' | 'git'
+
+const WORKSPACE_OPEN_KEY = 'allhands-workspace-open'
+
+function readWorkspaceOpen(): boolean {
+  try {
+    return sessionStorage.getItem(WORKSPACE_OPEN_KEY) === 'true'
+  } catch {
+    return false
+  }
+}
+
+function writeWorkspaceOpen(open: boolean): void {
+  try {
+    if (open) sessionStorage.setItem(WORKSPACE_OPEN_KEY, 'true')
+    else sessionStorage.removeItem(WORKSPACE_OPEN_KEY)
+  } catch {
+    /* ignore */
+  }
+}
 
 function chatRecordsToUi(messages: ChatMessageRecord[] | undefined): ChatUiMessage[] {
   return (messages ?? []).map((m, i) => ({
@@ -131,7 +151,10 @@ export default function App() {
   const [crModel, setCrModel] = useState('qwen2.5-coder:7b')
   const [qaModel, setQaModel] = useState('qwen2.5-coder:7b')
 
-  const [selectedFile, setSelectedFile] = useState<string | null>('package.json')
+  const [selectedFile, setSelectedFile] = useState<string | null>(null)
+  const [workspaceOpen, setWorkspaceOpen] = useState(readWorkspaceOpen)
+  const [workspaceBarDismissed, setWorkspaceBarDismissed] = useState(false)
+  const showWorkspace = selectedFile != null || workspaceOpen
   const [showDiff, setShowDiff] = useState(false)
   const [bottomTab, setBottomTab] = useState<BottomTab>('console')
   const [kanbanOpen, setKanbanOpen] = useState(readKanbanOpen)
@@ -239,6 +262,19 @@ export default function App() {
       }
     })
   }
+
+  const handleOpenFile = useCallback((path: string) => {
+    setSelectedFile(path)
+    setWorkspaceOpen(true)
+    setWorkspaceBarDismissed(false)
+    writeWorkspaceOpen(true)
+  }, [])
+
+  const handleCloseWorkspace = useCallback(() => {
+    setSelectedFile(null)
+    setWorkspaceOpen(false)
+    writeWorkspaceOpen(false)
+  }, [])
 
   useEffect(() => {
     if (!selectedTask) return
@@ -444,7 +480,6 @@ export default function App() {
         sprintRunning={orchestratedActive}
         isDark={isDark}
         onOllamaUrlChange={setOllamaUrl}
-        onBriefChange={setBrief}
         onProjectNameChange={setProjectName}
         onWorkspaceDirChange={setWorkspaceDir}
         onSkillsDirChange={setSkillsDir}
@@ -459,7 +494,6 @@ export default function App() {
           void withLoading(async () => handleState(await updateConfig(payload)))
         }
         onOpenNewProject={() => setShowNewProject(true)}
-        onOpenManualTask={() => setShowManualTask(true)}
         onOpenSkillModal={(agent) => void openSkillModal(agent)}
         onRemoveSkill={(agent, skill) =>
           void withLoading(async () =>
@@ -599,6 +633,12 @@ export default function App() {
           </div>
         )}
 
+        <BriefPanel
+          brief={brief}
+          onBriefChange={setBrief}
+          onOpenManualTask={() => setShowManualTask(true)}
+        />
+
         <KanbanToggleBar
           board={state.board}
           projectName={state.projectName}
@@ -623,32 +663,63 @@ export default function App() {
           />
         )}
 
-        <div className="flex-1 grid grid-cols-1 lg:grid-cols-[200px_1fr] min-h-0 overflow-hidden">
-          <FileExplorer
-            selectedFile={selectedFile}
-            onSelectFile={setSelectedFile}
-            refreshKey={fileTreeKey}
-          />
-
-          <div ref={workspaceColumnRef} className="flex flex-col min-h-0 overflow-hidden">
-            <div className="flex-1 min-h-0 grid grid-rows-1">
-              {showDiff ? (
-                <DiffPanel
-                  path={selectedFile}
-                  currentContent={localFiles[selectedFile ?? '']}
-                />
-              ) : (
-                <CodeEditor
-                  files={localFiles}
-                  selectedFile={selectedFile}
-                  onSelectFile={setSelectedFile}
-                  onFilesChange={setLocalFiles}
-                  showDiff={showDiff}
-                  onToggleDiff={() => setShowDiff((d) => !d)}
-                />
-              )}
+        <div className="flex-1 flex flex-col min-h-0 overflow-hidden">
+          {showWorkspace ? (
+            <div className="flex-1 min-h-0 grid grid-cols-1 lg:grid-cols-[200px_1fr] overflow-hidden">
+              <FileExplorer
+                selectedFile={selectedFile}
+                onSelectFile={handleOpenFile}
+                refreshKey={fileTreeKey}
+              />
+              <div className="min-h-0 flex flex-col overflow-hidden">
+                {showDiff ? (
+                  <DiffPanel
+                    path={selectedFile}
+                    currentContent={localFiles[selectedFile ?? '']}
+                  />
+                ) : (
+                  <CodeEditor
+                    files={localFiles}
+                    selectedFile={selectedFile}
+                    onSelectFile={handleOpenFile}
+                    onFilesChange={setLocalFiles}
+                    showDiff={showDiff}
+                    onToggleDiff={() => setShowDiff((d) => !d)}
+                    onCloseWorkspace={handleCloseWorkspace}
+                  />
+                )}
+              </div>
             </div>
+          ) : (
+            !workspaceBarDismissed && (
+              <div className="shrink-0 mx-4 mb-2 flex items-center justify-between gap-3 px-3 py-2 text-[11px] text-cat-subtext bg-cat-surface0/60 border border-cat-surface1 rounded-lg">
+                <span>No file open — open from a task card or browse files</span>
+                <div className="flex items-center gap-2 shrink-0">
+                  <button
+                    type="button"
+                    onClick={() => {
+                      setWorkspaceOpen(true)
+                      writeWorkspaceOpen(true)
+                      setWorkspaceBarDismissed(false)
+                    }}
+                    className="px-2.5 py-1 rounded bg-indigo-600/40 hover:bg-indigo-600/60 text-indigo-200 text-[10px] font-semibold"
+                  >
+                    Browse files
+                  </button>
+                  <button
+                    type="button"
+                    onClick={() => setWorkspaceBarDismissed(true)}
+                    className="text-cat-overlay hover:text-white px-1"
+                    aria-label="Dismiss"
+                  >
+                    <i className="fa-solid fa-xmark" />
+                  </button>
+                </div>
+              </div>
+            )
+          )}
 
+          <div ref={workspaceColumnRef} className="flex flex-col min-h-0 overflow-hidden shrink-0">
             <BottomPanelResize
               containerRef={workspaceColumnRef}
               onResize={handleBottomPanelResize}
@@ -749,7 +820,7 @@ export default function App() {
                   workspaceDir={state.workspaceDir}
                 />
                 {bottomTab === 'search' && (
-                  <SearchPanel onOpenFile={setSelectedFile} />
+                  <SearchPanel onOpenFile={handleOpenFile} />
                 )}
                 {bottomTab === 'git' && <GitPanel />}
               </div>
@@ -763,7 +834,7 @@ export default function App() {
         taskLane={selectedTaskLane}
         sprintRunning={orchestratedActive}
         onClose={() => setSelectedTask(null)}
-        onOpenFile={setSelectedFile}
+        onOpenFile={handleOpenFile}
         onUpdate={(taskId, title, description, acceptanceCriteria) =>
           void withLoading(async () => {
             handleState(

@@ -11,6 +11,7 @@ import {
 import { useMemo, useState } from 'react'
 import type { Board, BoardLane, Task, WorkflowSettings } from '../types'
 import { getDisplayLanes } from '../types'
+import { deriveTaskFiles } from '../utils/taskFormat'
 import KanbanColumn from './KanbanColumn'
 
 interface KanbanBoardProps {
@@ -26,7 +27,7 @@ interface KanbanBoardProps {
 }
 
 function getTaskFileCount(task: Task): number {
-  return (task.files ?? []).length
+  return deriveTaskFiles(task).length
 }
 
 function getTaskDecisionCount(task: Task): number {

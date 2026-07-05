@@ -15,6 +15,7 @@ interface CodeEditorProps {
   onFilesChange: (files: Record<string, string>) => void
   showDiff?: boolean
   onToggleDiff?: () => void
+  onCloseWorkspace?: () => void
 }
 
 function detectLanguage(path: string): string {
@@ -42,6 +43,7 @@ export default function CodeEditor({
   onFilesChange,
   showDiff,
   onToggleDiff,
+  onCloseWorkspace,
 }: CodeEditorProps) {
   const [tabs, setTabs] = useState<OpenTab[]>([])
   const [activePath, setActivePath] = useState<string | null>(selectedFile)
@@ -114,13 +116,18 @@ export default function CodeEditor({
   }, [handleSave])
 
   const closeTab = (path: string) => {
-    setTabs((prev) => prev.filter((t) => t.path !== path))
-    if (activePath === path) {
-      const remaining = tabs.filter((t) => t.path !== path)
-      const next = remaining[remaining.length - 1]?.path ?? null
-      setActivePath(next)
-      if (next) onSelectFile(next)
-    }
+    setTabs((prev) => {
+      const remaining = prev.filter((t) => t.path !== path)
+      if (remaining.length === 0) {
+        setActivePath(null)
+        onCloseWorkspace?.()
+      } else if (activePath === path) {
+        const next = remaining[remaining.length - 1]?.path ?? null
+        setActivePath(next)
+        if (next) onSelectFile(next)
+      }
+      return remaining
+    })
   }
 
   const fileNames = Object.keys(files)
@@ -160,7 +167,7 @@ export default function CodeEditor({
                 {path}
                 {dirty && <span className="text-amber-400 ml-1">●</span>}
               </button>
-              {tabs.length > 1 && (
+              {tabs.some((t) => t.path === path) && (
                 <button
                   type="button"
                   onClick={() => closeTab(path)}

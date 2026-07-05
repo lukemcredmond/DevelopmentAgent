@@ -1,29 +1,9 @@
 import { useEffect, useState, type ReactNode } from 'react'
 import type { BoardLane, Task, TaskFile, TaskGitCommit, TaskTranscriptEntry } from '../types'
-import { formatAcceptanceCriteria, formatTaskText, sanitizeTaskForUi } from '../utils/taskFormat'
+import { formatAcceptanceCriteria, formatTaskText, deriveTaskFiles, sanitizeTaskForUi } from '../utils/taskFormat'
 
 function getTaskFilePath(f: TaskFile | string): string {
   return typeof f === 'string' ? f : f.path
-}
-
-function normalizeTaskFile(f: TaskFile | string): TaskFile {
-  return typeof f === 'string' ? { path: f, action: 'touched' } : f
-}
-
-const FILE_ACTION_ORDER: Record<string, number> = {
-  written: 0,
-  tested: 1,
-  read: 2,
-  touched: 3,
-}
-
-function sortTaskFiles(files: (TaskFile | string)[]): TaskFile[] {
-  return [...files].map(normalizeTaskFile).sort((a, b) => {
-    const ao = FILE_ACTION_ORDER[a.action ?? 'touched'] ?? 3
-    const bo = FILE_ACTION_ORDER[b.action ?? 'touched'] ?? 3
-    if (ao !== bo) return ao - bo
-    return (b.lastTouchedAt ?? '').localeCompare(a.lastTouchedAt ?? '')
-  })
 }
 
 function fileActionBadgeClass(action?: string): string {
@@ -32,6 +12,8 @@ function fileActionBadgeClass(action?: string): string {
       return 'bg-emerald-950/60 text-emerald-300'
     case 'read':
       return 'bg-slate-800 text-slate-300'
+    case 'context':
+      return 'bg-violet-950/60 text-violet-300'
     case 'tested':
       return 'bg-amber-950/60 text-amber-300'
     default:
@@ -243,7 +225,8 @@ export default function TaskDetailModal({
   if (!task) return null
 
   const safeTask = sanitizeTaskForUi(task)
-  const files = sortTaskFiles(safeTask.files ?? [])
+  const files = deriveTaskFiles(safeTask)
+  const filesFromTranscriptOnly = (safeTask.files ?? []).length === 0 && files.length > 0
   const decisions = [...(safeTask.decisions ?? [])].reverse()
   const allTranscript = [...(safeTask.transcript ?? [])].reverse()
   const transcriptFailureCount = allTranscript.filter(isTranscriptFailure).length
@@ -336,6 +319,41 @@ export default function TaskDetailModal({
               </ul>
             ) : (
               <p className="text-[11px] text-cat-overlay italic">None defined</p>
+            )}
+          </CollapsibleSection>
+
+          <CollapsibleSection title="Associated Files" badge={files.length} defaultOpen>
+            <div className="overflow-y-auto space-y-1 max-h-48">
+              {files.length === 0 ? (
+                <p className="text-[11px] text-cat-overlay italic">
+                  No files yet — files appear after the agent reads or edits workspace files during
+                  a sprint.
+                </p>
+              ) : (
+                files.map((f, i) => (
+                  <button
+                    key={`${f.path}-${i}`}
+                    type="button"
+                    onClick={() => {
+                      onOpenFile(getTaskFilePath(f))
+                      onClose()
+                    }}
+                    className="w-full text-left text-[11px] font-mono bg-cat-base border border-cat-surface1 rounded px-2 py-1.5 hover:border-indigo-500/50 text-indigo-300 flex items-center justify-between gap-2"
+                  >
+                    <span className="truncate">{getTaskFilePath(f)}</span>
+                    {f.action && (
+                      <span
+                        className={`shrink-0 text-[9px] uppercase px-1.5 py-0.5 rounded ${fileActionBadgeClass(f.action)}`}
+                      >
+                        {f.action}
+                      </span>
+                    )}
+                  </button>
+                ))
+              )}
+            </div>
+            {filesFromTranscriptOnly && files.length > 0 && (
+              <p className="text-[10px] text-cat-overlay italic mt-2">Derived from tool transcript</p>
             )}
           </CollapsibleSection>
 
@@ -563,35 +581,6 @@ export default function TaskDetailModal({
               </button>
             </div>
           )}
-
-          <CollapsibleSection title="Associated Files" badge={files.length} defaultOpen={files.length > 0}>
-            <div className="overflow-y-auto space-y-1 max-h-24">
-              {files.length === 0 ? (
-                <p className="text-[11px] text-cat-overlay italic">None yet</p>
-              ) : (
-                files.map((f, i) => (
-                  <button
-                    key={`${f.path}-${i}`}
-                    type="button"
-                    onClick={() => {
-                      onOpenFile(getTaskFilePath(f))
-                      onClose()
-                    }}
-                    className="w-full text-left text-[11px] font-mono bg-cat-base border border-cat-surface1 rounded px-2 py-1.5 hover:border-indigo-500/50 text-indigo-300 flex items-center justify-between gap-2"
-                  >
-                    <span className="truncate">{getTaskFilePath(f)}</span>
-                    {f.action && (
-                      <span
-                        className={`shrink-0 text-[9px] uppercase px-1.5 py-0.5 rounded ${fileActionBadgeClass(f.action)}`}
-                      >
-                        {f.action}
-                      </span>
-                    )}
-                  </button>
-                ))
-              )}
-            </div>
-          </CollapsibleSection>
 
           <CollapsibleSection title="Agent Decisions" badge={decisions.length} defaultOpen={decisions.length <= 10}>
             <div className="overflow-y-auto space-y-2 max-h-40 pr-1">

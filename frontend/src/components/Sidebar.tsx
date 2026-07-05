@@ -20,7 +20,6 @@ interface SidebarProps {
   sprintRunning: boolean
   isDark: boolean
   onOllamaUrlChange: (v: string) => void
-  onBriefChange: (v: string) => void
   onProjectNameChange: (v: string) => void
   onWorkspaceDirChange: (v: string) => void
   onSkillsDirChange: (v: string) => void
@@ -31,7 +30,6 @@ interface SidebarProps {
   onLoadProject: (id: string) => void
   onSaveConfig: (payload: ConfigPayload) => void
   onOpenNewProject: () => void
-  onOpenManualTask: () => void
   onOpenSkillModal: (agent: AgentId) => void
   onRemoveSkill: (agent: AgentId, skill: string) => void
   onPlan: () => void
@@ -73,7 +71,6 @@ export default function Sidebar({
   sprintRunning,
   isDark,
   onOllamaUrlChange,
-  onBriefChange,
   onProjectNameChange,
   onWorkspaceDirChange,
   onSkillsDirChange,
@@ -84,7 +81,6 @@ export default function Sidebar({
   onLoadProject,
   onSaveConfig,
   onOpenNewProject,
-  onOpenManualTask,
   onOpenSkillModal,
   onRemoveSkill,
   onPlan,
@@ -359,29 +355,13 @@ export default function Sidebar({
         />
 
         <div className="bg-cat-surface0 p-3 rounded-xl border border-cat-surface1 space-y-3">
-          <div className="flex items-center justify-between">
-            <h3 className="text-xs font-bold uppercase tracking-wider text-cat-subtext">
-              Project Brief
-            </h3>
-            <button
-              type="button"
-              onClick={onOpenManualTask}
-              className="text-xs text-indigo-400 hover:text-indigo-300 font-semibold flex items-center gap-1"
-            >
-              <i className="fa-solid fa-square-plus" />
-              Add Feature
-            </button>
-          </div>
+          <h3 className="text-xs font-bold uppercase tracking-wider text-cat-subtext">
+            Sprint
+          </h3>
           <p className="text-[10px] text-cat-overlay leading-relaxed">
-            Describe your project. Plan & Run automates PO → Dev → QA. Developer questions go to
-            Needs PO; user decisions go to Needs User.
+            Use the Project Brief panel above the board to describe your project, then run sprint
+            actions here.
           </p>
-          <textarea
-            value={brief}
-            onChange={(e) => onBriefChange(e.target.value)}
-            className="w-full h-20 bg-cat-base border border-cat-surface1 rounded-lg p-2 text-xs text-white focus:outline-none focus:border-indigo-500 resize-none font-mono"
-            placeholder="Describe your project goals, features, and constraints…"
-          />
           <div className="space-y-2 pt-1">
             <button
               type="button"
@@ -440,7 +420,7 @@ export default function Sidebar({
             </div>
             {sprintRunning && (
               <p className="text-[10px] text-violet-300/90 italic">
-                Sprint active — watch Console and the progress bar below the editor.
+                Sprint active — watch Console and the progress bar below.
               </p>
             )}
             {autoSprint && autoSprintPaused && !sprintRunning && (

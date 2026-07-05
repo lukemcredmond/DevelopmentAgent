@@ -242,6 +242,7 @@ def normalize_task(task: Dict[str, Any]) -> Dict[str, Any]:
             "playbookRun": bool(qe.get("playbookRun")),
             "commands": [str(c) for c in (qe.get("commands") or [])],
             "passed": bool(qe.get("passed")),
+            **({"userOverride": bool(qe.get("userOverride"))} if qe.get("userOverride") else {}),
         }
     elif "qaEvidence" not in task:
         task["qaEvidence"] = None

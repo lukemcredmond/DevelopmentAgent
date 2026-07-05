@@ -25,6 +25,7 @@ from backend.agents.task_context import (
     normalize_task,
     publish_activity,
     record_task_decision,
+    record_task_file,
     record_task_git_commit,
     set_active_sprint_context,
     set_qa_failure,
@@ -346,6 +347,18 @@ def _mark_sprint_step_start() -> str:
     return ts
 
 
+def _task_has_work_files(task: Dict[str, Any]) -> bool:
+    """True when the task has agent-touched files beyond sprint context preload."""
+    for f in task.get("files") or []:
+        if isinstance(f, str):
+            return True
+        if isinstance(f, dict) and f.get("path"):
+            action = str(f.get("action") or "touched")
+            if action not in ("context", "touched"):
+                return True
+    return False
+
+
 def _inject_sprint_context(
     active_task: Dict[str, Any],
     brief: str,
@@ -362,6 +375,19 @@ def _inject_sprint_context(
             f"Pre-loaded {len(paths)} file(s) for {task_id}: {', '.join(paths[:8])}"
             + ("…" if len(paths) > 8 else ""),
         )
+        task = find_task_by_id(task_id)
+        if task:
+            normalize_task(task)
+            stronger = {"written", "tested", "read"}
+            existing_actions = {
+                f.get("path"): f.get("action")
+                for f in task.get("files", [])
+                if isinstance(f, dict) and f.get("path")
+            }
+            for path in paths:
+                if existing_actions.get(path) in stronger:
+                    continue
+                record_task_file(task_id, path, "context", persist=True)
     base = build_task_prompt(active_task, brief)
     parts = [base]
     if context_block:
@@ -564,7 +590,7 @@ def _audit_dev_verification(task: Dict[str, Any], lane_before: str, task_id: str
     if lane_before != "In Progress" or lane_after != target:
         return
     files = task.get("files") or []
-    if not files:
+    if not files or not _task_has_work_files(task):
         return
     if _dev_has_verification(task, step_started):
         return
@@ -634,7 +660,7 @@ def _audit_dev_files_written(task: Dict[str, Any], lane_before: str, task_id: st
     if lane_after in ("Needs PO", "Needs User"):
         return
     files = task.get("files") or []
-    if files:
+    if _task_has_work_files(task):
         return
     failures = _count_task_tool_failures(task)
     title = task.get("title", task_id)
@@ -1023,7 +1049,7 @@ def _run_developer_step(active_task: Dict[str, Any], brief: str) -> None:
                         )
                 else:
                     fresh = find_task_by_id(task_id)
-                    if fresh and fresh.get("files"):
+                    if fresh and _task_has_work_files(fresh):
                         clear_qa_failure(task_id)
                         move_board_stage(task_id, target)
                     elif fresh:

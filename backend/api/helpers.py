@@ -1,6 +1,7 @@
 from backend import state
 from backend.agents.agent_run import get_active_run
 from backend.agents.registry import agent_cr, agent_dev, agent_po, agent_qa
+from backend.agents.task_context import normalize_board_tasks
 from backend.services.skills import scan_skills_directory
 from backend.services.tool_approval import list_pending_approvals
 from backend.services.workflow_settings import (
@@ -13,6 +14,7 @@ from backend.workspace.files import sync_virtual_filesystem_from_disk
 
 
 def build_state_response() -> dict:
+    normalize_board_tasks()
     file_list = sync_virtual_filesystem_from_disk()
     ws = get_workflow_settings()
     return {
