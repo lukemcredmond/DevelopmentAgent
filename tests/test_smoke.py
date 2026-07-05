@@ -1013,3 +1013,69 @@ def test_chat_compose_includes_task_context():
     assert "Which API should we use?" in composed
     assert "Please split this card" in composed
 
+
+def test_clear_all_board_tasks():
+    from backend import state
+    from backend.agents.agent_run import finish_run
+    from backend.agents.task_context import init_new_task
+
+    initialize()
+    finish_run()
+    state.PROJECT_BRIEF = "Keep this brief"
+    existing_file = next(iter(state.VIRTUAL_FILESYSTEM.keys()), None)
+    state.SHARED_BOARD = {
+        "Backlog": [init_new_task({"id": "T-1", "title": "A", "description": "d"})],
+        "In Progress": [init_new_task({"id": "T-2", "title": "B", "description": "d"})],
+        "Needs PO": [],
+        "Needs User": [],
+        "QA": [],
+        "Done": [],
+    }
+
+    client = TestClient(app)
+    resp = client.post("/api/board/clear-tasks")
+    assert resp.status_code == 200
+    assert all(len(tasks) == 0 for tasks in state.SHARED_BOARD.values())
+    assert state.PROJECT_BRIEF == "Keep this brief"
+    if existing_file:
+        assert existing_file in state.VIRTUAL_FILESYSTEM
+
+
+def test_skills_dir_persists_via_settings():
+    from backend import state
+    from backend.bootstrap import initialize
+
+    initialize()
+    client = TestClient(app)
+    custom = "./custom_skills_test"
+    resp = client.post(
+        "/api/config",
+        json={
+            "projectName": state.PROJECT_NAME,
+            "workspaceDir": state.WORKSPACE_DIR,
+            "skillsDir": custom,
+            "poModel": "llama3:8b",
+            "devModel": "qwen2.5-coder:14b",
+            "crModel": "qwen2.5-coder:7b",
+            "qaModel": "qwen2.5-coder:7b",
+        },
+    )
+    assert resp.status_code == 200
+    assert state.SKILLS_DIR == custom
+
+    initialize()
+    assert state.SKILLS_DIR == custom
+
+
+def test_po_smallest_tasks_guidance_wired():
+    from backend.agents.registry import agent_po
+    from backend.services.brief_service import PO_SMALLEST_TASKS_GUIDANCE
+    from backend.services import sprint_service
+
+    assert "smallest achievable" in PO_SMALLEST_TASKS_GUIDANCE.lower()
+    assert PO_SMALLEST_TASKS_GUIDANCE in agent_po.system_prompt
+    import inspect
+
+    src = inspect.getsource(sprint_service.run_po_plan)
+    assert "PO_SMALLEST_TASKS_GUIDANCE" in src
+

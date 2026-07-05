@@ -7,6 +7,7 @@ from backend import state
 from backend.agents.registry import AGENT_MAP
 from backend.agents.task_context import build_task_prompt, find_task_by_id
 from backend.api.schemas import ChatPayload
+from backend.services.brief_service import PO_SMALLEST_TASKS_GUIDANCE
 from backend.services.events import publish_event
 from backend.services.project_service import save_current_project_state
 from backend.workspace.files import build_file_context_block
@@ -21,6 +22,7 @@ def _compose_message(payload: ChatPayload) -> str:
         if task:
             parts.append(build_task_prompt(task, state.PROJECT_BRIEF))
             if payload.agent == "po":
+                parts.append(PO_SMALLEST_TASKS_GUIDANCE)
                 parts.append(
                     "When the user asks to break down or split this card, use add_backlog_tasks "
                     "with split_from_task_id set to this task's ID. Each subtask needs clear "

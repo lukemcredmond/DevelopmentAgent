@@ -18,6 +18,7 @@ import {
   removeSkill,
   reorderTasks,
   resetWorkspace,
+  clearAllTasks,
   resolveToolApproval,
   resolveUserQuestion,
   triggerPlan,
@@ -433,6 +434,20 @@ export default function App() {
             }
           })
         }
+        onClearAllTasks={() => {
+          if (
+            !window.confirm(
+              'Remove all Kanban cards? Workspace files and the project brief will be kept.',
+            )
+          ) {
+            return
+          }
+          void withLoading(async () => {
+            if (sprintRunning) await stopAutoSprint()
+            handleState(await clearAllTasks())
+            setSelectedTask(null)
+          })
+        }}
         onReset={() =>
           void withLoading(async () => {
             handleState(await resetWorkspace())

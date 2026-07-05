@@ -1,7 +1,8 @@
+from backend import state
 from backend.agents.scrum_agent import ScrumAgent
 from backend.agents.task_context import record_task_git_commit
 from backend.agents.tools import Tool
-from backend import state
+from backend.services.brief_service import PO_SMALLEST_TASKS_GUIDANCE
 from backend.services.board_service import append_backlog_tasks, move_board_stage
 from backend.services.git_service import git_commit, git_diff, git_init, git_status
 from backend.workspace.files import (
@@ -21,7 +22,8 @@ agent_po = ScrumAgent(
         "When the user adds features, refine them into clear developer-ready stories. "
         "Use update_board to move tasks from 'Needs PO' back to 'In Progress' when clarification is done. "
         "Use add_backlog_tasks to add new stories to the Backlog; when splitting a large or stuck card, "
-        "pass split_from_task_id so the original moves to Done with a split note."
+        "pass split_from_task_id so the original moves to Done with a split note. "
+        f"{PO_SMALLEST_TASKS_GUIDANCE}"
     ),
 )
 

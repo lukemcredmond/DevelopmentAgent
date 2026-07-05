@@ -11,7 +11,9 @@ from backend.agents.task_context import (
     record_task_decision,
     sort_backlog,
 )
+from backend.services.board_lanes import normalize_board_lanes
 from backend.services.events import publish_event
+from backend.services.logs import add_system_log
 from backend.services.project_service import save_current_project_state
 from backend.services.workflow_settings import get_workflow_settings
 
@@ -69,6 +71,18 @@ def move_board_stage(task_id: str, target_lane: str) -> str:
         save_current_project_state()
         publish_board_update(task_id, target_lane, source="move")
         return f"Successfully moved task {task_id} to '{target_lane}'."
+
+
+def clear_all_board_tasks() -> None:
+    """Remove all tasks from every board lane; keep workspace files and brief."""
+    normalize_board_lanes(state.SHARED_BOARD)
+    for lane in list(state.SHARED_BOARD.keys()):
+        state.SHARED_BOARD[lane] = []
+    state.ACTIVE_SPRINT_TASK_ID = None
+    state.ACTIVE_SPRINT_AGENT = None
+    save_current_project_state()
+    publish_board_update(source="clear_tasks")
+    add_system_log("System", "info", "All board tasks cleared")
 
 
 def _enrich_task_from_po(raw: Dict[str, Any]) -> Dict[str, Any]:

@@ -37,6 +37,7 @@ interface SidebarProps {
   onPlan: () => void
   onPlanAndRun: () => void
   onStep: () => void
+  onClearAllTasks: () => void
   onReset: () => void
   onWorkflowSettingsChange: (partial: Partial<WorkflowSettings>) => void
   onToggleTheme: () => void
@@ -89,6 +90,7 @@ export default function Sidebar({
   onPlan,
   onPlanAndRun,
   onStep,
+  onClearAllTasks,
   onReset,
   onWorkflowSettingsChange,
   onToggleTheme,
@@ -441,7 +443,21 @@ export default function Sidebar({
         </div>
       </div>
 
-      <div className="pt-4 border-t border-cat-surface1">
+      <div className="pt-4 border-t border-cat-surface1 space-y-2">
+        <button
+          type="button"
+          onClick={onClearAllTasks}
+          disabled={sprintRunning}
+          title={
+            sprintRunning
+              ? 'Wait for the current sprint step to finish'
+              : 'Remove all Kanban cards; workspace files and brief are kept'
+          }
+          className="w-full bg-amber-950/20 text-amber-300 hover:bg-amber-950/40 disabled:opacity-50 border border-amber-500/20 py-2 rounded-lg text-xs font-medium transition-colors"
+        >
+          <i className="fa-solid fa-trash-can mr-1" />
+          Clear All Tasks
+        </button>
         <button
           type="button"
           onClick={onReset}

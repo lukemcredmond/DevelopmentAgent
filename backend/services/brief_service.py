@@ -14,6 +14,12 @@ WORKFLOW_LANES = [
     "Done",
 ]
 
+PO_SMALLEST_TASKS_GUIDANCE = (
+    "Always break work into the smallest achievable backlog items — each card should be "
+    "completable in one focused dev pass with testable acceptance criteria. "
+    "Prefer many small cards over few large ones."
+)
+
 
 def append_feature_to_brief(title: str, description: str, source: str = "user") -> str:
     """Appends a user feature request to the persisted project brief."""

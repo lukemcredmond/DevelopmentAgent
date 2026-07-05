@@ -196,6 +196,10 @@ export async function resetWorkspace(): Promise<AppState> {
   return request<AppState>('/api/reset', { method: 'POST' })
 }
 
+export async function clearAllTasks(): Promise<AppState> {
+  return request<AppState>('/api/board/clear-tasks', { method: 'POST' })
+}
+
 export async function triggerPlan(payload: BriefPayload): Promise<AppState> {
   return request<AppState>('/api/plan', {
     method: 'POST',

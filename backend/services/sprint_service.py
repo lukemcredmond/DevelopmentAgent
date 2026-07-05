@@ -33,8 +33,9 @@ from backend.agents.task_context import (
 from backend.services.board_lanes import normalize_board_lanes
 from backend.services.board_service import append_backlog_tasks, move_board_stage, publish_board_update
 from backend.services.brief_service import (
-    append_brief_text,
+    PO_SMALLEST_TASKS_GUIDANCE,
     append_feature_to_brief,
+    append_brief_text,
     existing_backlog_titles,
     record_brief_changelog,
     set_project_brief,
@@ -377,6 +378,7 @@ def run_po_plan(brief: str, ollama_url: str) -> None:
     add_system_log("Product Owner", "info", "Decomposing project brief into features…")
 
     po_output = agent_po.execute_step(
+        f"{PO_SMALLEST_TASKS_GUIDANCE}\n\n"
         "You are the Product Owner. Decompose the project brief into developer-ready features. "
         "Reply with ONLY a JSON array. Each object must have: title, description, "
         "acceptanceCriteria (string array), optional id (hint only — the system assigns TASK-{GUID}), "
@@ -410,6 +412,7 @@ def run_po_add_feature(title: str, description: str, ollama_url: str) -> None:
     add_system_log("Product Owner", "info", f"Refining feature '{title}'…")
 
     po_output = agent_po.execute_step(
+        f"{PO_SMALLEST_TASKS_GUIDANCE}\n\n"
         "Reply with ONLY a JSON array with ONE object: id, title, description, acceptanceCriteria, "
         "optional blockedBy, optional priority.\n\n"
         f"Brief:\n{state.PROJECT_BRIEF}\n\nFeature:\n{title}: {description}",

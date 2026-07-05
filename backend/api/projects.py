@@ -144,6 +144,7 @@ def update_config(payload: ConfigPayload):
 
         os.makedirs(state.WORKSPACE_DIR, exist_ok=True)
         os.makedirs(state.SKILLS_DIR, exist_ok=True)
+        state.storage.set_setting("skills_dir", payload.skillsDir)
 
         save_current_project_state()
         add_system_log(

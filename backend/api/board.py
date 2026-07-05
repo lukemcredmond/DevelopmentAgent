@@ -12,12 +12,26 @@ from backend.api.schemas import (
     UpdateTaskPayload,
 )
 from backend.services.board_lanes import normalize_board_lanes
-from backend.services.board_service import move_board_stage, publish_board_update
+from backend.services.board_service import clear_all_board_tasks, move_board_stage, publish_board_update
 from backend.services.logs import add_system_log
 from backend.services.project_service import save_current_project_state
 from backend.services.sprint_service import run_po_add_feature
 
 router = APIRouter()
+
+
+@router.post("/api/board/clear-tasks")
+def clear_board_tasks():
+    from backend.agents.agent_run import get_active_run
+
+    with state.STATE_LOCK:
+        if get_active_run() is not None:
+            raise HTTPException(
+                status_code=409,
+                detail="Cannot clear tasks while an agent sprint step is running.",
+            )
+        clear_all_board_tasks()
+    return build_state_response()
 
 
 @router.post("/api/tasks/manual")
