@@ -1,4 +1,4 @@
-"""Retry failed agent steps with optional prompt optimization."""
+"""Retry failed agent steps with optional prompt optimization and verification."""
 
 from __future__ import annotations
 
@@ -21,7 +21,15 @@ from backend.services.sprint_service import set_project_brief
 from backend.services.workflow_settings import get_workflow_settings
 
 
-def _last_failure_context(task_id: str) -> str:
+def _memory_context_for_retry(agent, task_id: str, query: str) -> str:
+    project_id = state.CURRENT_PROJECT_ID or "default-proj"
+    hits = agent.memory.search(agent.role, query, limit=3, project_id=project_id)
+    if not hits:
+        return ""
+    return "\n".join(f"[{item['category']}] {item['content']}" for item in hits)
+
+
+def _last_failure_context(task_id: str, agent=None) -> str:
     logs = get_llm_logs(limit=5, task_id=task_id)
     parts = []
     for entry in logs:
@@ -36,11 +44,63 @@ def _last_failure_context(task_id: str) -> str:
             parts.append(
                 f"Diagnosis: {ld.get('problem')} → {ld.get('recommendedAction', '')}"
             )
+        diagnostics = task.get("lastCommandDiagnostics") or []
+        for item in diagnostics[:10]:
+            parts.append(
+                f"Lint {item.get('severity')} {item.get('file')}:{item.get('line')} "
+                f"{item.get('message', '')}"
+            )
         recent = list(reversed(task.get("transcript") or []))[:5]
         for entry in recent:
             if entry.get("toolSuccess") is False:
-                parts.append(f"Tool fail {entry.get('toolName')}: {str(entry.get('content', ''))[:200]}")
+                parts.append(
+                    f"Tool fail {entry.get('toolName')}: {str(entry.get('content', ''))[:200]}"
+                )
+        if agent is not None:
+            memory_block = _memory_context_for_retry(
+                agent,
+                task_id,
+                "\n".join(parts) or task.get("title", ""),
+            )
+            if memory_block:
+                parts.append(f"Memory:\n{memory_block}")
     return "\n".join(parts) or "Unknown failure"
+
+
+def _auto_diagnose_if_needed(task_id: str, ollama_url: str) -> None:
+    task = find_task_by_id(task_id)
+    if not task:
+        return
+    if isinstance(task.get("lastDiagnosis"), dict) and task["lastDiagnosis"].get("problem"):
+        return
+    from backend.services.task_diagnosis import diagnose_task
+
+    diagnose_task(task_id, ollama_url)
+
+
+def _post_retry_verification(task_id: str) -> Dict[str, Any]:
+    from backend.services.command_result import run_workspace_command
+    from backend.workspace.files import derive_project_lint_command
+
+    lint_cmd = derive_project_lint_command()
+    if not lint_cmd:
+        return {"status": "skipped", "diagnosticsCount": 0, "command": None}
+
+    result = run_workspace_command(lint_cmd)
+    task = find_task_by_id(task_id)
+    if task:
+        task["lastCommandDiagnostics"] = (
+            result.diagnostics[:50] if result.diagnostics else []
+        )
+
+    status = "clean" if not result.diagnostics else "findings"
+    return {
+        "status": status,
+        "diagnosticsCount": len(result.diagnostics),
+        "summary": result.summary,
+        "outcome": result.outcome,
+        "command": lint_cmd,
+    }
 
 
 def _optimize_prompt(
@@ -97,8 +157,11 @@ def retry_agent_step(
     ws = get_workflow_settings()
     max_iter = int(ws.get("maxLlmIterationsPerStep", 8))
 
+    if mode in ("optimized", "fix_and_verify"):
+        _auto_diagnose_if_needed(task_id, ollama_url)
+
     base_prompt = build_task_prompt(task, brief)
-    failure_context = _last_failure_context(task_id)
+    failure_context = _last_failure_context(task_id, agent=agent)
 
     if mode == "optimized":
         optimized = _optimize_prompt(agent, base_prompt, failure_context, task_id, max_iterations=2)
@@ -110,19 +173,45 @@ def retry_agent_step(
             detail=json.dumps({"originalLen": len(base_prompt), "optimizedLen": len(optimized)}),
         )
         user_prompt = optimized
+    elif mode == "fix_and_verify":
+        record_task_decision(
+            task_id,
+            agent.role,
+            "prompt_retry",
+            f"Fix-and-verify retry ({reason})",
+            detail=failure_context[:500],
+        )
+        user_prompt = (
+            f"{base_prompt}\n\n=== RETRY CONTEXT ===\n{failure_context[:2500]}\n"
+            "Fix all listed lint issues, then verify with the project lint command."
+        )
     else:
         user_prompt = base_prompt
         record_task_decision(task_id, agent.role, "prompt_retry", f"Same prompt retry ({reason})")
 
     set_active_sprint_context(task_id, agent.role)
     try:
-        output = agent.execute_step(user_prompt, max_iterations=max_iter)
+        if mode == "fix_and_verify":
+            from backend.services.fix_verify_loop import run_fix_verify_loop
+
+            output = run_fix_verify_loop(
+                agent,
+                task,
+                user_prompt,
+                max_iterations=max_iter,
+            )
+        else:
+            output = agent.execute_step(user_prompt, max_iterations=max_iter)
     finally:
         from backend.agents.task_context import clear_active_sprint_context
 
         clear_active_sprint_context()
 
-    success = output not in ("SIMULATION_FALLBACK",) and not str(output).startswith("Stopped:")
+    verification = _post_retry_verification(task_id)
+    success = (
+        output not in ("SIMULATION_FALLBACK",)
+        and not str(output).startswith("Stopped:")
+    )
     if output:
         record_task_transcript(task_id, "assistant", output[:2000], agent=agent.role)
 
@@ -131,5 +220,6 @@ def retry_agent_step(
         "ok": success,
         "mode": mode,
         "output": output,
-        "optimizedPrompt": user_prompt if mode == "optimized" else None,
+        "optimizedPrompt": user_prompt if mode in ("optimized", "fix_and_verify") else None,
+        "verification": verification,
     }

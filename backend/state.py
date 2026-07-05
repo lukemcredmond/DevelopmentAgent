@@ -33,6 +33,8 @@ SPRINT_PROGRESS_STEP: int = 0
 SPRINT_PROGRESS_MAX: int = 20
 SPRINT_NEEDS_USER_COUNT: int = 0
 
+REFINEMENT_MODE: bool = False
+
 # Paths read via read_file during the current sprint agent step (safe_path -> content).
 STEP_FILE_READS: Dict[str, str] = {}
 

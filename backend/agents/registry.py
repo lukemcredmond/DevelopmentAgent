@@ -4,6 +4,7 @@ from backend.agents.task_context import record_task_git_commit
 from backend.agents.tools import Tool
 from backend.services.brief_service import PO_SMALLEST_TASKS_GUIDANCE
 from backend.services.board_service import append_backlog_tasks, move_board_stage
+from backend.services.subtask_service import append_subtasks, escape_subtask_loop
 from backend.services.git_service import git_commit, git_diff, git_init, git_status
 from backend.workspace.files import (
     apply_workspace_patch,
@@ -27,8 +28,11 @@ agent_po = ScrumAgent(
         "as JSON arrays. When developers ask questions, you clarify requirements and acceptance criteria. "
         "When the user adds features, refine them into clear developer-ready stories. "
         "Use update_board to move tasks from 'Needs PO' back to 'In Progress' when clarification is done. "
+        "For cards in 'Refinement', answer developer questions, update AC/description, use add_backlog_tasks "
+        "to split scope, then move to 'Backlog' when refinementComplete. "
         "Use add_backlog_tasks to add new stories to the Backlog; when splitting a large or stuck card, "
         "pass split_from_task_id so the original moves to Done with a split note. "
+        "Use add_subtasks for ordered child todos under a parent card (during refinement set executionOrder). "
         "Invoke add_backlog_tasks yourself — never instruct the user to call it. "
         "Prefer acting (split, move board) over asking clarifying questions when acceptance criteria exist. "
         "Use grep and glob_file_search to explore the codebase; prefer grep over search_code for patterns. "
@@ -43,6 +47,8 @@ agent_dev = ScrumAgent(
         "You implement features from the backlog. Use apply_patch for edits to existing files "
         "and write_file for new files. Use grep and glob_file_search to find symbols and files. "
         "If requirements are unclear, escalate to the Product Owner by moving the task to 'Needs PO'. "
+        "When a discrete tool step is needed (lint, test, file edit), use add_subtasks to spawn ordered "
+        "child todos that must complete before this card advances. "
         "When implementation is complete, move the task to 'QA' for validation. "
         "Continue iterating on test failures without asking the user unless blocked repeatedly."
     ),
@@ -168,15 +174,41 @@ def _format_search_results(query: str, limit: int = 20) -> str:
 
 def _guarded_update_board(task_id: str, target_lane: str) -> str:
     from backend.agents.task_context import find_task_by_id, get_task_lane, normalize_task
-    from backend.services.sprint_service import qa_gate_blocks_done
+    from backend.services.sprint_service import dev_gate_blocks_advance, qa_gate_blocks_done
 
-    if target_lane == "Done" and state.ACTIVE_SPRINT_AGENT == "QA Tester":
-        task = find_task_by_id(task_id)
-        if task and get_task_lane(task_id) == "QA":
-            normalize_task(task)
+    task = find_task_by_id(task_id)
+    if task:
+        normalize_task(task)
+        lane = get_task_lane(task_id) or ""
+        if target_lane == "Done" and state.ACTIVE_SPRINT_AGENT == "QA Tester" and lane == "QA":
             blocked, reason = qa_gate_blocks_done(task)
             if blocked:
                 return f"Error: {reason}"
+        if state.ACTIVE_SPRINT_AGENT == "Developer" and lane == "Refinement":
+            blocked_targets = {"In Progress", "Code Review", "QA", "Done", "Backlog"}
+            if target_lane.strip() in blocked_targets:
+                return (
+                    "Error: During refinement, Developer may only move to 'Needs PO' "
+                    "when blocked — do not advance to implementation lanes."
+                )
+        if (
+            state.ACTIVE_SPRINT_AGENT == "Product Owner"
+            and lane == "Refinement"
+            and target_lane.strip() == "Backlog"
+        ):
+            task["refinementComplete"] = True
+            task["refinementStatus"] = "ready"
+        if state.ACTIVE_SPRINT_AGENT == "Developer" and lane == "In Progress":
+            target_upper = target_lane.strip()
+            if target_upper in ("Code Review", "QA", "Done"):
+                from backend.services.subtask_service import subtask_gate_blocks_advance
+
+                blocked, reason = subtask_gate_blocks_advance(task)
+                if blocked:
+                    return f"Error: {reason}"
+                blocked, reason = dev_gate_blocks_advance(task)
+                if blocked:
+                    return f"Error: {reason}"
     return move_board_stage(task_id, target_lane)
 
 
@@ -331,6 +363,47 @@ tool_add_backlog_tasks = Tool(
     ),
 )
 
+tool_add_subtasks = Tool(
+    name="add_subtasks",
+    description=(
+        "Add ordered child todos under the current parent task. Each subtask must reach Done "
+        "before the parent can complete. Use when a step needs its own tool execution cycle "
+        "(run_command, write_file, etc.). Subtasks run in executionOrder; nested subtasks are allowed "
+        "up to maxSubtaskDepth. Prefer add_subtasks over add_backlog_tasks when work belongs to this card."
+    ),
+    parameters={
+        "type": "object",
+        "properties": {
+            "tasks": {
+                "type": "array",
+                "items": {
+                    "type": "object",
+                    "properties": {
+                        "title": {"type": "string"},
+                        "description": {"type": "string"},
+                        "acceptanceCriteria": {
+                            "type": "array",
+                            "items": {"type": "string"},
+                        },
+                        "executionOrder": {"type": "number"},
+                        "order": {"type": "number"},
+                    },
+                    "required": ["title", "description"],
+                },
+            },
+            "parent_task_id": {
+                "type": "string",
+                "description": "Parent todo ID (defaults to active sprint task)",
+            },
+        },
+        "required": ["tasks"],
+    },
+    func=lambda tasks, parent_task_id=None: append_subtasks(
+        parent_task_id or state.ACTIVE_SPRINT_TASK_ID or "",
+        tasks,
+    ),
+)
+
 tool_git_status = Tool(
     name="git_status",
     description="Returns git status for the workspace repository.",
@@ -403,6 +476,7 @@ def configure_agent_tools(ws: dict | None = None) -> None:
     settings = ws or get_workflow_settings()
     enable_web = bool(settings.get("enableWebSearch"))
     enable_semantic = bool(settings.get("enableSemanticSearch", True))
+    refinement_mode = bool(state.REFINEMENT_MODE)
 
     for agent in (agent_po, agent_dev, agent_cr, agent_qa):
         agent.registry.clear()
@@ -410,6 +484,7 @@ def configure_agent_tools(ws: dict | None = None) -> None:
     agent_po.registry.register(tool_read)
     agent_po.registry.register(tool_board)
     agent_po.registry.register(tool_add_backlog_tasks)
+    agent_po.registry.register(tool_add_subtasks)
     agent_po.registry.register(tool_grep)
     agent_po.registry.register(tool_glob)
     if enable_semantic:
@@ -418,21 +493,35 @@ def configure_agent_tools(ws: dict | None = None) -> None:
         agent_po.registry.register(tool_web_search)
 
     agent_dev.registry.register(tool_read)
-    agent_dev.registry.register(tool_write)
-    agent_dev.registry.register(tool_apply_patch)
-    agent_dev.registry.register(tool_delete)
-    agent_dev.registry.register(tool_board)
-    agent_dev.registry.register(tool_run_command)
-    agent_dev.registry.register(tool_grep)
-    agent_dev.registry.register(tool_glob)
-    agent_dev.registry.register(tool_search)
-    agent_dev.registry.register(tool_git_status)
-    agent_dev.registry.register(tool_git_diff)
-    agent_dev.registry.register(tool_git_commit)
-    if enable_semantic:
-        agent_dev.registry.register(tool_semantic)
-    if enable_web:
-        agent_dev.registry.register(tool_web_search)
+    if refinement_mode:
+        agent_dev.registry.register(tool_board)
+        agent_dev.registry.register(tool_add_subtasks)
+        agent_dev.registry.register(tool_grep)
+        agent_dev.registry.register(tool_glob)
+        agent_dev.registry.register(tool_search)
+        agent_dev.registry.register(tool_git_status)
+        agent_dev.registry.register(tool_git_diff)
+        if enable_semantic:
+            agent_dev.registry.register(tool_semantic)
+        if enable_web:
+            agent_dev.registry.register(tool_web_search)
+    else:
+        agent_dev.registry.register(tool_write)
+        agent_dev.registry.register(tool_apply_patch)
+        agent_dev.registry.register(tool_delete)
+        agent_dev.registry.register(tool_board)
+        agent_dev.registry.register(tool_add_subtasks)
+        agent_dev.registry.register(tool_run_command)
+        agent_dev.registry.register(tool_grep)
+        agent_dev.registry.register(tool_glob)
+        agent_dev.registry.register(tool_search)
+        agent_dev.registry.register(tool_git_status)
+        agent_dev.registry.register(tool_git_diff)
+        agent_dev.registry.register(tool_git_commit)
+        if enable_semantic:
+            agent_dev.registry.register(tool_semantic)
+        if enable_web:
+            agent_dev.registry.register(tool_web_search)
 
     agent_cr.registry.register(tool_read)
     agent_cr.registry.register(tool_apply_patch)
@@ -456,6 +545,20 @@ def configure_agent_tools(ws: dict | None = None) -> None:
         agent_qa.registry.register(tool_semantic)
     if enable_web:
         agent_qa.registry.register(tool_web_search)
+
+    from backend.services.mcp_tools import reregister_mcp_tools_on_agents
+    from backend.services.logs import add_system_log
+
+    mcp_count = reregister_mcp_tools_on_agents()
+    for agent in (agent_po, agent_dev, agent_cr, agent_qa):
+        if not agent.registry.tool_names():
+            add_system_log(
+                "System",
+                "error",
+                f"Agent {agent.role} has no tools registered after configure_agent_tools",
+            )
+    if mcp_count:
+        add_system_log("System", "info", f"Re-attached {mcp_count} MCP tool(s) to agents")
 
 
 configure_agent_tools()

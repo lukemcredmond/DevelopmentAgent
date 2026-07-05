@@ -1,6 +1,48 @@
 import { useEffect, useState, type ReactNode } from 'react'
-import type { BoardLane, Task, TaskFile, TaskGitCommit, TaskTranscriptEntry } from '../types'
+import type { BoardLane, CommandDiagnostic, Task, TaskFile, TaskGitCommit, TaskTranscriptEntry } from '../types'
 import { formatAcceptanceCriteria, formatTaskText, deriveTaskFiles, sanitizeTaskForUi } from '../utils/taskFormat'
+
+function getCommandDiagnostics(task: Task): CommandDiagnostic[] {
+  if (task.lastCommandDiagnostics?.length) {
+    return task.lastCommandDiagnostics
+  }
+  const transcript = task.transcript ?? []
+  for (let i = transcript.length - 1; i >= 0; i--) {
+    const entry = transcript[i]
+    if (entry.toolName !== 'run_command') continue
+    const output = entry.toolOutput ?? entry.content ?? ''
+    const command = String((entry.toolArgs as Record<string, unknown> | undefined)?.command ?? '')
+    const findings: CommandDiagnostic[] = []
+    const bulletPattern =
+      /^\s*(error|warning|info)\s+[•-]\s+(.+?)\s+[•-]\s+(.+?):(\d+):(\d+)\s*$/gim
+    let match: RegExpExecArray | null
+    while ((match = bulletPattern.exec(output)) !== null) {
+      findings.push({
+        severity: match[1].toLowerCase(),
+        message: match[2].trim(),
+        file: match[3].replace(/\\/g, '/'),
+        line: Number(match[4]),
+        column: Number(match[5]),
+      })
+    }
+    if (findings.length > 0 || output.includes('## Problems')) {
+      const problemsBlock = output.split('## Problems')[1]?.split('## Output')[0] ?? ''
+      const linePattern = /^-\s+(.+?):(\d+):(\d+)\s+(\S+)\s+(.+)$/gm
+      while ((match = linePattern.exec(problemsBlock)) !== null) {
+        findings.push({
+          file: match[1].replace(/\\/g, '/'),
+          line: Number(match[2]),
+          column: Number(match[3]),
+          severity: match[4].toLowerCase(),
+          message: match[5].trim(),
+        })
+      }
+    }
+    if (findings.length > 0) return findings
+    if (command && output) break
+  }
+  return []
+}
 
 function getTaskFilePath(f: TaskFile | string): string {
   return typeof f === 'string' ? f : f.path
@@ -107,9 +149,11 @@ interface TaskDetailModalProps {
   getTaskTitle?: (taskId: string) => string | undefined
   ollamaUrl?: string
   onDiagnose?: (taskId: string) => void | Promise<void>
-  onRetryStep?: (taskId: string, mode: 'same' | 'optimized') => void | Promise<void>
+  onRetryStep?: (taskId: string, mode: 'same' | 'optimized' | 'fix_and_verify') => void | Promise<void>
   onViewFileDiff?: (path: string) => void | Promise<void>
   onOpenModelTab?: () => void
+  maxRefinementRoundTrips?: number
+  onEscapeSubtasks?: (taskId: string) => void | Promise<void>
 }
 
 function CollapsibleSection({
@@ -205,6 +249,8 @@ export default function TaskDetailModal({
   onRetryStep,
   onViewFileDiff,
   onOpenModelTab,
+  maxRefinementRoundTrips,
+  onEscapeSubtasks,
 }: TaskDetailModalProps) {
   const [title, setTitle] = useState('')
   const [description, setDescription] = useState('')
@@ -251,8 +297,10 @@ export default function TaskDetailModal({
   const visibleTranscript = showAllTranscript ? filteredTranscript : filteredTranscript.slice(0, 50)
   const acList = formatAcceptanceCriteria(safeTask.acceptanceCriteria)
   const blockedBy = safeTask.blockedBy ?? []
+  const subtaskIds = safeTask.subtaskIds ?? []
   const relatedTaskIds = safeTask.relatedTaskIds ?? []
   const diagnosis = safeTask.lastDiagnosis
+  const commandDiagnostics = getCommandDiagnostics(safeTask)
   const workLabel =
     safeTask.workType === 'planning' || safeTask.requiresDev === false
       ? 'PO only'
@@ -414,6 +462,19 @@ export default function TaskDetailModal({
                   >
                     Retry (optimized)
                   </button>
+                  <button
+                    type="button"
+                    disabled={retrying || sprintRunning}
+                    onClick={() => {
+                      setRetrying(true)
+                      void Promise.resolve(onRetryStep(task.id, 'fix_and_verify')).finally(() =>
+                        setRetrying(false),
+                      )
+                    }}
+                    className="text-xs px-3 py-1.5 rounded border border-emerald-500/40 text-emerald-200 hover:bg-emerald-950/30 disabled:opacity-50"
+                  >
+                    Fix &amp; verify
+                  </button>
                 </>
               )}
             </div>
@@ -465,12 +526,93 @@ export default function TaskDetailModal({
             )}
           </CollapsibleSection>
 
+          {commandDiagnostics.length > 0 && (
+            <CollapsibleSection
+              title="Command diagnostics"
+              badge={commandDiagnostics.length}
+              defaultOpen
+            >
+              <div className="overflow-x-auto">
+                <table className="w-full text-[10px] font-mono border-collapse">
+                  <thead>
+                    <tr className="text-cat-overlay text-left border-b border-cat-surface1">
+                      <th className="py-1 pr-2">File</th>
+                      <th className="py-1 pr-2">Line</th>
+                      <th className="py-1 pr-2">Severity</th>
+                      <th className="py-1">Message</th>
+                    </tr>
+                  </thead>
+                  <tbody>
+                    {commandDiagnostics.map((diag, index) => (
+                      <tr key={`${diag.file}:${diag.line}:${index}`} className="border-b border-cat-surface1/40">
+                        <td className="py-1 pr-2 text-indigo-300 whitespace-nowrap">{diag.file}</td>
+                        <td className="py-1 pr-2 text-cat-subtext">{diag.line}</td>
+                        <td className="py-1 pr-2 uppercase text-amber-200">{diag.severity}</td>
+                        <td className="py-1 text-cat-subtext break-all">{diag.message}</td>
+                      </tr>
+                    ))}
+                  </tbody>
+                </table>
+              </div>
+            </CollapsibleSection>
+          )}
+
           {blockedBy.length > 0 && (
             <div>
               <h4 className="text-xs font-bold uppercase tracking-wider text-cat-subtext mb-1">
                 Blocked By
               </h4>
               <p className="text-[11px] font-mono text-orange-300">{blockedBy.join(', ')}</p>
+            </div>
+          )}
+
+          {(subtaskIds.length > 0 || safeTask.parentTaskId) && (
+            <div className="bg-sky-950/30 border border-sky-500/30 rounded-lg p-3">
+              <h4 className="text-xs font-bold text-sky-300 mb-1">Todo hierarchy</h4>
+              {safeTask.parentTaskId && (
+                <p className="text-[11px] text-white mb-2">
+                  Parent:{' '}
+                  <button
+                    type="button"
+                    onClick={() => onRelatedTaskClick?.(safeTask.parentTaskId!)}
+                    className="font-mono text-sky-300 hover:underline"
+                  >
+                    {safeTask.parentTaskId}
+                    {getTaskTitle?.(safeTask.parentTaskId) ? ` — ${getTaskTitle(safeTask.parentTaskId)}` : ''}
+                  </button>
+                </p>
+              )}
+              {subtaskIds.length > 0 && (
+                <ul className="text-[11px] text-white space-y-1">
+                  {subtaskIds.map((sid) => (
+                    <li key={sid}>
+                      <button
+                        type="button"
+                        onClick={() => onRelatedTaskClick?.(sid)}
+                        className="font-mono text-sky-300 hover:underline text-left"
+                      >
+                        {sid}
+                        {getTaskTitle?.(sid) ? ` — ${getTaskTitle(sid)}` : ''}
+                      </button>
+                    </li>
+                  ))}
+                </ul>
+              )}
+              {(safeTask.subtaskSpawnCount ?? 0) > 0 && (
+                <p className="text-[10px] text-cat-subtext mt-2">
+                  Subtask rounds: {safeTask.subtaskSpawnCount}
+                </p>
+              )}
+              {onEscapeSubtasks &&
+                ((safeTask.subtaskSpawnCount ?? 0) >= 3 || subtaskIds.length > 0) && (
+                  <button
+                    type="button"
+                    onClick={() => void onEscapeSubtasks(task.id)}
+                    className="mt-2 text-[10px] px-2 py-1 rounded border border-amber-500/40 text-amber-300 hover:bg-amber-950/40"
+                  >
+                    Escape subtask loop → Needs PO
+                  </button>
+                )}
             </div>
           )}
 
@@ -497,6 +639,42 @@ export default function TaskDetailModal({
           )}
 
           {safeTask.gitCommit?.hash && <GitCommitSection commit={safeTask.gitCommit} />}
+
+          {(taskLane === 'Refinement' ||
+            safeTask.refinementStatus ||
+            (safeTask.refinementQuestions?.length ?? 0) > 0 ||
+            safeTask.refinementNotes) && (
+            <div className="bg-violet-950/30 border border-violet-500/30 rounded-lg p-3">
+              <h4 className="text-xs font-bold text-violet-300 mb-1">Refinement</h4>
+              {safeTask.refinementStatus && (
+                <p className="text-[11px] text-white">
+                  Status: {safeTask.refinementStatus.replace('_', ' ')}
+                  {safeTask.refinementComplete ? ' · ready for dev' : ''}
+                </p>
+              )}
+              {(safeTask.refinementRoundTrips ?? 0) > 0 && (
+                <p className="text-[10px] text-cat-subtext mt-1">
+                  Round {safeTask.refinementRoundTrips}
+                  {maxRefinementRoundTrips != null ? ` / ${maxRefinementRoundTrips}` : ''}
+                </p>
+              )}
+              {(safeTask.refinementQuestions?.length ?? 0) > 0 && (
+                <div className="mt-2">
+                  <p className="text-[10px] text-violet-200 font-semibold">Developer questions</p>
+                  <ul className="text-[11px] text-white list-disc pl-4 mt-1">
+                    {safeTask.refinementQuestions!.map((q) => (
+                      <li key={q}>{q}</li>
+                    ))}
+                  </ul>
+                </div>
+              )}
+              {safeTask.refinementNotes && (
+                <p className="text-[11px] text-cat-subtext mt-2 whitespace-pre-wrap">
+                  {safeTask.refinementNotes}
+                </p>
+              )}
+            </div>
+          )}
 
           {safeTask.qaFailure && (
             <div className="bg-rose-950/30 border border-rose-500/30 rounded-lg p-3">

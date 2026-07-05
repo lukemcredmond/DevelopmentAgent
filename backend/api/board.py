@@ -5,6 +5,7 @@ from backend.agents.task_context import clear_task_transcript, find_task_by_id, 
 from backend.api.helpers import build_state_response
 from backend.api.schemas import (
     DeleteTaskPayload,
+    EscapeSubtaskPayload,
     InjectToolEvidencePayload,
     ManualTaskPayload,
     MoveTaskPayload,
@@ -185,6 +186,8 @@ def reorder_tasks(payload: ReorderTasksPayload):
         for i, tid in enumerate(payload.taskIds):
             if tid in tasks_by_id:
                 tasks_by_id[tid]["priority"] = i + 1
+                if lane == "Refinement":
+                    tasks_by_id[tid]["executionOrder"] = i + 1
                 reordered.append(tasks_by_id[tid])
         for t in state.SHARED_BOARD[lane]:
             if t["id"] not in payload.taskIds:
@@ -193,6 +196,16 @@ def reorder_tasks(payload: ReorderTasksPayload):
         save_current_project_state()
         publish_board_update(source="reorder")
     return build_state_response()
+
+
+@router.post("/api/tasks/{task_id}/escape-subtasks")
+def escape_subtasks_route(task_id: str, payload: EscapeSubtaskPayload):
+    from backend.services.subtask_service import escape_subtask_loop
+
+    result = escape_subtask_loop(task_id, mode=payload.mode or "needs_po")
+    if result.startswith("Error"):
+        raise HTTPException(status_code=400, detail=result)
+    return {**build_state_response(), "message": result}
 
 
 @router.delete("/api/tasks/{task_id}/transcript")

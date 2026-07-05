@@ -11,6 +11,13 @@ DEFAULT_WORKFLOW_SETTINGS: Dict[str, Any] = {
     "requireCodeReview": False,
     "requireToolApproval": False,
     "requireDevVerification": False,
+    "requireCleanLint": False,
+    "requireBacklogRefinement": False,
+    "maxRefinementRoundTrips": 3,
+    "maxSubtaskDepth": 4,
+    "maxSubtaskSpawns": 8,
+    "enableFixVerifyLoop": False,
+    "maxFixVerifyRounds": 3,
     "toolApprovalTools": ["write_file", "run_command", "delete_file"],
     "mcpServers": [],
     "definitionOfDone": [],
@@ -68,6 +75,14 @@ def save_workflow_settings(settings: Dict[str, Any], project_id: str | None = No
     return current
 
 
+def reset_workflow_settings(project_id: str | None = None) -> Dict[str, Any]:
+    """Replace workflow settings with defaults (used by tests and explicit UI reset)."""
+    pid = project_id or state.CURRENT_PROJECT_ID
+    defaults = dict(DEFAULT_WORKFLOW_SETTINGS)
+    state.storage.set_setting(_settings_key(pid), json.dumps(defaults))
+    return defaults
+
+
 def get_last_sprint_summary(project_id: str | None = None) -> Dict[str, Any]:
     pid = project_id or state.CURRENT_PROJECT_ID
     raw = state.storage.get_setting(_summary_key(pid))
@@ -86,12 +101,15 @@ def save_sprint_summary(summary: Dict[str, Any], project_id: str | None = None) 
 
 def get_active_lanes(settings: Dict[str, Any] | None = None) -> List[str]:
     ws = settings or get_workflow_settings()
-    lanes = ["Backlog", "In Progress", "Needs PO", "Needs User", "QA", "Done"]
+    lanes = ["Backlog"]
     if ws.get("requireBacklogApproval"):
-        lanes.insert(1, "Pending Approval")
+        lanes.append("Pending Approval")
+    if ws.get("requireBacklogRefinement"):
+        lanes.append("Refinement")
+    lanes.extend(["In Progress", "Needs PO", "Needs User"])
     if ws.get("requireCodeReview"):
-        qa_idx = lanes.index("QA")
-        lanes.insert(qa_idx, "Code Review")
+        lanes.append("Code Review")
+    lanes.extend(["QA", "Done"])
     return lanes
 
 

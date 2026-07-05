@@ -58,6 +58,64 @@ export default function WorkflowPanel({
       <label className="flex items-center gap-2 text-[11px] text-cat-subtext cursor-pointer">
         <input
           type="checkbox"
+          checked={settings.requireBacklogRefinement ?? false}
+          onChange={(e) => onSettingsChange({ requireBacklogRefinement: e.target.checked })}
+        />
+        Require backlog refinement before dev
+      </label>
+      {(settings.requireBacklogRefinement ?? false) && (
+        <label className="flex items-center gap-2 text-[11px] text-cat-subtext pl-5">
+          <span className="text-cat-overlay shrink-0">Max refinement rounds</span>
+          <input
+            type="number"
+            min={1}
+            max={10}
+            value={settings.maxRefinementRoundTrips ?? 3}
+            onChange={(e) =>
+              onSettingsChange({
+                maxRefinementRoundTrips: Math.max(1, Number(e.target.value) || 3),
+              })
+            }
+            className="w-16 bg-cat-base border border-cat-surface1 rounded px-2 py-0.5 text-cat-text"
+          />
+        </label>
+      )}
+      {(settings.requireBacklogRefinement ?? false) && (
+        <p className="text-[10px] text-cat-overlay leading-relaxed -mt-1 pl-5">
+          New PO stories go to Refinement for Dev↔PO grooming before Backlog. Drag cards in
+          Refinement to set execution order. Existing Backlog cards are grandfathered unless
+          manually moved to Refinement.
+        </p>
+      )}
+      <label className="flex items-center gap-2 text-[11px] text-cat-subtext pl-5">
+        <span className="text-cat-overlay shrink-0">Max subtask depth</span>
+        <input
+          type="number"
+          min={1}
+          max={10}
+          value={settings.maxSubtaskDepth ?? 4}
+          onChange={(e) =>
+            onSettingsChange({ maxSubtaskDepth: Math.max(1, Number(e.target.value) || 4) })
+          }
+          className="w-16 bg-cat-base border border-cat-surface1 rounded px-2 py-0.5 text-cat-text"
+        />
+      </label>
+      <label className="flex items-center gap-2 text-[11px] text-cat-subtext pl-5">
+        <span className="text-cat-overlay shrink-0">Max subtask spawns</span>
+        <input
+          type="number"
+          min={1}
+          max={30}
+          value={settings.maxSubtaskSpawns ?? 8}
+          onChange={(e) =>
+            onSettingsChange({ maxSubtaskSpawns: Math.max(1, Number(e.target.value) || 8) })
+          }
+          className="w-16 bg-cat-base border border-cat-surface1 rounded px-2 py-0.5 text-cat-text"
+        />
+      </label>
+      <label className="flex items-center gap-2 text-[11px] text-cat-subtext cursor-pointer">
+        <input
+          type="checkbox"
           checked={settings.requireCodeReview}
           onChange={(e) => onSettingsChange({ requireCodeReview: e.target.checked })}
         />
@@ -71,6 +129,37 @@ export default function WorkflowPanel({
         />
         Require dev run_command/run_test before QA
       </label>
+      <label className="flex items-center gap-2 text-[11px] text-cat-subtext cursor-pointer">
+        <input
+          type="checkbox"
+          checked={settings.requireCleanLint ?? false}
+          onChange={(e) => onSettingsChange({ requireCleanLint: e.target.checked })}
+        />
+        Require clean lint before dev/QA advance (Cursor-like)
+      </label>
+      <label className="flex items-center gap-2 text-[11px] text-cat-subtext cursor-pointer">
+        <input
+          type="checkbox"
+          checked={settings.enableFixVerifyLoop ?? false}
+          onChange={(e) => onSettingsChange({ enableFixVerifyLoop: e.target.checked })}
+        />
+        Enable fix-verify loop on dev steps
+      </label>
+      {(settings.enableFixVerifyLoop ?? false) && (
+        <label className="flex items-center gap-2 text-[11px] text-cat-subtext pl-5">
+          <span className="text-cat-overlay shrink-0">Max rounds</span>
+          <input
+            type="number"
+            min={1}
+            max={10}
+            value={settings.maxFixVerifyRounds ?? 3}
+            onChange={(e) =>
+              onSettingsChange({ maxFixVerifyRounds: Math.max(1, Number(e.target.value) || 3) })
+            }
+            className="w-16 bg-cat-base border border-cat-surface1 rounded px-2 py-0.5 text-cat-text"
+          />
+        </label>
+      )}
       <label className="flex items-center gap-2 text-[11px] text-cat-subtext cursor-pointer">
         <input
           type="checkbox"

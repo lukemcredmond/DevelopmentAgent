@@ -7,8 +7,11 @@ from backend.agents.task_context import (
     coerce_task_text,
     find_task_by_id,
     init_new_task,
+    init_refinement_fields,
     normalize_acceptance_criteria,
+    normalize_task,
     record_task_decision,
+    reset_refinement_fields,
     sort_backlog,
 )
 from backend.services.board_lanes import normalize_board_lanes
@@ -59,9 +62,16 @@ def move_board_stage(task_id: str, target_lane: str) -> str:
             ]
 
         active_task["status"] = target_lane
+        normalize_task(active_task)
+        if target_lane == "Refinement":
+            reset_refinement_fields(active_task)
         if target_lane not in state.SHARED_BOARD:
             state.SHARED_BOARD[target_lane] = []
         state.SHARED_BOARD[target_lane].append(active_task)
+        if target_lane == "Done":
+            from backend.services.subtask_service import on_subtask_completed
+
+            on_subtask_completed(active_task["id"])
         record_task_decision(
             active_task["id"],
             state.ACTIVE_SPRINT_AGENT or "System",
@@ -124,7 +134,11 @@ def _enrich_task_from_po(raw: Dict[str, Any]) -> Dict[str, Any]:
 
 def _new_task_lane() -> str:
     ws = get_workflow_settings()
-    return "Pending Approval" if ws.get("requireBacklogApproval") else "Backlog"
+    if ws.get("requireBacklogApproval"):
+        return "Pending Approval"
+    if ws.get("requireBacklogRefinement"):
+        return "Refinement"
+    return "Backlog"
 
 
 def append_backlog_tasks(
@@ -183,6 +197,8 @@ def append_backlog_tasks(
                 candidates=prior_candidates + added_tasks,
             )
             task["status"] = lane
+            if lane == "Refinement":
+                init_refinement_fields(task)
             state.SHARED_BOARD[lane].append(task)
             added_tasks.append(task)
 

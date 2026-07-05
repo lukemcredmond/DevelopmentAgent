@@ -424,6 +424,16 @@ export async function reorderTasks(
   })
 }
 
+export async function escapeSubtaskLoop(
+  taskId: string,
+  mode: 'needs_po' | 'skip_pending' | 'flatten' = 'needs_po',
+): Promise<AppState & { message?: string }> {
+  return request<AppState & { message?: string }>(`/api/tasks/${taskId}/escape-subtasks`, {
+    method: 'POST',
+    body: JSON.stringify({ mode }),
+  })
+}
+
 export async function updateWorkflowSettings(
   payload: WorkflowSettingsPayload,
 ): Promise<AppState> {
@@ -516,9 +526,19 @@ export async function checkQdrantHealth(
 export async function retryAgentStep(payload: {
   taskId: string
   agentId: string
-  mode: 'same' | 'optimized'
+  mode: 'same' | 'optimized' | 'fix_and_verify'
   ollamaUrl: string
-}): Promise<{ ok: boolean; output?: string; state?: import('../types').AppState }> {
+}): Promise<{
+  ok: boolean
+  output?: string
+  verification?: {
+    status?: string
+    diagnosticsCount?: number
+    summary?: string
+    command?: string | null
+  }
+  state?: import('../types').AppState
+}> {
   return request('/api/agents/retry-step', {
     method: 'POST',
     body: JSON.stringify({

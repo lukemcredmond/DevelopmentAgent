@@ -1,7 +1,7 @@
 """Tool invocation summaries and failure classification."""
 
 import re
-from typing import Any, Dict, Optional, Tuple
+from typing import Any, Dict, List, Optional, Tuple
 
 FILE_TOOLS: Dict[str, str] = {
     "read_file": "read",
@@ -133,18 +133,32 @@ def parse_run_command_exit(output: str) -> Tuple[Optional[int], Optional[str]]:
     return exit_code, body
 
 
-def _execution_failed_by_output(output: str) -> bool:
+def _blocked_command_output(output: str) -> bool:
+    lower = (output or "").lower()
+    return (
+        "chained or redirected commands are not allowed" in lower
+        or "directory changes are not allowed" in lower
+        or "command timed out" in lower
+    )
+
+
+def _execution_failed_by_output(
+    output: str,
+    *,
+    diagnostics: Optional[List[Dict[str, Any]]] = None,
+) -> bool:
     """True when the shell command did not run successfully (blocked, timeout, empty body)."""
+    if diagnostics:
+        return _blocked_command_output(output)
+
     if not output or not output.strip():
         return True
-    lower = output.lower()
-    if "chained or redirected commands are not allowed" in lower:
+    if _blocked_command_output(output):
         return True
-    if "directory changes are not allowed" in lower:
-        return True
-    if "command timed out" in lower:
-        return True
+    if "## Problems" in output:
+        return False
 
+    lower = output.lower()
     exit_code, body = parse_run_command_exit(output)
     if exit_code is None:
         return output.startswith("Error") or "not registered" in lower
@@ -155,23 +169,45 @@ def _execution_failed_by_output(output: str) -> bool:
         return True
 
     body_stripped = (body or "").strip()
-    if len(body_stripped) <= 20:
-        return True
     if body_stripped == "(no output)":
+        return True
+    if len(body_stripped) <= 20:
+        from backend.services.diagnostics_parser import parse_command_diagnostics
+
+        if parse_command_diagnostics("", body_stripped):
+            return False
         return True
     return False
 
 
-def classify_run_command(command: str, output: str) -> str:
-    """Classify run_command outcome: ok, lint_findings, test_failed, or execution_failed."""
-    if _execution_failed_by_output(output):
+def classify_run_command_outcome(
+    command: str,
+    exit_code: int,
+    body: str,
+    diagnostics: Optional[List[Dict[str, Any]]] = None,
+) -> str:
+    """Classify raw command results before agent formatting."""
+    combined = body or ""
+    if _blocked_command_output(combined):
+        return "execution_failed"
+    if exit_code < 0:
         return "execution_failed"
 
-    exit_code, _ = parse_run_command_exit(output)
-    if exit_code is None:
-        return "ok"
+    diags = diagnostics or []
+    if not diags and combined.strip() and combined.strip() != "(no output)":
+        from backend.services.diagnostics_parser import parse_command_diagnostics
+
+        diags = parse_command_diagnostics(command, combined)
+
+    if diags:
+        if _is_test_command(command):
+            return "test_failed"
+        return "lint_findings"
+
     if exit_code == 0:
         return "ok"
+    if not combined.strip() or combined.strip() == "(no output)":
+        return "execution_failed"
 
     cmd = (command or "").strip()
     if _is_test_command(cmd):
@@ -181,18 +217,43 @@ def classify_run_command(command: str, output: str) -> str:
     return "lint_findings"
 
 
+def classify_run_command(
+    command: str,
+    output: str,
+    diagnostics: Optional[List[Dict[str, Any]]] = None,
+) -> str:
+    """Classify run_command outcome: ok, lint_findings, test_failed, or execution_failed."""
+    diags = diagnostics
+    if diags is None and "## Problems" in output:
+        exit_code, body = parse_run_command_exit(output)
+        from backend.services.diagnostics_parser import parse_command_diagnostics
+
+        diags = parse_command_diagnostics(command, body or output)
+
+    if _execution_failed_by_output(output, diagnostics=diags):
+        return "execution_failed"
+
+    exit_code, body = parse_run_command_exit(output)
+    if exit_code is None:
+        return "ok"
+    if diags is None:
+        from backend.services.diagnostics_parser import parse_command_diagnostics
+
+        diags = parse_command_diagnostics(command, body or output)
+    return classify_run_command_outcome(command, exit_code, body or output, diags)
+
+
 def format_run_command_output(command: str, returncode: int, body: str) -> str:
-    """Build a classified run_command output string with an honest header."""
-    body_text = (body or "").strip() or "(no output)"
-    preliminary = f"[failed exit {returncode}]\n{body_text}"
-    outcome = classify_run_command(command, preliminary)
-    if outcome == "ok":
-        header = f"[success exit {returncode}]"
-    elif outcome in ("lint_findings", "test_failed"):
-        header = f"[findings exit {returncode}]"
-    else:
-        header = f"[failed exit {returncode}]"
-    return f"{header}\n{body_text[:3000]}"
+    """Build a classified run_command output string with structured problems."""
+    from backend.services.command_result import build_command_result, format_command_result_for_agent
+
+    result = build_command_result(
+        command,
+        exit_code=returncode,
+        stdout=body or "",
+        stderr="",
+    )
+    return format_command_result_for_agent(result)
 
 
 def normalize_run_command_output(command: str, tool_output: str) -> str:

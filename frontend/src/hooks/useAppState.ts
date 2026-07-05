@@ -15,6 +15,7 @@ import type {
   AgentRunState,
   AppState,
   Board,
+  CommandDiagnostic,
   PendingToolApproval,
   SprintProgress,
   SystemLog,
@@ -111,6 +112,9 @@ function mapToolSource(raw: unknown): ToolExecutionEvent['source'] {
 }
 
 function buildToolEventId(payload: Record<string, unknown>): string {
+  if (payload.eventId != null && String(payload.eventId).trim()) {
+    return String(payload.eventId)
+  }
   return `${String(payload.runId ?? payload.run_id ?? 'run')}-${String(payload.toolName ?? '?')}-${String(payload.timestamp ?? Date.now())}`
 }
 
@@ -126,6 +130,32 @@ function mapToolStart(payload: Record<string, unknown>): ToolExecutionEvent {
     status: 'running',
     source: mapToolSource(payload.source),
   }
+}
+
+function mapRunCommandFields(
+  payload: Record<string, unknown>,
+): Pick<ToolExecutionEvent, 'command' | 'diagnostics' | 'diagnosticsCount'> {
+  const command = payload.command != null ? String(payload.command) : undefined
+  const countRaw = payload.diagnosticsCount ?? payload.diagnostics_count
+  const diagnosticsCount =
+    countRaw != null && countRaw !== '' && Number.isFinite(Number(countRaw))
+      ? Number(countRaw)
+      : undefined
+  const rawDiagnostics = payload.diagnostics
+  let diagnostics: CommandDiagnostic[] | undefined
+  if (Array.isArray(rawDiagnostics)) {
+    diagnostics = rawDiagnostics.map((item) => {
+      const row = item as Record<string, unknown>
+      return {
+        file: String(row.file ?? '?'),
+        line: Number(row.line ?? 0),
+        column: Number(row.column ?? 0),
+        severity: String(row.severity ?? 'info'),
+        message: String(row.message ?? ''),
+      }
+    })
+  }
+  return { command, diagnostics, diagnosticsCount }
 }
 
 function historyPayloadToEvent(payload: Record<string, unknown>): ToolExecutionEvent {
@@ -157,6 +187,7 @@ function historyPayloadToEvent(payload: Record<string, unknown>): ToolExecutionE
     source: mapToolSource(payload.source),
     exitCode: Number.isFinite(exitCode) ? exitCode : undefined,
     runCommandStatus,
+    ...mapRunCommandFields(payload),
   }
 }
 
@@ -183,6 +214,7 @@ function applyToolEnd(events: ToolExecutionEvent[], payload: Record<string, unkn
     source: mapToolSource(payload.source),
     exitCode: Number.isFinite(exitCode) ? exitCode : undefined,
     runCommandStatus,
+    ...mapRunCommandFields(payload),
   }
   const idx = events.findIndex((e) => e.id === id)
   if (idx >= 0) {

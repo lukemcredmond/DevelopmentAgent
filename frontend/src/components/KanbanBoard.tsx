@@ -24,6 +24,7 @@ interface KanbanBoardProps {
   onTaskClick: (task: Task) => void
   onMoveTask: (taskId: string, fromLane: BoardLane, toLane: BoardLane) => void
   onReorderBacklog?: (taskIds: string[]) => void
+  onReorderLane?: (lane: BoardLane, taskIds: string[]) => void
 }
 
 function getTaskFileCount(task: Task): number {
@@ -44,6 +45,7 @@ export default function KanbanBoard({
   onTaskClick,
   onMoveTask,
   onReorderBacklog,
+  onReorderLane,
 }: KanbanBoardProps) {
   const [activeTask, setActiveTask] = useState<Task | null>(null)
   const lanes = useMemo(
@@ -95,15 +97,17 @@ export default function KanbanBoard({
     }
 
     if (!toLane || fromLane === toLane) {
-      if (fromLane === 'Backlog' && onReorderBacklog) {
-        const ids = (board.Backlog ?? []).map((t) => t.id)
+      const reorderable = fromLane === 'Backlog' ? onReorderBacklog : fromLane === 'Refinement' ? onReorderLane : undefined
+      if (reorderable && (fromLane === 'Backlog' || fromLane === 'Refinement')) {
+        const ids = (board[fromLane] ?? []).map((t) => t.id)
         const overIdx = ids.indexOf(String(over.id))
         const activeIdx = ids.indexOf(taskId)
         if (overIdx >= 0 && activeIdx >= 0 && overIdx !== activeIdx) {
           const next = [...ids]
           next.splice(activeIdx, 1)
           next.splice(overIdx, 0, taskId)
-          onReorderBacklog(next)
+          if (fromLane === 'Backlog') onReorderBacklog?.(next)
+          else onReorderLane?.(fromLane, next)
         }
       }
       return

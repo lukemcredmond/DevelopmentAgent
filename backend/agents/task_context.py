@@ -264,6 +264,18 @@ def normalize_task(task: Dict[str, Any]) -> Dict[str, Any]:
             if entry.get("agent") is not None:
                 entry["agent"] = coerce_task_text(entry.get("agent"))
     task["blockedBy"] = [str(b) for b in (task.get("blockedBy") or [])]
+    if task.get("parentTaskId") is not None:
+        task["parentTaskId"] = str(task["parentTaskId"])
+    if "subtaskIds" in task:
+        task["subtaskIds"] = [str(s) for s in (task.get("subtaskIds") or [])]
+    elif task.get("parentTaskId"):
+        task["subtaskIds"] = []
+    if "executionOrder" in task:
+        task["executionOrder"] = int(task["executionOrder"])
+    if "subtaskSpawnCount" in task:
+        task["subtaskSpawnCount"] = int(task["subtaskSpawnCount"])
+    if "subtaskEscapeCount" in task:
+        task["subtaskEscapeCount"] = int(task["subtaskEscapeCount"])
     wt = str(task.get("workType") or "implementation").lower()
     if wt not in ("planning", "implementation", "review", "qa", "user_action"):
         wt = "implementation"
@@ -289,7 +301,43 @@ def normalize_task(task: Dict[str, Any]) -> Dict[str, Any]:
             "suggestedAgent": coerce_task_text(ld.get("suggestedAgent", "")),
             **({"taskId": str(ld["taskId"])} if ld.get("taskId") else {}),
         }
+    status = str(task.get("refinementStatus") or "pending")
+    if status not in ("pending", "dev_reviewed", "po_updated", "ready", "blocked"):
+        status = "pending"
+    if "refinementStatus" in task or str(task.get("status", "")) == "Refinement":
+        task["refinementStatus"] = status
+    if "refinementComplete" in task:
+        task["refinementComplete"] = bool(task["refinementComplete"])
+    if "refinementRoundTrips" in task:
+        task["refinementRoundTrips"] = int(task["refinementRoundTrips"])
+    elif str(task.get("status", "")) == "Refinement":
+        task["refinementRoundTrips"] = 0
+    if "refinementQuestions" in task:
+        task["refinementQuestions"] = [
+            coerce_task_text(q).strip() for q in task["refinementQuestions"] if coerce_task_text(q).strip()
+        ]
+    elif str(task.get("status", "")) == "Refinement":
+        task["refinementQuestions"] = []
+    if task.get("refinementNotes") is not None:
+        task["refinementNotes"] = coerce_task_text(task["refinementNotes"])
+    if "refinementDevReady" in task:
+        task["refinementDevReady"] = bool(task["refinementDevReady"])
     return task
+
+
+def reset_refinement_fields(task: Dict[str, Any]) -> None:
+    """Reset refinement state when a card enters the Refinement lane."""
+    task["refinementStatus"] = "pending"
+    task["refinementComplete"] = False
+    task["refinementRoundTrips"] = 0
+    task["refinementQuestions"] = []
+    task["refinementNotes"] = None
+    task["refinementDevReady"] = False
+
+
+def init_refinement_fields(task: Dict[str, Any]) -> None:
+    """Initialize refinement fields for new cards entering Refinement."""
+    reset_refinement_fields(task)
 
 
 def init_new_task(task: Dict[str, Any]) -> Dict[str, Any]:
@@ -299,6 +347,7 @@ def init_new_task(task: Dict[str, Any]) -> Dict[str, Any]:
     task["transcript"] = []
     task.setdefault("acceptanceCriteria", [])
     task.setdefault("blockedBy", [])
+    task.setdefault("subtaskIds", [])
     task.setdefault("priority", 100)
     task["qaFailure"] = None
     task["qaEvidence"] = None
@@ -309,6 +358,8 @@ def init_new_task(task: Dict[str, Any]) -> Dict[str, Any]:
     task.setdefault("requiresDev", True)
     task.setdefault("requiresQa", True)
     task.setdefault("createdBy", "po")
+    if get_workflow_settings().get("requireBacklogRefinement") and task.get("status") == "Refinement":
+        init_refinement_fields(task)
     return normalize_task(task)
 
 
@@ -328,6 +379,7 @@ def set_active_sprint_context(task_id: str, agent_role: str) -> None:
 def clear_active_sprint_context() -> None:
     state.ACTIVE_SPRINT_TASK_ID = None
     state.ACTIVE_SPRINT_AGENT = None
+    state.REFINEMENT_MODE = False
 
 
 def _now_timestamp() -> str:
@@ -541,16 +593,55 @@ def apply_po_clarification(
 
 def sort_backlog() -> None:
     backlog = state.SHARED_BOARD.get("Backlog", [])
-    backlog.sort(key=lambda t: (t.get("priority", 100), t.get("id", "")))
+    backlog.sort(
+        key=lambda t: (
+            0 if t.get("parentTaskId") else 1,
+            t.get("executionOrder", 100),
+            t.get("priority", 100),
+            t.get("id", ""),
+        )
+    )
+
+
+def sort_refinement() -> None:
+    refinement = state.SHARED_BOARD.get("Refinement", [])
+    refinement.sort(
+        key=lambda t: (
+            t.get("executionOrder", 100),
+            t.get("priority", 100),
+            t.get("id", ""),
+        )
+    )
 
 
 def next_claimable_backlog_task() -> Optional[Dict[str, Any]]:
     sort_backlog()
+    ws = get_workflow_settings()
     for task in state.SHARED_BOARD.get("Backlog", []):
         normalize_task(task)
         if not task.get("requiresDev", True):
             continue
         if task.get("workType") == "planning":
+            continue
+        if ws.get("requireBacklogRefinement") and task.get("refinementComplete") is False:
+            continue
+        if task_dependencies_met(task):
+            return task
+    return None
+
+
+def next_refinement_task() -> Optional[Dict[str, Any]]:
+    """First claimable task in Refinement lane."""
+    ws = get_workflow_settings()
+    if not ws.get("requireBacklogRefinement"):
+        return None
+    for task in state.SHARED_BOARD.get("Refinement", []):
+        normalize_task(task)
+        if not task.get("requiresDev", True):
+            continue
+        if task.get("workType") == "planning":
+            continue
+        if task.get("refinementComplete"):
             continue
         if task_dependencies_met(task):
             return task
@@ -608,6 +699,28 @@ def build_task_prompt(task: Dict[str, Any], brief: str) -> str:
     blocked = task.get("blockedBy") or []
     blocked_str = ", ".join(blocked) if blocked else "(none)"
 
+    subtask_extra = ""
+    subtasks = task.get("subtaskIds") or []
+    if subtasks:
+        sub_lines = []
+        for sid in subtasks:
+            sub = find_task_by_id(str(sid))
+            if sub:
+                done = is_task_done(str(sid))
+                sub_lines.append(
+                    f"- {sid}: {sub.get('title', '?')} (order {sub.get('executionOrder', '?')}, "
+                    f"{'Done' if done else sub.get('status', '?')})"
+                )
+            else:
+                sub_lines.append(f"- {sid}: (missing)")
+        subtask_extra = (
+            "\n=== SUBTASKS (must all reach Done before this card completes) ===\n"
+            + "\n".join(sub_lines)
+            + "\n"
+        )
+    if task.get("parentTaskId"):
+        subtask_extra += f"\nParent todo: {task['parentTaskId']}\n"
+
     prompt = (
         f"Project brief:\n{brief}\n"
         f"{build_dod_block()}\n"
@@ -619,6 +732,7 @@ def build_task_prompt(task: Dict[str, Any], brief: str) -> str:
         f"Current status: {task.get('status', 'unknown')}\n"
         f"Workspace files: {file_list}\n"
         f"Files associated with this card: {task_files_str}\n"
+        f"{subtask_extra}"
     )
 
     qa_fail = task.get("qaFailure")

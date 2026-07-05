@@ -62,6 +62,10 @@ class ReorderTasksPayload(BaseModel):
     taskIds: List[str] = Field(default_factory=list)
 
 
+class EscapeSubtaskPayload(BaseModel):
+    mode: str = "needs_po"
+
+
 class ResolveUserPayload(BaseModel):
     answer: str
 
@@ -82,6 +86,13 @@ class WorkflowSettingsPayload(BaseModel):
     requireBacklogApproval: Optional[bool] = None
     requireCodeReview: Optional[bool] = None
     requireDevVerification: Optional[bool] = None
+    requireCleanLint: Optional[bool] = None
+    requireBacklogRefinement: Optional[bool] = None
+    maxRefinementRoundTrips: Optional[int] = None
+    maxSubtaskDepth: Optional[int] = None
+    maxSubtaskSpawns: Optional[int] = None
+    enableFixVerifyLoop: Optional[bool] = None
+    maxFixVerifyRounds: Optional[int] = None
     requireToolApproval: Optional[bool] = None
     toolApprovalTools: Optional[List[str]] = None
     definitionOfDone: Optional[List[str]] = None

@@ -4,7 +4,7 @@ from fastapi.testclient import TestClient
 
 from backend.bootstrap import initialize
 from backend.main import app
-from backend.services.workflow_settings import DEFAULT_WORKFLOW_SETTINGS, get_workflow_settings
+from backend.services.workflow_settings import DEFAULT_WORKFLOW_SETTINGS, get_workflow_settings, reset_workflow_settings
 
 
 def test_app_starts_and_serves_state():
@@ -47,6 +47,7 @@ def test_openapi_routes_registered():
 
 def test_workflow_settings_defaults():
     initialize()
+    reset_workflow_settings()
     ws = get_workflow_settings()
     assert ws["requireBacklogApproval"] is False
     assert ws["requireCodeReview"] is False
@@ -214,7 +215,7 @@ def test_run_agent_command_mock(monkeypatch):
         }
 
     monkeypatch.setattr(
-        "backend.services.terminal_service.run_command",
+        "backend.services.command_result.run_command",
         fake_run,
     )
     out = run_agent_command("flutter analyze")
@@ -460,7 +461,7 @@ def test_run_agent_command_findings_header(monkeypatch):
         }
 
     monkeypatch.setattr(
-        "backend.services.terminal_service.run_command",
+        "backend.services.command_result.run_command",
         fake_run,
     )
     output = run_agent_command("flutter analyze")
@@ -473,13 +474,18 @@ def test_qa_playbook_analyze_findings_does_not_fail_playbook(monkeypatch):
 
     calls = []
 
-    def fake_run_agent_command(cmd):
-        calls.append(cmd)
-        if "analyze" in cmd:
-            return "[findings exit 1]\nAnalyzing…\nwarning • x\n"
-        return "[success exit 0]\nAll tests passed"
+    def fake_run(command):
+        calls.append(command)
+        if "analyze" in command:
+            return {
+                "success": False,
+                "stdout": "Analyzing…\n  warning • unused import • lib/main.dart:1:1\n",
+                "stderr": "",
+                "returncode": 1,
+            }
+        return {"success": True, "stdout": "All tests passed", "stderr": "", "returncode": 0}
 
-    monkeypatch.setattr(sprint_service, "run_agent_command", fake_run_agent_command)
+    monkeypatch.setattr("backend.services.command_result.run_command", fake_run)
     monkeypatch.setattr(
         sprint_service,
         "derive_project_test_commands",
@@ -496,12 +502,17 @@ def test_qa_playbook_analyze_findings_does_not_fail_playbook(monkeypatch):
 def test_qa_playbook_test_failure_fails_playbook(monkeypatch):
     from backend.services import sprint_service
 
-    def fake_run_agent_command(cmd):
-        if "test" in cmd:
-            return "[findings exit 1]\nExpected: true\n  Actual: false\n"
-        return "[success exit 0]\nNo issues found"
+    def fake_run(command):
+        if "test" in command:
+            return {
+                "success": False,
+                "stdout": "Expected: true\n  Actual: false\n",
+                "stderr": "",
+                "returncode": 1,
+            }
+        return {"success": True, "stdout": "No issues found", "stderr": "", "returncode": 0}
 
-    monkeypatch.setattr(sprint_service, "run_agent_command", fake_run_agent_command)
+    monkeypatch.setattr("backend.services.command_result.run_command", fake_run)
     monkeypatch.setattr(
         sprint_service,
         "derive_project_test_commands",
@@ -518,6 +529,144 @@ def test_qa_playbook_test_failure_fails_playbook(monkeypatch):
     assert playbook["passed"] is False
     assert playbook["results"][1]["outcome"] == "test_failed"
     assert logged[1]["success"] is True
+
+
+def test_tool_history_same_second_distinct_events():
+    from backend import state
+    from backend.services.tool_execution_service import append_global_tool_event, get_tool_history
+
+    initialize()
+    state.TOOL_EXECUTION_LOG.clear()
+    ts = "2026-07-05 12:00:00"
+    append_global_tool_event(
+        {
+            "eventId": "evt-read",
+            "runId": "run-1",
+            "taskId": "T-1",
+            "agent": "Developer",
+            "toolName": "read_file",
+            "toolArgs": {"path": "lib/main.dart"},
+            "toolSuccess": True,
+            "toolOutput": "contents",
+            "durationMs": 10,
+            "timestamp": ts,
+            "source": "agent",
+            "status": "completed",
+        }
+    )
+    append_global_tool_event(
+        {
+            "eventId": "evt-grep",
+            "runId": "run-1",
+            "taskId": "T-1",
+            "agent": "Developer",
+            "toolName": "grep",
+            "toolArgs": {"pattern": "foo"},
+            "toolSuccess": True,
+            "toolOutput": "matches",
+            "durationMs": 5,
+            "timestamp": ts,
+            "source": "agent",
+            "status": "completed",
+        }
+    )
+
+    events = get_tool_history()
+    tool_names = [e["toolName"] for e in events if e.get("taskId") == "T-1"]
+    assert "read_file" in tool_names
+    assert "grep" in tool_names
+
+
+def test_user_inject_publishes_tool_start_and_end(monkeypatch):
+    from backend import state
+    from backend.agents.task_context import init_new_task
+    from backend.services.tool_execution_service import record_user_tool_evidence
+
+    initialize()
+    state.TOOL_EXECUTION_LOG.clear()
+    task = init_new_task({"id": "T-INJ2", "title": "Inject2", "description": "d"})
+    state.SHARED_BOARD.setdefault("In Progress", []).append(task)
+
+    published: list[tuple[str, dict]] = []
+
+    def capture(event_type, payload):
+        published.append((event_type, payload))
+
+    monkeypatch.setattr("backend.services.tool_execution_service.publish_event", capture)
+
+    record_user_tool_evidence(
+        "T-INJ2",
+        "run_command",
+        {"command": "flutter analyze"},
+        "  error • bad • lib/main.dart:1:1\n",
+    )
+
+    event_types = [item[0] for item in published]
+    assert "tool_start" in event_types
+    assert "tool_end" in event_types
+    start_payload = next(item[1] for item in published if item[0] == "tool_start")
+    end_payload = next(item[1] for item in published if item[0] == "tool_end")
+    assert start_payload.get("eventId")
+    assert start_payload["eventId"] == end_payload["eventId"]
+
+
+def test_diagnostics_parser_flutter_dash_and_generic():
+    from backend.services.diagnostics_parser import parse_command_diagnostics, summarize_diagnostics
+
+    dash_output = "  error - Undefined name 'foo' - lib/app.dart:3:1\n"
+    dash_findings = parse_command_diagnostics("dart analyze", dash_output)
+    assert len(dash_findings) == 1
+    assert dash_findings[0]["file"] == "lib/app.dart"
+    assert dash_findings[0]["line"] == 3
+
+    generic_output = "src/index.ts:10:5 error TS2304: Cannot find name 'bar'\n"
+    generic_findings = parse_command_diagnostics("npm run lint", generic_output)
+    assert any(f["file"] == "src/index.ts" for f in generic_findings)
+    assert summarize_diagnostics(dash_findings).startswith("1 error")
+
+
+def test_command_result_short_analyze_output_is_lint_findings(monkeypatch):
+    from backend.services.command_result import format_command_result_for_agent, run_workspace_command
+
+    def fake_run(command):
+        return {
+            "success": False,
+            "stdout": "  error • bad • lib/main.dart:10:5\n",
+            "stderr": "",
+            "returncode": 1,
+        }
+
+    monkeypatch.setattr("backend.services.command_result.run_command", fake_run)
+    result = run_workspace_command("flutter analyze")
+    assert result.outcome == "lint_findings"
+    assert len(result.diagnostics) == 1
+    formatted = format_command_result_for_agent(result)
+    assert formatted.startswith("[findings exit 1]")
+    assert "## Problems" in formatted
+    assert "lib/main.dart:10:5" in formatted
+
+
+def test_derive_project_lint_command(tmp_path, monkeypatch):
+    from backend import state
+    from backend.workspace.files import derive_project_lint_command
+
+    initialize()
+    monkeypatch.setattr(state, "WORKSPACE_DIR", str(tmp_path))
+    state.VIRTUAL_FILESYSTEM.clear()
+
+    (tmp_path / "pubspec.yaml").write_text("name: demo\n", encoding="utf-8")
+    state.VIRTUAL_FILESYSTEM["pubspec.yaml"] = "name: demo\n"
+    assert derive_project_lint_command() == "flutter analyze"
+
+    state.VIRTUAL_FILESYSTEM.clear()
+    for name in list(tmp_path.iterdir()):
+        name.unlink()
+    (tmp_path / "package.json").write_text(
+        '{"scripts":{"lint":"eslint .","test":"jest"}}',
+        encoding="utf-8",
+    )
+    state.VIRTUAL_FILESYSTEM["package.json"] = '{"scripts":{"lint":"eslint ."}}'
+    assert derive_project_lint_command() == "npm run lint"
 
 
 def test_inject_tool_evidence_api():
@@ -1265,6 +1414,34 @@ def test_configure_po_tools_respects_web_search_flag():
     assert "search_code" not in names
     assert "grep" in names
     assert "add_backlog_tasks" in names
+
+
+def test_configure_agent_tools_preserves_mcp_tools():
+    from backend.agents.registry import agent_dev, configure_agent_tools
+    from backend.agents.tools import Tool
+    from backend.services.mcp_tools import _MCP_TOOL_INSTANCES, clear_mcp_tools, reregister_mcp_tools_on_agents
+
+    initialize()
+    clear_mcp_tools()
+
+    def _fake_mcp(**kwargs):
+        return "ok"
+
+    fake = Tool(
+        name="mcp_test_echo",
+        description="test mcp tool",
+        parameters={"type": "object", "properties": {}, "required": []},
+        func=_fake_mcp,
+    )
+    _MCP_TOOL_INSTANCES.append(fake)
+    reregister_mcp_tools_on_agents()
+    assert "mcp_test_echo" in agent_dev.registry.tool_names()
+
+    configure_agent_tools()
+    assert "mcp_test_echo" in agent_dev.registry.tool_names()
+    assert "read_file" in agent_dev.registry.tool_names()
+
+    clear_mcp_tools()
 
 
 def test_prompt_budget_scales_with_num_ctx():
@@ -2164,6 +2341,111 @@ def test_delete_file_requires_approval_when_enabled():
         skip_approval=False,
     )
     assert result.success is False or "approval" in result.tool_output.lower() or "await" in result.tool_output.lower()
+
+
+def test_tool_cache_read_file_hit(monkeypatch):
+    from backend import state
+    from backend.services.tool_cache import clear_tool_cache, store_cached_result
+    from backend.services.tool_execution_service import execute_tool
+
+    initialize()
+    clear_tool_cache()
+    state.ACTIVE_SPRINT_TASK_ID = "T-CACHE"
+    state.VIRTUAL_FILESYSTEM["lib/a.dart"] = "hello"
+
+    calls = []
+
+    def fake_invoke(name, args):
+        calls.append((name, args))
+        return "live content"
+
+    from backend.agents.registry import AGENT_MAP
+
+    agent = AGENT_MAP["dev"]
+    original_invoke = agent.registry.invoke
+    agent.registry.invoke = fake_invoke
+    try:
+        store_cached_result("read_file", {"path": "lib/a.dart"}, "cached content", True)
+        result = execute_tool(
+            "dev",
+            "read_file",
+            {"path": "lib/a.dart"},
+            task_id="T-CACHE",
+            source="agent",
+            skip_approval=True,
+        )
+        assert result.success
+        assert "cached content" in result.tool_output
+        assert len(calls) == 0
+    finally:
+        agent.registry.invoke = original_invoke
+
+
+def test_run_command_lint_cache_blocks_repeat():
+    from backend.services.tool_cache import clear_tool_cache, store_cached_result
+
+    clear_tool_cache()
+    output = "[findings exit 1]\n  error • bad • lib/main.dart:1:1\n"
+    store_cached_result("run_command", {"command": "flutter analyze"}, output, True)
+    blocked = __import__(
+        "backend.services.tool_cache", fromlist=["check_run_command_cache"]
+    ).check_run_command_cache("flutter analyze", {"command": "flutter analyze"})
+    assert blocked is not None
+    assert "unchanged" in blocked.lower() or "problem" in blocked.lower()
+
+
+def test_dev_gate_blocks_advance_with_diagnostics(monkeypatch):
+    from backend.agents.task_context import init_new_task
+    from backend.services.sprint_service import dev_gate_blocks_advance
+
+    initialize()
+    task = init_new_task({"id": "T-LINT", "title": "Lint gate", "description": "d"})
+    task["lastCommandDiagnostics"] = [
+        {"file": "lib/a.dart", "line": 1, "column": 1, "severity": "error", "message": "x"}
+    ]
+
+    monkeypatch.setattr(
+        "backend.services.sprint_service.get_workflow_settings",
+        lambda: {"requireCleanLint": True},
+    )
+    blocked, reason = dev_gate_blocks_advance(task)
+    assert blocked
+    assert "lint" in reason.lower()
+
+
+def test_fix_verify_loop_disabled_delegates(monkeypatch):
+    from backend.agents.task_context import init_new_task
+    from backend.services.fix_verify_loop import run_fix_verify_loop
+
+    initialize()
+    task = init_new_task({"id": "T-FV", "title": "FV", "description": "d"})
+    calls = []
+
+    class FakeAgent:
+        role = "Developer"
+
+        def execute_step(self, prompt, max_iterations=8):
+            calls.append((prompt[:40], max_iterations))
+            return "done"
+
+    result = run_fix_verify_loop(FakeAgent(), task, "prompt", max_iterations=6)
+    assert result == "done"
+    assert len(calls) == 1
+
+
+def test_memory_scoped_agent_id():
+    from backend import state
+    from backend.storage.memory_engine import SemanticMemoryEngine
+
+    initialize()
+    engine = SemanticMemoryEngine()
+    state.CURRENT_PROJECT_ID = "proj-a"
+    scoped = engine._scoped_agent_id("Developer", "proj-a")
+    assert scoped == "proj-a:Developer"
+    engine.save_outcome("Developer", "fixed lib/main.dart", "fix_pattern", project_id="proj-a")
+    hits = engine.search("Developer", "fixed lib/main", limit=3, project_id="proj-a")
+    assert hits
+    assert hits[0]["category"] == "fix_pattern"
 
 
 def test_semantic_search_qdrant_optional():

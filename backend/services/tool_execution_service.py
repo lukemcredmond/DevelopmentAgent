@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import json
 import time
+import uuid
 from contextlib import contextmanager
 from dataclasses import dataclass
 from datetime import datetime
@@ -36,6 +37,14 @@ from backend.services.tool_approval import request_tool_approval, tool_requires_
 ToolSource = Literal["agent", "manual", "replay", "orchestrator", "context_inject"]
 
 MAX_TOOL_LOG_ENTRIES = 500
+TOOL_OUTPUT_PREVIEW_CHARS = 2000
+_RUN_SEQ: dict[str, int] = {}
+
+
+def _next_seq(run_id: str) -> int:
+    seq = _RUN_SEQ.get(run_id, 0) + 1
+    _RUN_SEQ[run_id] = seq
+    return seq
 
 
 def _tool_log_setting_key(project_id: str) -> str:
@@ -43,6 +52,11 @@ def _tool_log_setting_key(project_id: str) -> str:
 
 
 def _dedupe_key(event: Dict[str, Any]) -> str:
+    event_id = event.get("eventId")
+    if event_id:
+        return str(event_id)
+    seq = event.get("seq")
+    seq_part = f"|{seq}" if seq is not None else ""
     return "|".join(
         [
             str(event.get("runId") or ""),
@@ -50,7 +64,28 @@ def _dedupe_key(event: Dict[str, Any]) -> str:
             str(event.get("toolName") or ""),
             str(event.get("timestamp") or ""),
         ]
-    )
+    ) + seq_part
+
+
+def _run_command_event_fields(
+    tool_name: str,
+    arguments: Dict[str, Any],
+    tool_output: str,
+) -> Dict[str, Any]:
+    if tool_name != "run_command":
+        return {}
+    command = str(arguments.get("command") or "")
+    exit_code, body = parse_run_command_exit(tool_output)
+    from backend.services.diagnostics_parser import parse_command_diagnostics
+
+    diagnostics = parse_command_diagnostics(command, body or tool_output)
+    fields: Dict[str, Any] = {"command": command}
+    if diagnostics:
+        fields["diagnostics"] = diagnostics[:50]
+        fields["diagnosticsCount"] = len(diagnostics)
+    if exit_code is not None:
+        fields["exitCode"] = exit_code
+    return fields
 
 
 def _build_history_event(
@@ -67,24 +102,36 @@ def _build_history_event(
     source: str,
     exit_code: Optional[int] = None,
     run_cmd_status: Optional[str] = None,
+    event_id: Optional[str] = None,
+    diagnostics: Optional[list] = None,
+    command: Optional[str] = None,
 ) -> Dict[str, Any]:
+    event_id = event_id or str(uuid.uuid4())
     event: Dict[str, Any] = {
+        "eventId": event_id,
+        "seq": _next_seq(run_id),
         "runId": run_id,
         "taskId": task_id,
         "agent": agent,
         "toolName": tool_name,
         "toolArgs": tool_args,
         "toolSuccess": success,
-        "toolOutput": tool_output[:500],
+        "toolOutput": tool_output[:TOOL_OUTPUT_PREVIEW_CHARS],
         "durationMs": duration_ms,
         "timestamp": timestamp,
         "source": source,
         "status": "failed" if not success else "completed",
     }
-    if tool_name == "run_command" and exit_code is not None:
-        event["exitCode"] = exit_code
+    if tool_name == "run_command":
+        if command:
+            event["command"] = command
+        if exit_code is not None:
+            event["exitCode"] = exit_code
         if run_cmd_status is not None:
             event["runCommandStatus"] = run_cmd_status
+        if diagnostics:
+            event["diagnostics"] = diagnostics[:50]
+            event["diagnosticsCount"] = len(diagnostics)
     return event
 
 
@@ -224,24 +271,30 @@ def _history_event_from_transcript(
     ts = str(entry.get("timestamp") or "")
     source = entry.get("source") or "agent"
     run_id = str(entry.get("runId") or f"{task_id}-tx-{ts}-{tool_name}")
-    exit_code = None
-    run_cmd_status = None
     if tool_name == "run_command" and tool_output:
         exit_code, _ = parse_run_command_exit(tool_output)
         command = str((entry.get("toolArgs") or {}).get("command") or "")
         run_cmd_status = run_command_status_label(tool_output, success, command)
+        rc_fields = _run_command_event_fields(tool_name, entry.get("toolArgs") or {}, tool_output)
+    else:
+        exit_code = None
+        run_cmd_status = None
+        command = None
+        rc_fields = {}
     return {
+        "eventId": str(uuid.uuid4()),
         "runId": run_id,
         "taskId": task_id,
         "agent": str(entry.get("agent") or "Agent"),
         "toolName": tool_name,
         "toolArgs": entry.get("toolArgs") or {},
         "toolSuccess": success,
-        "toolOutput": tool_output[:500],
+        "toolOutput": tool_output[:TOOL_OUTPUT_PREVIEW_CHARS],
         "durationMs": 0,
         "timestamp": ts,
         "source": source,
         "status": "failed" if not success else "completed",
+        **rc_fields,
         **(
             {"exitCode": exit_code, "runCommandStatus": run_cmd_status}
             if tool_name == "run_command" and exit_code is not None
@@ -376,15 +429,40 @@ def _record_tool_side_effects(
         )
 
     if save_memory and memory_engine is not None:
-        memory_engine.save(
-            agent_role,
-            f"Invoked tool '{tool_name}' on task: {user_prompt}",
-            "tool_usage",
-        )
+        from backend import state as app_state
+
+        project_id = app_state.CURRENT_PROJECT_ID or "default-proj"
+        if success and tool_name in ("apply_patch", "write_file"):
+            path = file_path_from_tool(tool_name, arguments) or "?"
+            memory_engine.save_outcome(
+                agent_role,
+                f"{tool_name} {path} succeeded on task {task_id or 'system'}",
+                "fix_pattern",
+                project_id=project_id,
+            )
+        elif not success:
+            memory_engine.save_outcome(
+                agent_role,
+                f"{tool_name} failed: {tool_output[:300]}",
+                "failure",
+                project_id=project_id,
+            )
+        else:
+            memory_engine.save_outcome(
+                agent_role,
+                f"Invoked tool '{tool_name}' on task: {user_prompt[:200]}",
+                "tool_usage",
+                project_id=project_id,
+            )
 
     task = find_task_by_id(task_id)
     if task:
         sync_task_files_from_transcript(task)
+        if tool_name == "run_command":
+            rc_fields = _run_command_event_fields(tool_name, arguments, tool_output)
+            diagnostics = rc_fields.get("diagnostics")
+            if diagnostics:
+                task["lastCommandDiagnostics"] = diagnostics
 
 
 def execute_tool(
@@ -407,6 +485,7 @@ def execute_tool(
     ts = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
     active_run = get_active_run()
     effective_run_id = run_id or (active_run.run_id if active_run else "manual")
+    event_id = str(uuid.uuid4())
 
     with _sprint_context(task_id, agent_role):
         arg_summary = summarize_tool_args(tool_name, arguments)
@@ -416,6 +495,7 @@ def execute_tool(
         publish_event(
             "tool_start",
             {
+                "eventId": event_id,
                 "runId": effective_run_id,
                 "taskId": task_id or "system",
                 "agent": agent_role,
@@ -431,28 +511,61 @@ def execute_tool(
         started = time.time()
         tool_output = ""
         success = False
+        from_cache = False
 
-        if not skip_approval and tool_requires_approval(tool_name):
-            if on_awaiting_approval:
-                on_awaiting_approval(tool_name)
-            approved, deny_msg = request_tool_approval(
-                effective_run_id,
-                tool_name,
-                arguments,
-                task_id=task_id,
-                agent=agent_role,
+        if source == "agent":
+            from backend.services.tool_cache import (
+                check_run_command_cache,
+                get_cached_result,
+                should_cache_tool,
+                store_cached_result,
             )
-            if on_tool_executing:
-                on_tool_executing(tool_name)
-            if not approved:
-                tool_output = deny_msg
-                success = False
+
+            if should_cache_tool(tool_name, source):
+                if tool_name == "run_command":
+                    cmd = str(arguments.get("command") or "")
+                    cached_cmd = check_run_command_cache(cmd, arguments)
+                    if cached_cmd:
+                        tool_output = cached_cmd
+                        success = not is_tool_failure(tool_name, tool_output)
+                        from_cache = True
+                else:
+                    cached = get_cached_result(tool_name, arguments)
+                    if cached:
+                        tool_output, success = cached
+                        from_cache = True
+
+        if not from_cache:
+            if not skip_approval and tool_requires_approval(tool_name):
+                if on_awaiting_approval:
+                    on_awaiting_approval(tool_name)
+                approved, deny_msg = request_tool_approval(
+                    effective_run_id,
+                    tool_name,
+                    arguments,
+                    task_id=task_id,
+                    agent=agent_role,
+                )
+                if on_tool_executing:
+                    on_tool_executing(tool_name)
+                if not approved:
+                    tool_output = deny_msg
+                    success = False
+                else:
+                    tool_output = agent.registry.invoke(tool_name, arguments)
+                    success = not is_tool_failure(tool_name, tool_output)
             else:
                 tool_output = agent.registry.invoke(tool_name, arguments)
                 success = not is_tool_failure(tool_name, tool_output)
-        else:
-            tool_output = agent.registry.invoke(tool_name, arguments)
-            success = not is_tool_failure(tool_name, tool_output)
+
+            if source == "agent" and success:
+                from backend.services.tool_cache import (
+                    should_cache_tool,
+                    store_cached_result,
+                )
+
+                if should_cache_tool(tool_name, source):
+                    store_cached_result(tool_name, arguments, tool_output, success)
 
         if success:
             if tool_name == "read_file":
@@ -469,7 +582,7 @@ def execute_tool(
                     invalidate_step_file_read(path_key)
 
         duration_ms = int((time.time() - started) * 1000)
-        output_preview = tool_output[:500]
+        output_preview = tool_output[:TOOL_OUTPUT_PREVIEW_CHARS]
 
         exit_code, _ = parse_run_command_exit(tool_output) if tool_name == "run_command" else (None, None)
         run_cmd_status = (
@@ -481,6 +594,7 @@ def execute_tool(
             if tool_name == "run_command"
             else None
         )
+        rc_fields = _run_command_event_fields(tool_name, arguments, tool_output)
 
         tool_entry = {
             "toolName": tool_name,
@@ -495,6 +609,7 @@ def execute_tool(
         publish_event(
             "tool_end",
             {
+                "eventId": event_id,
                 "runId": effective_run_id,
                 "taskId": task_id or "system",
                 "agent": agent_role,
@@ -505,9 +620,10 @@ def execute_tool(
                 "durationMs": duration_ms,
                 "timestamp": ts,
                 "source": source,
+                **rc_fields,
                 **(
-                    {"exitCode": exit_code, "runCommandStatus": run_cmd_status}
-                    if tool_name == "run_command"
+                    {"runCommandStatus": run_cmd_status}
+                    if tool_name == "run_command" and run_cmd_status is not None
                     else {}
                 ),
             },
@@ -520,13 +636,16 @@ def execute_tool(
                 agent=agent_role,
                 tool_name=tool_name,
                 tool_args=safe_args,
-                tool_output=output_preview,
+                tool_output=tool_output,
                 success=success,
                 duration_ms=duration_ms,
                 timestamp=ts,
                 source=source,
                 exit_code=exit_code,
                 run_cmd_status=run_cmd_status,
+                event_id=event_id,
+                diagnostics=rc_fields.get("diagnostics"),
+                command=rc_fields.get("command"),
             )
         )
 
@@ -587,17 +706,19 @@ def log_synthetic_tool_event(
     ts = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
     active_run = get_active_run()
     effective_run_id = run_id or (active_run.run_id if active_run else "orchestrator")
-    output_preview = tool_output[:500]
+    output_preview = tool_output[:TOOL_OUTPUT_PREVIEW_CHARS]
+    event_id = str(uuid.uuid4())
+    rc_fields = _run_command_event_fields(tool_name, tool_args, tool_output)
     command = str(tool_args.get("command") or "") if tool_name == "run_command" else ""
-    exit_code = None
+    exit_code = rc_fields.get("exitCode")
     run_cmd_status = None
     if tool_name == "run_command":
-        exit_code, _ = parse_run_command_exit(tool_output)
         run_cmd_status = run_command_status_label(tool_output, success, command)
 
     publish_event(
         "tool_start",
         {
+            "eventId": event_id,
             "runId": effective_run_id,
             "taskId": task_id,
             "agent": agent_role,
@@ -609,6 +730,7 @@ def log_synthetic_tool_event(
     )
 
     tool_end_payload: Dict[str, Any] = {
+        "eventId": event_id,
         "runId": effective_run_id,
         "taskId": task_id,
         "agent": agent_role,
@@ -619,11 +741,10 @@ def log_synthetic_tool_event(
         "durationMs": 0,
         "timestamp": ts,
         "source": source,
+        **rc_fields,
     }
-    if tool_name == "run_command" and exit_code is not None:
-        tool_end_payload["exitCode"] = exit_code
-        if run_cmd_status is not None:
-            tool_end_payload["runCommandStatus"] = run_cmd_status
+    if tool_name == "run_command" and run_cmd_status is not None:
+        tool_end_payload["runCommandStatus"] = run_cmd_status
 
     publish_event(
         "tool_end",
@@ -637,13 +758,16 @@ def log_synthetic_tool_event(
             agent=agent_role,
             tool_name=tool_name,
             tool_args=tool_args,
-            tool_output=output_preview,
+            tool_output=tool_output,
             success=success,
             duration_ms=0,
             timestamp=ts,
             source=source,
             exit_code=exit_code,
             run_cmd_status=run_cmd_status,
+            event_id=event_id,
+            diagnostics=rc_fields.get("diagnostics"),
+            command=rc_fields.get("command"),
         )
     )
 
@@ -708,11 +832,12 @@ def record_user_tool_evidence(
 
     ts = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
     run_id = f"user-inject-{task_id}-{int(time.time() * 1000)}"
-    output_preview = normalized[:500]
-    exit_code = None
+    event_id = str(uuid.uuid4())
+    output_preview = normalized[:TOOL_OUTPUT_PREVIEW_CHARS]
+    rc_fields = _run_command_event_fields(tool_name, tool_args, normalized)
+    exit_code = rc_fields.get("exitCode")
     run_cmd_status = None
     if tool_name == "run_command":
-        exit_code, _ = parse_run_command_exit(normalized)
         run_cmd_status = run_command_status_label(normalized, success, command)
 
     content = format_tool_transcript_content(
@@ -730,6 +855,24 @@ def record_user_tool_evidence(
         source="user",
     )
 
+    task = find_task_by_id(task_id)
+    if task and rc_fields.get("diagnostics"):
+        task["lastCommandDiagnostics"] = rc_fields["diagnostics"]
+
+    publish_event(
+        "tool_start",
+        {
+            "eventId": event_id,
+            "runId": run_id,
+            "taskId": task_id,
+            "agent": "User",
+            "toolName": tool_name,
+            "toolArgs": tool_args,
+            "timestamp": ts,
+            "source": "user",
+        },
+    )
+
     append_global_tool_event(
         _build_history_event(
             run_id=run_id,
@@ -737,19 +880,23 @@ def record_user_tool_evidence(
             agent="User",
             tool_name=tool_name,
             tool_args=tool_args,
-            tool_output=output_preview,
+            tool_output=normalized,
             success=success,
             duration_ms=0,
             timestamp=ts,
             source="user",
             exit_code=exit_code,
             run_cmd_status=run_cmd_status,
+            event_id=event_id,
+            diagnostics=rc_fields.get("diagnostics"),
+            command=rc_fields.get("command"),
         )
     )
 
     publish_event(
         "tool_end",
         {
+            "eventId": event_id,
             "runId": run_id,
             "taskId": task_id,
             "agent": "User",
@@ -760,9 +907,10 @@ def record_user_tool_evidence(
             "durationMs": 0,
             "timestamp": ts,
             "source": "user",
+            **rc_fields,
             **(
-                {"exitCode": exit_code, "runCommandStatus": run_cmd_status}
-                if tool_name == "run_command" and exit_code is not None
+                {"runCommandStatus": run_cmd_status}
+                if tool_name == "run_command" and run_cmd_status is not None
                 else {}
             ),
         },

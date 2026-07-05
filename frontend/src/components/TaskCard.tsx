@@ -30,6 +30,8 @@ export default function TaskCard({
   }
 
   const blocked = (task.blockedBy ?? []).length > 0
+  const subtaskCount = (task.subtaskIds ?? []).length
+  const isSubtask = Boolean(task.parentTaskId)
   const relatedCount = (task.relatedTaskIds ?? []).length
   const hasCommit = Boolean(task.gitCommit?.hash)
   const isDone = task.status === 'Done'
@@ -96,6 +98,22 @@ export default function TaskCard({
               title="Needs your input"
             >
               <i className="fa-solid fa-circle-question" />
+            </span>
+          )}
+          {subtaskCount > 0 && (
+            <span
+              className="text-[9px] bg-sky-950/50 text-sky-300 px-1 py-0.5 rounded"
+              title="Child todos"
+            >
+              ↳{subtaskCount}
+            </span>
+          )}
+          {isSubtask && (
+            <span
+              className="text-[9px] bg-sky-950/50 text-sky-300 px-1 py-0.5 rounded"
+              title="Subtask of parent"
+            >
+              sub
             </span>
           )}
           {relatedCount > 0 && (

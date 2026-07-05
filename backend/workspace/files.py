@@ -1,4 +1,5 @@
 import fnmatch
+import json
 import os
 import re
 import shutil
@@ -146,6 +147,10 @@ def write_workspace_file(path: str, content: str, author: Optional[str] = None) 
             f"Wrote '{safe_path}' ({nbytes} bytes) → {phys_path}",
         )
         invalidate_step_file_read(safe_path)
+        from backend.services.tool_cache import invalidate_fingerprint, register_touched_path
+
+        register_touched_path(safe_path)
+        invalidate_fingerprint()
         return f"Successfully saved file physically at: '{phys_path}'"
     except Exception as e:
         msg = f"Error: physical write failed for '{safe_path}': {e}"
@@ -328,18 +333,39 @@ def run_tests_on_workspace(test_script_path: str) -> str:
 
 def run_agent_command(command: str) -> str:
     """Runs a shell command for sprint agents; returns structured text output."""
-    from backend.agents.tool_outcomes import format_run_command_output
-    from backend.services.terminal_service import run_command
+    from backend.services.command_result import format_command_result_for_agent, run_workspace_command
 
-    result = run_command(command)
-    parts: List[str] = []
-    if result.get("stdout"):
-        parts.append(result["stdout"])
-    if result.get("stderr"):
-        parts.append(result["stderr"])
-    body = "\n".join(parts).strip() or "(no output)"
-    rc = result.get("returncode", -1)
-    return format_run_command_output(command, rc, body)
+    result = run_workspace_command(command)
+    return format_command_result_for_agent(result)
+
+
+def derive_project_lint_command() -> Optional[str]:
+    """Return one recommended lint/analyze command for the current workspace, if detectable."""
+    sync_virtual_filesystem_from_disk()
+    ws = state.WORKSPACE_DIR
+
+    if os.path.isfile(os.path.join(ws, "pubspec.yaml")):
+        return "flutter analyze"
+
+    package_json = os.path.join(ws, "package.json")
+    if os.path.isfile(package_json):
+        try:
+            with open(package_json, "r", encoding="utf-8") as handle:
+                data = json.load(handle)
+            scripts = data.get("scripts") or {}
+            if "lint" in scripts:
+                return "npm run lint"
+        except (OSError, json.JSONDecodeError):
+            pass
+        return None
+
+    if any(path.endswith(".py") for path in state.VIRTUAL_FILESYSTEM):
+        import shutil
+
+        if shutil.which("ruff"):
+            return "ruff check ."
+
+    return None
 
 
 def get_file_tree() -> List[Dict[str, Any]]:

@@ -3,6 +3,7 @@ export type AgentId = 'po' | 'dev' | 'cr' | 'qa'
 export type BoardLane =
   | 'Backlog'
   | 'Pending Approval'
+  | 'Refinement'
   | 'In Progress'
   | 'Needs PO'
   | 'Needs User'
@@ -79,6 +80,19 @@ export interface Task {
   requiresQa?: boolean
   createdBy?: 'po' | 'user' | 'split'
   lastDiagnosis?: TaskDiagnosis
+  lastCommandDiagnostics?: CommandDiagnostic[]
+  refinementStatus?: 'pending' | 'dev_reviewed' | 'po_updated' | 'ready' | 'blocked'
+  refinementComplete?: boolean
+  refinementRoundTrips?: number
+  refinementQuestions?: string[]
+  refinementNotes?: string | null
+  refinementDevReady?: boolean
+  parentTaskId?: string | null
+  subtaskIds?: string[]
+  executionOrder?: number
+  subtaskSpawnCount?: number
+  subtaskEscapeCount?: number
+  subtaskSkipped?: boolean
 }
 
 export interface TaskDiagnosis {
@@ -113,6 +127,13 @@ export interface WorkflowSettings {
   requireBacklogApproval: boolean
   requireCodeReview: boolean
   requireDevVerification?: boolean
+  requireCleanLint?: boolean
+  requireBacklogRefinement?: boolean
+  maxRefinementRoundTrips?: number
+  maxSubtaskDepth?: number
+  maxSubtaskSpawns?: number
+  enableFixVerifyLoop?: boolean
+  maxFixVerifyRounds?: number
   requireToolApproval?: boolean
   toolApprovalTools?: string[]
   mcpServers?: McpServerConfig[]
@@ -147,6 +168,14 @@ export interface RecentToolEntry {
   timestamp: string
 }
 
+export interface CommandDiagnostic {
+  file: string
+  line: number
+  column: number
+  severity: string
+  message: string
+}
+
 export interface ToolExecutionEvent {
   id: string
   runId?: string
@@ -162,6 +191,9 @@ export interface ToolExecutionEvent {
   source: 'agent' | 'manual' | 'replay' | 'orchestrator' | 'context_inject' | 'user'
   exitCode?: number
   runCommandStatus?: string
+  command?: string
+  diagnostics?: CommandDiagnostic[]
+  diagnosticsCount?: number
 }
 
 export interface ToolDefinition {
@@ -385,6 +417,13 @@ export interface WorkflowSettingsPayload {
   requireBacklogApproval?: boolean
   requireCodeReview?: boolean
   requireDevVerification?: boolean
+  requireCleanLint?: boolean
+  requireBacklogRefinement?: boolean
+  maxRefinementRoundTrips?: number
+  maxSubtaskDepth?: number
+  maxSubtaskSpawns?: number
+  enableFixVerifyLoop?: boolean
+  maxFixVerifyRounds?: number
   requireToolApproval?: boolean
   toolApprovalTools?: string[]
   mcpServers?: McpServerConfig[]
@@ -554,6 +593,13 @@ export const DEFAULT_WORKFLOW_SETTINGS: WorkflowSettings = {
   requireBacklogApproval: false,
   requireCodeReview: false,
   requireDevVerification: false,
+  requireCleanLint: false,
+  requireBacklogRefinement: false,
+  maxRefinementRoundTrips: 3,
+  maxSubtaskDepth: 4,
+  maxSubtaskSpawns: 8,
+  enableFixVerifyLoop: false,
+  maxFixVerifyRounds: 3,
   requireToolApproval: false,
   toolApprovalTools: ['write_file', 'run_command', 'delete_file'],
   mcpServers: [],
@@ -584,7 +630,8 @@ export const EMPTY_BOARD: Board = {
 
 export function hasSprintWork(board: Board, settings?: WorkflowSettings): boolean {
   const lanes: BoardLane[] = ['Needs PO', 'In Progress', 'Backlog', 'QA']
-  if (settings?.requireCodeReview) lanes.splice(3, 0, 'Code Review')
+  if (settings?.requireBacklogRefinement) lanes.splice(2, 0, 'Refinement')
+  if (settings?.requireCodeReview) lanes.splice(lanes.indexOf('Backlog') + 1, 0, 'Code Review')
   return lanes.some((lane) => (board[lane]?.length ?? 0) > 0)
 }
 
@@ -595,6 +642,7 @@ export function getDisplayLanes(
   if (activeLanes && activeLanes.length > 0) return activeLanes
   const lanes: BoardLane[] = ['Backlog']
   if (settings?.requireBacklogApproval) lanes.push('Pending Approval')
+  if (settings?.requireBacklogRefinement) lanes.push('Refinement')
   lanes.push('In Progress', 'Needs PO', 'Needs User')
   if (settings?.requireCodeReview) lanes.push('Code Review')
   lanes.push('QA', 'Done')

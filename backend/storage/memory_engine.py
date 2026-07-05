@@ -110,26 +110,71 @@ class SemanticMemoryEngine:
         scored_records.sort(key=lambda x: x["score"], reverse=True)
         return scored_records[:limit]
 
-    def save(self, agent_id: str, content: str, category: str = "general") -> None:
+    def _scoped_agent_id(self, agent_id: str, project_id: Optional[str] = None) -> str:
+        from backend import state
+
+        pid = project_id or state.CURRENT_PROJECT_ID or "default-proj"
+        if agent_id.startswith(f"{pid}:"):
+            return agent_id
+        return f"{pid}:{agent_id}"
+
+    def save(
+        self,
+        agent_id: str,
+        content: str,
+        category: str = "general",
+        *,
+        project_id: Optional[str] = None,
+    ) -> None:
+        scoped = self._scoped_agent_id(agent_id, project_id)
         mem_id = str(uuid.uuid4())
         embedding = self._embed_ollama(content)
         embedding_json = json.dumps(embedding) if embedding else None
         with sqlite3.connect(self.db_path) as conn:
             conn.execute(
                 "INSERT INTO memories (id, agent_id, category, content, embedding) VALUES (?, ?, ?, ?, ?)",
-                (mem_id, agent_id, category, content, embedding_json),
+                (mem_id, scoped, category, content, embedding_json),
             )
             conn.commit()
 
-    def search(self, agent_id: str, query: str, limit: int = 3) -> List[Dict[str, Any]]:
+    def save_outcome(
+        self,
+        agent_id: str,
+        content: str,
+        category: str,
+        *,
+        project_id: Optional[str] = None,
+    ) -> None:
+        self.save(agent_id, content, category, project_id=project_id)
+
+    def search(
+        self,
+        agent_id: str,
+        query: str,
+        limit: int = 3,
+        *,
+        project_id: Optional[str] = None,
+    ) -> List[Dict[str, Any]]:
+        scoped = self._scoped_agent_id(agent_id, project_id)
         with sqlite3.connect(self.db_path) as conn:
             conn.row_factory = sqlite3.Row
             cursor = conn.cursor()
             cursor.execute(
                 "SELECT id, category, content, embedding, timestamp FROM memories WHERE agent_id = ?",
-                (agent_id,),
+                (scoped,),
             )
             records = cursor.fetchall()
+
+        if not records:
+            legacy = agent_id.split(":")[-1] if ":" in agent_id else agent_id
+            with sqlite3.connect(self.db_path) as conn:
+                conn.row_factory = sqlite3.Row
+                cursor = conn.cursor()
+                cursor.execute(
+                    "SELECT id, category, content, embedding, timestamp FROM memories WHERE agent_id = ?",
+                    (legacy,),
+                )
+                records = cursor.fetchall()
 
         if not records:
             return []

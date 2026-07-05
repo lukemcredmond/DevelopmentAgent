@@ -21,6 +21,7 @@ from backend.agents.task_context import (
 from backend.agents.tools import ToolRegistry
 from backend.services.logs import add_system_log
 from backend.agents.tool_outcomes import parse_run_command_exit
+from backend.services.diagnostics_parser import parse_command_diagnostics
 from backend.services.tool_execution_service import execute_tool
 from backend.services.workflow_settings import get_workflow_settings
 from backend.storage.memory_engine import SemanticMemoryEngine
@@ -104,7 +105,15 @@ class ScrumAgent:
         return self.system_prompt + self._get_skills_context()
 
     def _build_user_content(self, user_prompt: str) -> str:
-        related_memories = self.memory.search(self.role, user_prompt, limit=2)
+        from backend import state
+
+        project_id = state.CURRENT_PROJECT_ID or "default-proj"
+        related_memories = self.memory.search(
+            self.role,
+            user_prompt,
+            limit=3,
+            project_id=project_id,
+        )
         memory_context = ""
         if related_memories:
             memory_context = "\n=== RELEVANT HISTORICAL MEMORIES ===\n" + "\n".join(
@@ -301,15 +310,27 @@ class ScrumAgent:
                     }
                 )
             elif tool_name == "run_command":
-                exit_code, _ = parse_run_command_exit(tool_output)
-                if exit_code is not None and exit_code > 0:
+                exit_code, body = parse_run_command_exit(tool_output)
+                command = str(arguments.get("command") or "")
+                diagnostics = parse_command_diagnostics(command, body or tool_output)
+                if diagnostics:
+                    messages.append(
+                        {
+                            "role": "system",
+                            "content": (
+                                f"Command returned {len(diagnostics)} problems — fix each "
+                                "file:line listed above before re-running."
+                            ),
+                        }
+                    )
+                elif exit_code is not None and exit_code > 0:
                     messages.append(
                         {
                             "role": "system",
                             "content": (
                                 "Command completed with findings (non-zero exit). "
                                 "Fix listed issues with apply_patch/write_file, then re-run "
-                                "analyze once. Do not repeat the same command without making changes."
+                                "the lint command once. Do not repeat the same command without making changes."
                             ),
                         }
                     )
@@ -320,6 +341,12 @@ class ScrumAgent:
 
         configure_agent_tools()
         tools = self.registry.get_ollama_tools()
+        if not tools:
+            add_system_log(
+                self.role,
+                "error",
+                "No tools registered for this agent — check Workflow settings and restart the backend.",
+            )
         messages: List[ChatMessage] = [
             {"role": "system", "content": self._build_system_content()},
             {"role": "user", "content": self._build_user_content(user_prompt)},

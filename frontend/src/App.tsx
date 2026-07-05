@@ -19,6 +19,7 @@ import {
   moveTask,
   planAndRun,
   removeSkill,
+  escapeSubtaskLoop,
   reorderTasks,
   resetWorkspace,
   retryAgentStep,
@@ -228,7 +229,10 @@ export default function App() {
     setChatPinnedTask(task)
     setSelectedTask(null)
     setBottomTab('chat')
-    if (lane === 'Needs User' || lane === 'Needs PO') {
+    if (lane === 'Refinement') {
+      const status = task.refinementStatus ?? 'pending'
+      setChatAgent(status === 'dev_reviewed' ? 'po' : 'dev')
+    } else if (lane === 'Needs User' || lane === 'Needs PO') {
       setChatAgent('po')
     }
   }
@@ -694,6 +698,9 @@ export default function App() {
             onReorderBacklog={(taskIds) =>
               void withLoading(async () => handleState(await reorderTasks('Backlog', taskIds)))
             }
+            onReorderLane={(lane, taskIds) =>
+              void withLoading(async () => handleState(await reorderTasks(lane, taskIds)))
+            }
           />
         )}
 
@@ -873,6 +880,8 @@ export default function App() {
                       onRefreshState={() => void refresh()}
                       preferredSubTab={toolsPreferredSubTab}
                       workspaceDir={state.workspaceDir}
+                      sprintRunning={orchestratedActive}
+                      onOpenConsole={() => setBottomTab('console')}
                       onInjectToolEvidence={(taskId, payload) => handleInjectToolEvidence(taskId, payload)}
                     />
                   </div>
@@ -1003,13 +1012,17 @@ export default function App() {
           void withLoading(async () => {
             const lane = selectedTaskLane
             const agentId =
-              lane === 'Needs PO' || lane === 'Backlog'
-                ? 'po'
-                : lane === 'QA'
-                  ? 'qa'
-                  : lane === 'Code Review'
-                    ? 'cr'
-                    : 'dev'
+              lane === 'Refinement'
+                ? selectedTask?.refinementStatus === 'dev_reviewed'
+                  ? 'po'
+                  : 'dev'
+                : lane === 'Needs PO' || lane === 'Backlog'
+                  ? 'po'
+                  : lane === 'QA'
+                    ? 'qa'
+                    : lane === 'Code Review'
+                      ? 'cr'
+                      : 'dev'
             const data = await retryAgentStep({ taskId, agentId, mode, ollamaUrl })
             if (data.state) handleState(data.state)
             const updated = Object.values(data.state?.board ?? {})
@@ -1019,6 +1032,13 @@ export default function App() {
           })
         }
         onOpenModelTab={() => setBottomTab('model')}
+        maxRefinementRoundTrips={state.workflowSettings?.maxRefinementRoundTrips ?? 3}
+        onEscapeSubtasks={(taskId) =>
+          void withLoading(async () => {
+            handleState(await escapeSubtaskLoop(taskId, 'needs_po'))
+            setSelectedTask(null)
+          })
+        }
         onViewFileDiff={(path) =>
           void fetchFileDiff(path).then((d) =>
             setFileDiffModal({

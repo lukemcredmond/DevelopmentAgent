@@ -46,6 +46,8 @@ interface ToolsPanelProps {
   onRefreshState?: () => void
   preferredSubTab?: ToolsSubTab
   workspaceDir?: string
+  sprintRunning?: boolean
+  onOpenConsole?: () => void
   onInjectToolEvidence?: (
     taskId: string,
     payload: {
@@ -84,6 +86,9 @@ function toolEventBadge(ev: ToolExecutionEvent): { label: string; tone: 'ok' | '
 
 function runCommandSummaryLine(ev: ToolExecutionEvent): string | null {
   if (ev.toolName !== 'run_command' || ev.status === 'running') return null
+  if (ev.diagnosticsCount != null && ev.diagnosticsCount > 0) {
+    return `${ev.diagnosticsCount} finding${ev.diagnosticsCount === 1 ? '' : 's'} — fix file:line entries below.`
+  }
   if (
     ev.runCommandStatus?.startsWith('Findings') ||
     ev.runCommandStatus?.startsWith('Tests failed')
@@ -163,6 +168,8 @@ export default function ToolsPanel({
   onRefreshState,
   preferredSubTab,
   workspaceDir,
+  sprintRunning = false,
+  onOpenConsole,
   onInjectToolEvidence,
 }: ToolsPanelProps) {
   const [subTab, setSubTab] = useState<ToolsSubTab>(readToolsSubTab)
@@ -200,6 +207,8 @@ export default function ToolsPanel({
     }
   }, [subTab])
 
+  const [registryError, setRegistryError] = useState<string | null>(null)
+
   useEffect(() => {
     if (selectedTaskId) {
       setTaskIdInput(selectedTaskId)
@@ -209,15 +218,25 @@ export default function ToolsPanel({
 
   useEffect(() => {
     let cancelled = false
+    setRegistryError(null)
     void fetchToolRegistry(agentId)
       .then((data) => {
         if (cancelled) return
-        setTools(data.tools ?? [])
-        const first = data.tools?.[0]?.name ?? ''
-        setSelectedTool((prev) => (data.tools?.some((t) => t.name === prev) ? prev : first))
+        const loaded = data.tools ?? []
+        setTools(loaded)
+        if (loaded.length === 0) {
+          setRegistryError('No tools returned — restart the backend or check Workflow settings.')
+        }
+        const first = loaded[0]?.name ?? ''
+        setSelectedTool((prev) => (loaded.some((t) => t.name === prev) ? prev : first))
       })
-      .catch(() => {
-        if (!cancelled) setTools([])
+      .catch((err) => {
+        if (!cancelled) {
+          setTools([])
+          setRegistryError(
+            err instanceof Error ? err.message : 'Failed to load tool registry from /api/tools/registry',
+          )
+        }
       })
     return () => {
       cancelled = true
@@ -459,6 +478,24 @@ export default function ToolsPanel({
           >
             {filtered.length === 0 && (
               <p className="text-cat-overlay text-center py-8">
+                {sprintRunning && toolEvents.length === 0 && (
+                  <span className="block mb-3 text-amber-200/90">
+                    Sprint is active but no tools logged yet — the agent may still be thinking, or
+                    check{' '}
+                    {onOpenConsole ? (
+                      <button
+                        type="button"
+                        onClick={onOpenConsole}
+                        className="text-indigo-400 hover:text-indigo-300 underline"
+                      >
+                        Console
+                      </button>
+                    ) : (
+                      'Console'
+                    )}{' '}
+                    for system logs.
+                  </span>
+                )}
                 {filter === 'work' || filter === 'agent' ? (
                   <>
                     No agent tool calls yet this session — Context preload events are hidden by default.
@@ -545,6 +582,13 @@ export default function ToolsPanel({
                       </span>
                     )}
                     <span className="text-indigo-300 font-bold">{ev.toolName}</span>
+                    {ev.toolName === 'run_command' &&
+                      ev.diagnosticsCount != null &&
+                      ev.diagnosticsCount > 0 && (
+                        <span className="text-[9px] font-bold uppercase px-1.5 py-0.5 rounded shrink-0 bg-amber-900/60 text-amber-200">
+                          {ev.diagnosticsCount} finding{ev.diagnosticsCount === 1 ? '' : 's'}
+                        </span>
+                      )}
                     <span className="text-cat-overlay text-[10px]">{ev.agent}</span>
                     <span className="text-cat-overlay text-[10px] uppercase">{sourceDisplayLabel(ev.source)}</span>
                     {ev.durationMs != null && ev.durationMs > 0 && (
@@ -576,6 +620,24 @@ export default function ToolsPanel({
                           <pre className="text-[10px] text-cat-subtext whitespace-pre-wrap break-all bg-black/20 p-2 rounded max-h-32 overflow-y-auto">
                             {JSON.stringify(ev.toolArgs, null, 2)}
                           </pre>
+                        </div>
+                      )}
+                      {ev.diagnostics != null && ev.diagnostics.length > 0 && (
+                        <div>
+                          <p className="text-[9px] uppercase text-cat-overlay mb-1">
+                            Diagnostics ({ev.diagnostics.length})
+                          </p>
+                          <ul className="text-[10px] text-cat-subtext space-y-1 max-h-40 overflow-y-auto bg-black/20 p-2 rounded">
+                            {ev.diagnostics.map((diag, index) => (
+                              <li key={`${diag.file}:${diag.line}:${index}`} className="break-all">
+                                <span className="text-amber-200">{diag.file}:{diag.line}</span>{' '}
+                                <span className="uppercase text-[9px] text-cat-overlay">
+                                  {diag.severity}
+                                </span>{' '}
+                                {diag.message}
+                              </li>
+                            ))}
+                          </ul>
                         </div>
                       )}
                       <div>
@@ -624,6 +686,9 @@ export default function ToolsPanel({
           )}
           {runnerError && (
             <p className="text-rose-300 mb-3 text-[10px] font-mono">{runnerError}</p>
+          )}
+          {registryError && (
+            <p className="text-amber-300 mb-3 text-[10px]">{registryError}</p>
           )}
           <div className="grid grid-cols-1 md:grid-cols-2 gap-3 max-w-3xl">
             <label className="flex flex-col gap-1">

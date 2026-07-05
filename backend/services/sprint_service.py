@@ -22,6 +22,7 @@ from backend.agents.task_context import (
     init_new_task,
     next_claimable_backlog_task,
     next_po_planning_backlog_task,
+    next_refinement_task,
     normalize_acceptance_criteria,
     normalize_task,
     publish_activity,
@@ -58,6 +59,7 @@ from backend.services.tool_execution_service import log_synthetic_tool_event
 from backend.workspace.files import (
     build_sprint_file_context,
     derive_project_test_commands,
+    derive_project_lint_command,
     run_agent_command,
     write_workspace_file,
 )
@@ -74,6 +76,8 @@ _HANDLER_AGENT: Dict[str, str] = {
     "dev": "Developer",
     "cr": "Code Reviewer",
     "qa": "QA Tester",
+    "refinement_dev": "Developer",
+    "refinement_po": "Product Owner",
     "needs_user": "System",
     "blocked": "System",
     "idle": "System",
@@ -375,6 +379,9 @@ def _mark_sprint_step_start() -> str:
     ts = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
     state.SPRINT_STEP_STARTED_AT = ts
     state.STEP_FILE_READS.clear()
+    from backend.services.tool_cache import clear_tool_cache
+
+    clear_tool_cache()
     return ts
 
 
@@ -502,6 +509,10 @@ def qa_gate_blocks_done(task: Dict[str, Any]) -> tuple[bool, str]:
         return True, "Automated test playbook failed — cannot move to Done."
     if not _qa_has_test_evidence(task, evidence, step_started):
         return True, "No test evidence — run_test or run_command must succeed before Done."
+    if get_workflow_settings().get("requireCleanLint"):
+        diagnostics = task.get("lastCommandDiagnostics") or []
+        if diagnostics:
+            return True, f"Unresolved lint ({len(diagnostics)} issues) — fix before Done."
     return False, ""
 
 
@@ -519,15 +530,16 @@ def _playbook_outcome_label(outcome: str) -> str:
 
 def _run_qa_test_playbook(task_id: str) -> Dict[str, Any]:
     """Run project test commands before the QA agent evaluates."""
-    from backend.agents.tool_outcomes import classify_run_command
+    from backend.services.command_result import format_command_result_for_agent, run_workspace_command
 
     commands = derive_project_test_commands()
     results: List[Dict[str, Any]] = []
     all_passed = True
 
     for cmd in commands:
-        output = run_agent_command(cmd)
-        outcome = classify_run_command(cmd, output)
+        cmd_result = run_workspace_command(cmd)
+        output = format_command_result_for_agent(cmd_result)
+        outcome = cmd_result.outcome
         tool_success = outcome != "execution_failed"
         if _playbook_item_failed(outcome):
             all_passed = False
@@ -537,6 +549,7 @@ def _run_qa_test_playbook(task_id: str) -> Dict[str, Any]:
                 "success": outcome == "ok",
                 "outcome": outcome,
                 "output": output[:1500],
+                "diagnosticsCount": len(cmd_result.diagnostics),
             }
         )
         log_synthetic_tool_event(
@@ -613,11 +626,47 @@ def inject_tool_evidence_for_task(
     return result
 
 
-def _dev_has_verification(task: Dict[str, Any], step_started: str) -> bool:
+def _dev_verification_status(task: Dict[str, Any], step_started: str) -> str:
+    """Return none | ran_with_findings | clean for dev verification this step."""
+    if task.get("lastCommandDiagnostics"):
+        return "ran_with_findings"
+
+    saw_command = False
     for entry in _transcript_entries_since(task, step_started):
-        if entry.get("toolName") in ("run_test", "run_command") and entry.get("toolSuccess") is not False:
-            return True
-    return False
+        if entry.get("toolName") not in ("run_test", "run_command"):
+            continue
+        if entry.get("toolSuccess") is False:
+            return "ran_with_findings"
+        saw_command = True
+        output = str(entry.get("toolOutput") or entry.get("content") or "")
+        if "[findings exit" in output.lower():
+            return "ran_with_findings"
+
+    if saw_command:
+        return "clean"
+    return "none"
+
+
+def _dev_has_verification(task: Dict[str, Any], step_started: str) -> bool:
+    return _dev_verification_status(task, step_started) != "none"
+
+
+def dev_gate_blocks_advance(task: Dict[str, Any]) -> tuple[bool, str]:
+    """Block dev board advance when subtasks pending or lint unresolved."""
+    from backend.services.subtask_service import subtask_gate_blocks_advance
+
+    blocked, reason = subtask_gate_blocks_advance(task)
+    if blocked:
+        return blocked, reason
+    if not get_workflow_settings().get("requireCleanLint"):
+        return False, ""
+    diagnostics = task.get("lastCommandDiagnostics") or []
+    if diagnostics:
+        return True, f"Unresolved lint: {len(diagnostics)} problem(s) — fix before advancing."
+    status = _dev_verification_status(task, state.SPRINT_STEP_STARTED_AT or "")
+    if status == "ran_with_findings":
+        return True, "Lint/test command reported findings — resolve before advancing."
+    return False, ""
 
 
 def _audit_dev_verification(task: Dict[str, Any], lane_before: str, task_id: str, step_started: str) -> None:
@@ -631,6 +680,15 @@ def _audit_dev_verification(task: Dict[str, Any], lane_before: str, task_id: str
     if not files or not _task_has_work_files(task):
         return
     if _dev_has_verification(task, step_started):
+        status = _dev_verification_status(task, step_started)
+        if status == "ran_with_findings" and get_workflow_settings().get("requireCleanLint"):
+            add_system_log(
+                "Developer",
+                "warning",
+                f"'{task.get('title', task_id)}' has lint findings — requireCleanLint enabled; "
+                "moving back to In Progress",
+            )
+            move_board_stage(task_id, "In Progress")
         return
     add_system_log(
         "Developer",
@@ -990,6 +1048,174 @@ def _apply_po_clarification_result(active_task: Dict[str, Any], result: str) -> 
     return True
 
 
+def _apply_refinement_dev_result(task: Dict[str, Any], result: str) -> bool:
+    """Parse dev refinement JSON and update task fields."""
+    obj = extract_json_object_from_text(result)
+    if not obj:
+        return False
+    ready = bool(obj.get("ready"))
+    questions = obj.get("questions") or []
+    if isinstance(questions, str):
+        questions = [questions]
+    notes = coerce_task_text(obj.get("explorationNotes") or obj.get("exploration_notes") or "")
+    task["refinementDevReady"] = ready
+    task["refinementQuestions"] = [
+        coerce_task_text(q).strip() for q in questions if coerce_task_text(q).strip()
+    ]
+    if notes:
+        existing = coerce_task_text(task.get("refinementNotes") or "")
+        task["refinementNotes"] = f"{existing}\n{notes}".strip() if existing else notes
+    task["refinementStatus"] = "dev_reviewed"
+    task["refinementRoundTrips"] = int(task.get("refinementRoundTrips") or 0) + 1
+    record_task_decision(
+        task["id"],
+        "Developer",
+        "refinement_dev",
+        "Ready for implementation" if ready else f"{len(task['refinementQuestions'])} question(s)",
+        result[:500],
+    )
+    return True
+
+
+def _run_refinement_dev_review(active_task: Dict[str, Any], brief: str) -> None:
+    task_id = active_task["id"]
+    lane_before = get_task_lane(task_id) or "Refinement"
+    ws = get_workflow_settings()
+    max_rounds = int(ws.get("maxRefinementRoundTrips") or 3)
+    set_active_sprint_context(task_id, "Developer")
+    state.REFINEMENT_MODE = True
+    add_system_log("Developer", "info", f"Refinement review for '{active_task['title']}'…")
+    questions_block = ""
+    if active_task.get("refinementQuestions"):
+        qs = "\n".join(f"- {q}" for q in active_task["refinementQuestions"])
+        questions_block = f"\nPrevious questions (PO may have updated AC):\n{qs}\n"
+    prompt = (
+        build_task_prompt(active_task, brief)
+        + questions_block
+        + "\nREFINEMENT ONLY — do not implement. Explore the codebase with read-only tools "
+        "(read_file, grep, glob_file_search, search_code, git_status, git_diff). "
+        "Do NOT use write_file, apply_patch, run_command, or git_commit.\n"
+        "Reply with a JSON object:\n"
+        '{"ready": true} when acceptance criteria are sufficient to implement, OR\n'
+        '{"ready": false, "questions": ["..."], "explorationNotes": "..."} when clarification is needed.\n'
+        "If blocked after repeated rounds, use update_board to move to 'Needs PO'."
+    )
+    try:
+        result = agent_dev.execute_step(prompt, max_iterations=_llm_iterations())
+    finally:
+        state.REFINEMENT_MODE = False
+
+    with state.STATE_LOCK:
+        task = find_task_by_id(task_id)
+        if not task:
+            return
+        if result == "SIMULATION_FALLBACK":
+            task["refinementDevReady"] = True
+            task["refinementStatus"] = "dev_reviewed"
+            task["refinementRoundTrips"] = int(task.get("refinementRoundTrips") or 0) + 1
+        else:
+            record_task_decision(task_id, "Developer", "refinement_dev", result[:500], result)
+            if not _apply_refinement_dev_result(task, result):
+                add_system_log(
+                    "Developer",
+                    "warning",
+                    f"Refinement review incomplete for '{task['title']}' — missing JSON",
+                )
+        rounds = int(task.get("refinementRoundTrips") or 0)
+        if (
+            not task.get("refinementDevReady")
+            and rounds >= max_rounds
+            and _task_in_lane(task_id, "Refinement")
+        ):
+            move_board_stage(task_id, "Needs PO")
+            task["refinementStatus"] = "blocked"
+            record_task_decision(
+                task_id,
+                "System",
+                "escalation",
+                f"Max refinement rounds ({max_rounds}) — escalated to PO",
+            )
+            publish_activity(
+                task_id,
+                "refinement_escalated",
+                "Max refinement rounds reached — moved to Needs PO",
+                role="assistant",
+                agent="System",
+                lane="Needs PO",
+            )
+        _check_stuck_and_escalate(task_id, lane_before)
+
+
+def _run_refinement_po_update(active_task: Dict[str, Any], brief: str) -> None:
+    task_id = active_task["id"]
+    lane_before = get_task_lane(task_id) or "Refinement"
+    set_active_sprint_context(task_id, "Product Owner")
+    add_system_log("Product Owner", "info", f"Refinement update for '{active_task['title']}'…")
+    questions = active_task.get("refinementQuestions") or []
+    q_block = "\n".join(f"- {q}" for q in questions) if questions else "(none listed)"
+    dev_ready = bool(active_task.get("refinementDevReady"))
+    prompt = (
+        build_task_prompt(active_task, brief)
+        + f"\nDeveloper refinement questions:\n{q_block}\n"
+        + f"Developer marked ready: {dev_ready}\n"
+        "Update description and acceptance criteria. Reply with JSON: "
+        '{"description": "...", "acceptanceCriteria": ["..."], "briefAddition": "..."}\n'
+        "Use add_backlog_tasks to split scope if needed. "
+        "Use add_subtasks with executionOrder to define an ordered todo list under this card. "
+        "Or include executionPlan in JSON: "
+        '[{"title": "...", "description": "...", "acceptanceCriteria": ["..."], "order": 1}, ...]\n'
+        "When refinement is complete and the card is ready for implementation, "
+        "use update_board to move to 'Backlog'."
+    )
+    result = agent_po.execute_step(prompt, max_iterations=_llm_iterations())
+
+    with state.STATE_LOCK:
+        task = find_task_by_id(task_id)
+        if not task:
+            return
+        clarified = False
+        if result == "SIMULATION_FALLBACK":
+            clarified = True
+        else:
+            record_task_decision(task_id, "Product Owner", "refinement_po", result[:500], result)
+            clarified = _apply_po_clarification_result(task, result)
+            obj = extract_json_object_from_text(result)
+            if obj and isinstance(obj.get("executionPlan"), list):
+                from backend.services.subtask_service import apply_execution_plan
+
+                apply_execution_plan(task_id, obj["executionPlan"])
+        task["refinementStatus"] = "po_updated"
+        if not clarified:
+            add_system_log(
+                "Product Owner",
+                "warning",
+                f"Refinement PO update incomplete for '{task['title']}'",
+            )
+        if _task_in_lane(task_id, "Refinement") and task.get("refinementDevReady"):
+            task["refinementComplete"] = True
+            task["refinementStatus"] = "ready"
+            move_board_stage(task_id, "Backlog")
+            sort_backlog()
+            publish_activity(
+                task_id,
+                "refinement_complete",
+                "Refinement complete — task moved to Backlog",
+                role="assistant",
+                agent="Product Owner",
+                lane="Backlog",
+            )
+        elif _task_in_lane(task_id, "Backlog") and task.get("refinementComplete"):
+            publish_activity(
+                task_id,
+                "refinement_complete",
+                "PO marked refinement complete",
+                role="assistant",
+                agent="Product Owner",
+                lane="Backlog",
+            )
+        _check_stuck_and_escalate(task_id, lane_before)
+
+
 def _run_po_clarification(active_task: Dict[str, Any], brief: str) -> None:
     task_id = active_task["id"]
     lane_before = get_task_lane(task_id) or "Needs PO"
@@ -1016,15 +1242,32 @@ def _run_po_clarification(active_task: Dict[str, Any], brief: str) -> None:
             clarified = _apply_po_clarification_result(task, result)
         if _task_in_lane(task_id, "Needs PO"):
             if clarified:
-                move_board_stage(task_id, "In Progress")
-                publish_activity(
-                    task_id,
-                    "po_clarified",
-                    "PO clarified requirements and returned task to Dev",
-                    role="assistant",
-                    agent="Product Owner",
-                    lane="In Progress",
-                )
+                ws = get_workflow_settings()
+                if (
+                    ws.get("requireBacklogRefinement")
+                    and int(task.get("refinementRoundTrips") or 0) > 0
+                    and not task.get("refinementComplete")
+                ):
+                    move_board_stage(task_id, "Refinement")
+                    task["refinementStatus"] = "po_updated"
+                    publish_activity(
+                        task_id,
+                        "po_clarified",
+                        "PO clarified refinement blockers — returned to Refinement",
+                        role="assistant",
+                        agent="Product Owner",
+                        lane="Refinement",
+                    )
+                else:
+                    move_board_stage(task_id, "In Progress")
+                    publish_activity(
+                        task_id,
+                        "po_clarified",
+                        "PO clarified requirements and returned task to Dev",
+                        role="assistant",
+                        agent="Product Owner",
+                        lane="In Progress",
+                    )
             else:
                 add_system_log(
                     "Product Owner",
@@ -1041,6 +1284,8 @@ def _run_developer_step(active_task: Dict[str, Any], brief: str) -> None:
     set_active_sprint_context(task_id, "Developer")
     add_system_log("Developer", "info", f"Implementing '{active_task['title']}'…")
     target = _dev_complete_lane()
+    lint_cmd = derive_project_lint_command()
+    lint_hint = f" (e.g. '{lint_cmd}')" if lint_cmd else ""
     instructions = (
         "Registered tools: read_file, write_file, apply_patch, run_command, update_board, "
         "grep, glob_file_search, git_status, git_diff, git_commit, search_code. "
@@ -1050,17 +1295,24 @@ def _run_developer_step(active_task: Dict[str, Any], brief: str) -> None:
         "Implement using apply_patch and write_file. "
         "Read each tool result before calling update_board — if write_file or apply_patch fails, "
         "try a different path or approach (do not repeat the same failing arguments). "
-        "For Flutter/Dart use run_command with command 'flutter analyze'. "
-        "If analyze returns issues (non-zero exit), fix them with apply_patch/write_file — "
-        "do NOT re-run the same analyze command without fixing code first. "
-        "Analyze findings are not a reason to move to Needs User. "
+        f"Use run_command with the project lint command{lint_hint}. "
+        "Findings are expected — fix each file:line listed in the Problems section, "
+        "don't treat lint output as a tool failure. "
+        "Do NOT re-run the same lint command without fixing code first. "
         "Unclear requirements → move to 'Needs PO'. "
         "User-only decisions (keys, design) → move to 'Needs User' with a specific userQuestion. "
         f"When complete and files are written → move to '{target}'."
         f"{_autonomous_instruction_suffix()}"
     )
     prompt = _inject_sprint_context(active_task, brief, "Developer", instructions)
-    result = agent_dev.execute_step(prompt, max_iterations=_llm_iterations())
+    from backend.services.fix_verify_loop import run_fix_verify_loop
+
+    result = run_fix_verify_loop(
+        agent_dev,
+        active_task,
+        prompt,
+        max_iterations=_llm_iterations(),
+    )
 
     with state.STATE_LOCK:
         task = find_task_by_id(task_id)
@@ -1097,8 +1349,12 @@ def _run_developer_step(active_task: Dict[str, Any], brief: str) -> None:
                 else:
                     fresh = find_task_by_id(task_id)
                     if fresh and _task_has_work_files(fresh):
-                        clear_qa_failure(task_id)
-                        move_board_stage(task_id, target)
+                        blocked, reason = dev_gate_blocks_advance(fresh)
+                        if blocked:
+                            add_system_log("Developer", "warning", f"{task_id}: {reason}")
+                        else:
+                            clear_qa_failure(task_id)
+                            move_board_stage(task_id, target)
                     elif fresh:
                         add_system_log(
                             "Developer",
@@ -1207,9 +1463,13 @@ def _run_qa_step(active_task: Dict[str, Any], brief: str) -> None:
 
 def _sprint_lanes_active() -> List[str]:
     ws = get_workflow_settings()
-    lanes = ["Needs PO", "In Progress", "Backlog", "QA"]
+    lanes = ["Needs PO", "In Progress"]
+    if ws.get("requireBacklogRefinement"):
+        lanes.append("Refinement")
+    lanes.append("Backlog")
     if ws.get("requireCodeReview"):
-        lanes.insert(3, "Code Review")
+        lanes.insert(lanes.index("Backlog") + 1, "Code Review")
+    lanes.append("QA")
     return lanes
 
 
@@ -1239,6 +1499,14 @@ def run_sprint_step(brief: str, ollama_url: str) -> None:
         elif state.SHARED_BOARD.get("In Progress"):
             active_task = dict(state.SHARED_BOARD["In Progress"][0])
             handler = "dev"
+        elif get_workflow_settings().get("requireBacklogRefinement") and state.SHARED_BOARD.get("Refinement"):
+            task = next_refinement_task()
+            if task:
+                active_task = dict(task)
+                status = str(task.get("refinementStatus") or "pending")
+                handler = "refinement_po" if status == "dev_reviewed" else "refinement_dev"
+            else:
+                handler = "idle"
         elif state.SHARED_BOARD.get("Backlog"):
             task = next_claimable_backlog_task()
             if task:
@@ -1294,6 +1562,10 @@ def run_sprint_step(brief: str, ollama_url: str) -> None:
             add_system_log("System", "info", "Feature waiting in Needs User — resolve via UI.")
         elif handler == "dev" and active_task:
             _run_developer_step(active_task, brief)
+        elif handler == "refinement_dev" and active_task:
+            _run_refinement_dev_review(active_task, brief)
+        elif handler == "refinement_po" and active_task:
+            _run_refinement_po_update(active_task, brief)
         elif handler == "blocked":
             with state.STATE_LOCK:
                 blocked = [t for t in state.SHARED_BOARD["Backlog"] if not task_dependencies_met(t)]

@@ -11,6 +11,7 @@ from backend.services.logs import add_system_log
 from backend.services.workflow_settings import get_workflow_settings
 
 _REGISTERED_MCP_TOOLS: List[str] = []
+_MCP_TOOL_INSTANCES: List[Tool] = []
 _MCP_CLIENTS: Dict[str, "_McpStdioClient"] = {}
 _LOCK = threading.Lock()
 
@@ -133,9 +134,21 @@ def clear_mcp_tools() -> None:
             for name in list(_REGISTERED_MCP_TOOLS):
                 agent.registry._tools.pop(name, None)
         _REGISTERED_MCP_TOOLS.clear()
+        _MCP_TOOL_INSTANCES.clear()
         for client in _MCP_CLIENTS.values():
             client.close()
         _MCP_CLIENTS.clear()
+
+
+def reregister_mcp_tools_on_agents() -> int:
+    """Re-attach cached MCP tools after configure_agent_tools clears registries."""
+    with _LOCK:
+        if not _MCP_TOOL_INSTANCES:
+            return 0
+        for tool in _MCP_TOOL_INSTANCES:
+            for agent in ALL_AGENTS:
+                agent.registry.register(tool)
+        return len(_MCP_TOOL_INSTANCES)
 
 
 def register_mcp_tools_from_settings() -> int:
@@ -180,6 +193,7 @@ def register_mcp_tools_from_settings() -> int:
                 for agent in ALL_AGENTS:
                     agent.register_tool(tool)
                 _REGISTERED_MCP_TOOLS.append(reg_name)
+                _MCP_TOOL_INSTANCES.append(tool)
                 count += 1
             add_system_log("System", "success", f"MCP '{name}': registered {len(client.list_tools())} tool(s)")
         except Exception as exc:
