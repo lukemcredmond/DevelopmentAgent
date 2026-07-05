@@ -1,7 +1,7 @@
 import { useCallback, useEffect, useRef, useState } from 'react'
 import { cancelSprint, fetchState, runSprint, subscribeEvents } from '../api/client'
-import type { AppState, SystemLog } from '../types'
-import { EMPTY_BOARD } from '../types'
+import type { ActivityEvent, AppState, Board, SystemLog } from '../types'
+import { EMPTY_BOARD, hasSprintWork } from '../types'
 
 const defaultState: AppState = {
   projectId: '',
@@ -23,10 +23,20 @@ const defaultState: AppState = {
   projectsList: [],
 }
 
+const MAX_ACTIVITY = 200
+
+function patchBoardFromEvent(data: unknown, prev: AppState): AppState | null {
+  if (!data || typeof data !== 'object') return null
+  const payload = data as { board?: Board }
+  if (!payload.board) return null
+  return { ...prev, board: payload.board }
+}
+
 export function useAppState() {
   const [state, setState] = useState<AppState>(defaultState)
   const [loading, setLoading] = useState(false)
   const [error, setError] = useState<string | null>(null)
+  const [activityEvents, setActivityEvents] = useState<ActivityEvent[]>([])
 
   const refresh = useCallback(async () => {
     try {
@@ -47,6 +57,10 @@ export function useAppState() {
     setState((prev) => ({ ...prev, logs: [...prev.logs, log] }))
   }, [])
 
+  const appendActivity = useCallback((event: ActivityEvent) => {
+    setActivityEvents((prev) => [...prev.slice(-(MAX_ACTIVITY - 1)), event])
+  }, [])
+
   useEffect(() => {
     void refresh()
   }, [refresh])
@@ -57,15 +71,19 @@ export function useAppState() {
         setState(event.data as AppState)
       } else if (event.type === 'log' && event.data) {
         appendLog(event.data as SystemLog)
-      } else if (event.type === 'board' || event.type === 'files') {
+      } else if (event.type === 'board') {
+        setState((prev) => patchBoardFromEvent(event.data, prev) ?? prev)
+      } else if (event.type === 'files') {
         void refresh()
-      } else if (event.type === 'sprint' && event.data) {
+      } else if (event.type === 'sprint') {
         void refresh()
+      } else if (event.type === 'activity' && event.data) {
+        appendActivity(event.data as ActivityEvent)
       }
     })
 
     return () => source.close()
-  }, [refresh, appendLog])
+  }, [refresh, appendLog, appendActivity])
 
   return {
     state,
@@ -77,20 +95,31 @@ export function useAppState() {
     refresh,
     applyState,
     appendLog,
+    activityEvents,
+    appendActivity,
   }
 }
 
 export function useAutoSprint(
   brief: string,
   ollamaUrl: string,
+  board: AppState['board'],
+  workflowSettings: AppState['workflowSettings'],
   onState: (s: AppState) => void,
 ) {
   const [autoSprint, setAutoSprint] = useState(false)
+  const [autoSprintPaused, setAutoSprintPaused] = useState(false)
   const [sprintRunning, setSprintRunning] = useState(false)
   const cancelRef = useRef<AbortController | null>(null)
+  const backlogLenRef = useRef(board.Backlog?.length ?? 0)
 
   const startAutoSprint = useCallback(async () => {
-    setAutoSprint(true)
+    if (!hasSprintWork(board, workflowSettings)) {
+      setAutoSprintPaused(true)
+      return
+    }
+
+    setAutoSprintPaused(false)
     setSprintRunning(true)
     cancelRef.current = new AbortController()
 
@@ -99,18 +128,22 @@ export function useAutoSprint(
         brief,
         ollama_url: ollamaUrl,
         auto: true,
-        max_steps: 20,
+        max_steps: workflowSettings?.maxSprintSteps ?? 20,
       })
       onState(data)
+      if (data.lastSprintSummary?.status === 'idle') {
+        setAutoSprintPaused(true)
+      }
     } catch {
       /* sprint may be cancelled or endpoint unavailable */
     } finally {
       setSprintRunning(false)
     }
-  }, [brief, ollamaUrl, onState])
+  }, [brief, ollamaUrl, board, workflowSettings, onState])
 
   const stopAutoSprint = useCallback(async () => {
     setAutoSprint(false)
+    setAutoSprintPaused(false)
     cancelRef.current?.abort()
     try {
       await cancelSprint()
@@ -121,20 +154,35 @@ export function useAutoSprint(
   }, [])
 
   useEffect(() => {
-    if (!autoSprint) return
+    if (!autoSprint || autoSprintPaused) return
 
     const interval = window.setInterval(() => {
-      if (!sprintRunning) {
+      if (!sprintRunning && hasSprintWork(board, workflowSettings)) {
         void startAutoSprint()
       }
     }, 5000)
 
     return () => window.clearInterval(interval)
-  }, [autoSprint, sprintRunning, startAutoSprint])
+  }, [autoSprint, autoSprintPaused, sprintRunning, board, workflowSettings, startAutoSprint])
+
+  useEffect(() => {
+    const currentLen = board.Backlog?.length ?? 0
+    if (
+      autoSprint &&
+      autoSprintPaused &&
+      currentLen > backlogLenRef.current &&
+      hasSprintWork(board, workflowSettings)
+    ) {
+      setAutoSprintPaused(false)
+      void startAutoSprint()
+    }
+    backlogLenRef.current = currentLen
+  }, [board.Backlog?.length, autoSprint, autoSprintPaused, board, workflowSettings, startAutoSprint])
 
   return {
     autoSprint,
     setAutoSprint,
+    autoSprintPaused,
     sprintRunning,
     startAutoSprint,
     stopAutoSprint,

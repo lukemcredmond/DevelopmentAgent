@@ -8,7 +8,7 @@ from fastapi.staticfiles import StaticFiles
 from backend.api import board, chat, files, git, ollama, projects, skills, sprint, state as state_routes, terminal
 from backend.config import CORS_ORIGINS, FRONTEND_DIST
 
-app = FastAPI(title="OpenHands Local Scrum Engine", version="1.0.0")
+app = FastAPI(title="All Hands Local Scrum Engine", version="1.0.0")
 
 app.add_middleware(
     CORSMiddleware,

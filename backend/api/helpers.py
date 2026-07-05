@@ -42,4 +42,5 @@ def build_state_response() -> dict:
         "briefChangelog": state.storage.get_brief_changelog(state.CURRENT_PROJECT_ID, limit=50),
         "lastSprintSummary": get_last_sprint_summary(),
         "notifications": build_workflow_notifications(),
+        "chatMessages": state.storage.get_chat_messages(state.CURRENT_PROJECT_ID, limit=100),
     }

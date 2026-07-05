@@ -16,6 +16,7 @@ interface SidebarProps {
   loading: boolean
   ollamaOk: boolean | null
   autoSprint: boolean
+  autoSprintPaused?: boolean
   sprintRunning: boolean
   isDark: boolean
   onOllamaUrlChange: (v: string) => void
@@ -67,6 +68,7 @@ export default function Sidebar({
   loading,
   ollamaOk,
   autoSprint,
+  autoSprintPaused = false,
   sprintRunning,
   isDark,
   onOllamaUrlChange,
@@ -127,7 +129,7 @@ export default function Sidebar({
               <i className="fa-solid fa-code-merge text-xl" />
             </div>
             <div>
-              <h1 className="font-bold text-lg text-white">OpenHands</h1>
+              <h1 className="font-bold text-lg text-white">All Hands</h1>
               <p className="text-xs text-cat-subtext">Multi-Agent Workspace</p>
             </div>
           </div>
@@ -430,6 +432,11 @@ export default function Sidebar({
                 </button>
               )}
             </div>
+            {autoSprint && autoSprintPaused && !sprintRunning && (
+              <p className="text-[10px] text-amber-400/90 italic">
+                Paused — waiting for backlog work
+              </p>
+            )}
           </div>
         </div>
       </div>

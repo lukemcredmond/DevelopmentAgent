@@ -73,6 +73,9 @@ export default function TaskDetailModal({
             <p className="text-[10px] text-indigo-300 font-mono mt-0.5">
               {task.id} · {task.status}
               {task.priority != null && ` · P${task.priority}`}
+              {(task.poRoundTrips ?? 0) > 0 && (
+                <span className="ml-2 text-amber-400">PO↔Dev ×{task.poRoundTrips}</span>
+              )}
             </p>
           </div>
           <div className="flex items-center gap-2">
@@ -227,7 +230,7 @@ export default function TaskDetailModal({
           <h4 className="text-xs font-bold uppercase tracking-wider text-cat-subtext pt-2">
             Agent Decisions ({decisions.length})
           </h4>
-          <div className="overflow-y-auto space-y-2 flex-1 max-h-32 pr-1">
+          <div className="overflow-y-auto space-y-2 flex-1 min-h-[80px] max-h-40 pr-1">
             {decisions.map((d, i) => (
               <div key={i} className="bg-cat-base border border-cat-surface1 rounded-lg p-2 text-[11px]">
                 <div className="flex justify-between text-[10px] text-cat-overlay mb-1">
@@ -235,6 +238,9 @@ export default function TaskDetailModal({
                   <span>{d.timestamp}</span>
                 </div>
                 <p className="text-white">{d.summary}</p>
+                {d.detail && (
+                  <p className="text-cat-subtext mt-1 whitespace-pre-wrap text-[10px]">{d.detail}</p>
+                )}
               </div>
             ))}
           </div>
@@ -242,10 +248,13 @@ export default function TaskDetailModal({
           <h4 className="text-xs font-bold uppercase tracking-wider text-cat-subtext pt-2">
             Transcript ({transcript.length})
           </h4>
-          <div className="overflow-y-auto max-h-24 space-y-1">
+          <div className="overflow-y-auto flex-1 min-h-[100px] max-h-48 space-y-2 pr-1">
             {transcript.map((entry, i) => (
-              <div key={i} className="text-[10px] font-mono text-cat-subtext truncate">
-                [{entry.timestamp}] {entry.agent}: {entry.content}
+              <div key={i} className="text-[10px] font-mono text-cat-subtext bg-cat-base border border-cat-surface1 rounded p-2">
+                <div className="text-cat-overlay mb-0.5">
+                  [{entry.timestamp}] {entry.agent ?? entry.role}
+                </div>
+                <p className="whitespace-pre-wrap">{entry.content}</p>
               </div>
             ))}
           </div>

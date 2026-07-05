@@ -16,6 +16,7 @@ import type {
   ProjectSummary,
   SkillsResponse,
   SkillPayload,
+  BulkSkillPayload,
   SprintRunPayload,
   TerminalRunPayload,
   TerminalRunResponse,
@@ -128,6 +129,13 @@ export async function fetchSkills(): Promise<SkillsResponse> {
 
 export async function assignSkill(payload: SkillPayload): Promise<AppState> {
   return request<AppState>('/api/assign-skill', {
+    method: 'POST',
+    body: JSON.stringify(payload),
+  })
+}
+
+export async function assignSkills(payload: BulkSkillPayload): Promise<AppState> {
+  return request<AppState>('/api/assign-skills', {
     method: 'POST',
     body: JSON.stringify(payload),
   })
@@ -390,6 +398,10 @@ export function subscribeEvents(
 
   source.addEventListener('sprint', (e) => {
     onEvent({ type: 'sprint', data: JSON.parse(e.data) })
+  })
+
+  source.addEventListener('activity', (e) => {
+    onEvent({ type: 'activity', data: JSON.parse(e.data) })
   })
 
   source.onerror = (err) => {

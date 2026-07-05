@@ -3,7 +3,33 @@ from typing import Any, Dict, List, Optional
 
 from backend.config import MAX_TASK_DECISIONS
 from backend import state
+from backend.services.events import publish_event
 from backend.services.workflow_settings import get_workflow_settings
+
+
+def publish_activity(
+    task_id: str,
+    kind: str,
+    content: str,
+    *,
+    role: str = "system",
+    agent: Optional[str] = None,
+    lane: Optional[str] = None,
+) -> None:
+    task = find_task_by_id(task_id)
+    publish_event(
+        "activity",
+        {
+            "taskId": task_id,
+            "taskTitle": task.get("title", task_id) if task else task_id,
+            "kind": kind,
+            "role": role,
+            "agent": agent or role,
+            "content": content[:4000],
+            "lane": lane,
+            "timestamp": datetime.datetime.now().strftime("%Y-%m-%d %H:%M:%S"),
+        },
+    )
 
 
 def find_task_by_id(task_id: str) -> Optional[Dict[str, Any]]:
@@ -41,6 +67,8 @@ def normalize_task(task: Dict[str, Any]) -> Dict[str, Any]:
         task["qaFailure"] = None
     if "userQuestion" not in task:
         task["userQuestion"] = None
+    if "poRoundTrips" not in task or not isinstance(task.get("poRoundTrips"), (int, float)):
+        task["poRoundTrips"] = 0
     return task
 
 
@@ -54,6 +82,7 @@ def init_new_task(task: Dict[str, Any]) -> Dict[str, Any]:
     task.setdefault("priority", 100)
     task["qaFailure"] = None
     task["userQuestion"] = None
+    task["poRoundTrips"] = 0
     return normalize_task(task)
 
 
@@ -107,6 +136,15 @@ def record_task_decision(
     )
     if len(task["decisions"]) > MAX_TASK_DECISIONS:
         task["decisions"] = task["decisions"][-MAX_TASK_DECISIONS:]
+    publish_activity(
+        task_id,
+        "decision",
+        summary,
+        role="decision",
+        agent=agent,
+    )
+    if detail:
+        publish_activity(task_id, "decision_detail", detail, role="decision", agent=agent)
 
 
 def record_task_transcript(
@@ -127,6 +165,31 @@ def record_task_transcript(
             "content": content[:4000],
         }
     )
+    publish_activity(
+        task_id,
+        "transcript",
+        content,
+        role=role,
+        agent=agent or role,
+    )
+
+
+def increment_po_round_trips(task_id: str) -> int:
+    task = find_task_by_id(task_id)
+    if not task:
+        return 0
+    normalize_task(task)
+    task["poRoundTrips"] = int(task.get("poRoundTrips", 0)) + 1
+    count = task["poRoundTrips"]
+    publish_activity(
+        task_id,
+        "po_round_trip",
+        f"PO round trip #{count}",
+        role="system",
+        agent="System",
+        lane=task.get("status"),
+    )
+    return count
 
 
 def set_qa_failure(task_id: str, reason: str, output: str = "") -> None:

@@ -24,6 +24,11 @@ class SkillPayload(BaseModel):
     skillFile: str
 
 
+class BulkSkillPayload(BaseModel):
+    agent: str
+    skillFiles: List[str] = Field(default_factory=list)
+
+
 class CreateProjectPayload(BaseModel):
     projectName: str
     workspaceDir: str
@@ -67,6 +72,7 @@ class WorkflowSettingsPayload(BaseModel):
     definitionOfDone: Optional[List[str]] = None
     maxSprintSteps: Optional[int] = None
     maxLlmIterationsPerStep: Optional[int] = None
+    maxPoRoundTrips: Optional[int] = None
 
 
 class DeleteTaskPayload(BaseModel):

@@ -35,7 +35,7 @@ export default function TerminalPanel({ workspaceDir }: TerminalPanelProps) {
     term.open(containerRef.current)
     fit.fit()
 
-    term.writeln('\x1b[1;34mOpenHands Terminal\x1b[0m — type a command below')
+    term.writeln('\x1b[1;34mAll Hands Terminal\x1b[0m — type a command below')
     term.writeln(`cwd: ${workspaceDir}`)
     term.writeln('')
 

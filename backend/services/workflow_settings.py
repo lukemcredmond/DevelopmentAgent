@@ -12,6 +12,7 @@ DEFAULT_WORKFLOW_SETTINGS: Dict[str, Any] = {
     "definitionOfDone": [],
     "maxSprintSteps": MAX_SPRINT_STEPS,
     "maxLlmIterationsPerStep": 8,
+    "maxPoRoundTrips": 3,
 }
 
 DEFAULT_SPRINT_SUMMARY: Dict[str, Any] = {
@@ -21,6 +22,7 @@ DEFAULT_SPRINT_SUMMARY: Dict[str, Any] = {
     "blocked": [],
     "needsPo": 0,
     "needsUser": 0,
+    "status": "completed",
 }
 
 

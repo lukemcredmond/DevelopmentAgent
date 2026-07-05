@@ -12,7 +12,7 @@ from backend.api.schemas import (
     UpdateTaskPayload,
 )
 from backend.services.board_lanes import normalize_board_lanes
-from backend.services.board_service import move_board_stage
+from backend.services.board_service import move_board_stage, publish_board_update
 from backend.services.logs import add_system_log
 from backend.services.project_service import save_current_project_state
 from backend.services.sprint_service import run_po_add_feature
@@ -119,6 +119,7 @@ def reorder_tasks(payload: ReorderTasksPayload):
                 reordered.append(t)
         state.SHARED_BOARD[lane] = reordered
         save_current_project_state()
+        publish_board_update(source="reorder")
     return build_state_response()
 
 
@@ -143,4 +144,5 @@ def delete_task(payload: DeleteTaskPayload):
             raise HTTPException(status_code=404, detail="Task not found")
         save_current_project_state()
         add_system_log("System", "info", f"Deleted task {payload.task_id}")
+        publish_board_update(payload.task_id, source="delete")
     return build_state_response()

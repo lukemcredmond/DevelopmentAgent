@@ -13,9 +13,11 @@ from backend.agents.task_context import (
     build_task_prompt,
     clear_active_sprint_context,
     clear_qa_failure,
+    increment_po_round_trips,
     init_new_task,
     next_claimable_backlog_task,
     normalize_task,
+    publish_activity,
     record_task_decision,
     set_active_sprint_context,
     set_qa_failure,
@@ -23,7 +25,7 @@ from backend.agents.task_context import (
     task_dependencies_met,
 )
 from backend.services.board_lanes import normalize_board_lanes
-from backend.services.board_service import move_board_stage
+from backend.services.board_service import move_board_stage, publish_board_update
 from backend.services.brief_service import (
     append_brief_text,
     append_feature_to_brief,
@@ -94,21 +96,56 @@ def _task_in_lane(task_id: str, lane: str) -> bool:
     return task_id in [t["id"] for t in state.SHARED_BOARD.get(lane, [])]
 
 
-def _dev_needs_po(result: str) -> bool:
+def _dev_needs_po(result: str, task: Optional[Dict[str, Any]] = None) -> bool:
+    """Stricter escalation detection — avoid substring false positives."""
+    if task:
+        normalize_task(task)
+        ac = task.get("acceptanceCriteria") or []
+        if ac and task.get("poRoundTrips", 0) > 0:
+            return False
+
     lower = result.lower()
-    return any(
-        m in lower
-        for m in (
-            "needs po",
-            "need po",
-            "needs product owner",
-            "need clarification",
-            "unclear requirement",
-            "escalate to po",
-            "move the task to 'needs po'",
-            "blocked on requirements",
-        )
+    explicit_markers = (
+        "escalate to po",
+        "move the task to 'needs po'",
+        "moving to needs po",
+        "move to needs po",
+        "escalating to product owner",
     )
+    if any(m in lower for m in explicit_markers):
+        return True
+
+    for line in lower.split("\n"):
+        stripped = line.strip()
+        if stripped.startswith("needs po:") or stripped.startswith("need po:"):
+            return True
+        if stripped.startswith("blocked on requirements:"):
+            return True
+    return False
+
+
+def _escalate_po_limit(task: Dict[str, Any]) -> bool:
+    """Move to Needs User when PO round-trip limit exceeded."""
+    normalize_task(task)
+    max_trips = int(get_workflow_settings().get("maxPoRoundTrips", 3))
+    if task.get("poRoundTrips", 0) < max_trips:
+        return False
+    msg = (
+        f"PO and Dev could not agree after {max_trips} rounds — "
+        "please clarify requirements."
+    )
+    task["userQuestion"] = msg
+    move_board_stage(task["id"], "Needs User")
+    publish_activity(
+        task["id"],
+        "po_limit",
+        msg,
+        role="system",
+        agent="System",
+        lane="Needs User",
+    )
+    add_system_log("System", "warning", f"{task['id']}: {msg}")
+    return True
 
 
 def _dev_needs_user(result: str) -> bool:
@@ -165,6 +202,8 @@ def _append_tasks(tasks: List[Dict[str, Any]]) -> int:
         added += 1
     if lane == "Backlog":
         sort_backlog()
+    if added:
+        publish_board_update(source="append_tasks")
     return added
 
 
@@ -284,18 +323,24 @@ def run_po_add_feature(title: str, description: str, ollama_url: str) -> None:
     save_current_project_state()
 
 
-def _apply_po_clarification_result(active_task: Dict[str, Any], result: str) -> None:
+def _apply_po_clarification_result(active_task: Dict[str, Any], result: str) -> bool:
     obj = extract_json_object_from_text(result)
-    if obj:
-        apply_po_clarification(
-            active_task["id"],
-            description=obj.get("description"),
-            acceptance_criteria=obj.get("acceptanceCriteria") or obj.get("acceptance_criteria"),
-        )
-        addition = obj.get("briefAddition") or obj.get("brief_addition") or ""
-        if addition:
-            append_brief_text(addition, "po", f"PO clarification for {active_task['id']}")
+    if not obj:
+        return False
+    description = obj.get("description")
+    ac = obj.get("acceptanceCriteria") or obj.get("acceptance_criteria")
+    if not description and not ac:
+        return False
+    apply_po_clarification(
+        active_task["id"],
+        description=description,
+        acceptance_criteria=ac,
+    )
+    addition = obj.get("briefAddition") or obj.get("brief_addition") or ""
+    if addition:
+        append_brief_text(addition, "po", f"PO clarification for {active_task['id']}")
     record_brief_changelog("po", f"Clarified {active_task['title']}", result[:300])
+    return True
 
 
 def _run_po_clarification(active_task: Dict[str, Any], brief: str) -> None:
@@ -308,13 +353,30 @@ def _run_po_clarification(active_task: Dict[str, Any], brief: str) -> None:
         "Then use update_board to move back to 'In Progress'."
     )
     result = agent_po.execute_step(prompt, max_iterations=_llm_iterations())
+    clarified = False
     if result == "SIMULATION_FALLBACK":
         record_task_decision(active_task["id"], "Product Owner", "clarification", "Offline clarification")
+        clarified = True
     else:
         record_task_decision(active_task["id"], "Product Owner", "clarification", result[:500], result)
-        _apply_po_clarification_result(active_task, result)
+        clarified = _apply_po_clarification_result(active_task, result)
     if _task_in_lane(active_task["id"], "Needs PO"):
-        move_board_stage(active_task["id"], "In Progress")
+        if clarified:
+            move_board_stage(active_task["id"], "In Progress")
+            publish_activity(
+                active_task["id"],
+                "po_clarified",
+                "PO clarified requirements and returned task to Dev",
+                role="assistant",
+                agent="Product Owner",
+                lane="In Progress",
+            )
+        else:
+            add_system_log(
+                "Product Owner",
+                "warning",
+                f"Clarification incomplete for '{active_task['title']}' — card stays in Needs PO",
+            )
 
 
 def _run_developer_step(active_task: Dict[str, Any], brief: str) -> None:
@@ -337,8 +399,19 @@ def _run_developer_step(active_task: Dict[str, Any], brief: str) -> None:
         if _dev_needs_user(result):
             active_task["userQuestion"] = result[:500]
             move_board_stage(active_task["id"], "Needs User")
-        elif _dev_needs_po(result):
+        elif _dev_needs_po(result, active_task):
+            if _escalate_po_limit(active_task):
+                return
+            increment_po_round_trips(active_task["id"])
             move_board_stage(active_task["id"], "Needs PO")
+            publish_activity(
+                active_task["id"],
+                "dev_escalation",
+                "Developer escalated to PO for clarification",
+                role="assistant",
+                agent="Developer",
+                lane="Needs PO",
+            )
         else:
             clear_qa_failure(active_task["id"])
             move_board_stage(active_task["id"], target)
@@ -394,6 +467,12 @@ def _sprint_lanes_active() -> List[str]:
     return lanes
 
 
+def has_sprint_work() -> bool:
+    """True when auto-sprint has actionable work in active lanes."""
+    lanes = _sprint_lanes_active()
+    return any(len(state.SHARED_BOARD.get(l, [])) > 0 for l in lanes)
+
+
 def run_sprint_step(brief: str, ollama_url: str) -> None:
     set_project_brief(brief, source="user")
     agent_dev.ollama_url = ollama_url
@@ -427,9 +506,10 @@ def run_sprint_step(brief: str, ollama_url: str) -> None:
     finally:
         clear_active_sprint_context()
     save_current_project_state()
+    publish_board_update(source="sprint_step")
 
 
-def _build_sprint_summary(steps: int) -> Dict[str, Any]:
+def _build_sprint_summary(steps: int, status: str = "completed") -> Dict[str, Any]:
     board = state.SHARED_BOARD
     completed = [t.get("id") for t in board.get("Done", [])]
     qa_failed = [
@@ -450,6 +530,7 @@ def _build_sprint_summary(steps: int) -> Dict[str, Any]:
         "blocked": blocked,
         "needsPo": len(board.get("Needs PO", [])),
         "needsUser": len(board.get("Needs User", [])),
+        "status": status,
     }
     save_sprint_summary(summary)
     publish_event("sprint", summary)
@@ -461,19 +542,30 @@ def run_auto_sprint(brief: str, ollama_url: str, max_steps: int | None = None) -
     ws = get_workflow_settings()
     limit = max_steps if max_steps is not None else int(ws.get("maxSprintSteps", 20))
     steps = 0
-    lanes = _sprint_lanes_active()
+    status = "completed"
+
     while steps < limit and not state.SPRINT_CANCEL:
-        if not any(len(state.SHARED_BOARD.get(l, [])) > 0 for l in lanes):
-            break
-        run_sprint_step(brief, ollama_url)
-        steps += 1
+        with state.STATE_LOCK:
+            if not has_sprint_work():
+                status = "idle"
+                break
+            run_sprint_step(brief, ollama_url)
+            steps += 1
+
     if state.SPRINT_CANCEL:
+        status = "cancelled"
         add_system_log("System", "info", "Auto sprint cancelled.")
+    elif status != "idle" and steps >= limit:
+        status = "max_steps"
+        add_system_log("System", "info", f"Auto sprint finished after {steps} step(s) (max steps).")
+    elif status == "idle":
+        add_system_log("System", "info", "Auto sprint paused — no backlog work remaining.")
     else:
         add_system_log("System", "info", f"Auto sprint finished after {steps} step(s).")
-    return _build_sprint_summary(steps)
+    return _build_sprint_summary(steps, status)
 
 
 def run_plan_and_run(brief: str, ollama_url: str, max_steps: int | None = None) -> Dict[str, Any]:
-    run_po_plan(brief, ollama_url)
+    with state.STATE_LOCK:
+        run_po_plan(brief, ollama_url)
     return run_auto_sprint(brief, ollama_url, max_steps=max_steps)

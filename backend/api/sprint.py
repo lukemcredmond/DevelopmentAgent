@@ -26,22 +26,21 @@ def trigger_agent_turn(payload: BriefPayload):
 
 @router.post("/api/sprint/run")
 def trigger_auto_sprint(payload: SprintRunPayload):
+    run_auto_sprint(payload.brief, payload.ollama_url, max_steps=payload.max_steps)
     with state.STATE_LOCK:
-        run_auto_sprint(payload.brief, payload.ollama_url, max_steps=payload.max_steps)
-    return build_state_response()
+        return build_state_response()
 
 
 @router.post("/api/sprint/plan-and-run")
 def trigger_plan_and_run(payload: SprintRunPayload):
+    run_plan_and_run(payload.brief, payload.ollama_url, max_steps=payload.max_steps)
     with state.STATE_LOCK:
-        run_plan_and_run(payload.brief, payload.ollama_url, max_steps=payload.max_steps)
-    return build_state_response()
+        return build_state_response()
 
 
 @router.post("/api/sprint/cancel")
 def cancel_auto_sprint():
-    with state.STATE_LOCK:
-        state.SPRINT_CANCEL = True
+    state.SPRINT_CANCEL = True
     return {"ok": True, "sprintCancel": True}
 
 

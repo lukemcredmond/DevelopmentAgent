@@ -1,4 +1,4 @@
-# OpenHands Multi-Agent Workspace
+# All Hands Multi-Agent Workspace
 
 Local multi-agent AI development workspace with Kanban board, Ollama-powered agents, skills, Monaco editor, chat composer, and file tree — inspired by Cursor IDE patterns.
 
@@ -70,7 +70,7 @@ DevelopmentAgent/
 ├── tests/                 # pytest smoke tests
 ├── workspace/             # Agent-written project files (runtime)
 ├── global_skills/         # Skill markdown library (runtime)
-└── scrum_memory.db        # SQLite persistence (runtime)
+└── scrum_memory.db        # SQLite persistence (runtime, local-only — not committed)
 ```
 
 ---

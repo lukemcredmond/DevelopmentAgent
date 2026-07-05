@@ -2,7 +2,7 @@ import { useCallback, useEffect, useState } from 'react'
 import {
   addManualTask,
   approveTask,
-  assignSkill,
+  assignSkills,
   checkOllamaHealth,
   createProject,
   deleteProject,
@@ -23,8 +23,9 @@ import {
   updateTask,
   updateWorkflowSettings,
 } from './api/client'
+import ActivityPanel from './components/ActivityPanel'
 import AgentConsole from './components/AgentConsole'
-import ChatPanel from './components/ChatPanel'
+import ChatPanel, { type ChatUiMessage } from './components/ChatPanel'
 import CodeEditor from './components/CodeEditor'
 import DiffPanel from './components/DiffPanel'
 import FileExplorer from './components/FileExplorer'
@@ -39,10 +40,19 @@ import TaskDetailModal from './components/TaskDetailModal'
 import TerminalPanel from './components/TerminalPanel'
 import { useAppState, useAutoSprint } from './hooks/useAppState'
 import { useTheme } from './hooks/useTheme'
-import type { AgentId, AppState, BoardLane, Task, WorkflowSettings } from './types'
+import type { AgentId, AppState, BoardLane, ChatMessageRecord, Task, WorkflowSettings } from './types'
 import { getDisplayLanes } from './types'
 
-type BottomTab = 'console' | 'chat' | 'terminal' | 'search' | 'git'
+type BottomTab = 'console' | 'activity' | 'chat' | 'terminal' | 'search' | 'git'
+
+function chatRecordsToUi(messages: ChatMessageRecord[] | undefined): ChatUiMessage[] {
+  return (messages ?? []).map((m, i) => ({
+    id: `stored-${i}-${m.timestamp ?? i}`,
+    role: m.role,
+    content: m.content,
+    agent: m.agent as AgentId | undefined,
+  }))
+}
 
 function applyStateFields(
   data: AppState,
@@ -69,7 +79,7 @@ function applyStateFields(
 
 export default function App() {
   const { theme, toggleTheme, isDark } = useTheme()
-  const { state, loading, setLoading, applyState } = useAppState()
+  const { state, loading, setLoading, applyState, activityEvents } = useAppState()
 
   const [ollamaUrl, setOllamaUrl] = useState('http://localhost:11434')
   const [brief, setBrief] = useState('')
@@ -89,10 +99,15 @@ export default function App() {
   const [selectedTask, setSelectedTask] = useState<Task | null>(null)
   const [skillModalAgent, setSkillModalAgent] = useState<AgentId | null>(null)
   const [skillSearch, setSkillSearch] = useState('')
-  const [selectedSkillFile, setSelectedSkillFile] = useState<string | null>(null)
+  const [selectedSkillFiles, setSelectedSkillFiles] = useState<string[]>([])
   const [skillModalLoading, setSkillModalLoading] = useState(false)
   const [modalSkills, setModalSkills] = useState(state.availableSkills)
   const [modalSkillsDir, setModalSkillsDir] = useState(skillsDir)
+
+  const [chatAgent, setChatAgent] = useState<AgentId>('dev')
+  const [chatInput, setChatInput] = useState('')
+  const [chatMessages, setChatMessages] = useState<ChatUiMessage[]>([])
+  const [chatContextFiles, setChatContextFiles] = useState<string[]>([])
 
   const [showNewProject, setShowNewProject] = useState(false)
   const [newProjName, setNewProjName] = useState('')
@@ -137,16 +152,25 @@ export default function App() {
     [applyState],
   )
 
-  const { autoSprint, setAutoSprint, sprintRunning, stopAutoSprint } = useAutoSprint(
-    brief,
-    ollamaUrl,
-    handleState,
-  )
+  const { autoSprint, setAutoSprint, autoSprintPaused, sprintRunning, stopAutoSprint } =
+    useAutoSprint(brief, ollamaUrl, state.board, state.workflowSettings, handleState)
 
   useEffect(() => {
     applyStateFields(state, setters)
     setLocalFiles(state.files)
+    setChatMessages(chatRecordsToUi(state.chatMessages))
   }, [state.projectId])
+
+  useEffect(() => {
+    const key = `allhands-chat-draft-${state.projectId}`
+    const saved = sessionStorage.getItem(key)
+    if (saved != null) setChatInput(saved)
+  }, [state.projectId])
+
+  useEffect(() => {
+    const key = `allhands-chat-draft-${state.projectId}`
+    sessionStorage.setItem(key, chatInput)
+  }, [chatInput, state.projectId])
 
   useEffect(() => {
     let cancelled = false
@@ -179,7 +203,7 @@ export default function App() {
   const openSkillModal = async (agent: AgentId) => {
     setSkillModalAgent(agent)
     setSkillSearch('')
-    setSelectedSkillFile(null)
+    setSelectedSkillFiles([])
     setSkillModalLoading(true)
     try {
       const data = await fetchSkills()
@@ -210,6 +234,7 @@ export default function App() {
 
   const bottomTabs: { id: BottomTab; label: string; icon: string }[] = [
     { id: 'console', label: 'Console', icon: 'fa-terminal' },
+    { id: 'activity', label: 'Activity', icon: 'fa-wave-square' },
     { id: 'chat', label: 'Chat', icon: 'fa-comments' },
     { id: 'terminal', label: 'Terminal', icon: 'fa-square-terminal' },
     { id: 'search', label: 'Search', icon: 'fa-magnifying-glass' },
@@ -232,6 +257,7 @@ export default function App() {
         loading={loading}
         ollamaOk={ollamaOk}
         autoSprint={autoSprint}
+        autoSprintPaused={autoSprintPaused}
         sprintRunning={sprintRunning}
         isDark={isDark}
         onOllamaUrlChange={setOllamaUrl}
@@ -319,6 +345,7 @@ export default function App() {
           workspaceDir={state.workspaceDir}
           activeLanes={state.activeLanes}
           workflowSettings={state.workflowSettings}
+          sprintRunning={sprintRunning}
           onTaskClick={setSelectedTask}
           onMoveTask={(taskId, from, to) => void handleMoveTask(taskId, from, to)}
           onReorderBacklog={(taskIds) =>
@@ -370,14 +397,37 @@ export default function App() {
                   </button>
                 ))}
               </div>
-              <div className="flex-1 min-h-0 overflow-hidden">
+              <div className="flex-1 min-h-0 overflow-hidden relative">
                 {bottomTab === 'console' && <AgentConsole logs={state.logs} />}
-                {bottomTab === 'chat' && (
-                  <ChatPanel
-                    ollamaUrl={ollamaUrl}
-                    filePaths={Object.keys(localFiles)}
+                {bottomTab === 'activity' && (
+                  <ActivityPanel
+                    events={activityEvents}
+                    onTaskClick={(taskId) => {
+                      for (const lane of Object.keys(state.board)) {
+                        const task = (state.board[lane as BoardLane] ?? []).find(
+                          (t) => t.id === taskId,
+                        )
+                        if (task) {
+                          setSelectedTask(task)
+                          break
+                        }
+                      }
+                    }}
                   />
                 )}
+                <ChatPanel
+                  hidden={bottomTab !== 'chat'}
+                  ollamaUrl={ollamaUrl}
+                  filePaths={Object.keys(localFiles)}
+                  agent={chatAgent}
+                  onAgentChange={setChatAgent}
+                  input={chatInput}
+                  onInputChange={setChatInput}
+                  messages={chatMessages}
+                  onMessagesChange={setChatMessages}
+                  contextFiles={chatContextFiles}
+                  onContextFilesChange={setChatContextFiles}
+                />
                 {bottomTab === 'terminal' && (
                   <TerminalPanel workspaceDir={state.workspaceDir} />
                 )}
@@ -437,21 +487,26 @@ export default function App() {
         skillsDir={modalSkillsDir}
         loading={skillModalLoading}
         search={skillSearch}
-        selectedFile={selectedSkillFile}
+        selectedFiles={selectedSkillFiles}
         assigning={loading}
         onSearchChange={setSkillSearch}
-        onSelectFile={setSelectedSkillFile}
+        onToggleFile={(filename) =>
+          setSelectedSkillFiles((prev) =>
+            prev.includes(filename)
+              ? prev.filter((f) => f !== filename)
+              : [...prev, filename],
+          )
+        }
         onAssign={() =>
           skillModalAgent &&
-          selectedSkillFile &&
+          selectedSkillFiles.length > 0 &&
           void withLoading(async () => {
-            const data = await assignSkill({
+            const data = await assignSkills({
               agent: skillModalAgent,
-              skillFile: selectedSkillFile,
+              skillFiles: selectedSkillFiles,
             })
             handleState(data)
-            setSkillModalAgent(null)
-            setSelectedFile(`skills/${selectedSkillFile.replace(/\\/g, '/')}`)
+            setSelectedSkillFiles([])
           })
         }
         onClose={() => setSkillModalAgent(null)}

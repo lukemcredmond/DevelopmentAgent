@@ -8,10 +8,10 @@ interface SkillModalProps {
   skillsDir: string
   loading: boolean
   search: string
-  selectedFile: string | null
+  selectedFiles: string[]
   assigning: boolean
   onSearchChange: (v: string) => void
-  onSelectFile: (filename: string | null) => void
+  onToggleFile: (filename: string) => void
   onAssign: () => void
   onClose: () => void
 }
@@ -23,10 +23,10 @@ export default function SkillModal({
   skillsDir,
   loading,
   search,
-  selectedFile,
+  selectedFiles,
   assigning,
   onSearchChange,
-  onSelectFile,
+  onToggleFile,
   onAssign,
   onClose,
 }: SkillModalProps) {
@@ -40,6 +40,7 @@ export default function SkillModal({
       s.filename.toLowerCase().includes(q) ||
       s.folder.toLowerCase().includes(q),
   )
+  const selectedSet = new Set(selectedFiles)
 
   return (
     <div className="fixed inset-0 bg-black/75 flex items-center justify-center p-4 z-50">
@@ -48,7 +49,7 @@ export default function SkillModal({
           <div>
             <h3 className="text-base font-bold text-white flex items-center gap-2">
               <i className="fa-solid fa-graduation-cap text-indigo-400" />
-              Add Skill — {AGENT_LABELS[agent]}
+              Add Skills — {AGENT_LABELS[agent]}
             </h3>
             <p className="text-[10px] text-cat-subtext font-mono mt-1">
               Library: {skillsDir}
@@ -73,7 +74,7 @@ export default function SkillModal({
 
         <div className="text-[10px] text-cat-subtext flex items-center justify-between px-1">
           <span>{skills.length} skill(s) in directory</span>
-          <span>{filtered.length} shown</span>
+          <span>{selectedFiles.length} selected</span>
         </div>
 
         <div className="space-y-1.5 overflow-y-auto flex-1 min-h-[200px] pr-1">
@@ -85,46 +86,38 @@ export default function SkillModal({
           )}
           {!loading &&
             filtered.map((skill) => {
-              const isSelected = selectedFile === skill.filename
+              const isSelected = selectedSet.has(skill.filename)
               const isAssigned = assignedSkills.includes(skill.filename)
               return (
                 <button
                   key={skill.filename}
                   type="button"
-                  onClick={() => onSelectFile(skill.filename)}
-                  onDoubleClick={onAssign}
-                  className={`w-full text-left p-3 rounded-xl border transition-colors flex items-center justify-between ${
+                  onClick={() => onToggleFile(skill.filename)}
+                  className={`w-full text-left p-3 rounded-xl border transition-colors flex items-center gap-3 ${
                     isSelected
                       ? 'bg-indigo-950/40 border-indigo-500/60'
                       : 'bg-cat-base border-cat-surface1 hover:border-indigo-500/40'
                   }`}
                 >
-                  <div className="space-y-0.5 truncate pr-2 min-w-0">
+                  <input
+                    type="checkbox"
+                    readOnly
+                    checked={isSelected}
+                    className="shrink-0 pointer-events-none"
+                  />
+                  <div className="space-y-0.5 truncate flex-1 min-w-0">
                     <div className="font-bold text-xs text-indigo-300 truncate">
                       {skill.title}
                     </div>
                     <div className="text-[10px] text-cat-subtext font-mono truncate">
                       {skill.filename}
                     </div>
-                    {skill.folder && skill.folder !== '.' && (
-                      <div className="text-[9px] text-cat-overlay font-mono truncate">
-                        {skill.folder}
-                      </div>
-                    )}
                   </div>
-                  <div className="flex flex-col items-end gap-1 shrink-0">
-                    {isAssigned && (
-                      <span className="text-[9px] bg-emerald-950/50 text-emerald-400 border border-emerald-500/30 px-1.5 py-0.5 rounded">
-                        Assigned
-                      </span>
-                    )}
-                    {isSelected && (
-                      <span className="text-[9px] text-indigo-400">
-                        <i className="fa-solid fa-check mr-1" />
-                        Selected
-                      </span>
-                    )}
-                  </div>
+                  {isAssigned && (
+                    <span className="text-[9px] bg-emerald-950/50 text-emerald-400 border border-emerald-500/30 px-1.5 py-0.5 rounded shrink-0">
+                      Assigned
+                    </span>
+                  )}
                 </button>
               )
             })}
@@ -139,7 +132,7 @@ export default function SkillModal({
 
         <div className="flex items-center justify-between pt-2 border-t border-cat-surface1">
           <p className="text-[10px] text-cat-overlay italic">
-            {selectedFile ? `Selected: ${selectedFile}` : 'Click a skill to select, then assign'}
+            Select multiple skills, then assign in one batch
           </p>
           <div className="flex gap-2">
             <button
@@ -147,16 +140,16 @@ export default function SkillModal({
               onClick={onClose}
               className="bg-cat-base border border-cat-surface1 hover:bg-cat-surface1 text-cat-subtext py-1.5 px-3 rounded-lg text-xs"
             >
-              Cancel
+              Close
             </button>
             <button
               type="button"
-              disabled={!selectedFile || assigning}
+              disabled={selectedFiles.length === 0 || assigning}
               onClick={onAssign}
               className="bg-indigo-600 hover:bg-indigo-500 disabled:opacity-40 disabled:cursor-not-allowed text-white font-semibold py-1.5 px-4 rounded-lg text-xs transition-colors flex items-center gap-1"
             >
               <i className="fa-solid fa-copy text-[10px]" />
-              Copy to Workspace & Assign
+              Assign {selectedFiles.length} skill(s)
             </button>
           </div>
         </div>

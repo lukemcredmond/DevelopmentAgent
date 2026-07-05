@@ -51,6 +51,7 @@ export interface Task {
   blockedBy?: string[]
   qaFailure?: QaFailure | null
   userQuestion?: string | null
+  poRoundTrips?: number
 }
 
 export type Board = Partial<Record<BoardLane, Task[]>>
@@ -61,6 +62,7 @@ export interface WorkflowSettings {
   definitionOfDone: string[]
   maxSprintSteps: number
   maxLlmIterationsPerStep: number
+  maxPoRoundTrips: number
 }
 
 export interface BriefChangelogEntry {
@@ -77,6 +79,25 @@ export interface SprintSummary {
   blocked: string[]
   needsPo: number
   needsUser: number
+  status?: 'completed' | 'idle' | 'cancelled' | 'max_steps'
+}
+
+export interface ActivityEvent {
+  taskId: string
+  taskTitle: string
+  kind: string
+  role: string
+  agent: string
+  content: string
+  lane?: string
+  timestamp: string
+}
+
+export interface ChatMessageRecord {
+  role: 'user' | 'assistant'
+  content: string
+  agent?: string
+  timestamp?: string
 }
 
 export interface WorkflowNotifications {
@@ -122,6 +143,7 @@ export interface AppState {
   briefChangelog?: BriefChangelogEntry[]
   lastSprintSummary?: SprintSummary
   notifications?: WorkflowNotifications
+  chatMessages?: ChatMessageRecord[]
 }
 
 export interface ConfigPayload {
@@ -142,6 +164,11 @@ export interface BriefPayload {
 export interface SkillPayload {
   agent: AgentId
   skillFile: string
+}
+
+export interface BulkSkillPayload {
+  agent: AgentId
+  skillFiles: string[]
 }
 
 export interface CreateProjectPayload {
@@ -177,6 +204,7 @@ export interface WorkflowSettingsPayload {
   definitionOfDone?: string[]
   maxSprintSteps?: number
   maxLlmIterationsPerStep?: number
+  maxPoRoundTrips?: number
 }
 
 export interface SkillsResponse {
@@ -259,6 +287,7 @@ export type AppEventType =
   | 'log'
   | 'task'
   | 'sprint'
+  | 'activity'
   | 'connected'
 
 export interface AppEvent {
@@ -290,6 +319,7 @@ export const DEFAULT_WORKFLOW_SETTINGS: WorkflowSettings = {
   definitionOfDone: [],
   maxSprintSteps: 20,
   maxLlmIterationsPerStep: 8,
+  maxPoRoundTrips: 3,
 }
 
 export const EMPTY_BOARD: Board = {
@@ -299,6 +329,12 @@ export const EMPTY_BOARD: Board = {
   'Needs User': [],
   QA: [],
   Done: [],
+}
+
+export function hasSprintWork(board: Board, settings?: WorkflowSettings): boolean {
+  const lanes: BoardLane[] = ['Needs PO', 'In Progress', 'Backlog', 'QA']
+  if (settings?.requireCodeReview) lanes.splice(3, 0, 'Code Review')
+  return lanes.some((lane) => (board[lane]?.length ?? 0) > 0)
 }
 
 export function getDisplayLanes(

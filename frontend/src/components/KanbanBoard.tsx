@@ -19,6 +19,7 @@ interface KanbanBoardProps {
   workspaceDir: string
   activeLanes?: BoardLane[]
   workflowSettings?: WorkflowSettings
+  sprintRunning?: boolean
   onTaskClick: (task: Task) => void
   onMoveTask: (taskId: string, fromLane: BoardLane, toLane: BoardLane) => void
   onReorderBacklog?: (taskIds: string[]) => void
@@ -38,6 +39,7 @@ export default function KanbanBoard({
   workspaceDir,
   activeLanes,
   workflowSettings,
+  sprintRunning = false,
   onTaskClick,
   onMoveTask,
   onReorderBacklog,
@@ -115,6 +117,12 @@ export default function KanbanBoard({
           Workspace: {workspaceDir}
         </span>
       </div>
+
+      {sprintRunning && (
+        <div className="mb-2 text-[10px] text-amber-300 bg-amber-950/30 border border-amber-500/30 rounded px-2 py-1 shrink-0">
+          Sprint running — you can move cards between steps
+        </div>
+      )}
 
       <DndContext
         sensors={sensors}

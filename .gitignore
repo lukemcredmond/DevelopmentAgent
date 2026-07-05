@@ -1,0 +1,11 @@
+# Local SQLite persistence
+scrum_memory.db
+*.db-journal
+
+# Agent-written workspace (runtime)
+/workspace/
+
+# Python
+__pycache__/
+*.py[cod]
+.pytest_cache/

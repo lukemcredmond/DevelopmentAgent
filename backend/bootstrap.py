@@ -42,7 +42,7 @@ def load_project_into_state(project_id: str) -> bool:
 
 
 def initialize() -> None:
-    add_system_log("System", "info", "OpenHands Multi-Agent Backend framework live.")
+    add_system_log("System", "info", "All Hands Multi-Agent Backend framework live.")
 
     os.makedirs(state.WORKSPACE_DIR, exist_ok=True)
     os.makedirs(state.SKILLS_DIR, exist_ok=True)

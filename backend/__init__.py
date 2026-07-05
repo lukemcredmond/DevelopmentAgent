@@ -1,1 +1,1 @@
-"""OpenHands Local Scrum Engine backend."""
+"""All Hands Local Scrum Engine backend."""

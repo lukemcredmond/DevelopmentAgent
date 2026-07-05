@@ -64,7 +64,7 @@ export default function WorkflowPanel({
         Require code review before QA
       </label>
 
-      <div className="grid grid-cols-2 gap-2 text-[11px]">
+      <div className="grid grid-cols-3 gap-2 text-[11px]">
         <label>
           <span className="text-[10px] text-cat-overlay block">Max sprint steps</span>
           <input
@@ -88,6 +88,21 @@ export default function WorkflowPanel({
             onChange={(e) =>
               onSettingsChange({
                 maxLlmIterationsPerStep: parseInt(e.target.value, 10) || 8,
+              })
+            }
+            className="w-full bg-cat-base border border-cat-surface1 rounded p-1 text-white"
+          />
+        </label>
+        <label>
+          <span className="text-[10px] text-cat-overlay block">Max PO round trips</span>
+          <input
+            type="number"
+            min={1}
+            max={10}
+            value={settings.maxPoRoundTrips ?? 3}
+            onChange={(e) =>
+              onSettingsChange({
+                maxPoRoundTrips: parseInt(e.target.value, 10) || 3,
               })
             }
             className="w-full bg-cat-base border border-cat-surface1 rounded p-1 text-white"

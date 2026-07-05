@@ -3,7 +3,7 @@ import { streamChat } from '../api/client'
 import type { AgentId } from '../types'
 import { AGENT_LABELS } from '../types'
 
-interface ChatMessage {
+export interface ChatUiMessage {
   id: string
   role: 'user' | 'assistant'
   content: string
@@ -13,14 +13,33 @@ interface ChatMessage {
 interface ChatPanelProps {
   ollamaUrl: string
   filePaths: string[]
+  agent: AgentId
+  onAgentChange: (agent: AgentId) => void
+  input: string
+  onInputChange: (value: string) => void
+  messages: ChatUiMessage[]
+  onMessagesChange: (
+    messages: ChatUiMessage[] | ((prev: ChatUiMessage[]) => ChatUiMessage[]),
+  ) => void
+  contextFiles: string[]
+  onContextFilesChange: (files: string[]) => void
+  hidden?: boolean
 }
 
-export default function ChatPanel({ ollamaUrl, filePaths }: ChatPanelProps) {
-  const [agent, setAgent] = useState<AgentId>('dev')
-  const [input, setInput] = useState('')
-  const [messages, setMessages] = useState<ChatMessage[]>([])
+export default function ChatPanel({
+  ollamaUrl,
+  filePaths,
+  agent,
+  onAgentChange,
+  input,
+  onInputChange,
+  messages,
+  onMessagesChange,
+  contextFiles,
+  onContextFilesChange,
+  hidden = false,
+}: ChatPanelProps) {
   const [streaming, setStreaming] = useState(false)
-  const [contextFiles, setContextFiles] = useState<string[]>([])
   const [showFilePicker, setShowFilePicker] = useState(false)
   const bottomRef = useRef<HTMLDivElement>(null)
   const abortRef = useRef<AbortController | null>(null)
@@ -33,17 +52,17 @@ export default function ChatPanel({ ollamaUrl, filePaths }: ChatPanelProps) {
     const text = input.trim()
     if (!text || streaming) return
 
-    const userMsg: ChatMessage = {
+    const userMsg: ChatUiMessage = {
       id: crypto.randomUUID(),
       role: 'user',
       content: text,
     }
-    setMessages((prev) => [...prev, userMsg])
-    setInput('')
+    onMessagesChange((prev) => [...prev, userMsg])
+    onInputChange('')
     setStreaming(true)
 
     const assistantId = crypto.randomUUID()
-    setMessages((prev) => [
+    onMessagesChange((prev) => [
       ...prev,
       { id: assistantId, role: 'assistant', content: '', agent },
     ])
@@ -62,12 +81,13 @@ export default function ChatPanel({ ollamaUrl, filePaths }: ChatPanelProps) {
         abortRef.current.signal,
       )) {
         full += token
-        setMessages((prev) =>
-          prev.map((m) => (m.id === assistantId ? { ...m, content: full } : m)),
+        const content = full
+        onMessagesChange((prev) =>
+          prev.map((m) => (m.id === assistantId ? { ...m, content } : m)),
         )
       }
     } catch {
-      setMessages((prev) =>
+      onMessagesChange((prev) =>
         prev.map((m) =>
           m.id === assistantId
             ? { ...m, content: m.content || '(Stream unavailable — check /api/chat/stream)' }
@@ -80,20 +100,24 @@ export default function ChatPanel({ ollamaUrl, filePaths }: ChatPanelProps) {
   }
 
   const toggleContextFile = (path: string) => {
-    setContextFiles((prev) =>
-      prev.includes(path) ? prev.filter((p) => p !== path) : [...prev, path],
+    onContextFilesChange(
+      contextFiles.includes(path)
+        ? contextFiles.filter((p) => p !== path)
+        : [...contextFiles, path],
     )
   }
 
   return (
-    <div className="flex flex-col h-full bg-cat-base overflow-hidden">
+    <div
+      className={`flex flex-col h-full bg-cat-base overflow-hidden ${hidden ? 'hidden' : ''}`}
+    >
       <div className="px-4 py-2 border-b border-cat-surface1 flex items-center gap-3 shrink-0">
         <h3 className="text-xs font-bold uppercase tracking-wider text-cat-subtext">
           Agent Chat
         </h3>
         <select
           value={agent}
-          onChange={(e) => setAgent(e.target.value as AgentId)}
+          onChange={(e) => onAgentChange(e.target.value as AgentId)}
           className="bg-cat-surface0 border border-cat-surface1 rounded text-[11px] text-white px-2 py-1"
         >
           {(Object.keys(AGENT_LABELS) as AgentId[]).map((id) => (
@@ -136,9 +160,7 @@ export default function ChatPanel({ ollamaUrl, filePaths }: ChatPanelProps) {
         {messages.map((msg) => (
           <div
             key={msg.id}
-            className={`max-w-[90%] ${
-              msg.role === 'user' ? 'ml-auto text-right' : ''
-            }`}
+            className={`max-w-[90%] ${msg.role === 'user' ? 'ml-auto text-right' : ''}`}
           >
             {msg.role === 'assistant' && msg.agent && (
               <span className="text-[10px] text-indigo-400 block mb-0.5">
@@ -163,7 +185,7 @@ export default function ChatPanel({ ollamaUrl, filePaths }: ChatPanelProps) {
         <input
           type="text"
           value={input}
-          onChange={(e) => setInput(e.target.value)}
+          onChange={(e) => onInputChange(e.target.value)}
           onKeyDown={(e) => {
             if (e.key === '@') setShowFilePicker(true)
             if (e.key === 'Enter' && !e.shiftKey) void sendMessage()

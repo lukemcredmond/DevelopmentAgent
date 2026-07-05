@@ -1,6 +1,6 @@
 import { useCallback, useEffect, useState } from 'react'
 
-const STORAGE_KEY = 'openhands-theme'
+const STORAGE_KEY = 'allhands-theme'
 
 export type Theme = 'dark' | 'light'
 
