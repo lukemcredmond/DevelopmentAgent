@@ -345,6 +345,49 @@ export async function runTerminal(
   })
 }
 
+export async function startBackgroundTerminal(
+  command: string,
+): Promise<{ sessionId: string; command: string }> {
+  return request<{ sessionId: string; command: string }>('/api/terminal/background', {
+    method: 'POST',
+    body: JSON.stringify({ command }),
+  })
+}
+
+export async function fetchBackgroundTerminals(): Promise<{
+  sessions: Array<{
+    id: string
+    command: string
+    startedAt: string
+    done: boolean
+    exitCode?: number | null
+    outputLength: number
+  }>
+}> {
+  return request('/api/terminal/background')
+}
+
+export async function fetchBackgroundTerminalOutput(
+  sessionId: string,
+  offset = 0,
+): Promise<{
+  sessionId: string
+  chunk: string
+  outputLength: number
+  done: boolean
+  exitCode?: number | null
+}> {
+  return request(
+    `/api/terminal/background/${encodeURIComponent(sessionId)}?offset=${offset}`,
+  )
+}
+
+export async function stopBackgroundTerminal(sessionId: string): Promise<{ ok: boolean }> {
+  return request(`/api/terminal/background/${encodeURIComponent(sessionId)}`, {
+    method: 'DELETE',
+  })
+}
+
 export async function runSprint(payload: SprintRunPayload): Promise<AppState> {
   return request<AppState>('/api/sprint/run', {
     method: 'POST',
@@ -472,8 +515,8 @@ export async function fetchPendingApprovals(): Promise<{
 export async function resolveToolApproval(
   approvalId: string,
   approved: boolean,
-): Promise<{ ok: boolean }> {
-  return request<{ ok: boolean }>(
+): Promise<import('../types').AppState & { ok: boolean; pending: import('../types').PendingToolApproval[] }> {
+  return request(
     `/api/tools/approvals/${encodeURIComponent(approvalId)}`,
     {
       method: 'POST',

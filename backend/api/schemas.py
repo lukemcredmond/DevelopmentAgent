@@ -95,6 +95,12 @@ class WorkflowSettingsPayload(BaseModel):
     maxFixVerifyRounds: Optional[int] = None
     requireToolApproval: Optional[bool] = None
     toolApprovalTools: Optional[List[str]] = None
+    nonBlockingToolApproval: Optional[bool] = None
+    commandAutoRunMode: Optional[str] = None
+    commandAllowlist: Optional[List[str]] = None
+    commandDenylist: Optional[List[str]] = None
+    allowChainedCommands: Optional[bool] = None
+    maxMcpTools: Optional[int] = None
     definitionOfDone: Optional[List[str]] = None
     maxSprintSteps: Optional[int] = None
     maxLlmIterationsPerStep: Optional[int] = None

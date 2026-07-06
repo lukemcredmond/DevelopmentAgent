@@ -14,6 +14,7 @@ CACHEABLE_READ_TOOLS = frozenset(
         "read_file",
         "grep",
         "glob_file_search",
+        "list_dir",
         "git_diff",
         "git_status",
         "search_code",

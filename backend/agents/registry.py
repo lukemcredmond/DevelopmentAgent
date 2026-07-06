@@ -11,6 +11,7 @@ from backend.workspace.files import (
     delete_workspace_file,
     glob_workspace,
     grep_workspace,
+    list_workspace_dir,
     read_workspace_file,
     run_agent_command,
     run_tests_on_workspace,
@@ -106,15 +107,40 @@ tool_apply_patch = Tool(
     func=apply_workspace_patch,
 )
 
+def _invoke_read_file(path: str, start_line=None, end_line=None) -> str:
+    return read_workspace_file(path, start_line=start_line, end_line=end_line)
+
+
 tool_read = Tool(
     name="read_file",
-    description="Reads plain text source code contents from any workspace path.",
+    description=(
+        "Reads plain text source code from a workspace path. "
+        "Use start_line/end_line (1-based) to read a slice of large files."
+    ),
     parameters={
         "type": "object",
-        "properties": {"path": {"type": "string"}},
+        "properties": {
+            "path": {"type": "string"},
+            "start_line": {"type": "integer"},
+            "end_line": {"type": "integer"},
+        },
         "required": ["path"],
     },
-    func=read_workspace_file,
+    func=_invoke_read_file,
+)
+
+tool_list_dir = Tool(
+    name="list_dir",
+    description="List files and subdirectories in a workspace path (default: workspace root).",
+    parameters={
+        "type": "object",
+        "properties": {
+            "path": {"type": "string"},
+            "limit": {"type": "integer"},
+        },
+        "required": [],
+    },
+    func=lambda path=".", limit=200: list_workspace_dir(path, limit=int(limit or 200)),
 )
 
 tool_test = Tool(
@@ -458,15 +484,19 @@ tool_git_init = Tool(
 tool_run_command = Tool(
     name="run_command",
     description=(
-        "Run a single shell command in the workspace root "
-        "(e.g. flutter analyze, dart fix --apply, npm test)."
+        "Run shell command(s) in the workspace root. "
+        "Use background=true for long-running servers. "
+        "When allowChainedCommands is enabled, use && or ; to chain steps."
     ),
     parameters={
         "type": "object",
-        "properties": {"command": {"type": "string"}},
+        "properties": {
+            "command": {"type": "string"},
+            "background": {"type": "boolean"},
+        },
         "required": ["command"],
     },
-    func=lambda command: run_agent_command(command),
+    func=lambda command, background=False: run_agent_command(command, background=bool(background)),
 )
 
 def configure_agent_tools(ws: dict | None = None) -> None:
@@ -482,6 +512,7 @@ def configure_agent_tools(ws: dict | None = None) -> None:
         agent.registry.clear()
 
     agent_po.registry.register(tool_read)
+    agent_po.registry.register(tool_list_dir)
     agent_po.registry.register(tool_board)
     agent_po.registry.register(tool_add_backlog_tasks)
     agent_po.registry.register(tool_add_subtasks)
@@ -493,6 +524,7 @@ def configure_agent_tools(ws: dict | None = None) -> None:
         agent_po.registry.register(tool_web_search)
 
     agent_dev.registry.register(tool_read)
+    agent_dev.registry.register(tool_list_dir)
     if refinement_mode:
         agent_dev.registry.register(tool_board)
         agent_dev.registry.register(tool_add_subtasks)
@@ -524,6 +556,7 @@ def configure_agent_tools(ws: dict | None = None) -> None:
             agent_dev.registry.register(tool_web_search)
 
     agent_cr.registry.register(tool_read)
+    agent_cr.registry.register(tool_list_dir)
     agent_cr.registry.register(tool_apply_patch)
     agent_cr.registry.register(tool_board)
     agent_cr.registry.register(tool_grep)
@@ -535,6 +568,7 @@ def configure_agent_tools(ws: dict | None = None) -> None:
         agent_cr.registry.register(tool_web_search)
 
     agent_qa.registry.register(tool_read)
+    agent_qa.registry.register(tool_list_dir)
     agent_qa.registry.register(tool_test)
     agent_qa.registry.register(tool_run_command)
     agent_qa.registry.register(tool_grep)

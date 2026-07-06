@@ -39,6 +39,8 @@ const AGENT_OPTIONS: { id: AgentId; label: string }[] = [
 
 interface ToolsPanelProps {
   toolEvents: ToolExecutionEvent[]
+  terminalSessions?: import('../types').BackgroundTerminalSession[]
+  onStopTerminal?: (sessionId: string) => void | Promise<void>
   onClearLog?: () => void | Promise<void>
   onMergeToolEvent?: (payload: Record<string, unknown>) => void
   board: Board
@@ -161,6 +163,8 @@ function listBoardTasks(board: Board): Task[] {
 
 export default function ToolsPanel({
   toolEvents,
+  terminalSessions = [],
+  onStopTerminal,
   onClearLog,
   onMergeToolEvent,
   board,
@@ -672,6 +676,48 @@ export default function ToolsPanel({
               )
             })}
           </div>
+          {terminalSessions.length > 0 && (
+            <div className="mt-4 border-t border-cat-surface1 pt-3">
+              <p className="text-[10px] uppercase text-cat-overlay mb-2">Background terminals</p>
+              <div className="space-y-2">
+                {terminalSessions.map((session) => (
+                  <div
+                    key={session.id}
+                    className="rounded border border-cat-surface1 bg-black/20 p-2"
+                  >
+                    <div className="flex items-center gap-2 mb-1">
+                      <span
+                        className={`text-[9px] uppercase px-1.5 py-0.5 rounded ${
+                          session.done
+                            ? session.exitCode === 0
+                              ? 'bg-emerald-950/50 text-emerald-300'
+                              : 'bg-rose-950/50 text-rose-300'
+                            : 'bg-indigo-950/50 text-indigo-300 animate-pulse'
+                        }`}
+                      >
+                        {session.done ? `exit ${session.exitCode ?? '?'}` : 'running'}
+                      </span>
+                      <span className="text-[10px] font-mono text-cat-subtext truncate flex-1">
+                        {session.command || session.id}
+                      </span>
+                      {!session.done && onStopTerminal && (
+                        <button
+                          type="button"
+                          onClick={() => void onStopTerminal(session.id)}
+                          className="text-[10px] text-rose-300 hover:text-rose-200 shrink-0"
+                        >
+                          Stop
+                        </button>
+                      )}
+                    </div>
+                    <pre className="text-[10px] text-cat-subtext whitespace-pre-wrap break-all max-h-36 overflow-y-auto font-mono">
+                      {session.output || (session.done ? '(no output)' : '…')}
+                    </pre>
+                  </div>
+                ))}
+              </div>
+            </div>
+          )}
         </div>
       )}
 

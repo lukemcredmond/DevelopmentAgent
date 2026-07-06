@@ -1,9 +1,11 @@
-"""Register MCP stdio server tools into agent ToolRegistry instances."""
+"""Register MCP stdio/HTTP/SSE server tools into agent ToolRegistry instances."""
 
 import json
 import subprocess
 import threading
-from typing import Any, Callable, Dict, List, Optional
+import urllib.error
+import urllib.request
+from typing import Any, Callable, Dict, List, Optional, Set
 
 from backend.agents.registry import agent_cr, agent_dev, agent_po, agent_qa
 from backend.agents.tools import Tool
@@ -12,7 +14,7 @@ from backend.services.workflow_settings import get_workflow_settings
 
 _REGISTERED_MCP_TOOLS: List[str] = []
 _MCP_TOOL_INSTANCES: List[Tool] = []
-_MCP_CLIENTS: Dict[str, "_McpStdioClient"] = {}
+_MCP_CLIENTS: Dict[str, Any] = {}
 _LOCK = threading.Lock()
 
 ALL_AGENTS = [agent_po, agent_dev, agent_cr, agent_qa]
@@ -121,7 +123,86 @@ class _McpStdioClient:
                 pass
 
 
-def _make_mcp_tool_func(client: _McpStdioClient, tool_name: str) -> Callable:
+class _McpHttpClient:
+    """Minimal MCP JSON-RPC over HTTP POST (streamable HTTP / SSE-compatible servers)."""
+
+    def __init__(self, name: str, url: str, headers: Optional[Dict[str, str]] = None):
+        self.name = name
+        self.url = url.rstrip("/")
+        self.headers = {"Content-Type": "application/json", **(headers or {})}
+        self._next_id = 1
+        self._initialize()
+
+    def _post(self, payload: Dict[str, Any]) -> Dict[str, Any]:
+        data = json.dumps(payload).encode("utf-8")
+        req = urllib.request.Request(self.url, data=data, headers=self.headers, method="POST")
+        try:
+            with urllib.request.urlopen(req, timeout=60) as resp:
+                raw = resp.read().decode("utf-8")
+                return json.loads(raw) if raw.strip() else {}
+        except urllib.error.HTTPError as exc:
+            body = exc.read().decode("utf-8", errors="replace")
+            raise RuntimeError(f"HTTP {exc.code}: {body[:300]}") from exc
+
+    def _initialize(self) -> None:
+        init_id = self._next_id
+        self._next_id += 1
+        self._post(
+            {
+                "jsonrpc": "2.0",
+                "id": init_id,
+                "method": "initialize",
+                "params": {
+                    "protocolVersion": "2024-11-05",
+                    "capabilities": {},
+                    "clientInfo": {"name": "allhands", "version": "1.0"},
+                },
+            }
+        )
+        self._post({"jsonrpc": "2.0", "method": "notifications/initialized", "params": {}})
+
+    def list_tools(self) -> List[Dict[str, Any]]:
+        req_id = self._next_id
+        self._next_id += 1
+        resp = self._post({"jsonrpc": "2.0", "id": req_id, "method": "tools/list", "params": {}})
+        result = resp.get("result") or {}
+        return list(result.get("tools") or [])
+
+    def call_tool(self, name: str, arguments: Dict[str, Any]) -> str:
+        req_id = self._next_id
+        self._next_id += 1
+        resp = self._post(
+            {
+                "jsonrpc": "2.0",
+                "id": req_id,
+                "method": "tools/call",
+                "params": {"name": name, "arguments": arguments},
+            }
+        )
+        if resp.get("error"):
+            return f"Error: MCP tool call failed — {resp['error']}"
+        result = resp.get("result") or {}
+        content = result.get("content") or []
+        parts = [str(b.get("text")) for b in content if isinstance(b, dict) and b.get("text")]
+        return "\n".join(parts) if parts else json.dumps(result, indent=2)
+
+    def close(self) -> None:
+        return
+
+
+def _tool_enabled(raw_name: str, spec: Dict[str, Any]) -> bool:
+    enabled = spec.get("enabledTools") or spec.get("enabled_tools")
+    disabled = spec.get("disabledTools") or spec.get("disabled_tools")
+    if isinstance(disabled, list) and raw_name in disabled:
+        return False
+    if isinstance(enabled, list) and enabled:
+        return raw_name in enabled
+    if spec.get("enabled") is False:
+        return False
+    return True
+
+
+def _make_mcp_tool_func(client: Any, tool_name: str) -> Callable:
     def _run(**kwargs: Any) -> str:
         return client.call_tool(tool_name, kwargs)
 
@@ -158,26 +239,43 @@ def register_mcp_tools_from_settings() -> int:
     if not isinstance(servers, list):
         return 0
 
+    max_tools = int(get_workflow_settings().get("maxMcpTools") or 40)
     count = 0
     for spec in servers:
         if not isinstance(spec, dict):
             continue
+        if count >= max_tools:
+            add_system_log("System", "warning", f"MCP tool budget ({max_tools}) reached — skipping remaining servers")
+            break
         name = str(spec.get("name") or "mcp")
-        transport = str(spec.get("transport") or "stdio")
-        if transport != "stdio":
-            add_system_log("System", "warning", f"MCP server '{name}': only stdio transport supported in v1")
-            continue
-        command = spec.get("command")
-        if not command:
-            continue
-        args = spec.get("args") or []
-        if not isinstance(args, list):
-            args = []
+        transport = str(spec.get("transport") or "stdio").lower()
         try:
-            client = _McpStdioClient(name, str(command), [str(a) for a in args])
+            if transport in ("http", "sse", "streamable_http", "streamable-http"):
+                url = spec.get("url") or spec.get("endpoint")
+                if not url:
+                    add_system_log("System", "warning", f"MCP server '{name}': missing url for {transport}")
+                    continue
+                headers = spec.get("headers") if isinstance(spec.get("headers"), dict) else {}
+                client = _McpHttpClient(name, str(url), headers=headers)
+            elif transport == "stdio":
+                command = spec.get("command")
+                if not command:
+                    continue
+                args = spec.get("args") or []
+                if not isinstance(args, list):
+                    args = []
+                client = _McpStdioClient(name, str(command), [str(a) for a in args])
+            else:
+                add_system_log("System", "warning", f"MCP server '{name}': unsupported transport '{transport}'")
+                continue
             _MCP_CLIENTS[name] = client
+            registered = 0
             for tool_def in client.list_tools():
+                if count >= max_tools:
+                    break
                 raw_name = str(tool_def.get("name") or "tool")
+                if not _tool_enabled(raw_name, spec):
+                    continue
                 reg_name = f"mcp_{name}_{raw_name}".replace("-", "_").replace(".", "_")
                 schema = tool_def.get("inputSchema") or {
                     "type": "object",
@@ -195,7 +293,8 @@ def register_mcp_tools_from_settings() -> int:
                 _REGISTERED_MCP_TOOLS.append(reg_name)
                 _MCP_TOOL_INSTANCES.append(tool)
                 count += 1
-            add_system_log("System", "success", f"MCP '{name}': registered {len(client.list_tools())} tool(s)")
+                registered += 1
+            add_system_log("System", "success", f"MCP '{name}' ({transport}): registered {registered} tool(s)")
         except Exception as exc:
             add_system_log("System", "error", f"MCP server '{name}' failed: {exc}")
 

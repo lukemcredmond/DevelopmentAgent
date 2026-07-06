@@ -1,6 +1,8 @@
 import json
 import os
+import threading
 import time
+from concurrent.futures import ThreadPoolExecutor
 from typing import Any, Dict, Generator, List, Mapping, Optional, Sequence, Tuple, Union
 
 from ollama import Client
@@ -22,13 +24,15 @@ from backend.agents.tools import ToolRegistry
 from backend.services.logs import add_system_log
 from backend.agents.tool_outcomes import parse_run_command_exit
 from backend.services.diagnostics_parser import parse_command_diagnostics
-from backend.services.tool_execution_service import execute_tool
+from backend.services.parallel_tools import partition_tool_calls
+from backend.services.tool_execution_service import ToolExecutionResult, execute_tool
 from backend.services.workflow_settings import get_workflow_settings
 from backend.storage.memory_engine import SemanticMemoryEngine
 
 ChatMessage = Union[Mapping[str, Any], Message]
 
 SAME_ARGS_FAILURE_LIMIT = 3
+_FAILURE_LOCK = threading.Lock()
 
 
 def _normalize_tool_arguments(raw: Any) -> Dict[str, Any]:
@@ -225,6 +229,124 @@ class ScrumAgent:
     def _log_step_exit(self, message: str, log_type: str = "warning") -> None:
         add_system_log(self.role, log_type, message)
 
+    def _execute_single_tool_call(
+        self,
+        call: Any,
+        *,
+        task_id: Optional[str],
+        agent_id: str,
+        run_id: str,
+        user_prompt: str,
+        failed_tool_keys: List[Tuple[str, str]],
+        total_failures: List[int],
+        max_tool_failures: int,
+    ) -> Tuple[str, Dict[str, Any], ToolExecutionResult, Optional[str]]:
+        """Returns (tool_name, arguments, result, early_stop_message)."""
+        tool_name = call.function.name
+        arguments = _normalize_tool_arguments(call.function.arguments)
+        result = execute_tool(
+            agent_id,
+            tool_name,
+            arguments,
+            task_id=task_id,
+            source="agent",
+            skip_approval=False,
+            run_id=run_id,
+            user_prompt=user_prompt,
+            on_awaiting_approval=lambda name: update_run(status="awaiting_approval", current_tool=name),
+            on_tool_executing=lambda name: update_run(status="tool_executing", current_tool=name),
+        )
+        update_run(status="thinking", clear_tool=True)
+
+        if result.pending_approval:
+            stop_msg = result.tool_output
+            finish_run(status="awaiting_approval", error=stop_msg)
+            return tool_name, arguments, result, stop_msg
+
+        if not result.success and not result.pending_approval:
+            with _FAILURE_LOCK:
+                total_failures[0] += 1
+                key = (tool_name, json.dumps(arguments, sort_keys=True))
+                failed_tool_keys.append(key)
+                same_count = failed_tool_keys.count(key)
+                fail_total = total_failures[0]
+            if same_count >= SAME_ARGS_FAILURE_LIMIT:
+                stop_msg = (
+                    f"Stopped: tool '{tool_name}' failed repeatedly with the same arguments. "
+                    f"Last error: {result.tool_output[:200]}"
+                )
+                self._log_step_exit(stop_msg, "error")
+                finish_run(status="failed", error=stop_msg)
+                return tool_name, arguments, result, stop_msg
+            if fail_total >= max_tool_failures:
+                stop_msg = (
+                    f"Stopped: {total_failures[0]} tool failures this step (limit {max_tool_failures}). "
+                    f"Last error ({tool_name}): {result.tool_output[:200]}"
+                )
+                self._log_step_exit(stop_msg, "error")
+                finish_run(status="failed", error=stop_msg)
+                return tool_name, arguments, result, stop_msg
+        return tool_name, arguments, result, None
+
+    def _append_tool_messages(
+        self,
+        messages: List[ChatMessage],
+        tool_name: str,
+        arguments: Dict[str, Any],
+        tool_output: str,
+        success: bool,
+    ) -> None:
+        messages.append(
+            {
+                "role": "tool",
+                "tool_name": tool_name,
+                "content": tool_output,
+            }
+        )
+        if not success:
+            messages.append(
+                {
+                    "role": "system",
+                    "content": (
+                        f"Tool '{tool_name}' failed: {tool_output[:300]}. "
+                        "Do not repeat the same arguments. Try a different path, "
+                        "command, or approach to achieve the task."
+                        + (
+                            " apply_patch failed — call read_file on the same path, "
+                            "then retry with exact old_text from that result. Never use "
+                            "analyze output or pre-loaded context."
+                            if tool_name == "apply_patch"
+                            else ""
+                        )
+                    ),
+                }
+            )
+        elif tool_name == "run_command":
+            exit_code, body = parse_run_command_exit(tool_output)
+            command = str(arguments.get("command") or "")
+            diagnostics = parse_command_diagnostics(command, body or tool_output)
+            if diagnostics:
+                messages.append(
+                    {
+                        "role": "system",
+                        "content": (
+                            f"Command returned {len(diagnostics)} problems — fix each "
+                            "file:line listed above before re-running."
+                        ),
+                    }
+                )
+            elif exit_code is not None and exit_code > 0:
+                messages.append(
+                    {
+                        "role": "system",
+                        "content": (
+                            "Command completed with findings (non-zero exit). "
+                            "Fix listed issues with apply_patch/write_file, then re-run "
+                            "the lint command once. Do not repeat the same command without making changes."
+                        ),
+                    }
+                )
+
     def _process_tool_calls(
         self,
         message: Message,
@@ -241,99 +363,47 @@ class ScrumAgent:
         from backend.agents.registry import AGENT_MAP
 
         agent_id = next((aid for aid, a in AGENT_MAP.items() if a is self), "dev")
+        run_id = run.run_id if run else "NO-RUN"
+        all_calls = list(message.tool_calls or [])
+        parallel_calls, sequential_calls = partition_tool_calls(all_calls)
+        results_by_id: Dict[int, Tuple[str, Dict[str, Any], ToolExecutionResult, Optional[str]]] = {}
 
-        for call in message.tool_calls or []:
-            tool_name = call.function.name
-            arguments = _normalize_tool_arguments(call.function.arguments)
+        if parallel_calls:
+            with ThreadPoolExecutor(max_workers=min(8, len(parallel_calls))) as pool:
+                future_map = {
+                    pool.submit(
+                        self._execute_single_tool_call,
+                        call,
+                        task_id=task_id,
+                        agent_id=agent_id,
+                        run_id=run_id,
+                        user_prompt=user_prompt,
+                        failed_tool_keys=failed_tool_keys,
+                        total_failures=total_failures,
+                        max_tool_failures=max_tool_failures,
+                    ): call
+                    for call in parallel_calls
+                }
+                for future, call in future_map.items():
+                    results_by_id[id(call)] = future.result()
 
-            run_id = run.run_id if run else "NO-RUN"
-            result = execute_tool(
-                agent_id,
-                tool_name,
-                arguments,
+        for call in sequential_calls:
+            results_by_id[id(call)] = self._execute_single_tool_call(
+                call,
                 task_id=task_id,
-                source="agent",
-                skip_approval=False,
+                agent_id=agent_id,
                 run_id=run_id,
                 user_prompt=user_prompt,
-                on_awaiting_approval=lambda name: update_run(status="awaiting_approval", current_tool=name),
-                on_tool_executing=lambda name: update_run(status="tool_executing", current_tool=name),
+                failed_tool_keys=failed_tool_keys,
+                total_failures=total_failures,
+                max_tool_failures=max_tool_failures,
             )
-            tool_output = result.tool_output
-            success = result.success
-            update_run(status="thinking", clear_tool=True)
 
-            if not success:
-                total_failures[0] += 1
-                key = (tool_name, json.dumps(arguments, sort_keys=True))
-                failed_tool_keys.append(key)
-                if failed_tool_keys.count(key) >= SAME_ARGS_FAILURE_LIMIT:
-                    stop_msg = (
-                        f"Stopped: tool '{tool_name}' failed repeatedly with the same arguments. "
-                        f"Last error: {tool_output[:200]}"
-                    )
-                    self._log_step_exit(stop_msg, "error")
-                    finish_run(status="failed", error=stop_msg)
-                    return stop_msg
-                if total_failures[0] >= max_tool_failures:
-                    stop_msg = (
-                        f"Stopped: {total_failures[0]} tool failures this step (limit {max_tool_failures}). "
-                        f"Last error ({tool_name}): {tool_output[:200]}"
-                    )
-                    self._log_step_exit(stop_msg, "error")
-                    finish_run(status="failed", error=stop_msg)
-                    return stop_msg
-
-            messages.append(
-                {
-                    "role": "tool",
-                    "tool_name": tool_name,
-                    "content": tool_output,
-                }
-            )
-            if not success:
-                messages.append(
-                    {
-                        "role": "system",
-                        "content": (
-                            f"Tool '{tool_name}' failed: {tool_output[:300]}. "
-                            "Do not repeat the same arguments. Try a different path, "
-                            "command, or approach to achieve the task."
-                            + (
-                                " apply_patch failed — call read_file on the same path, "
-                                "then retry with exact old_text from that result. Never use "
-                                "analyze output or pre-loaded context."
-                                if tool_name == "apply_patch"
-                                else ""
-                            )
-                        ),
-                    }
-                )
-            elif tool_name == "run_command":
-                exit_code, body = parse_run_command_exit(tool_output)
-                command = str(arguments.get("command") or "")
-                diagnostics = parse_command_diagnostics(command, body or tool_output)
-                if diagnostics:
-                    messages.append(
-                        {
-                            "role": "system",
-                            "content": (
-                                f"Command returned {len(diagnostics)} problems — fix each "
-                                "file:line listed above before re-running."
-                            ),
-                        }
-                    )
-                elif exit_code is not None and exit_code > 0:
-                    messages.append(
-                        {
-                            "role": "system",
-                            "content": (
-                                "Command completed with findings (non-zero exit). "
-                                "Fix listed issues with apply_patch/write_file, then re-run "
-                                "the lint command once. Do not repeat the same command without making changes."
-                            ),
-                        }
-                    )
+        for call in all_calls:
+            tool_name, arguments, result, early_stop = results_by_id[id(call)]
+            if early_stop:
+                return early_stop
+            self._append_tool_messages(messages, tool_name, arguments, result.tool_output, result.success)
         return None
 
     def execute_step(self, user_prompt: str, max_iterations: int = 8) -> str:

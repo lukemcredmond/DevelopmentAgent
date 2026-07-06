@@ -30,6 +30,11 @@ export default function ToolApprovalModal({
           {formatTaskText(pending.agent)} wants to run{' '}
           <span className="text-amber-300 font-mono">{pending.toolName}</span>
           {pending.taskId ? ` on task ${pending.taskId}` : ''}.
+          {(pending.nonBlocking ?? true) && (
+            <span className="block mt-2 text-cat-overlay text-[10px]">
+              Non-blocking mode: the sprint step is paused until you approve or deny.
+            </span>
+          )}
         </p>
         <pre className="text-[10px] font-mono bg-cat-base border border-cat-surface1 rounded p-3 mb-4 overflow-x-auto text-cat-subtext">
           {JSON.stringify(pending.toolArgs ?? {}, null, 2)}

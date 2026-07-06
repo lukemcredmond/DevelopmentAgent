@@ -136,6 +136,12 @@ export interface WorkflowSettings {
   maxFixVerifyRounds?: number
   requireToolApproval?: boolean
   toolApprovalTools?: string[]
+  nonBlockingToolApproval?: boolean
+  commandAutoRunMode?: 'off' | 'allowlist' | 'denylist' | 'all'
+  commandAllowlist?: string[]
+  commandDenylist?: string[]
+  allowChainedCommands?: boolean
+  maxMcpTools?: number
   mcpServers?: McpServerConfig[]
   definitionOfDone: string[]
   maxSprintSteps: number
@@ -156,8 +162,13 @@ export interface WorkflowSettings {
 export interface McpServerConfig {
   name: string
   transport?: string
-  command: string
+  command?: string
   args?: string[]
+  url?: string
+  headers?: Record<string, string>
+  enabled?: boolean
+  enabledTools?: string[]
+  disabledTools?: string[]
 }
 
 export interface RecentToolEntry {
@@ -265,6 +276,7 @@ export interface PendingToolApproval {
   toolName: string
   toolArgs?: Record<string, unknown>
   timestamp: string
+  nonBlocking?: boolean
 }
 
 export interface BriefChangelogEntry {
@@ -426,6 +438,12 @@ export interface WorkflowSettingsPayload {
   maxFixVerifyRounds?: number
   requireToolApproval?: boolean
   toolApprovalTools?: string[]
+  nonBlockingToolApproval?: boolean
+  commandAutoRunMode?: 'off' | 'allowlist' | 'denylist' | 'all'
+  commandAllowlist?: string[]
+  commandDenylist?: string[]
+  allowChainedCommands?: boolean
+  maxMcpTools?: number
   mcpServers?: McpServerConfig[]
   definitionOfDone?: string[]
   maxSprintSteps?: number
@@ -550,6 +568,15 @@ export interface GitStatusResponse {
   stderr?: string
 }
 
+export interface BackgroundTerminalSession {
+  id: string
+  command: string
+  output: string
+  done: boolean
+  exitCode?: number | null
+  startedAt?: string
+}
+
 export type AppEventType =
   | 'state'
   | 'board'
@@ -563,6 +590,7 @@ export type AppEventType =
   | 'tool_end'
   | 'agent_run'
   | 'tool_approval_required'
+  | 'terminal_stream'
   | 'sprint_progress'
   | 'connected'
 
@@ -602,6 +630,12 @@ export const DEFAULT_WORKFLOW_SETTINGS: WorkflowSettings = {
   maxFixVerifyRounds: 3,
   requireToolApproval: false,
   toolApprovalTools: ['write_file', 'run_command', 'delete_file'],
+  nonBlockingToolApproval: true,
+  commandAutoRunMode: 'off',
+  commandAllowlist: ['flutter analyze', 'dart analyze', 'npm test', 'npm run lint', 'pytest', 'ruff check'],
+  commandDenylist: ['rm ', 'del ', 'rmdir ', 'format ', 'shutdown'],
+  allowChainedCommands: false,
+  maxMcpTools: 40,
   mcpServers: [],
   definitionOfDone: [],
   maxSprintSteps: 20,

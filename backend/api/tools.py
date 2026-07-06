@@ -208,4 +208,5 @@ def post_tool_approval(approval_id: str, payload: ToolApprovalPayload):
         ok = resolve_tool_approval(approval_id, payload.approved)
         if not ok:
             raise HTTPException(status_code=404, detail="Approval request not found or already resolved")
-    return {"ok": True, "pending": list_pending_approvals()}
+        pending = list_pending_approvals()
+    return {**build_state_response(), "ok": True, "pending": pending}

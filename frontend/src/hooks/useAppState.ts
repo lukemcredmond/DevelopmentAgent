@@ -3,17 +3,20 @@ import {
   cancelSprint,
   clearLogs as clearLogsApi,
   clearToolHistory,
+  fetchBackgroundTerminals,
   fetchPendingApprovals,
   fetchPendingTools,
   fetchState,
   fetchToolHistory,
   runSprint,
+  stopBackgroundTerminal,
   subscribeEvents,
 } from '../api/client'
 import type {
   ActivityEvent,
   AgentRunState,
   AppState,
+  BackgroundTerminalSession,
   Board,
   CommandDiagnostic,
   PendingToolApproval,
@@ -248,6 +251,7 @@ function mapApprovalFromEvent(data: Record<string, unknown>): PendingToolApprova
     toolName: String(data.toolName ?? data.tool_name ?? ''),
     toolArgs: (data.toolArgs ?? data.tool_args) as Record<string, unknown> | undefined,
     timestamp: String(data.timestamp ?? ''),
+    nonBlocking: data.nonBlocking === true,
   }
 }
 
@@ -263,6 +267,7 @@ export function useAppState() {
   const [displayRun, setDisplayRun] = useState<AgentRunState | null>(null)
   const [currentTool, setCurrentTool] = useState<string | null>(null)
   const [toolEvents, setToolEvents] = useState<ToolExecutionEvent[]>([])
+  const [terminalSessions, setTerminalSessions] = useState<BackgroundTerminalSession[]>([])
   const [toolStartTick, setToolStartTick] = useState(0)
   const [sprintProgress, setSprintProgress] = useState<SprintProgress | null>(null)
   const liveActivityRef = useRef<ActivityEvent[]>([])
@@ -312,6 +317,39 @@ export function useAppState() {
       setPendingTools(data.pending ?? [])
     } catch {
       setPendingTools([])
+    }
+  }, [])
+
+  const refreshTerminalSessions = useCallback(async () => {
+    try {
+      const data = await fetchBackgroundTerminals()
+      setTerminalSessions((prev) => {
+        const byId = new Map(prev.map((s) => [s.id, s]))
+        return (data.sessions ?? []).map((s) => {
+          const existing = byId.get(s.id)
+          return {
+            id: s.id,
+            command: s.command,
+            output: existing?.output ?? '',
+            done: s.done,
+            exitCode: s.exitCode,
+            startedAt: s.startedAt,
+          }
+        })
+      })
+    } catch {
+      /* optional during startup */
+    }
+  }, [])
+
+  const stopTerminalSession = useCallback(async (sessionId: string) => {
+    try {
+      await stopBackgroundTerminal(sessionId)
+      setTerminalSessions((prev) =>
+        prev.map((s) => (s.id === sessionId ? { ...s, done: true } : s)),
+      )
+    } catch {
+      /* best effort */
     }
   }, [])
 
@@ -374,10 +412,11 @@ export function useAppState() {
       void refreshPendingTools()
       void refreshPendingApprovals()
       void refreshToolHistory()
+      void refreshTerminalSessions()
     } catch (e) {
       setError(e instanceof Error ? e.message : 'Failed to fetch state')
     }
-  }, [syncActivityFromBoard, refreshPendingTools, refreshPendingApprovals, refreshToolHistory])
+  }, [syncActivityFromBoard, refreshPendingTools, refreshPendingApprovals, refreshToolHistory, refreshTerminalSessions])
 
   const applyState = useCallback(
     (data: AppState) => {
@@ -424,7 +463,8 @@ export function useAppState() {
   useEffect(() => {
     void refresh()
     void refreshToolHistory()
-  }, [refresh, refreshToolHistory])
+    void refreshTerminalSessions()
+  }, [refresh, refreshToolHistory, refreshTerminalSessions])
 
   useEffect(() => {
     syncActivityFromBoard(state.board)
@@ -522,6 +562,58 @@ export function useAppState() {
           prev.some((p) => p.id === approval.id) ? prev : [...prev, approval],
         )
         void refreshPendingApprovals()
+      } else if (event.type === 'terminal_stream' && event.data) {
+        const payload = event.data as Record<string, unknown>
+        const sessionId = String(payload.sessionId ?? '')
+        if (!sessionId) return
+        setTerminalSessions((prev) => {
+          const idx = prev.findIndex((s) => s.id === sessionId)
+          if (payload.started) {
+            const command = String(payload.command ?? '')
+            if (idx >= 0) {
+              return prev.map((s) =>
+                s.id === sessionId ? { ...s, command: command || s.command, output: '' } : s,
+              )
+            }
+            return [
+              {
+                id: sessionId,
+                command,
+                output: '',
+                done: false,
+                startedAt: new Date().toISOString(),
+              },
+              ...prev,
+            ].slice(0, 20)
+          }
+          const chunk = payload.chunk != null ? String(payload.chunk) : ''
+          const done = payload.done === true
+          const exitCode =
+            payload.exitCode != null ? Number(payload.exitCode) : undefined
+          if (idx >= 0) {
+            return prev.map((s) =>
+              s.id === sessionId
+                ? {
+                    ...s,
+                    output: chunk ? s.output + chunk : s.output,
+                    done: done || s.done,
+                    exitCode: exitCode ?? s.exitCode,
+                  }
+                : s,
+            )
+          }
+          return [
+            {
+              id: sessionId,
+              command: '',
+              output: chunk,
+              done,
+              exitCode,
+              startedAt: new Date().toISOString(),
+            },
+            ...prev,
+          ].slice(0, 20)
+        })
       }
     })
 
@@ -565,6 +657,9 @@ export function useAppState() {
     refreshPendingTools,
     pendingApprovals,
     refreshPendingApprovals,
+    refreshTerminalSessions,
+    stopTerminalSession,
+    terminalSessions,
     activeRun: runBarState,
     currentTool,
     toolEvents,

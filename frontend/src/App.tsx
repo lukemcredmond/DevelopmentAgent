@@ -140,6 +140,8 @@ export default function App() {
     toolEvents,
     clearToolEvents,
     mergeToolEvent,
+    terminalSessions,
+    stopTerminalSession,
     toolFailureCount,
     toolRunningCount,
     sprintProgress,
@@ -873,6 +875,8 @@ export default function App() {
                   <div className="absolute inset-0 flex flex-col min-h-0">
                     <ToolsPanel
                       toolEvents={toolEvents}
+                      terminalSessions={terminalSessions}
+                      onStopTerminal={stopTerminalSession}
                       onClearLog={clearToolEvents}
                       onMergeToolEvent={mergeToolEvent}
                       board={state.board}
@@ -1176,7 +1180,9 @@ export default function App() {
         onClose={() => setApprovalModal(null)}
         onResolved={() => void refreshPendingApprovals()}
         onApprove={async (id, approved) => {
-          await resolveToolApproval(id, approved)
+          const data = await resolveToolApproval(id, approved)
+          applyState(data)
+          void refreshToolHistory()
         }}
       />
     </div>

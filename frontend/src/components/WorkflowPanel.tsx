@@ -174,6 +174,96 @@ export default function WorkflowPanel({
         <span className="text-indigo-300">apply_patch</span>, and{' '}
         <span className="text-indigo-300">run_command</span> pause until you approve in the modal.
       </p>
+      {(settings.requireToolApproval ?? false) && (
+        <label className="flex items-center gap-2 text-[11px] text-cat-subtext cursor-pointer pl-5">
+          <input
+            type="checkbox"
+            checked={settings.nonBlockingToolApproval !== false}
+            onChange={(e) => onSettingsChange({ nonBlockingToolApproval: e.target.checked })}
+          />
+          Non-blocking approval (don&apos;t freeze sprint thread)
+        </label>
+      )}
+      {(settings.requireToolApproval ?? false) && (
+        <div className="pl-5 space-y-2">
+          <label className="text-[11px] text-cat-subtext block">
+            <span className="text-[10px] text-cat-overlay block">Command auto-run mode</span>
+            <select
+              value={settings.commandAutoRunMode ?? 'off'}
+              onChange={(e) =>
+                onSettingsChange({
+                  commandAutoRunMode: e.target.value as
+                    | 'off'
+                    | 'allowlist'
+                    | 'denylist'
+                    | 'all',
+                })
+              }
+              className="w-full bg-cat-base border border-cat-surface1 rounded p-1 text-white text-[11px]"
+            >
+              <option value="off">Off — all run_command needs approval</option>
+              <option value="allowlist">Allowlist — auto-run matching commands</option>
+              <option value="denylist">Denylist — block only matching commands</option>
+              <option value="all">All — auto-run every command</option>
+            </select>
+          </label>
+          {(settings.commandAutoRunMode === 'allowlist' ||
+            settings.commandAutoRunMode === 'denylist') && (
+            <label className="text-[11px] text-cat-subtext block">
+              <span className="text-[10px] text-cat-overlay block">
+                {settings.commandAutoRunMode === 'allowlist' ? 'Allowlist' : 'Denylist'} (one per
+                line)
+              </span>
+              <textarea
+                rows={3}
+                value={(settings.commandAutoRunMode === 'allowlist'
+                  ? settings.commandAllowlist
+                  : settings.commandDenylist
+                )?.join('\n') ?? ''}
+                onChange={(e) => {
+                  const lines = e.target.value
+                    .split('\n')
+                    .map((l) => l.trim())
+                    .filter(Boolean)
+                  if (settings.commandAutoRunMode === 'allowlist') {
+                    onSettingsChange({ commandAllowlist: lines })
+                  } else {
+                    onSettingsChange({ commandDenylist: lines })
+                  }
+                }}
+                className="w-full bg-cat-base border border-cat-surface1 rounded p-1 text-[10px] font-mono text-white"
+              />
+            </label>
+          )}
+          <label className="flex items-center gap-2 text-[11px] text-cat-subtext cursor-pointer">
+            <input
+              type="checkbox"
+              checked={settings.allowChainedCommands ?? false}
+              onChange={(e) => onSettingsChange({ allowChainedCommands: e.target.checked })}
+            />
+            Allow safe command chaining (&& and ;)
+          </label>
+        </div>
+      )}
+
+      <label className="text-[11px] text-cat-subtext block">
+        <span className="text-[10px] text-cat-overlay block">Max MCP tools (budget)</span>
+        <input
+          type="number"
+          min={0}
+          max={200}
+          value={settings.maxMcpTools ?? 40}
+          onChange={(e) =>
+            onSettingsChange({ maxMcpTools: Math.max(0, parseInt(e.target.value, 10) || 40) })
+          }
+          className="w-full bg-cat-base border border-cat-surface1 rounded p-1 text-white"
+        />
+      </label>
+      <p className="text-[10px] text-cat-overlay leading-relaxed -mt-1">
+        MCP servers are configured in workflow settings JSON (stdio, http, or sse transport).
+        Per-server <span className="font-mono">enabledTools</span> /{' '}
+        <span className="font-mono">disabledTools</span> filter which tools register.
+      </p>
 
       <label className="flex items-center gap-2 text-[11px] text-cat-subtext cursor-pointer">
         <input

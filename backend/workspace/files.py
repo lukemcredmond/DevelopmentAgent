@@ -249,24 +249,75 @@ def apply_workspace_patch(path: str, old_text: str, new_text: str) -> str:
     return write_workspace_file(path, updated)
 
 
-def read_workspace_file(path: str) -> str:
+def read_workspace_file(
+    path: str,
+    start_line: Optional[int] = None,
+    end_line: Optional[int] = None,
+) -> str:
     try:
         safe_path = resolve_workspace_path(path)
     except ValueError as e:
         return str(e)
 
     phys_path = os.path.join(state.WORKSPACE_DIR, safe_path)
+    content: Optional[str] = None
     if os.path.exists(phys_path):
         try:
             with open(phys_path, "r", encoding="utf-8") as f:
                 content = f.read()
                 state.VIRTUAL_FILESYSTEM[safe_path] = content
-                if state.ACTIVE_SPRINT_TASK_ID:
-                    record_task_file(state.ACTIVE_SPRINT_TASK_ID, safe_path, "read", persist=True)
-                return content
         except Exception:
             pass
-    return state.VIRTUAL_FILESYSTEM.get(safe_path, f"Error: File '{safe_path}' not found.")
+    if content is None:
+        content = state.VIRTUAL_FILESYSTEM.get(safe_path)
+    if content is None:
+        return f"Error: File '{safe_path}' not found."
+
+    if state.ACTIVE_SPRINT_TASK_ID:
+        record_task_file(state.ACTIVE_SPRINT_TASK_ID, safe_path, "read", persist=True)
+
+    lines = content.splitlines()
+    total = len(lines)
+    start = max(1, int(start_line)) if start_line else 1
+    end = min(total, int(end_line)) if end_line else total
+    if start_line or end_line:
+        if start > total:
+            return f"Error: start_line {start} exceeds file length ({total} lines)."
+        if end < start:
+            end = start
+        sliced = lines[start - 1 : end]
+        numbered = "\n".join(f"{i}|{line}" for i, line in enumerate(sliced, start=start))
+        return f"File: {safe_path} (lines {start}-{end} of {total})\n{numbered}"
+    return content
+
+
+def list_workspace_dir(path: str = ".", limit: int = 200) -> str:
+    """List directory entries relative to workspace root."""
+    try:
+        safe_path = resolve_workspace_path(path or ".")
+    except ValueError as e:
+        return str(e)
+    root = os.path.join(state.WORKSPACE_DIR, safe_path)
+    if not os.path.isdir(root):
+        return f"Error: '{safe_path}' is not a directory."
+    entries: List[str] = []
+    try:
+        for name in sorted(os.listdir(root)):
+            if name.startswith(".") and name not in (".env.example",):
+                continue
+            full = os.path.join(root, name)
+            rel = os.path.join(safe_path, name).replace("\\", "/")
+            if safe_path in (".", ""):
+                rel = name
+            kind = "dir" if os.path.isdir(full) else "file"
+            entries.append(f"{kind}\t{rel}")
+            if len(entries) >= int(limit or 200):
+                entries.append(f"... truncated at {limit} entries")
+                break
+    except OSError as exc:
+        return f"Error listing '{safe_path}': {exc}"
+    header = f"Directory: {safe_path or '.'} ({len(entries)} entries)"
+    return header + "\n" + "\n".join(entries)
 
 
 def run_tests_on_workspace(test_script_path: str) -> str:
@@ -331,8 +382,20 @@ def run_tests_on_workspace(test_script_path: str) -> str:
     return f"❌ QA Validation Failure for '{test_script_path}':\n{last_output[:1500]}"
 
 
-def run_agent_command(command: str) -> str:
+def run_agent_command(command: str, background: bool = False) -> str:
     """Runs a shell command for sprint agents; returns structured text output."""
+    if background:
+        from backend.services.background_terminal import start_background_command
+
+        ok, msg, session_id = start_background_command(command)
+        if not ok:
+            return f"Error: {msg}"
+        return (
+            f"Background terminal session {session_id} started.\n"
+            f"Command: {command}\n"
+            "Output streams to Tools panel; use read_background_output or wait for completion."
+        )
+
     from backend.services.command_result import format_command_result_for_agent, run_workspace_command
 
     result = run_workspace_command(command)

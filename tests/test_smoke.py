@@ -834,6 +834,7 @@ def test_resolve_tool_approval_unblocks():
         run_id="RUN1",
         task_id="T1",
         agent="Developer",
+        agent_id="dev",
         tool_name="write_file",
         arguments={"path": "lib/a.dart", "content": "x"},
         timestamp=datetime.now().strftime("%Y-%m-%d %H:%M:%S"),

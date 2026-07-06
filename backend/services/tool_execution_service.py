@@ -216,6 +216,8 @@ class ToolExecutionResult:
     task_id: Optional[str]
     source: ToolSource
     run_id: str
+    pending_approval: bool = False
+    approval_id: Optional[str] = None
 
 
 @contextmanager
@@ -536,16 +538,36 @@ def execute_tool(
                         from_cache = True
 
         if not from_cache:
-            if not skip_approval and tool_requires_approval(tool_name):
+            if not skip_approval and tool_requires_approval(tool_name, arguments):
                 if on_awaiting_approval:
                     on_awaiting_approval(tool_name)
-                approved, deny_msg = request_tool_approval(
+                approved, deny_msg, approval_id = request_tool_approval(
                     effective_run_id,
                     tool_name,
                     arguments,
                     task_id=task_id,
                     agent=agent_role,
+                    agent_id=agent_id,
+                    user_prompt=user_prompt,
                 )
+                if deny_msg.startswith("AWAITING_APPROVAL:"):
+                    duration_ms = int((time.time() - started) * 1000)
+                    return ToolExecutionResult(
+                        tool_name=tool_name,
+                        arguments=arguments,
+                        safe_args=safe_args,
+                        tool_output=deny_msg,
+                        success=False,
+                        duration_ms=duration_ms,
+                        timestamp=ts,
+                        agent=agent_role,
+                        agent_id=agent_id,
+                        task_id=task_id,
+                        source=source,
+                        run_id=effective_run_id,
+                        pending_approval=True,
+                        approval_id=approval_id,
+                    )
                 if on_tool_executing:
                     on_tool_executing(tool_name)
                 if not approved:
@@ -686,7 +708,32 @@ def execute_tool(
         task_id=task_id,
         source=source,
         run_id=effective_run_id,
+        pending_approval=False,
+        approval_id=None,
     )
+
+
+def execute_deferred_approval(approval: Any) -> None:
+    """Run a tool after the user approved a non-blocking approval request."""
+    from backend.services.tool_approval import PendingToolApproval
+
+    if not isinstance(approval, PendingToolApproval) or approval.executed:
+        return
+    agent_id = approval.agent_id or "dev"
+    execute_tool(
+        agent_id,
+        approval.tool_name,
+        approval.arguments,
+        task_id=approval.task_id,
+        source="agent",
+        skip_approval=True,
+        run_id=approval.run_id,
+        user_prompt=approval.user_prompt,
+    )
+    approval.executed = True
+    from backend.services.tool_approval import _remove_approval
+
+    _remove_approval(approval)
 
 
 def log_synthetic_tool_event(
