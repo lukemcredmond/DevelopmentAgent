@@ -404,22 +404,44 @@ def _inject_sprint_context(
     instructions: str,
 ) -> str:
     """Build sprint prompt with pre-loaded file contents (no Tools log row per step)."""
-    from backend.services.prompt_budget import sprint_file_context_max_chars
+    from backend.services.prompt_budget import (
+        semantic_sprint_context_max_chars,
+        sprint_file_context_max_chars,
+    )
     from backend.services.workflow_settings import get_workflow_settings
+    from backend.storage.code_index import build_semantic_sprint_context
 
     task_id = active_task["id"]
     num_ctx = int(get_workflow_settings().get("ollamaNumCtx", 32768))
-    context_block, paths = build_sprint_file_context(
+    total_budget = sprint_file_context_max_chars(num_ctx)
+    semantic_block, sem_paths = build_semantic_sprint_context(
         active_task,
-        max_chars=sprint_file_context_max_chars(num_ctx),
+        max_chars=semantic_sprint_context_max_chars(num_ctx),
     )
+    file_budget = max(1000, total_budget - len(semantic_block)) if semantic_block else total_budget
+    file_block, file_paths = build_sprint_file_context(active_task, max_chars=file_budget)
+    context_block = "".join(part for part in (semantic_block, file_block) if part)
+    paths = list(dict.fromkeys([*sem_paths, *file_paths]))
     if paths:
-        add_system_log(
-            agent_role,
-            "info",
-            f"Pre-loaded {len(paths)} file(s) for {task_id}: {', '.join(paths[:8])}"
-            + ("…" if len(paths) > 8 else ""),
-        )
+        if semantic_block and file_block:
+            add_system_log(
+                agent_role,
+                "info",
+                f"Pre-loaded semantic + {len(file_paths)} file(s) for {task_id}",
+            )
+        elif semantic_block:
+            add_system_log(
+                agent_role,
+                "info",
+                f"Pre-loaded {len(sem_paths)} semantic chunk(s) for {task_id}",
+            )
+        else:
+            add_system_log(
+                agent_role,
+                "info",
+                f"Pre-loaded {len(paths)} file(s) for {task_id}: {', '.join(paths[:8])}"
+                + ("…" if len(paths) > 8 else ""),
+            )
         task = find_task_by_id(task_id)
         if task:
             normalize_task(task)

@@ -1,4 +1,5 @@
-import { useState } from 'react'
+import { useCallback, useEffect, useState } from 'react'
+import { fetchIndexStatus, reindexCodebase } from '../api/client'
 import type { BriefChangelogEntry, WorkflowNotifications, WorkflowSettings } from '../types'
 
 interface WorkflowPanelProps {
@@ -16,6 +17,43 @@ export default function WorkflowPanel({
 }: WorkflowPanelProps) {
   const [dodInput, setDodInput] = useState('')
   const [showChangelog, setShowChangelog] = useState(false)
+  const [showPerformanceTips, setShowPerformanceTips] = useState(false)
+  const [indexStatus, setIndexStatus] = useState<{
+    ok?: boolean
+    available?: boolean
+    chunks?: number
+  } | null>(null)
+  const [reindexing, setReindexing] = useState(false)
+  const [indexError, setIndexError] = useState<string | null>(null)
+
+  const refreshIndexStatus = useCallback(async () => {
+    try {
+      const data = await fetchIndexStatus()
+      setIndexStatus(data)
+      setIndexError(null)
+    } catch {
+      setIndexStatus({ ok: false, available: false, chunks: 0 })
+    }
+  }, [])
+
+  useEffect(() => {
+    if (settings.enableSemanticSearch !== false) {
+      void refreshIndexStatus()
+    }
+  }, [settings.enableSemanticSearch, refreshIndexStatus])
+
+  const handleReindex = async () => {
+    setReindexing(true)
+    setIndexError(null)
+    try {
+      await reindexCodebase()
+      await refreshIndexStatus()
+    } catch (e) {
+      setIndexError(e instanceof Error ? e.message : 'Reindex failed')
+    } finally {
+      setReindexing(false)
+    }
+  }
 
   return (
     <div className="bg-cat-surface0 p-3 rounded-xl border border-cat-surface1 space-y-3">
@@ -303,6 +341,134 @@ export default function WorkflowPanel({
         Requires Qdrant at{' '}
         <span className="font-mono">{settings.qdrantUrl ?? 'http://localhost:6333'}</span> and{' '}
         <span className="font-mono">ollama pull nomic-embed-text</span>.
+      </p>
+      {(settings.enableSemanticSearch ?? true) && (
+        <div className="pl-5 flex flex-wrap items-center gap-2 text-[10px]">
+          <span
+            className={`px-1.5 py-0.5 rounded ${
+              indexStatus?.chunks
+                ? 'bg-emerald-950/50 text-emerald-300'
+                : indexStatus?.available
+                  ? 'bg-amber-950/50 text-amber-300'
+                  : 'bg-cat-surface1 text-cat-overlay'
+            }`}
+          >
+            Index:{' '}
+            {indexStatus == null
+              ? '…'
+              : indexStatus.chunks
+                ? `${indexStatus.chunks} chunks`
+                : indexStatus.available
+                  ? 'empty — reindex'
+                  : 'Qdrant offline'}
+          </span>
+          <button
+            type="button"
+            disabled={reindexing}
+            onClick={() => void handleReindex()}
+            className="text-indigo-300 hover:text-indigo-200 disabled:opacity-50"
+          >
+            {reindexing ? 'Indexing…' : 'Reindex codebase'}
+          </button>
+          <button
+            type="button"
+            onClick={() => void refreshIndexStatus()}
+            className="text-cat-overlay hover:text-cat-subtext"
+          >
+            Refresh
+          </button>
+        </div>
+      )}
+      {indexError && (
+        <p className="text-[10px] text-rose-300 pl-5">{indexError}</p>
+      )}
+      <label className="flex items-center gap-2 text-[11px] text-cat-subtext cursor-pointer pl-5">
+        <input
+          type="checkbox"
+          checked={settings.enableSemanticSprintContext !== false}
+          onChange={(e) => onSettingsChange({ enableSemanticSprintContext: e.target.checked })}
+        />
+        Pre-load semantic index chunks at sprint step start
+      </label>
+
+      <div className="border-t border-cat-surface1 pt-2">
+        <button
+          type="button"
+          onClick={() => setShowPerformanceTips((v) => !v)}
+          className="text-[10px] uppercase tracking-wider text-cat-overlay hover:text-cat-subtext"
+        >
+          {showPerformanceTips ? '▼' : '▶'} Performance tuning
+        </button>
+        {showPerformanceTips && (
+          <div className="mt-2 space-y-2 text-[10px] text-cat-overlay leading-relaxed">
+            <p>
+              <span className="text-cat-subtext">Models:</span> use 7b/8b for PO/CR; dev 7b before
+              14b. Prefer quantized tags (e.g. <span className="font-mono">:q4_K_M</span>) on limited
+              RAM/VRAM.
+            </p>
+            <p>
+              <span className="text-cat-subtext">Qdrant:</span>{' '}
+              <span className="font-mono">docker run -p 6333:6333 qdrant/qdrant</span> then Reindex
+              above. Index updates incrementally on agent file writes.
+            </p>
+            <p>
+              <span className="text-cat-subtext">Iterations:</span> lower Max LLM iter/step (5) for
+              simple tasks. Trim assigned skills per agent.
+            </p>
+          </div>
+        )}
+      </div>
+
+      <label className="text-[11px] text-cat-subtext block">
+        <span className="text-[10px] text-cat-overlay block">Ollama keep-alive</span>
+        <input
+          type="text"
+          value={settings.ollamaKeepAlive ?? '30m'}
+          onChange={(e) => onSettingsChange({ ollamaKeepAlive: e.target.value || '30m' })}
+          className="w-full bg-cat-base border border-cat-surface1 rounded p-1 text-white font-mono text-[11px]"
+        />
+      </label>
+      <p className="text-[10px] text-cat-overlay leading-relaxed -mt-1">
+        Keeps model loaded between sprint iterations (e.g. 30m). Reduces reload latency.
+      </p>
+
+      <label className="text-[11px] text-cat-subtext block">
+        <span className="text-[10px] text-cat-overlay block">Max tool output chars (to LLM)</span>
+        <input
+          type="number"
+          min={1000}
+          max={50000}
+          step={500}
+          value={settings.maxToolOutputCharsForLlm ?? 6000}
+          onChange={(e) =>
+            onSettingsChange({
+              maxToolOutputCharsForLlm: Math.max(1000, parseInt(e.target.value, 10) || 6000),
+            })
+          }
+          className="w-full bg-cat-base border border-cat-surface1 rounded p-1 text-white"
+        />
+      </label>
+
+      <label className="text-[11px] text-cat-subtext block">
+        <span className="text-[10px] text-cat-overlay block">Message prune threshold (% of num_ctx)</span>
+        <input
+          type="number"
+          min={30}
+          max={90}
+          value={settings.messagePruneThresholdPct ?? 60}
+          onChange={(e) =>
+            onSettingsChange({
+              messagePruneThresholdPct: Math.min(
+                90,
+                Math.max(30, parseInt(e.target.value, 10) || 60),
+              ),
+            })
+          }
+          className="w-full bg-cat-base border border-cat-surface1 rounded p-1 text-white"
+        />
+      </label>
+      <p className="text-[10px] text-cat-overlay leading-relaxed -mt-1">
+        When conversation exceeds this budget, oldest tool messages are dropped before each LLM call.
       </p>
 
       <label className="text-[11px] text-cat-subtext block">

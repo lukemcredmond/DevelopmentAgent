@@ -157,6 +157,10 @@ export interface WorkflowSettings {
   qdrantUrl?: string
   embedModel?: string
   ollamaNumCtx?: number
+  ollamaKeepAlive?: string
+  maxToolOutputCharsForLlm?: number
+  messagePruneThresholdPct?: number
+  enableSemanticSprintContext?: boolean
 }
 
 export interface McpServerConfig {
@@ -459,6 +463,10 @@ export interface WorkflowSettingsPayload {
   qdrantUrl?: string
   embedModel?: string
   ollamaNumCtx?: number
+  ollamaKeepAlive?: string
+  maxToolOutputCharsForLlm?: number
+  messagePruneThresholdPct?: number
+  enableSemanticSprintContext?: boolean
 }
 
 export interface SkillsResponse {
@@ -651,6 +659,10 @@ export const DEFAULT_WORKFLOW_SETTINGS: WorkflowSettings = {
   qdrantUrl: 'http://localhost:6333',
   embedModel: 'nomic-embed-text',
   ollamaNumCtx: 32768,
+  ollamaKeepAlive: '30m',
+  maxToolOutputCharsForLlm: 6000,
+  messagePruneThresholdPct: 60,
+  enableSemanticSprintContext: true,
 }
 
 export const EMPTY_BOARD: Board = {

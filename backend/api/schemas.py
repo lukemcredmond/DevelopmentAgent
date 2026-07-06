@@ -115,6 +115,10 @@ class WorkflowSettingsPayload(BaseModel):
     qdrantUrl: Optional[str] = None
     embedModel: Optional[str] = None
     ollamaNumCtx: Optional[int] = None
+    ollamaKeepAlive: Optional[str] = None
+    maxToolOutputCharsForLlm: Optional[int] = None
+    messagePruneThresholdPct: Optional[int] = None
+    enableSemanticSprintContext: Optional[bool] = None
 
 
 class DiagnoseTaskPayload(BaseModel):

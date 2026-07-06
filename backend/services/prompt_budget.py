@@ -24,3 +24,8 @@ def skills_context_max_chars(num_ctx: int) -> int:
 
 def workspace_file_list_cap(num_ctx: int) -> int:
     return 30 if num_ctx >= 8192 else 15
+
+
+def semantic_sprint_context_max_chars(num_ctx: int) -> int:
+    """Budget for semantic index chunks in sprint pre-load."""
+    return min(6000, max(1500, sprint_file_context_max_chars(num_ctx) // 2))

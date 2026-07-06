@@ -40,6 +40,10 @@ DEFAULT_WORKFLOW_SETTINGS: Dict[str, Any] = {
     "qdrantUrl": "http://localhost:6333",
     "embedModel": "nomic-embed-text",
     "ollamaNumCtx": 32768,
+    "ollamaKeepAlive": "30m",
+    "maxToolOutputCharsForLlm": 6000,
+    "messagePruneThresholdPct": 60,
+    "enableSemanticSprintContext": True,
 }
 
 DEFAULT_SPRINT_SUMMARY: Dict[str, Any] = {

@@ -257,3 +257,62 @@ def format_semantic_search_results(query: str, limit: int = 8) -> str:
         snippet = str(r.get("content", "")).replace("\n", " ")[:120]
         lines.append(f"- [{score:.3f}] {loc}: {snippet}")
     return "\n".join(lines)
+
+
+def build_semantic_sprint_context(
+    task: Dict[str, Any],
+    max_chars: int = 4000,
+) -> tuple[str, List[str]]:
+    """Inject top semantic index chunks for a sprint task when index is available."""
+    from backend.services.workflow_settings import get_workflow_settings
+
+    ws = get_workflow_settings()
+    if not ws.get("enableSemanticSearch", True) or ws.get("enableSemanticSprintContext", True) is False:
+        return "", []
+
+    engine = CodeIndexEngine()
+    status = engine.index_status()
+    if not status.get("chunks"):
+        return "", []
+
+    title = str(task.get("title") or "").strip()
+    desc = str(task.get("description") or "").strip()
+    query = "\n".join(part for part in (title, desc) if part)[:600]
+    if not query:
+        return "", []
+
+    results = engine.search(query, limit=5)
+    if not results:
+        return "", []
+
+    header = "\n=== SEMANTIC CODE CONTEXT (from index) ===\n"
+    blocks: List[str] = []
+    paths: List[str] = []
+    used = len(header)
+
+    for hit in results:
+        path = str(hit.get("path") or "")
+        start = hit.get("startLine")
+        end = hit.get("endLine")
+        score = hit.get("score", 0)
+        content = str(hit.get("content") or "")
+        block = (
+            f"--- {path}:{start}-{end} (relevance {score:.3f}) ---\n"
+            f"{content}\n--- END {path} ---"
+        )
+        if used + len(block) > max_chars and blocks:
+            break
+        if used + len(block) > max_chars:
+            remaining = max_chars - used - 40
+            if remaining > 200:
+                block = block[:remaining] + "\n...[truncated]\n"
+            else:
+                break
+        blocks.append(block)
+        used += len(block)
+        if path and path not in paths:
+            paths.append(path)
+
+    if not blocks:
+        return "", []
+    return header + "\n\n".join(blocks) + "\n", paths

@@ -128,10 +128,14 @@ class ScrumAgent:
 
     def _chat_options(self) -> Dict[str, Any]:
         ws = get_workflow_settings()
-        return {
+        opts: Dict[str, Any] = {
             "temperature": 0.1,
             "num_ctx": int(ws.get("ollamaNumCtx", 32768)),
         }
+        keep_alive = ws.get("ollamaKeepAlive")
+        if keep_alive:
+            opts["keep_alive"] = str(keep_alive)
+        return opts
 
     @staticmethod
     def _is_context_overflow_error(error: str) -> bool:
@@ -296,11 +300,14 @@ class ScrumAgent:
         tool_output: str,
         success: bool,
     ) -> None:
+        from backend.services.llm_context import truncate_tool_output_for_llm
+
+        llm_output = truncate_tool_output_for_llm(tool_name, tool_output)
         messages.append(
             {
                 "role": "tool",
                 "tool_name": tool_name,
-                "content": tool_output,
+                "content": llm_output,
             }
         )
         if not success:
@@ -308,7 +315,7 @@ class ScrumAgent:
                 {
                     "role": "system",
                     "content": (
-                        f"Tool '{tool_name}' failed: {tool_output[:300]}. "
+                        f"Tool '{tool_name}' failed: {llm_output[:300]}. "
                         "Do not repeat the same arguments. Try a different path, "
                         "command, or approach to achieve the task."
                         + (
@@ -322,9 +329,9 @@ class ScrumAgent:
                 }
             )
         elif tool_name == "run_command":
-            exit_code, body = parse_run_command_exit(tool_output)
+            exit_code, body = parse_run_command_exit(llm_output)
             command = str(arguments.get("command") or "")
-            diagnostics = parse_command_diagnostics(command, body or tool_output)
+            diagnostics = parse_command_diagnostics(command, body or llm_output)
             if diagnostics:
                 messages.append(
                     {
@@ -442,6 +449,9 @@ class ScrumAgent:
                     "info",
                     f"LLM iteration {iteration}/{max_iterations}",
                 )
+                from backend.services.llm_context import prune_messages_if_needed
+
+                prune_messages_if_needed(messages)
                 response = self._chat(
                     messages,
                     tools=tools or None,
