@@ -169,9 +169,11 @@ function historyPayloadToEvent(payload: Record<string, unknown>): ToolExecutionE
   const status: ToolExecutionEvent['status'] =
     statusRaw === 'running'
       ? 'running'
-      : success
-        ? 'completed'
-        : 'failed'
+      : statusRaw === 'awaiting_approval'
+        ? 'awaiting_approval'
+        : success
+          ? 'completed'
+          : 'failed'
   const runCommandStatus =
     payload.runCommandStatus != null ? String(payload.runCommandStatus) : undefined
   const exitCodeRaw = payload.exitCode ?? payload.exit_code
@@ -204,6 +206,13 @@ function applyToolEnd(events: ToolExecutionEvent[], payload: Record<string, unkn
   const exitCodeRaw = payload.exitCode ?? payload.exit_code
   const exitCode =
     exitCodeRaw != null && exitCodeRaw !== '' ? Number(exitCodeRaw) : undefined
+  const statusRaw = payload.status
+  const status: ToolExecutionEvent['status'] =
+    statusRaw === 'awaiting_approval'
+      ? 'awaiting_approval'
+      : success
+        ? 'completed'
+        : 'failed'
   const nextEntry: ToolExecutionEvent = {
     id,
     runId: String(payload.runId ?? payload.run_id ?? ''),
@@ -215,7 +224,7 @@ function applyToolEnd(events: ToolExecutionEvent[], payload: Record<string, unkn
     toolOutput: String(payload.toolOutput ?? ''),
     durationMs: Number(payload.durationMs ?? payload.duration_ms ?? 0),
     timestamp: String(payload.timestamp ?? new Date().toISOString()),
-    status: success ? 'completed' : 'failed',
+    status,
     source: mapToolSource(payload.source),
     exitCode: Number.isFinite(exitCode) ? exitCode : undefined,
     runCommandStatus,

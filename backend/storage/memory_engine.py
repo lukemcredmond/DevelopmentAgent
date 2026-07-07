@@ -10,6 +10,25 @@ import requests
 from backend.config import DB_PATH
 
 
+def resolve_embed_model(explicit: Optional[str] = None) -> str:
+    """Resolve Ollama embed model from workflow settings or explicit override."""
+    if explicit:
+        return explicit
+    from backend.services.workflow_settings import get_workflow_settings
+
+    return str(get_workflow_settings().get("embedModel") or "nomic-embed-text")
+
+
+def create_memory_engine(
+    ollama_url: str = "http://localhost:11434",
+    embed_model: Optional[str] = None,
+) -> "SemanticMemoryEngine":
+    return SemanticMemoryEngine(
+        ollama_url=ollama_url.rstrip("/"),
+        embed_model=resolve_embed_model(embed_model),
+    )
+
+
 class SemanticMemoryEngine:
     """
     SQLite-backed semantic memory with Ollama embeddings when available,
@@ -24,7 +43,7 @@ class SemanticMemoryEngine:
     ):
         self.db_path = db_path
         self.ollama_url = ollama_url.rstrip("/")
-        self.embed_model = embed_model
+        self.embed_model = resolve_embed_model(embed_model)
         self._init_db()
 
     def _init_db(self) -> None:

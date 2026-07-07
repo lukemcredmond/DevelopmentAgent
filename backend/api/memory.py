@@ -4,13 +4,13 @@ from fastapi import APIRouter, HTTPException
 
 from backend import state
 from backend.api.schemas import MemoryCreatePayload
-from backend.storage.memory_engine import SemanticMemoryEngine
+from backend.storage.memory_engine import SemanticMemoryEngine, create_memory_engine
 
 router = APIRouter()
 
 
 def _engine(ollama_url: str = "http://localhost:11434") -> SemanticMemoryEngine:
-    return SemanticMemoryEngine(ollama_url=ollama_url.rstrip("/"))
+    return create_memory_engine(ollama_url=ollama_url.rstrip("/"))
 
 
 @router.get("/api/memory")
@@ -41,7 +41,7 @@ def create_memory(payload: MemoryCreatePayload, ollamaUrl: str = "http://localho
 @router.delete("/api/memory/{memory_id}")
 def delete_memory(memory_id: str):
     with state.STATE_LOCK:
-        engine = SemanticMemoryEngine()
+        engine = create_memory_engine()
         if not engine.delete(memory_id, project_id=state.CURRENT_PROJECT_ID):
             raise HTTPException(status_code=404, detail="Memory not found")
     return {"ok": True}

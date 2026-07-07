@@ -5,7 +5,7 @@ import { AGENT_LABELS } from '../types'
 
 export interface ChatToolCallDisplay {
   toolName: string
-  status: 'running' | 'completed' | 'failed'
+  status: 'running' | 'completed' | 'failed' | 'awaiting_approval'
   toolOutput?: string
   toolArgs?: Record<string, unknown>
 }
@@ -59,14 +59,17 @@ function ToolCallBlock({ call }: { call: ChatToolCallDisplay }) {
   const [open, setOpen] = useState(false)
   const failed = call.status === 'failed'
   const running = call.status === 'running'
+  const awaiting = call.status === 'awaiting_approval'
   return (
     <div
       className={`text-left text-[10px] rounded border mb-1 ${
         failed
           ? 'border-rose-500/50 bg-rose-950/20'
-          : running
-            ? 'border-indigo-500/40 bg-indigo-950/20'
-            : 'border-cat-surface1 bg-cat-surface0/50'
+          : awaiting
+            ? 'border-amber-500/40 bg-amber-950/20'
+            : running
+              ? 'border-indigo-500/40 bg-indigo-950/20'
+              : 'border-cat-surface1 bg-cat-surface0/50'
       }`}
     >
       <button
@@ -75,7 +78,7 @@ function ToolCallBlock({ call }: { call: ChatToolCallDisplay }) {
         className="w-full px-2 py-1 flex items-center justify-between gap-2 text-left"
       >
         <span className="font-mono text-indigo-300">{call.toolName}</span>
-        <span className={failed ? 'text-rose-300' : running ? 'text-indigo-300' : 'text-emerald-400'}>
+        <span className={failed ? 'text-rose-300' : awaiting ? 'text-amber-300' : running ? 'text-indigo-300' : 'text-emerald-400'}>
           {call.status}
         </span>
       </button>

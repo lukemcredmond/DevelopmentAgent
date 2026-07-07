@@ -426,11 +426,26 @@ export default function WorkflowPanel({
         Enable semantic codebase search (Qdrant)
       </label>
       <p className="text-[10px] text-cat-overlay leading-relaxed -mt-1 pl-5">
-        Requires Qdrant and{' '}
-        <span className="font-mono">ollama pull nomic-embed-text</span>.
+        Requires Qdrant and an Ollama embed model (e.g.{' '}
+        <span className="font-mono">ollama pull {settings.embedModel ?? 'nomic-embed-text'}</span>
+        ).
       </p>
       {(settings.enableSemanticSearch ?? true) && (
         <div className="pl-5 space-y-2">
+          <label className="block text-[10px] text-cat-subtext">
+            Embed model (Ollama)
+            <input
+              type="text"
+              value={settings.embedModel ?? 'nomic-embed-text'}
+              onChange={(e) => onSettingsChange({ embedModel: e.target.value })}
+              placeholder="nomic-embed-text:1.5"
+              className="mt-0.5 w-full bg-cat-base border border-cat-surface1 rounded px-2 py-1 font-mono text-[10px] text-white"
+            />
+          </label>
+          <p className="text-[10px] text-cat-overlay leading-relaxed">
+            Used for Qdrant indexing and project memory. Must match a name from{' '}
+            <span className="font-mono">ollama list</span>.
+          </p>
           <label className="block text-[10px] text-cat-subtext">
             Qdrant URL
             <input

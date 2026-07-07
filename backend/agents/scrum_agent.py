@@ -27,7 +27,7 @@ from backend.services.diagnostics_parser import parse_command_diagnostics
 from backend.services.parallel_tools import partition_tool_calls
 from backend.services.tool_execution_service import ToolExecutionResult, execute_tool
 from backend.services.workflow_settings import get_workflow_settings
-from backend.storage.memory_engine import SemanticMemoryEngine
+from backend.storage.memory_engine import create_memory_engine
 
 ChatMessage = Union[Mapping[str, Any], Message]
 
@@ -59,7 +59,9 @@ class ScrumAgent:
         self.model = model
         self.system_prompt = system_prompt
         self.ollama_url = ollama_url.rstrip("/")
-        self.memory = SemanticMemoryEngine(ollama_url=self.ollama_url)
+        from backend.storage.memory_engine import create_memory_engine
+
+        self.memory = create_memory_engine(ollama_url=self.ollama_url)
         self.registry = ToolRegistry()
         self.assigned_skills: List[str] = []
         self._client: Optional[Client] = None
@@ -168,6 +170,8 @@ class ScrumAgent:
         if agent_id is None:
             agent_id = next((aid for aid, a in AGENT_MAP.items() if a is self), "dev")
         tid = task_id or state.ACTIVE_SPRINT_TASK_ID
+        active_run = get_active_run()
+        run_id = active_run.run_id if active_run else None
         tool_names = [t.get("function", {}).get("name") for t in (tools or []) if isinstance(t, dict)]
 
         for delay in delays:
@@ -199,6 +203,7 @@ class ScrumAgent:
                         agent=self.role,
                         agent_id=agent_id or "dev",
                         task_id=tid,
+                        run_id=run_id,
                         model=self.model,
                         iteration=iteration,
                         request_messages=messages,
@@ -215,6 +220,7 @@ class ScrumAgent:
                     agent=self.role,
                     agent_id=agent_id or "dev",
                     task_id=tid,
+                    run_id=run_id,
                     model=self.model,
                     iteration=iteration,
                     request_messages=messages,
@@ -417,6 +423,9 @@ class ScrumAgent:
         from backend.agents.registry import configure_agent_tools
 
         configure_agent_tools()
+        from backend.storage.memory_engine import resolve_embed_model
+
+        self.memory.embed_model = resolve_embed_model()
         tools = self.registry.get_ollama_tools()
         if not tools:
             add_system_log(

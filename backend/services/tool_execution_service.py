@@ -105,6 +105,7 @@ def _build_history_event(
     event_id: Optional[str] = None,
     diagnostics: Optional[list] = None,
     command: Optional[str] = None,
+    status_override: Optional[str] = None,
 ) -> Dict[str, Any]:
     event_id = event_id or str(uuid.uuid4())
     event: Dict[str, Any] = {
@@ -120,7 +121,7 @@ def _build_history_event(
         "durationMs": duration_ms,
         "timestamp": timestamp,
         "source": source,
-        "status": "failed" if not success else "completed",
+        "status": status_override or ("failed" if not success else "completed"),
     }
     if tool_name == "run_command":
         if command:
@@ -467,6 +468,90 @@ def _record_tool_side_effects(
                 task["lastCommandDiagnostics"] = diagnostics
 
 
+def _emit_tool_end(
+    *,
+    event_id: str,
+    effective_run_id: str,
+    task_id: Optional[str],
+    agent_role: str,
+    tool_name: str,
+    safe_args: Dict[str, Any],
+    arguments: Dict[str, Any],
+    tool_output: str,
+    success: bool,
+    duration_ms: int,
+    ts: str,
+    source: str,
+    active_run: Any,
+    status_override: Optional[str] = None,
+) -> None:
+    """Publish tool_end SSE and persist to global tool log."""
+    output_preview = tool_output[:TOOL_OUTPUT_PREVIEW_CHARS]
+    exit_code, _ = parse_run_command_exit(tool_output) if tool_name == "run_command" else (None, None)
+    run_cmd_status = (
+        run_command_status_label(
+            tool_output,
+            success,
+            str(arguments.get("command") or ""),
+        )
+        if tool_name == "run_command"
+        else None
+    )
+    rc_fields = _run_command_event_fields(tool_name, arguments, tool_output)
+
+    tool_entry = {
+        "toolName": tool_name,
+        "toolSuccess": success,
+        "toolOutput": output_preview,
+        "durationMs": duration_ms,
+        "timestamp": ts,
+    }
+    if active_run or source in ("manual", "replay"):
+        append_recent_tool(tool_entry)
+
+    end_payload: Dict[str, Any] = {
+        "eventId": event_id,
+        "runId": effective_run_id,
+        "taskId": task_id or "system",
+        "agent": agent_role,
+        "toolName": tool_name,
+        "toolArgs": safe_args,
+        "toolSuccess": success,
+        "toolOutput": output_preview,
+        "durationMs": duration_ms,
+        "timestamp": ts,
+        "source": source,
+        **rc_fields,
+    }
+    if status_override:
+        end_payload["status"] = status_override
+    if tool_name == "run_command" and run_cmd_status is not None:
+        end_payload["runCommandStatus"] = run_cmd_status
+
+    publish_event("tool_end", end_payload)
+
+    append_global_tool_event(
+        _build_history_event(
+            run_id=effective_run_id,
+            task_id=task_id or "system",
+            agent=agent_role,
+            tool_name=tool_name,
+            tool_args=safe_args,
+            tool_output=tool_output,
+            success=success,
+            duration_ms=duration_ms,
+            timestamp=ts,
+            source=source,
+            exit_code=exit_code,
+            run_cmd_status=run_cmd_status,
+            event_id=event_id,
+            diagnostics=rc_fields.get("diagnostics"),
+            command=rc_fields.get("command"),
+            status_override=status_override,
+        )
+    )
+
+
 def execute_tool(
     agent_id: str,
     tool_name: str,
@@ -552,6 +637,22 @@ def execute_tool(
                 )
                 if deny_msg.startswith("AWAITING_APPROVAL:"):
                     duration_ms = int((time.time() - started) * 1000)
+                    _emit_tool_end(
+                        event_id=event_id,
+                        effective_run_id=effective_run_id,
+                        task_id=task_id,
+                        agent_role=agent_role,
+                        tool_name=tool_name,
+                        safe_args=safe_args,
+                        arguments=arguments,
+                        tool_output=deny_msg,
+                        success=False,
+                        duration_ms=duration_ms,
+                        ts=ts,
+                        source=source,
+                        active_run=active_run,
+                        status_override="awaiting_approval",
+                    )
                     return ToolExecutionResult(
                         tool_name=tool_name,
                         arguments=arguments,
@@ -604,72 +705,22 @@ def execute_tool(
                     invalidate_step_file_read(path_key)
 
         duration_ms = int((time.time() - started) * 1000)
+        _emit_tool_end(
+            event_id=event_id,
+            effective_run_id=effective_run_id,
+            task_id=task_id,
+            agent_role=agent_role,
+            tool_name=tool_name,
+            safe_args=safe_args,
+            arguments=arguments,
+            tool_output=tool_output,
+            success=success,
+            duration_ms=duration_ms,
+            ts=ts,
+            source=source,
+            active_run=active_run,
+        )
         output_preview = tool_output[:TOOL_OUTPUT_PREVIEW_CHARS]
-
-        exit_code, _ = parse_run_command_exit(tool_output) if tool_name == "run_command" else (None, None)
-        run_cmd_status = (
-            run_command_status_label(
-                tool_output,
-                success,
-                str(arguments.get("command") or ""),
-            )
-            if tool_name == "run_command"
-            else None
-        )
-        rc_fields = _run_command_event_fields(tool_name, arguments, tool_output)
-
-        tool_entry = {
-            "toolName": tool_name,
-            "toolSuccess": success,
-            "toolOutput": output_preview,
-            "durationMs": duration_ms,
-            "timestamp": ts,
-        }
-        if active_run or source in ("manual", "replay"):
-            append_recent_tool(tool_entry)
-
-        publish_event(
-            "tool_end",
-            {
-                "eventId": event_id,
-                "runId": effective_run_id,
-                "taskId": task_id or "system",
-                "agent": agent_role,
-                "toolName": tool_name,
-                "toolArgs": safe_args,
-                "toolSuccess": success,
-                "toolOutput": output_preview,
-                "durationMs": duration_ms,
-                "timestamp": ts,
-                "source": source,
-                **rc_fields,
-                **(
-                    {"runCommandStatus": run_cmd_status}
-                    if tool_name == "run_command" and run_cmd_status is not None
-                    else {}
-                ),
-            },
-        )
-
-        append_global_tool_event(
-            _build_history_event(
-                run_id=effective_run_id,
-                task_id=task_id or "system",
-                agent=agent_role,
-                tool_name=tool_name,
-                tool_args=safe_args,
-                tool_output=tool_output,
-                success=success,
-                duration_ms=duration_ms,
-                timestamp=ts,
-                source=source,
-                exit_code=exit_code,
-                run_cmd_status=run_cmd_status,
-                event_id=event_id,
-                diagnostics=rc_fields.get("diagnostics"),
-                command=rc_fields.get("command"),
-            )
-        )
 
         if task_id and source == "agent":
             publish_activity(

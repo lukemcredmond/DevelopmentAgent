@@ -2,6 +2,7 @@ import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import VirtualScrollList from './VirtualScrollList'
 import {
   executeTool,
+  fetchStackCatalog,
   fetchTaskToolCalls,
   fetchToolRegistry,
   replayTools,
@@ -9,6 +10,8 @@ import {
 import type {
   AgentId,
   Board,
+  BriefCategory,
+  StackCatalogEntry,
   Task,
   ToolDefinition,
   ToolExecutionEvent,
@@ -16,7 +19,7 @@ import type {
 } from '../types'
 
 type ToolFilter = 'all' | 'work' | 'this_task' | 'failed' | 'agent' | 'manual' | 'replay' | 'orchestrator' | 'context_inject'
-type ToolsSubTab = 'log' | 'manual' | 'replay'
+type ToolsSubTab = 'log' | 'manual' | 'replay' | 'reference'
 
 const WORK_SOURCES = new Set(['agent', 'orchestrator', 'manual', 'user'])
 
@@ -47,6 +50,9 @@ interface ToolsPanelProps {
   board: Board
   selectedTaskId?: string | null
   onRefreshState?: () => void
+  onRefreshToolHistory?: () => void
+  sseLive?: boolean
+  brief?: string
   preferredSubTab?: ToolsSubTab
   workspaceDir?: string
   sprintRunning?: boolean
@@ -63,6 +69,7 @@ interface ToolsPanelProps {
 }
 
 function toolEventBadge(ev: ToolExecutionEvent): { label: string; tone: 'ok' | 'findings' | 'failed' } {
+  if (ev.status === 'awaiting_approval') return { label: 'Awaiting approval', tone: 'findings' }
   if (ev.status === 'running') return { label: '…', tone: 'ok' }
   if (ev.toolName === 'context_inject') return { label: 'Context', tone: 'ok' }
   if (ev.source === 'user') return { label: 'User inject', tone: 'ok' }
@@ -114,7 +121,7 @@ function sourceDisplayLabel(source: ToolExecutionEvent['source']): string {
 function readToolsSubTab(): ToolsSubTab {
   try {
     const stored = sessionStorage.getItem(TOOLS_SUBTAB_KEY)
-    if (stored === 'log' || stored === 'manual' || stored === 'replay') return stored
+    if (stored === 'log' || stored === 'manual' || stored === 'replay' || stored === 'reference') return stored
   } catch {
     /* ignore */
   }
@@ -171,6 +178,9 @@ export default function ToolsPanel({
   board,
   selectedTaskId,
   onRefreshState,
+  onRefreshToolHistory,
+  sseLive = true,
+  brief = '',
   preferredSubTab,
   workspaceDir,
   sprintRunning = false,
@@ -182,6 +192,10 @@ export default function ToolsPanel({
   const [expanded, setExpanded] = useState<Set<string>>(new Set())
   const scrollRef = useRef<HTMLDivElement>(null)
   const stickToBottomRef = useRef(true)
+  const [stackCatalog, setStackCatalog] = useState<StackCatalogEntry[]>([])
+  const [catalogCategories, setCatalogCategories] = useState<BriefCategory[]>([])
+  const [catalogLoading, setCatalogLoading] = useState(false)
+  const [expandedStacks, setExpandedStacks] = useState<Set<string>>(new Set())
 
   const [agentId, setAgentId] = useState<AgentId>('dev')
   const [tools, setTools] = useState<ToolDefinition[]>([])
@@ -203,6 +217,27 @@ export default function ToolsPanel({
   useEffect(() => {
     if (preferredSubTab) setSubTab(preferredSubTab)
   }, [preferredSubTab])
+
+  useEffect(() => {
+    if (subTab === 'log') {
+      onRefreshToolHistory?.()
+    }
+  }, [subTab, onRefreshToolHistory])
+
+  useEffect(() => {
+    if (subTab !== 'reference') return
+    setCatalogLoading(true)
+    void fetchStackCatalog(true)
+      .then((data) => {
+        setStackCatalog(data.stacks ?? [])
+        setCatalogCategories(data.briefCategories ?? [])
+      })
+      .catch(() => {
+        setStackCatalog([])
+        setCatalogCategories([])
+      })
+      .finally(() => setCatalogLoading(false))
+  }, [subTab, brief])
 
   useEffect(() => {
     try {
@@ -404,7 +439,7 @@ export default function ToolsPanel({
   return (
     <div className="flex flex-col h-full min-h-0 overflow-hidden bg-[#0f0f15]">
       <div className="bg-cat-mantle border-b border-cat-surface1 px-4 py-2 flex items-center gap-2 shrink-0">
-        {(['log', 'manual', 'replay'] as const).map((tab) => (
+        {(['log', 'manual', 'replay', 'reference'] as const).map((tab) => (
           <button
             key={tab}
             type="button"
@@ -419,7 +454,9 @@ export default function ToolsPanel({
               ? `Execution Log${toolEvents.length > 0 ? ` (${toolEvents.length})` : ''}`
               : tab === 'manual'
                 ? 'Manual Test'
-                : 'Replay'}
+                : tab === 'reference'
+                  ? 'Stack Reference'
+                  : 'Replay'}
           </button>
         ))}
       </div>
@@ -480,6 +517,15 @@ export default function ToolsPanel({
                   {clearingLog ? 'Clearing…' : 'Clear'}
                 </button>
               )}
+              {onRefreshToolHistory && (
+                <button
+                  type="button"
+                  onClick={() => onRefreshToolHistory()}
+                  className="text-[10px] text-indigo-300 hover:text-indigo-200 ml-1"
+                >
+                  Refresh
+                </button>
+              )}
             </div>
           </div>
           <p className="shrink-0 text-[9px] text-cat-overlay/90 px-4 py-1 border-b border-cat-surface1/40">
@@ -511,6 +557,11 @@ export default function ToolsPanel({
                       'Console'
                     )}{' '}
                     for system logs.
+                  </span>
+                )}
+                {!sseLive && toolEvents.length === 0 && (
+                  <span className="block mb-3 text-rose-300/90">
+                    Live event stream disconnected — click Refresh or reload the page.
                   </span>
                 )}
                 {filter === 'this_task' && selectedTaskId ? (
@@ -939,6 +990,112 @@ export default function ToolsPanel({
               ))}
             </div>
           </div>
+        </div>
+      )}
+
+      {subTab === 'reference' && (
+        <div className="flex-1 min-h-0 overflow-y-auto p-4 text-[11px] space-y-3">
+          <p className="text-[10px] text-cat-overlay">
+            Supported tools and example commands by stack. Agents use generic file/shell tools —
+            adapt commands to your workspace.
+          </p>
+          {catalogCategories.length > 0 && (
+            <div className="flex flex-wrap gap-1.5">
+              <span className="text-[10px] text-cat-overlay">From brief:</span>
+              {catalogCategories.map((cat) => (
+                <span
+                  key={cat.id}
+                  className="text-[10px] px-2 py-0.5 rounded-full bg-indigo-950/50 border border-indigo-500/30 text-indigo-200"
+                >
+                  {cat.label}
+                </span>
+              ))}
+            </div>
+          )}
+          {catalogLoading && (
+            <p className="text-cat-overlay text-center py-8">Loading stack catalog…</p>
+          )}
+          {!catalogLoading &&
+            stackCatalog.map((stack) => {
+              const open = expandedStacks.has(stack.id)
+              return (
+                <div
+                  key={stack.id}
+                  className={`border rounded-lg overflow-hidden ${
+                    stack.matched ? 'border-indigo-500/40 bg-indigo-950/20' : 'border-cat-surface1'
+                  }`}
+                >
+                  <button
+                    type="button"
+                    onClick={() =>
+                      setExpandedStacks((prev) => {
+                        const next = new Set(prev)
+                        if (next.has(stack.id)) next.delete(stack.id)
+                        else next.add(stack.id)
+                        return next
+                      })
+                    }
+                    className="w-full text-left px-3 py-2 flex items-center gap-2 hover:bg-cat-surface0/30"
+                  >
+                    <span className="font-semibold text-indigo-300">{stack.label}</span>
+                    {stack.matched && (
+                      <span className="text-[9px] text-indigo-200/80">matches brief</span>
+                    )}
+                  </button>
+                  {open && (
+                    <div className="px-3 pb-3 space-y-2 border-t border-cat-surface1/50">
+                      <p className="text-cat-subtext text-[10px]">{stack.description}</p>
+                      <p className="text-cat-overlay text-[10px]">{stack.notes}</p>
+                      {stack.recommendedSkills.length > 0 && (
+                        <div>
+                          <div className="text-[9px] uppercase text-cat-overlay mb-1">Skills</div>
+                          <div className="flex flex-wrap gap-1">
+                            {stack.recommendedSkills.map((s) => (
+                              <span
+                                key={s}
+                                className="text-[10px] font-mono text-emerald-300/90"
+                              >
+                                {s}
+                              </span>
+                            ))}
+                          </div>
+                        </div>
+                      )}
+                      <div>
+                        <div className="text-[9px] uppercase text-cat-overlay mb-1">
+                          Example commands
+                        </div>
+                        <ul className="space-y-1">
+                          {stack.exampleCommands.map((cmd) => (
+                            <li key={cmd} className="flex items-center gap-2">
+                              <code className="text-[10px] text-cat-subtext flex-1">{cmd}</code>
+                              <button
+                                type="button"
+                                onClick={() => void navigator.clipboard.writeText(cmd)}
+                                className="text-[9px] text-indigo-400 hover:text-indigo-300"
+                              >
+                                Copy
+                              </button>
+                            </li>
+                          ))}
+                        </ul>
+                      </div>
+                      <div>
+                        <div className="text-[9px] uppercase text-cat-overlay mb-1">
+                          Agent tools
+                        </div>
+                        {Object.entries(stack.tools).map(([agentKey, toolNames]) => (
+                          <div key={agentKey} className="text-[10px] text-cat-subtext mb-1">
+                            <span className="text-indigo-300">{agentKey}</span>:{' '}
+                            {toolNames.join(', ')}
+                          </div>
+                        ))}
+                      </div>
+                    </div>
+                  )}
+                </div>
+              )
+            })}
         </div>
       )}
     </div>

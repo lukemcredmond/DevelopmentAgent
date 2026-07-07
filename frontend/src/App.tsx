@@ -936,6 +936,9 @@ export default function App() {
                       board={state.board}
                       selectedTaskId={selectedTask?.id}
                       onRefreshState={() => void refresh()}
+                      onRefreshToolHistory={() => void refreshToolHistory()}
+                      sseLive={sseLive}
+                      brief={brief}
                       preferredSubTab={toolsPreferredSubTab}
                       workspaceDir={state.workspaceDir}
                       sprintRunning={orchestratedActive}

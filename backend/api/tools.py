@@ -101,6 +101,14 @@ def get_tool_registry(agent: str = Query(default="dev")):
         return {"agent": agent, "tools": list_agent_tools(agent)}
 
 
+@router.get("/api/tools/stack-catalog")
+def get_stack_catalog(brief: int = Query(default=1, ge=0, le=1)):
+    from backend.services.stack_catalog import build_stack_catalog
+
+    with state.STATE_LOCK:
+        return build_stack_catalog(use_brief=bool(brief))
+
+
 @router.post("/api/tools/execute")
 def post_tool_execute(payload: ToolExecutePayload):
     if payload.agent not in VALID_AGENTS:

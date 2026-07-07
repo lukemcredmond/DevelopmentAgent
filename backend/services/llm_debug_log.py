@@ -68,6 +68,7 @@ def append_llm_log_entry(
     response_tool_calls: Optional[List[Any]] = None,
     duration_ms: int = 0,
     error: Optional[str] = None,
+    run_id: Optional[str] = None,
 ) -> Dict[str, Any]:
     entry: Dict[str, Any] = {
         "id": uuid.uuid4().hex[:12],
@@ -75,6 +76,7 @@ def append_llm_log_entry(
         "agent": agent,
         "agentId": agent_id,
         "taskId": task_id,
+        "runId": run_id,
         "model": model,
         "iteration": iteration,
         "requestMessages": _truncate_messages(request_messages),

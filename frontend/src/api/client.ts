@@ -586,6 +586,23 @@ export async function clearLlmLogs(): Promise<{ ok: boolean; entries: [] }> {
   return request('/api/ollama/logs/clear', { method: 'POST' })
 }
 
+export async function fetchModelTimeline(params?: {
+  taskId?: string
+  limit?: number
+}): Promise<import('../types').ModelTimelineResponse> {
+  const q = new URLSearchParams()
+  if (params?.taskId) q.set('taskId', params.taskId)
+  if (params?.limit) q.set('limit', String(params.limit))
+  const qs = q.toString()
+  return request(`/api/llm-logs/timeline${qs ? `?${qs}` : ''}`)
+}
+
+export async function fetchStackCatalog(
+  useBrief = true,
+): Promise<import('../types').StackCatalogResponse> {
+  return request(`/api/tools/stack-catalog?brief=${useBrief ? '1' : '0'}`)
+}
+
 export async function checkQdrantHealth(
   url = 'http://localhost:6333',
   apiKey?: string,

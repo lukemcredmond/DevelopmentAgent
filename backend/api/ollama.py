@@ -6,6 +6,7 @@ from fastapi import APIRouter, Query
 
 from backend import state
 from backend.services.llm_debug_log import clear_llm_log, get_llm_logs
+from backend.services.model_timeline import build_model_timeline
 from backend.services.qdrant_auth import qdrant_connection_settings, qdrant_request_headers
 from backend.services.system_capacity import get_model_recommendations, probe_system_capacity
 
@@ -39,6 +40,15 @@ def get_ollama_logs(
 def clear_ollama_logs():
     with state.STATE_LOCK:
         return clear_llm_log()
+
+
+@router.get("/api/llm-logs/timeline")
+def get_llm_timeline(
+    taskId: str | None = None,
+    limit: int = Query(default=100, ge=1, le=500),
+):
+    with state.STATE_LOCK:
+        return build_model_timeline(task_id=taskId, limit=limit)
 
 
 @router.get("/api/ollama/qdrant-health")

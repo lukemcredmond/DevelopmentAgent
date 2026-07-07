@@ -113,6 +113,7 @@ export interface LlmDebugEntry {
   agent: string
   agentId: string
   taskId?: string
+  runId?: string
   model: string
   iteration: number
   requestMessages: unknown[]
@@ -121,6 +122,58 @@ export interface LlmDebugEntry {
   responseToolCalls: unknown[]
   durationMs: number
   error?: string
+}
+
+export interface ModelTimelineItem {
+  kind: 'llm' | 'tool'
+  id?: string
+  timestamp?: string
+  agent?: string
+  agentId?: string
+  taskId?: string
+  runId?: string
+  model?: string
+  iteration?: number
+  durationMs?: number
+  error?: string
+  content?: string
+  toolCalls?: unknown[]
+  toolNames?: string[]
+  toolName?: string
+  toolArgs?: Record<string, unknown>
+  toolOutput?: string
+  success?: boolean
+  status?: string
+  source?: string
+}
+
+export interface ModelTimelineThread {
+  taskId: string
+  items: ModelTimelineItem[]
+}
+
+export interface ModelTimelineResponse {
+  items: ModelTimelineItem[]
+  threads: ModelTimelineThread[]
+  count: number
+}
+
+export interface StackCatalogEntry {
+  id: string
+  label: string
+  description: string
+  recommendedSkills: string[]
+  exampleCommands: string[]
+  agentsWithTools: string[]
+  notes: string
+  tools: Record<string, string[]>
+  matched?: boolean
+}
+
+export interface StackCatalogResponse {
+  stacks: StackCatalogEntry[]
+  briefCategories: BriefCategory[]
+  agents: string[]
 }
 
 export type Board = Partial<Record<BoardLane, Task[]>>
@@ -208,7 +261,7 @@ export interface ToolExecutionEvent {
   toolOutput?: string
   durationMs?: number
   timestamp: string
-  status: 'running' | 'completed' | 'failed'
+  status: 'running' | 'completed' | 'failed' | 'awaiting_approval'
   source: 'agent' | 'manual' | 'replay' | 'orchestrator' | 'context_inject' | 'user'
   exitCode?: number
   runCommandStatus?: string
