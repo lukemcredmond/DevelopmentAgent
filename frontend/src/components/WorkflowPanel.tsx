@@ -1,12 +1,27 @@
 import { useCallback, useEffect, useState } from 'react'
-import { checkQdrantHealth, fetchIndexStatus, reindexCodebase } from '../api/client'
-import type { BriefChangelogEntry, WorkflowNotifications, WorkflowSettings } from '../types'
+import {
+  checkQdrantHealth,
+  createProjectMemory,
+  deleteProjectMemory,
+  fetchIndexStatus,
+  fetchProjectMemories,
+  reindexCodebase,
+} from '../api/client'
+import type {
+  BriefChangelogEntry,
+  IndexProgress,
+  ProjectMemoryEntry,
+  WorkflowNotifications,
+  WorkflowSettings,
+} from '../types'
 
 interface WorkflowPanelProps {
   settings: WorkflowSettings
   changelog: BriefChangelogEntry[]
   notifications: WorkflowNotifications
   onSettingsChange: (partial: Partial<WorkflowSettings>) => void
+  ollamaUrl?: string
+  indexProgress?: IndexProgress | null
 }
 
 export default function WorkflowPanel({
@@ -14,6 +29,8 @@ export default function WorkflowPanel({
   changelog,
   notifications,
   onSettingsChange,
+  ollamaUrl = 'http://localhost:11434',
+  indexProgress = null,
 }: WorkflowPanelProps) {
   const [dodInput, setDodInput] = useState('')
   const [showChangelog, setShowChangelog] = useState(false)
@@ -28,6 +45,11 @@ export default function WorkflowPanel({
   const [qdrantApiKeyInput, setQdrantApiKeyInput] = useState('')
   const [qdrantTestStatus, setQdrantTestStatus] = useState<string | null>(null)
   const [qdrantTesting, setQdrantTesting] = useState(false)
+  const [reindexResult, setReindexResult] = useState<string | null>(null)
+  const [memories, setMemories] = useState<ProjectMemoryEntry[]>([])
+  const [memoryInput, setMemoryInput] = useState('')
+  const [memorySaving, setMemorySaving] = useState(false)
+  const [showMemory, setShowMemory] = useState(false)
 
   const refreshIndexStatus = useCallback(async () => {
     try {
@@ -45,14 +67,36 @@ export default function WorkflowPanel({
     }
   }, [settings.enableSemanticSearch, refreshIndexStatus])
 
+  const refreshMemories = useCallback(async () => {
+    try {
+      const data = await fetchProjectMemories(ollamaUrl, 25)
+      setMemories(data.entries ?? [])
+    } catch {
+      setMemories([])
+    }
+  }, [ollamaUrl])
+
+  useEffect(() => {
+    if (showMemory) void refreshMemories()
+  }, [showMemory, refreshMemories])
+
   const handleReindex = async () => {
     setReindexing(true)
     setIndexError(null)
+    setReindexResult(null)
     try {
-      await reindexCodebase()
+      const result = await reindexCodebase(ollamaUrl)
+      if (result.filesScanned != null) {
+        setReindexResult(
+          `${result.filesScanned} files → ${result.chunks ?? 0} chunks` +
+            (result.filesSkipped ? ` (${result.filesSkipped} skipped)` : ''),
+        )
+      }
       await refreshIndexStatus()
     } catch (e) {
-      setIndexError(e instanceof Error ? e.message : 'Reindex failed')
+      const msg = e instanceof Error ? e.message : 'Reindex failed'
+      setIndexError(msg)
+      setReindexResult(null)
     } finally {
       setReindexing(false)
     }
@@ -475,6 +519,30 @@ export default function WorkflowPanel({
       {indexError && (
         <p className="text-[10px] text-rose-300 pl-5">{indexError}</p>
       )}
+      {reindexResult && !indexError && (
+        <p className="text-[10px] text-emerald-300 pl-5">{reindexResult}</p>
+      )}
+      {(reindexing || indexProgress) && (
+        <div className="pl-5 space-y-1">
+          {indexProgress && indexProgress.filesTotal > 0 ? (
+            <>
+              <progress
+                className="w-full h-1.5 accent-indigo-500"
+                value={indexProgress.filesDone}
+                max={indexProgress.filesTotal}
+              />
+              <p className="text-[10px] text-cat-overlay font-mono truncate">
+                {indexProgress.phase === 'preflight'
+                  ? 'Checking embed model…'
+                  : `Indexing ${indexProgress.filesDone}/${indexProgress.filesTotal} — ${indexProgress.chunks} chunks`}
+                {indexProgress.currentFile ? ` · ${indexProgress.currentFile}` : ''}
+              </p>
+            </>
+          ) : (
+            <progress className="w-full h-1.5 accent-indigo-500" />
+          )}
+        </div>
+      )}
       <label className="flex items-center gap-2 text-[11px] text-cat-subtext cursor-pointer pl-5">
         <input
           type="checkbox"
@@ -684,6 +752,70 @@ export default function WorkflowPanel({
             </li>
           ))}
         </ul>
+      </div>
+
+      <div className="border-t border-cat-surface1 pt-2">
+        <button
+          type="button"
+          onClick={() => setShowMemory((v) => !v)}
+          className="text-[10px] uppercase tracking-wider text-cat-overlay hover:text-cat-subtext"
+        >
+          {showMemory ? '▼' : '▶'} Project memory
+        </button>
+        {showMemory && (
+          <div className="mt-2 space-y-2">
+            <p className="text-[10px] text-cat-overlay leading-relaxed">
+              Agents remember tool outcomes automatically. Pin facts here for persistent context.
+            </p>
+            <textarea
+              value={memoryInput}
+              onChange={(e) => setMemoryInput(e.target.value)}
+              placeholder="e.g. API key lives in .env, use Provider X for auth…"
+              className="w-full text-[10px] bg-cat-base border border-cat-surface1 rounded p-2 min-h-[48px] text-white"
+            />
+            <button
+              type="button"
+              disabled={memorySaving || !memoryInput.trim()}
+              onClick={() => {
+                setMemorySaving(true)
+                void createProjectMemory(memoryInput.trim(), ollamaUrl)
+                  .then(() => {
+                    setMemoryInput('')
+                    return refreshMemories()
+                  })
+                  .finally(() => setMemorySaving(false))
+              }}
+              className="text-[10px] px-2 py-1 rounded bg-indigo-600/50 text-white disabled:opacity-50"
+            >
+              {memorySaving ? 'Saving…' : 'Save note'}
+            </button>
+            <ul className="max-h-32 overflow-y-auto space-y-1 text-[10px]">
+              {memories.map((m) => (
+                <li
+                  key={m.id}
+                  className="flex gap-2 items-start border border-cat-surface1/50 rounded p-1.5"
+                >
+                  <div className="flex-1 min-w-0">
+                    <span className="text-indigo-300">{m.agent}</span>
+                    <span className="text-cat-overlay mx-1">·</span>
+                    <span className="text-cat-overlay">{m.category}</span>
+                    <p className="text-cat-subtext truncate">{m.content}</p>
+                  </div>
+                  <button
+                    type="button"
+                    onClick={() => void deleteProjectMemory(m.id).then(() => refreshMemories())}
+                    className="text-rose-400 hover:text-rose-300 shrink-0"
+                  >
+                    ×
+                  </button>
+                </li>
+              ))}
+              {memories.length === 0 && (
+                <li className="text-cat-overlay italic">No memories yet</li>
+              )}
+            </ul>
+          </div>
+        )}
       </div>
 
       <button

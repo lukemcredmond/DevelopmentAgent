@@ -411,11 +411,28 @@ export async function approveTask(taskId: string): Promise<AppState> {
 export async function resolveUserQuestion(
   taskId: string,
   answer: string,
+  target: 'dev' | 'refinement' | 'po' = 'dev',
 ): Promise<AppState> {
   return request<AppState>(
     `/api/tasks/${encodeURIComponent(taskId)}/resolve-user`,
-    { method: 'POST', body: JSON.stringify({ answer }) },
+    { method: 'POST', body: JSON.stringify({ answer, target }) },
   )
+}
+
+export async function reindexCodebase(
+  ollamaUrl = 'http://localhost:11434',
+): Promise<{
+  ok: boolean
+  chunks?: number
+  filesScanned?: number
+  filesSkipped?: number
+  embedFailures?: number
+  error?: string
+}> {
+  return request('/api/search/reindex', {
+    method: 'POST',
+    body: JSON.stringify({ ollama_url: ollamaUrl }),
+  })
 }
 
 export async function splitTask(
@@ -628,10 +645,6 @@ export async function fetchFileRevisions(
   )
 }
 
-export async function reindexCodebase(): Promise<{ ok: boolean; chunks?: number }> {
-  return request('/api/search/reindex', { method: 'POST' })
-}
-
 export async function fetchIndexStatus(): Promise<{
   ok: boolean
   available?: boolean
@@ -640,6 +653,30 @@ export async function fetchIndexStatus(): Promise<{
   apiKeyConfigured?: boolean
 }> {
   return request('/api/search/index-status')
+}
+
+export async function fetchProjectMemories(
+  ollamaUrl = 'http://localhost:11434',
+  limit = 30,
+): Promise<{ entries: import('../types').ProjectMemoryEntry[]; count: number }> {
+  return request(
+    `/api/memory?limit=${limit}&ollamaUrl=${encodeURIComponent(ollamaUrl)}`,
+  )
+}
+
+export async function createProjectMemory(
+  content: string,
+  ollamaUrl = 'http://localhost:11434',
+  agent = 'System',
+): Promise<{ ok: boolean }> {
+  return request(`/api/memory?ollamaUrl=${encodeURIComponent(ollamaUrl)}`, {
+    method: 'POST',
+    body: JSON.stringify({ content, agent, category: 'user_note' }),
+  })
+}
+
+export async function deleteProjectMemory(memoryId: string): Promise<{ ok: boolean }> {
+  return request(`/api/memory/${encodeURIComponent(memoryId)}`, { method: 'DELETE' })
 }
 
 export async function fetchToolRegistry(agent: string): Promise<ToolRegistryResponse> {
@@ -724,6 +761,10 @@ export function subscribeEvents(
 
   source.addEventListener('sprint_progress', (e) => {
     onEvent({ type: 'sprint_progress', data: JSON.parse(e.data) })
+  })
+
+  source.addEventListener('index_progress', (e) => {
+    onEvent({ type: 'index_progress', data: JSON.parse(e.data) })
   })
 
   source.addEventListener('agent_run', (e) => {

@@ -1,7 +1,15 @@
 from fastapi import APIRouter, HTTPException
 
 from backend import state
-from backend.agents.task_context import clear_task_transcript, find_task_by_id, normalize_task, record_task_decision, sort_backlog
+from backend.agents.task_context import (
+    clear_task_transcript,
+    find_task_by_id,
+    init_refinement_fields,
+    normalize_task,
+    record_task_decision,
+    record_task_transcript,
+    sort_backlog,
+)
 from backend.api.helpers import build_state_response
 from backend.api.schemas import (
     DeleteTaskPayload,
@@ -106,6 +114,17 @@ def approve_task(task_id: str):
 
 @router.post("/api/tasks/{task_id}/resolve-user")
 def resolve_user_question(task_id: str, payload: ResolveUserPayload):
+    target = (payload.target or "dev").strip().lower()
+    if target not in ("dev", "refinement", "po"):
+        raise HTTPException(status_code=400, detail="target must be dev, refinement, or po")
+
+    lane_map = {
+        "dev": "In Progress",
+        "refinement": "Refinement",
+        "po": "Needs PO",
+    }
+    target_lane = lane_map[target]
+
     with state.STATE_LOCK:
         task = find_task_by_id(task_id)
         if not task:
@@ -113,10 +132,29 @@ def resolve_user_question(task_id: str, payload: ResolveUserPayload):
         if not any(t.get("id") == task_id for t in state.SHARED_BOARD.get("Needs User", [])):
             raise HTTPException(status_code=400, detail="Task is not in Needs User")
         normalize_task(task)
+        answer = payload.answer.strip()
+        record_task_transcript(
+            task_id,
+            "user",
+            f"User response (→ {target_lane}):\n{answer}",
+            agent="User",
+        )
         task["userQuestion"] = None
-        record_task_decision(task_id, "User", "resolve", f"User answered: {payload.answer[:200]}", payload.answer)
-        move_board_stage(task_id, "In Progress")
-        add_system_log("System", "success", f"User resolved question for {task_id}")
+        task["needsUserReason"] = None
+        task["needsUserAction"] = None
+        record_task_decision(
+            task_id,
+            "User",
+            "resolve",
+            f"User routed to {target_lane}",
+            answer[:500],
+        )
+        if target == "refinement":
+            init_refinement_fields(task)
+            task["refinementStatus"] = "pending"
+            task["refinementNotes"] = answer
+        move_board_stage(task_id, target_lane)
+        add_system_log("System", "success", f"User resolved {task_id} → {target_lane}")
     return build_state_response()
 
 

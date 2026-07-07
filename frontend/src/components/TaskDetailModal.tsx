@@ -133,7 +133,7 @@ interface TaskDetailModalProps {
   onDelete: (taskId: string) => void
   onClearTranscript?: (taskId: string) => void
   onApprove?: (taskId: string) => void
-  onResolveUser?: (taskId: string, answer: string) => void
+  onResolveUser?: (taskId: string, answer: string, target: 'dev' | 'refinement' | 'po') => void
   onDiscussWithAgent?: (task: Task, lane: BoardLane | null) => void
   onSplit?: (taskId: string) => void | Promise<void>
   onInjectToolEvidence?: (
@@ -153,6 +153,7 @@ interface TaskDetailModalProps {
   onViewFileDiff?: (path: string) => void | Promise<void>
   onOpenModelTab?: () => void
   maxRefinementRoundTrips?: number
+  requireBacklogRefinement?: boolean
   onEscapeSubtasks?: (taskId: string) => void | Promise<void>
 }
 
@@ -250,6 +251,7 @@ export default function TaskDetailModal({
   onViewFileDiff,
   onOpenModelTab,
   maxRefinementRoundTrips,
+  requireBacklogRefinement = false,
   onEscapeSubtasks,
 }: TaskDetailModalProps) {
   const [title, setTitle] = useState('')
@@ -880,22 +882,47 @@ export default function TaskDetailModal({
                 placeholder="Your answer for the Developer…"
                 className="w-full text-xs bg-cat-base border border-cat-surface1 rounded p-2 min-h-[60px]"
               />
-              <button
-                type="button"
-                disabled={!userAnswer.trim()}
-                onClick={() => {
-                  try {
-                    sessionStorage.removeItem(`needs-user-draft-${task.id}`)
-                  } catch {
-                    /* ignore */
-                  }
-                  onResolveUser(task.id, userAnswer.trim())
-                  setUserAnswer('')
-                }}
-                className="bg-amber-600 hover:bg-amber-500 disabled:opacity-50 text-white text-xs py-1.5 px-3 rounded-lg"
-              >
-                Resolve & Return to Dev
-              </button>
+              <div className="flex flex-wrap gap-2 pt-1">
+                {(
+                  [
+                    { target: 'dev' as const, label: 'Send to Developer', className: 'bg-amber-600 hover:bg-amber-500' },
+                    ...(requireBacklogRefinement ||
+                    safeTask.refinementStatus ||
+                    safeTask.refinementRoundTrips
+                      ? [
+                          {
+                            target: 'refinement' as const,
+                            label: 'Send to Refinement',
+                            className: 'bg-violet-700 hover:bg-violet-600',
+                          },
+                        ]
+                      : []),
+                    {
+                      target: 'po' as const,
+                      label: 'Send to Product Owner',
+                      className: 'bg-indigo-700 hover:bg-indigo-600',
+                    },
+                  ] as const
+                ).map(({ target, label, className }) => (
+                  <button
+                    key={target}
+                    type="button"
+                    disabled={!userAnswer.trim()}
+                    onClick={() => {
+                      try {
+                        sessionStorage.removeItem(`needs-user-draft-${task.id}`)
+                      } catch {
+                        /* ignore */
+                      }
+                      onResolveUser(task.id, userAnswer.trim(), target)
+                      setUserAnswer('')
+                    }}
+                    className={`${className} disabled:opacity-50 text-white text-xs py-1.5 px-3 rounded-lg`}
+                  >
+                    {label}
+                  </button>
+                ))}
+              </div>
             </div>
           )}
 

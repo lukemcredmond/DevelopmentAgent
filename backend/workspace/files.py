@@ -69,6 +69,86 @@ def resolve_workspace_path(path: str) -> str:
     return normalized
 
 
+INDEX_SKIP_DIR_PARTS = {
+    "venv",
+    "__pycache__",
+    ".git",
+    "node_modules",
+    ".dart_tool",
+    "build",
+    "dist",
+    ".pub-cache",
+    ".idea",
+    ".vscode",
+    "coverage",
+    ".pytest_cache",
+}
+
+INDEXABLE_EXTENSIONS = {
+    ".dart",
+    ".py",
+    ".ts",
+    ".tsx",
+    ".js",
+    ".jsx",
+    ".json",
+    ".md",
+    ".yaml",
+    ".yml",
+    ".toml",
+    ".html",
+    ".css",
+    ".scss",
+    ".sql",
+    ".sh",
+    ".ps1",
+    ".cs",
+    ".java",
+    ".go",
+    ".rs",
+    ".xml",
+    ".gradle",
+    ".properties",
+    ".env.example",
+}
+
+
+def _path_should_skip_index(rel_path: str) -> bool:
+    parts = rel_path.replace("\\", "/").split("/")
+    return any(part in INDEX_SKIP_DIR_PARTS for part in parts)
+
+
+def _is_indexable_file(rel_path: str) -> bool:
+    lower = rel_path.lower()
+    _, ext = os.path.splitext(lower)
+    if ext in INDEXABLE_EXTENSIONS:
+        return True
+    return lower.endswith("dockerfile") or lower.endswith("makefile")
+
+
+def scan_indexable_workspace_files() -> tuple[Dict[str, str], int]:
+    """Return indexable text files and count of skipped non-indexable paths."""
+    file_list: Dict[str, str] = {}
+    skipped = 0
+    if not os.path.exists(state.WORKSPACE_DIR):
+        return file_list, skipped
+    for root, _dirs, files_in_dir in os.walk(state.WORKSPACE_DIR):
+        for file in files_in_dir:
+            rel_path = os.path.relpath(os.path.join(root, file), state.WORKSPACE_DIR).replace("\\", "/")
+            if _path_should_skip_index(rel_path):
+                skipped += 1
+                continue
+            if not _is_indexable_file(rel_path):
+                skipped += 1
+                continue
+            try:
+                with open(os.path.join(root, file), "r", encoding="utf-8") as f:
+                    file_list[rel_path] = f.read()
+            except Exception:
+                skipped += 1
+    return file_list, skipped
+
+
 def sync_virtual_filesystem_from_disk() -> Dict[str, str]:
     """Scans the physical workspace and syncs VIRTUAL_FILESYSTEM."""
     file_list: Dict[str, str] = {}
@@ -76,7 +156,7 @@ def sync_virtual_filesystem_from_disk() -> Dict[str, str]:
         for root, _dirs, files_in_dir in os.walk(state.WORKSPACE_DIR):
             for file in files_in_dir:
                 rel_path = os.path.relpath(os.path.join(root, file), state.WORKSPACE_DIR)
-                if not any(ex in rel_path for ex in ["venv", "__pycache__", ".git"]):
+                if not _path_should_skip_index(rel_path.replace("\\", "/")):
                     try:
                         with open(os.path.join(root, file), "r", encoding="utf-8") as f:
                             file_list[rel_path.replace("\\", "/")] = f.read()
@@ -353,6 +433,45 @@ def list_workspace_dir(path: str = ".", limit: int = 200) -> str:
     return header + "\n" + "\n".join(entries)
 
 
+def _workspace_has_dotnet_project(ws: str) -> bool:
+    """True when workspace root contains a .sln or .csproj file."""
+    if not os.path.isdir(ws):
+        return False
+    try:
+        for name in os.listdir(ws):
+            if name.endswith(".sln") or name.endswith(".csproj"):
+                return True
+    except OSError:
+        return False
+    return False
+
+
+def _dotnet_test_commands(ws: str, safe_path: str) -> list[list[str]]:
+    """Build dotnet test command candidates for the workspace or explicit project path."""
+    commands: list[list[str]] = []
+    if safe_path.endswith((".csproj", ".sln")):
+        phys = os.path.normpath(os.path.join(ws, safe_path.replace("/", os.sep)))
+        if os.path.isfile(phys):
+            return [["dotnet", "test", phys]]
+
+    if not os.path.isdir(ws):
+        return commands
+
+    try:
+        names = sorted(os.listdir(ws))
+    except OSError:
+        return commands
+
+    for name in names:
+        if name.endswith(".sln"):
+            return [["dotnet", "test", os.path.join(ws, name)]]
+
+    csprojs = [n for n in names if n.endswith(".csproj")]
+    if csprojs:
+        commands.append(["dotnet", "test", os.path.join(ws, csprojs[0])])
+    return commands
+
+
 def run_tests_on_workspace(test_script_path: str) -> str:
     import subprocess
 
@@ -386,6 +505,8 @@ def run_tests_on_workspace(test_script_path: str) -> str:
         commands.append(["flutter", "analyze"])
     elif os.path.exists(os.path.join(state.WORKSPACE_DIR, "package.json")):
         commands.append(["npm", "test"])
+    elif safe_path.endswith((".csproj", ".sln")) or _workspace_has_dotnet_project(state.WORKSPACE_DIR):
+        commands.extend(_dotnet_test_commands(state.WORKSPACE_DIR, safe_path))
 
     if not commands:
         content = read_workspace_file(test_script_path)
@@ -442,6 +563,9 @@ def derive_project_lint_command() -> Optional[str]:
 
     if os.path.isfile(os.path.join(ws, "pubspec.yaml")):
         return "flutter analyze"
+
+    if _workspace_has_dotnet_project(ws):
+        return "dotnet build"
 
     package_json = os.path.join(ws, "package.json")
     if os.path.isfile(package_json):

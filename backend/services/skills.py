@@ -3,25 +3,49 @@ from typing import Dict, List
 
 from backend import state
 
+_DEFAULT_SKILL_TEMPLATES = {
+    "git_expert.md": "# Git Expert Skill\nAlways commit changes using clean semantic messages. Check file diffs carefully.",
+    "python_tester.md": "# Python Unit Tester Skill\nEnsure code has unittest coverage checking for negative and overflow bounds.",
+    "javascript_optimizer.md": "# ES6 JS Optimization Skill\nWrite code utilizing modular functions, arrow notations, and clean error captures.",
+    "acceptance_tester.md": "# Dynamic QA Acceptance Skill\nValidate user workflows match exact brief expectations. Write automated check reports.",
+    "code_auditor.md": "# Code Reviewer Auditor Skill\nVerify architecture patterns, import structures, syntax errors, and complexity levels.",
+    "csharp_api.md": (
+        "# C# / .NET Application Skill\n"
+        "Target ASP.NET Core or console apps with modern C# (10+). Use `dotnet build` and `dotnet test` via run_command. "
+        "Prefer xUnit or NUnit for tests; keep Program.cs minimal with DI. "
+        "Structure: Controllers/Services/Models for APIs; appsettings.json for config (never commit secrets). "
+        "Use async/await for I/O; validate inputs with DataAnnotations or FluentValidation. "
+        "Pin framework version and test approach in the project brief."
+    ),
+    "unity_quest_vr.md": (
+        "# Unity Quest 3 VR Skill\n"
+        "Edit C# scripts under Assets/; avoid modifying Library/ or Temp/. "
+        "Use XR Interaction Toolkit or Meta XR SDK per project brief. Target Android/Quest builds. "
+        "Run tests via run_command (Unity batchmode -runTests or dotnet test for edit-mode tests). "
+        "Document build commands in Project Memory (Unity path, scene names, package versions). "
+        "Keep MonoBehaviour scripts focused; use ScriptableObjects for data. "
+        "Quest deploy requires Android build + adb/Meta tooling — script these in run_command when paths are known."
+    ),
+}
+
+
+def _ensure_skill_templates() -> None:
+    """Create missing default skill files without overwriting existing ones."""
+    try:
+        os.makedirs(state.SKILLS_DIR, exist_ok=True)
+        for name, content in _DEFAULT_SKILL_TEMPLATES.items():
+            path = os.path.join(state.SKILLS_DIR, name)
+            if not os.path.exists(path):
+                with open(path, "w", encoding="utf-8") as f:
+                    f.write(content)
+    except Exception:
+        pass
+
 
 def scan_skills_directory() -> List[Dict[str, str]]:
     """Recursively scans SKILLS_DIR for markdown or text skill files."""
     skills: List[Dict[str, str]] = []
-    if not os.path.exists(state.SKILLS_DIR):
-        try:
-            os.makedirs(state.SKILLS_DIR, exist_ok=True)
-            default_skills = {
-                "git_expert.md": "# Git Expert Skill\nAlways commit changes using clean semantic messages. Check file diffs carefully.",
-                "python_tester.md": "# Python Unit Tester Skill\nEnsure code has unittest coverage checking for negative and overflow bounds.",
-                "javascript_optimizer.md": "# ES6 JS Optimization Skill\nWrite code utilizing modular functions, arrow notations, and clean error captures.",
-                "acceptance_tester.md": "# Dynamic QA Acceptance Skill\nValidate user workflows match exact brief expectations. Write automated check reports.",
-                "code_auditor.md": "# Code Reviewer Auditor Skill\nVerify architecture patterns, import structures, syntax errors, and complexity levels.",
-            }
-            for name, content in default_skills.items():
-                with open(os.path.join(state.SKILLS_DIR, name), "w", encoding="utf-8") as f:
-                    f.write(content)
-        except Exception:
-            pass
+    _ensure_skill_templates()
 
     if os.path.exists(state.SKILLS_DIR):
         for root, _dirs, files in os.walk(state.SKILLS_DIR):

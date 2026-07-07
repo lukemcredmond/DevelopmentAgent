@@ -68,6 +68,17 @@ class EscapeSubtaskPayload(BaseModel):
 
 class ResolveUserPayload(BaseModel):
     answer: str
+    target: str = "dev"  # dev | refinement | po
+
+
+class ReindexPayload(BaseModel):
+    ollama_url: str = "http://localhost:11434"
+
+
+class MemoryCreatePayload(BaseModel):
+    content: str
+    category: str = "user_note"
+    agent: str = "System"
 
 
 class InjectToolEvidencePayload(BaseModel):

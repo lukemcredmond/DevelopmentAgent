@@ -48,8 +48,6 @@ export default function ActivityPanel({ events, onTaskClick, onClear, wasCleared
     [events],
   )
 
-  const displayEvents = useMemo(() => [...filtered].reverse(), [filtered])
-
   const handleScroll = () => {
     stickToBottomRef.current = false
   }
@@ -69,6 +67,7 @@ export default function ActivityPanel({ events, onTaskClick, onClear, wasCleared
         <h3 className="text-xs font-bold uppercase tracking-wider text-cat-subtext">
           Agent Activity
         </h3>
+        <span className="text-[9px] text-cat-overlay normal-case">Newest first</span>
         <div className="flex gap-1 flex-wrap justify-end items-center">
           <span className="text-[10px] text-cat-overlay mr-1">{events.length} events</span>
           {onClear && (
@@ -102,10 +101,11 @@ export default function ActivityPanel({ events, onTaskClick, onClear, wasCleared
       </div>
       <VirtualScrollList
         className="flex-1 p-3 font-mono text-xs"
-        items={displayEvents}
+        items={filtered}
         estimateRowHeight={88}
         getKey={(event, i) => `${event.timestamp}-${event.taskId}-${i}`}
         onScroll={handleScroll}
+        newestFirst
         empty={
           <p className="text-cat-overlay italic">
             {wasCleared
@@ -114,8 +114,7 @@ export default function ActivityPanel({ events, onTaskClick, onClear, wasCleared
           </p>
         }
         renderRow={(event, i) => {
-          const idx = filtered.length - 1 - i
-          const isOpen = expanded.has(idx)
+          const isOpen = expanded.has(i)
           const isFailure = event.kind === 'tool_failed'
           const contentStr = formatTaskText(event.content)
           const preview =
@@ -125,7 +124,7 @@ export default function ActivityPanel({ events, onTaskClick, onClear, wasCleared
           return (
             <button
               type="button"
-              onClick={() => toggleExpand(idx)}
+              onClick={() => toggleExpand(i)}
               className={`w-full text-left p-2 rounded border transition-colors mb-2 ${
                 isFailure
                   ? 'border-rose-500/60 bg-rose-950/30 hover:border-rose-400 ring-1 ring-rose-500/20'

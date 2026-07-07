@@ -14,6 +14,7 @@ interface VirtualScrollListProps<T> {
   estimateRowHeight?: number
   overscan?: number
   defaultCap?: number
+  newestFirst?: boolean
   className?: string
   empty?: ReactNode
   onScroll?: () => void
@@ -26,6 +27,7 @@ export default function VirtualScrollList<T>({
   estimateRowHeight = 72,
   overscan = 8,
   defaultCap = 150,
+  newestFirst = true,
   className = '',
   empty,
   onScroll,
@@ -36,9 +38,10 @@ export default function VirtualScrollList<T>({
   const containerRef = useRef<HTMLDivElement>(null)
 
   const displayItems = useMemo(() => {
-    if (showAll || items.length <= defaultCap) return items
-    return items.slice(-defaultCap)
-  }, [items, showAll, defaultCap])
+    const ordered = newestFirst ? [...items].reverse() : items
+    if (showAll || ordered.length <= defaultCap) return ordered
+    return newestFirst ? ordered.slice(0, defaultCap) : ordered.slice(-defaultCap)
+  }, [items, showAll, defaultCap, newestFirst])
 
   const hiddenCount = items.length - displayItems.length
 
@@ -79,7 +82,7 @@ export default function VirtualScrollList<T>({
           onClick={() => setShowAll(true)}
           className="shrink-0 text-[10px] text-indigo-400 hover:text-indigo-300 py-1 px-3 border-b border-cat-surface1/40"
         >
-          Show all ({items.length}) — currently showing newest {defaultCap}
+          Show all ({items.length}) — currently showing {defaultCap} newest
         </button>
       )}
       <div

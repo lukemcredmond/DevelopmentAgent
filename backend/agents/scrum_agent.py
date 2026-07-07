@@ -444,6 +444,20 @@ class ScrumAgent:
                     iteration=iteration,
                     max_iterations=max_iterations,
                 )
+                if task_id and state.SPRINT_PROGRESS_MAX:
+                    from backend.agents.task_context import find_task_by_id
+                    from backend.services.sprint_service import publish_sprint_progress
+
+                    active = find_task_by_id(task_id) or {}
+                    publish_sprint_progress(
+                        phase="sprint_step",
+                        step=state.SPRINT_PROGRESS_STEP or iteration,
+                        max_steps=state.SPRINT_PROGRESS_MAX,
+                        agent=self.role,
+                        task_id=task_id,
+                        task_title=str(active.get("title") or task_id),
+                        status=f"LLM iter {iteration}/{max_iterations}",
+                    )
                 add_system_log(
                     self.role,
                     "info",

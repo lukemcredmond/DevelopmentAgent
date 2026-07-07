@@ -37,6 +37,7 @@ export default function AgentConsole({ logs, onClear, sseLive = true }: AgentCon
           Agent Console Event Stream
         </h3>
         <div className="flex items-center gap-2">
+          <span className="text-[9px] text-cat-overlay normal-case">Newest first</span>
           <span
             className={`text-[9px] uppercase px-1.5 py-0.5 rounded ${
               sseLive
@@ -64,6 +65,7 @@ export default function AgentConsole({ logs, onClear, sseLive = true }: AgentCon
         estimateRowHeight={80}
         getKey={(_, i) => i}
         onScroll={handleScroll}
+        newestFirst
         empty={<p className="text-cat-overlay italic">No log events yet.</p>}
         renderRow={(log) => {
           const actionable = log.type === 'warning' && isActionableWarning(log.text)

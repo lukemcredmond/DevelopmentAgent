@@ -48,8 +48,8 @@ export function hydrateActivityFromBoard(board: Board): ActivityEvent[] {
       }
     }
   }
-  events.sort((a, b) => a.timestamp.localeCompare(b.timestamp))
-  return events.slice(-MAX_ACTIVITY)
+  events.sort((a, b) => b.timestamp.localeCompare(a.timestamp))
+  return events.slice(0, MAX_ACTIVITY)
 }
 
 export function mergeActivityEvents(
@@ -64,8 +64,8 @@ export function mergeActivityEvents(
     seen.add(key)
     merged.push(event)
   }
-  merged.sort((a, b) => a.timestamp.localeCompare(b.timestamp))
-  return merged.slice(-MAX_ACTIVITY)
+  merged.sort((a, b) => b.timestamp.localeCompare(a.timestamp))
+  return merged.slice(0, MAX_ACTIVITY)
 }
 
 export function filterActivityAfterClear(

@@ -1,0 +1,2 @@
+# C# / .NET Application Skill
+Target ASP.NET Core or console apps with modern C# (10+). Use `dotnet build` and `dotnet test` via run_command. Prefer xUnit or NUnit for tests; keep Program.cs minimal with DI. Structure: Controllers/Services/Models for APIs; appsettings.json for config (never commit secrets). Use async/await for I/O; validate inputs with DataAnnotations or FluentValidation. Pin framework version and test approach in the project brief.

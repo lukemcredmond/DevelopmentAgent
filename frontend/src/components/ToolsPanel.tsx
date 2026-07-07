@@ -492,6 +492,7 @@ export default function ToolsPanel({
             estimateRowHeight={96}
             getKey={(ev) => ev.id}
             onScroll={handleScroll}
+            newestFirst
             empty={
               <p className="text-cat-overlay text-center py-8">
                 {sprintRunning && toolEvents.length === 0 && (

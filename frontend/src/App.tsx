@@ -146,6 +146,7 @@ export default function App() {
     toolRunningCount,
     sprintProgress,
     setSprintProgress,
+    indexProgress,
     refreshToolHistory,
     clearLogs,
     clearActivity,
@@ -509,6 +510,7 @@ export default function App() {
         autoSprintPaused={autoSprintPaused}
         sprintRunning={orchestratedActive}
         isDark={isDark}
+        indexProgress={indexProgress}
         onOllamaUrlChange={setOllamaUrl}
         onProjectNameChange={setProjectName}
         onWorkspaceDirChange={setWorkspaceDir}
@@ -775,7 +777,12 @@ export default function App() {
               style={{ height: bottomPanelHeight, maxHeight: '100%' }}
               className="flex flex-col shrink-0 border-t border-cat-surface1 min-h-0"
             >
-              <SprintProgressBar progress={sprintProgress} planRunActive={planRunActive} />
+              <SprintProgressBar
+                progress={sprintProgress}
+                planRunActive={planRunActive}
+                sprintRunning={sprintRunning}
+                currentTool={currentTool}
+              />
               <AgentRunBar
                 activeRun={activeRun}
                 currentTool={currentTool}
@@ -952,9 +959,9 @@ export default function App() {
             setSelectedTask(null)
           })
         }
-        onResolveUser={(taskId, answer) =>
+        onResolveUser={(taskId, answer, target) =>
           void withLoading(async () => {
-            handleState(await resolveUserQuestion(taskId, answer))
+            handleState(await resolveUserQuestion(taskId, answer, target))
             setSelectedTask(null)
           })
         }
@@ -1039,6 +1046,7 @@ export default function App() {
         }
         onOpenModelTab={() => setBottomTab('model')}
         maxRefinementRoundTrips={state.workflowSettings?.maxRefinementRoundTrips ?? 3}
+        requireBacklogRefinement={state.workflowSettings?.requireBacklogRefinement ?? false}
         onEscapeSubtasks={(taskId) =>
           void withLoading(async () => {
             handleState(await escapeSubtaskLoop(taskId, 'needs_po'))

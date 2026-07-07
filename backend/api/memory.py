@@ -1,0 +1,47 @@
+"""Project memory API — expose SemanticMemoryEngine to the UI."""
+
+from fastapi import APIRouter, HTTPException
+
+from backend import state
+from backend.api.schemas import MemoryCreatePayload
+from backend.storage.memory_engine import SemanticMemoryEngine
+
+router = APIRouter()
+
+
+def _engine(ollama_url: str = "http://localhost:11434") -> SemanticMemoryEngine:
+    return SemanticMemoryEngine(ollama_url=ollama_url.rstrip("/"))
+
+
+@router.get("/api/memory")
+def list_memories(agent: str | None = None, limit: int = 50, ollamaUrl: str = "http://localhost:11434"):
+    with state.STATE_LOCK:
+        engine = _engine(ollamaUrl)
+        entries = engine.list_for_project(agent=agent, limit=min(limit, 200))
+    return {"entries": entries, "count": len(entries)}
+
+
+@router.post("/api/memory")
+def create_memory(payload: MemoryCreatePayload, ollamaUrl: str = "http://localhost:11434"):
+    content = payload.content.strip()
+    if not content:
+        raise HTTPException(status_code=400, detail="content is required")
+    with state.STATE_LOCK:
+        engine = _engine(ollamaUrl)
+        engine.save(
+            payload.agent or "System",
+            content,
+            payload.category or "user_note",
+            project_id=state.CURRENT_PROJECT_ID,
+        )
+        entries = engine.list_for_project(limit=1)
+    return {"ok": True, "entry": entries[0] if entries else None}
+
+
+@router.delete("/api/memory/{memory_id}")
+def delete_memory(memory_id: str):
+    with state.STATE_LOCK:
+        engine = SemanticMemoryEngine()
+        if not engine.delete(memory_id, project_id=state.CURRENT_PROJECT_ID):
+            raise HTTPException(status_code=404, detail="Memory not found")
+    return {"ok": True}

@@ -1,7 +1,7 @@
 from fastapi import APIRouter, HTTPException
 
 from backend import state
-from backend.api.schemas import SaveFilePayload, SearchFilesPayload
+from backend.api.schemas import SaveFilePayload, SearchFilesPayload, ReindexPayload
 from backend.workspace.files import get_file_tree, read_workspace_file, save_file_with_revision, search_files
 from backend.storage.code_index import CodeIndexEngine
 
@@ -100,13 +100,12 @@ def semantic_search(q: str, limit: int = 8):
 
 
 @router.post("/api/search/reindex")
-def reindex_codebase():
+def reindex_codebase(payload: ReindexPayload | None = None):
+    ollama_url = (payload.ollama_url if payload else None) or "http://localhost:11434"
     with state.STATE_LOCK:
-        engine = CodeIndexEngine()
+        engine = CodeIndexEngine(ollama_url=ollama_url)
         result = engine.index_workspace()
         if not result.get("ok"):
-            from fastapi import HTTPException
-
             raise HTTPException(status_code=503, detail=result.get("error", "Reindex failed"))
         return result
 

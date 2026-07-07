@@ -2,20 +2,42 @@
 
 from __future__ import annotations
 
-import hashlib
 import uuid
 from typing import Any, Dict, List, Optional
 
 import requests
 
 from backend import state
+from backend.services.events import publish_event
 from backend.services.logs import add_system_log
 from backend.services.workflow_settings import get_workflow_settings
-from backend.workspace.files import sync_virtual_filesystem_from_disk
+from backend.workspace.files import scan_indexable_workspace_files, sync_virtual_filesystem_from_disk
 
 EMBED_DIM = 768
 CHUNK_SIZE = 800
 CHUNK_OVERLAP = 100
+
+
+def _publish_index_progress(
+    *,
+    phase: str,
+    files_done: int = 0,
+    files_total: int = 0,
+    chunks: int = 0,
+    current_file: str = "",
+    embed_failures: int = 0,
+) -> None:
+    publish_event(
+        "index_progress",
+        {
+            "phase": phase,
+            "filesDone": files_done,
+            "filesTotal": files_total,
+            "chunks": chunks,
+            "currentFile": current_file,
+            "embedFailures": embed_failures,
+        },
+    )
 
 
 class CodeIndexEngine:
@@ -66,6 +88,30 @@ class CodeIndexEngine:
             add_system_log("System", "warning", f"Qdrant unavailable: {exc}")
             return None
 
+    def _verify_embed_model(self) -> Optional[str]:
+        """Return error message if embed model unavailable, else None."""
+        try:
+            resp = requests.get(f"{self.ollama_url}/api/tags", timeout=10)
+            if resp.status_code != 200:
+                return f"Ollama unreachable at {self.ollama_url} (HTTP {resp.status_code})"
+            names = {m.get("name") for m in resp.json().get("models", []) if m.get("name")}
+            base = self.embed_model.split(":")[0]
+            if self.embed_model not in names and not any(n.startswith(base) for n in names):
+                return (
+                    f"Embed model '{self.embed_model}' not found in Ollama. "
+                    f"Run: ollama pull {self.embed_model}"
+                )
+        except requests.RequestException as exc:
+            return f"Cannot reach Ollama at {self.ollama_url}: {exc}"
+
+        test = self._embed("index preflight test")
+        if not test:
+            return (
+                f"Embedding test failed for '{self.embed_model}' at {self.ollama_url}. "
+                f"Ensure the model is pulled and Ollama is running."
+            )
+        return None
+
     def _embed(self, text: str) -> Optional[List[float]]:
         try:
             resp = requests.post(
@@ -106,11 +152,34 @@ class CodeIndexEngine:
         if not ws_settings.get("enableSemanticSearch", True):
             return {"ok": False, "error": "Semantic search disabled in workflow settings"}
 
+        _publish_index_progress(phase="preflight")
+        embed_error = self._verify_embed_model()
+        if embed_error:
+            _publish_index_progress(phase="error")
+            return {"ok": False, "error": embed_error}
+
         client = self._get_client()
         if client is None:
+            _publish_index_progress(phase="error")
             return {"ok": False, "error": "Qdrant unavailable"}
 
         sync_virtual_filesystem_from_disk()
+        indexable_files, files_skipped = scan_indexable_workspace_files()
+        files_total = len(indexable_files)
+        if files_total == 0:
+            _publish_index_progress(phase="done", files_total=0, chunks=0)
+            return {
+                "ok": False,
+                "error": (
+                    "No indexable text files found in workspace. "
+                    "Check WORKSPACE DIR and ensure code files exist."
+                ),
+                "filesScanned": 0,
+                "filesSkipped": files_skipped,
+                "chunks": 0,
+                "embedFailures": 0,
+            }
+
         name = self._collection_name()
         try:
             client.delete_collection(name)
@@ -126,11 +195,24 @@ class CodeIndexEngine:
         from qdrant_client.http.models import PointStruct
 
         indexed = 0
+        embed_failures = 0
         points: List[PointStruct] = []
-        for path, content in state.VIRTUAL_FILESYSTEM.items():
+        files_done = 0
+
+        for path, content in indexable_files.items():
+            files_done += 1
+            _publish_index_progress(
+                phase="indexing",
+                files_done=files_done,
+                files_total=files_total,
+                chunks=indexed,
+                current_file=path,
+                embed_failures=embed_failures,
+            )
             for chunk in self._chunk_file(path, content):
                 emb = self._embed(chunk["content"])
                 if not emb:
+                    embed_failures += 1
                     continue
                 point_id = uuid.uuid5(uuid.NAMESPACE_URL, f"{self.project_id}:{path}:{chunk['startLine']}")
                 points.append(
@@ -155,8 +237,44 @@ class CodeIndexEngine:
             client.upsert(collection_name=name, points=points)
             indexed += len(points)
 
-        add_system_log("System", "success", f"Indexed {indexed} code chunks in Qdrant")
-        return {"ok": True, "chunks": indexed, "collection": name}
+        _publish_index_progress(
+            phase="done",
+            files_done=files_total,
+            files_total=files_total,
+            chunks=indexed,
+            embed_failures=embed_failures,
+        )
+
+        if indexed == 0:
+            msg = (
+                f"Indexed 0 chunks from {files_total} file(s). "
+                f"{embed_failures} embedding failure(s). "
+                f"Verify Ollama embed model '{self.embed_model}'."
+            )
+            add_system_log("System", "warning", msg)
+            return {
+                "ok": False,
+                "error": msg,
+                "filesScanned": files_total,
+                "filesSkipped": files_skipped,
+                "chunks": 0,
+                "embedFailures": embed_failures,
+                "collection": name,
+            }
+
+        add_system_log(
+            "System",
+            "success",
+            f"Indexed {indexed} chunks from {files_total} files in Qdrant",
+        )
+        return {
+            "ok": True,
+            "chunks": indexed,
+            "filesScanned": files_total,
+            "filesSkipped": files_skipped,
+            "embedFailures": embed_failures,
+            "collection": name,
+        }
 
     def upsert_file(self, path: str, content: str) -> None:
         ws_settings = get_workflow_settings(self.project_id)

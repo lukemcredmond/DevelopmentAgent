@@ -45,6 +45,7 @@ interface SidebarProps {
   onExportProject: () => void
   onImportProject: (file: File) => void
   onDeleteProject: () => void
+  indexProgress?: import('../types').IndexProgress | null
 }
 
 const skillBadgeClass: Record<AgentId, string> = {
@@ -96,6 +97,7 @@ export default function Sidebar({
   onExportProject,
   onImportProject,
   onDeleteProject,
+  indexProgress = null,
 }: SidebarProps) {
   const agents: { id: AgentId; model: string }[] = [
     { id: 'po', model: poModel },
@@ -369,6 +371,8 @@ export default function Sidebar({
           changelog={state.briefChangelog ?? []}
           notifications={notifications}
           onSettingsChange={onWorkflowSettingsChange}
+          ollamaUrl={ollamaUrl}
+          indexProgress={indexProgress}
         />
 
         <div className="bg-cat-surface0 p-3 rounded-xl border border-cat-surface1 space-y-3">

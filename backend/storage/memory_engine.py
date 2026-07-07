@@ -206,3 +206,72 @@ class SemanticMemoryEngine:
                 return scored[:limit]
 
         return self._tfidf_search(query, records, limit)
+
+    def list_for_project(
+        self,
+        *,
+        project_id: Optional[str] = None,
+        agent: Optional[str] = None,
+        limit: int = 50,
+    ) -> List[Dict[str, Any]]:
+        from backend import state
+
+        pid = project_id or state.CURRENT_PROJECT_ID or "default-proj"
+        prefix = f"{pid}:"
+        with sqlite3.connect(self.db_path) as conn:
+            conn.row_factory = sqlite3.Row
+            cursor = conn.cursor()
+            if agent:
+                scoped = self._scoped_agent_id(agent, pid)
+                cursor.execute(
+                    """
+                    SELECT id, agent_id, category, content, timestamp
+                    FROM memories WHERE agent_id = ?
+                    ORDER BY timestamp DESC LIMIT ?
+                    """,
+                    (scoped, limit),
+                )
+            else:
+                cursor.execute(
+                    """
+                    SELECT id, agent_id, category, content, timestamp
+                    FROM memories
+                    WHERE agent_id LIKE ?
+                    ORDER BY timestamp DESC LIMIT ?
+                    """,
+                    (f"{prefix}%", limit),
+                )
+            rows = cursor.fetchall()
+
+        out: List[Dict[str, Any]] = []
+        for row in rows:
+            agent_id = str(row["agent_id"] or "")
+            display_agent = agent_id.split(":")[-1] if ":" in agent_id else agent_id
+            out.append(
+                {
+                    "id": row["id"],
+                    "agent": display_agent,
+                    "category": row["category"],
+                    "content": row["content"],
+                    "timestamp": row["timestamp"],
+                }
+            )
+        return out
+
+    def delete(self, memory_id: str, *, project_id: Optional[str] = None) -> bool:
+        from backend import state
+
+        pid = project_id or state.CURRENT_PROJECT_ID or "default-proj"
+        prefix = f"{pid}:"
+        with sqlite3.connect(self.db_path) as conn:
+            cursor = conn.cursor()
+            cursor.execute("SELECT agent_id FROM memories WHERE id = ?", (memory_id,))
+            row = cursor.fetchone()
+            if not row:
+                return False
+            agent_id = str(row[0] or "")
+            if not agent_id.startswith(prefix) and ":" in agent_id:
+                return False
+            cursor.execute("DELETE FROM memories WHERE id = ?", (memory_id,))
+            conn.commit()
+            return cursor.rowcount > 0

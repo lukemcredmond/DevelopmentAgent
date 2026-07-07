@@ -22,6 +22,7 @@ import type {
   CommandDiagnostic,
   PendingToolApproval,
   SprintProgress,
+  IndexProgress,
   SystemLog,
   ToolExecutionEvent,
 } from '../types'
@@ -271,6 +272,7 @@ export function useAppState() {
   const [terminalSessions, setTerminalSessions] = useState<BackgroundTerminalSession[]>([])
   const [toolStartTick, setToolStartTick] = useState(0)
   const [sprintProgress, setSprintProgress] = useState<SprintProgress | null>(null)
+  const [indexProgress, setIndexProgress] = useState<IndexProgress | null>(null)
   const liveActivityRef = useRef<ActivityEvent[]>([])
   const activityClearedAtRef = useRef<string | null>(null)
   const lastProjectIdRef = useRef<string>(defaultState.projectId)
@@ -502,6 +504,19 @@ export function useAppState() {
         if (progress.phase === 'done' || progress.status === 'done') {
           void refresh()
         }
+      } else if (event.type === 'index_progress' && event.data) {
+        const d = event.data as Record<string, unknown>
+        setIndexProgress({
+          phase: String(d.phase ?? ''),
+          filesDone: Number(d.filesDone ?? 0),
+          filesTotal: Number(d.filesTotal ?? 0),
+          chunks: Number(d.chunks ?? 0),
+          currentFile: d.currentFile != null ? String(d.currentFile) : undefined,
+          embedFailures: Number(d.embedFailures ?? 0),
+        })
+        if (d.phase === 'done' || d.phase === 'error') {
+          window.setTimeout(() => setIndexProgress(null), 4000)
+        }
       } else if (event.type === 'activity' && event.data) {
         appendActivity(event.data as ActivityEvent)
       } else if (event.type === 'pending_tool' && event.data) {
@@ -676,6 +691,7 @@ export function useAppState() {
     toolStartTick,
     sprintProgress,
     setSprintProgress,
+    indexProgress,
   }
 }
 

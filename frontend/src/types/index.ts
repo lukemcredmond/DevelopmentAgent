@@ -317,6 +317,23 @@ export interface SprintProgress {
   status?: string
 }
 
+export interface IndexProgress {
+  phase: string
+  filesDone: number
+  filesTotal: number
+  chunks: number
+  currentFile?: string
+  embedFailures?: number
+}
+
+export interface ProjectMemoryEntry {
+  id: string
+  agent: string
+  category: string
+  content: string
+  timestamp: string
+}
+
 export interface ActivityEvent {
   taskId: string
   taskTitle: string
@@ -610,6 +627,7 @@ export type AppEventType =
   | 'tool_approval_required'
   | 'terminal_stream'
   | 'sprint_progress'
+  | 'index_progress'
   | 'connected'
 
 export interface AppEvent {
