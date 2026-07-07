@@ -1,3 +1,5 @@
+from typing import Optional
+
 from backend import state
 from backend.agents.scrum_agent import ScrumAgent
 from backend.agents.task_context import record_task_git_commit
@@ -198,14 +200,48 @@ def _format_search_results(query: str, limit: int = 20) -> str:
     return "\n".join(lines)
 
 
-def _guarded_update_board(task_id: str, target_lane: str) -> str:
+def _guarded_update_board(task_id: str, target_lane: str, user_question: Optional[str] = None) -> str:
     from backend.agents.task_context import find_task_by_id, get_task_lane, normalize_task
-    from backend.services.sprint_service import dev_gate_blocks_advance, qa_gate_blocks_done
+    from backend.services.needs_user_guard import should_escalate_to_needs_user
+    from backend.services.sprint_service import (
+        _redirect_to_needs_po,
+        _try_move_to_needs_user,
+        dev_gate_blocks_advance,
+        qa_gate_blocks_done,
+    )
 
     task = find_task_by_id(task_id)
     if task:
         normalize_task(task)
         lane = get_task_lane(task_id) or ""
+        target_stripped = target_lane.strip()
+        if target_stripped == "Needs User":
+            question = (user_question or task.get("userQuestion") or "").strip()
+            if not question:
+                return (
+                    "Error: Needs User requires a specific user_question argument or task.userQuestion. "
+                    "Use Needs PO for requirement clarification."
+                )
+            allowed, block_reason = should_escalate_to_needs_user(task, question)
+            if not allowed:
+                if block_reason == "clarification_use_po":
+                    if _redirect_to_needs_po(task_id, task, question, kind="board_clarification"):
+                        return f"Task {task_id} routed to Needs PO (clarification, not Needs User)."
+                    return "Error: Could not route to Needs PO — PO round-trip limit reached."
+                if block_reason in (
+                    "duplicate_question",
+                    "cooldown_active",
+                    "same_reason_hash",
+                    "already_in_needs_user",
+                ):
+                    return (
+                        f"Error: Needs User blocked ({block_reason}). "
+                        "Prior user answer applies — continue implementation."
+                    )
+                return "Error: Needs User escalation not allowed for this question."
+            if _try_move_to_needs_user(task_id, task, question, kind="dev_board_move"):
+                return f"Task {task_id} moved to 'Needs User'."
+            return "Error: Needs User move blocked (cap or policy)."
         if target_lane == "Done" and state.ACTIVE_SPRINT_AGENT == "QA Tester" and lane == "QA":
             blocked, reason = qa_gate_blocks_done(task)
             if blocked:
@@ -342,6 +378,10 @@ tool_board = Tool(
         "properties": {
             "task_id": {"type": "string"},
             "target_lane": {"type": "string"},
+            "user_question": {
+                "type": "string",
+                "description": "Required when target_lane is Needs User — specific question for the user.",
+            },
         },
         "required": ["task_id", "target_lane"],
     },

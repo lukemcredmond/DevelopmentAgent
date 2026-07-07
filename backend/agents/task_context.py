@@ -256,6 +256,29 @@ def normalize_task(task: Dict[str, Any]) -> Dict[str, Any]:
         task["needsUserReason"] = None
     if "needsUserAction" not in task:
         task["needsUserAction"] = None
+    if "userResolutions" not in task or not isinstance(task.get("userResolutions"), list):
+        task["userResolutions"] = []
+    else:
+        normalized_res: List[Dict[str, Any]] = []
+        for res in task["userResolutions"]:
+            if isinstance(res, dict):
+                normalized_res.append(
+                    {
+                        "question": coerce_task_text(res.get("question", "")),
+                        "answer": coerce_task_text(res.get("answer", "")),
+                        "timestamp": coerce_task_text(res.get("timestamp", "")),
+                        "targetLane": coerce_task_text(res.get("targetLane", "")),
+                    }
+                )
+        task["userResolutions"] = normalized_res
+    if "needsUserCooldownUntilStep" not in task or not isinstance(
+        task.get("needsUserCooldownUntilStep"), (int, float)
+    ):
+        task["needsUserCooldownUntilStep"] = None
+    if "needsUserDuplicate" not in task:
+        task["needsUserDuplicate"] = False
+    if "lastNeedsUserReasonHash" not in task:
+        task["lastNeedsUserReasonHash"] = None
     if "poRoundTrips" not in task or not isinstance(task.get("poRoundTrips"), (int, float)):
         task["poRoundTrips"] = 0
     if "stuckLoops" not in task or not isinstance(task.get("stuckLoops"), (int, float)):
@@ -362,6 +385,9 @@ def init_new_task(task: Dict[str, Any]) -> Dict[str, Any]:
     task["userQuestion"] = None
     task["poRoundTrips"] = 0
     task["stuckLoops"] = 0
+    task["userResolutions"] = []
+    task["needsUserCooldownUntilStep"] = None
+    task["needsUserDuplicate"] = False
     task.setdefault("workType", "implementation")
     task.setdefault("requiresDev", True)
     task.setdefault("requiresQa", True)
@@ -751,6 +777,18 @@ def build_task_prompt(task: Dict[str, Any], brief: str) -> str:
             f"Output: {qa_fail.get('output', '')[:500]}\n"
             f"When: {qa_fail.get('timestamp', '')}\n"
         )
+
+    if task.get("userResolutions"):
+        prompt += "\n=== PRIOR USER ANSWERS (do not re-ask) ===\n"
+        for res in task["userResolutions"][-5:]:
+            if not isinstance(res, dict):
+                continue
+            prompt += (
+                f"Q: {res.get('question', '')[:300]}\n"
+                f"A: {res.get('answer', '')[:400]}\n"
+                f"(→ {res.get('targetLane', '?')} at {res.get('timestamp', '?')})\n\n"
+            )
+        prompt += "These questions were already answered — do not escalate again for the same topic.\n"
 
     if task.get("userQuestion"):
         prompt += f"\n=== USER QUESTION PENDING ===\n{task['userQuestion']}\n"

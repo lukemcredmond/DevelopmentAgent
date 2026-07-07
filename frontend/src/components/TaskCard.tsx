@@ -36,6 +36,7 @@ export default function TaskCard({
   const hasCommit = Boolean(task.gitCommit?.hash)
   const isDone = task.status === 'Done'
   const needsUser = lane === 'Needs User' || task.status === 'Needs User'
+  const duplicateQuestion = task.needsUserDuplicate === true
   const filePaths = deriveTaskFiles(task).map((f) => f.path).slice(0, 2)
 
   function truncatePath(path: string): string {
@@ -98,6 +99,14 @@ export default function TaskCard({
               title="Needs your input"
             >
               <i className="fa-solid fa-circle-question" />
+            </span>
+          )}
+          {duplicateQuestion && (
+            <span
+              className="text-[9px] bg-rose-950/50 text-rose-300 px-1 py-0.5 rounded"
+              title="Agent tried to ask the same question again"
+            >
+              repeat?
             </span>
           )}
           {subtaskCount > 0 && (

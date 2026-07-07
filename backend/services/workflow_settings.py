@@ -35,6 +35,7 @@ DEFAULT_WORKFLOW_SETTINGS: Dict[str, Any] = {
     "autoStartSprint": True,
     "autonomousMode": False,
     "maxNeedsUserPerSprint": 2,
+    "needsUserCooldownSteps": 3,
     "enableWebSearch": False,
     "enableSemanticSearch": True,
     "qdrantUrl": "http://localhost:6333",

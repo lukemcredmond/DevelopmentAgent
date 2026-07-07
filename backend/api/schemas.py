@@ -121,6 +121,7 @@ class WorkflowSettingsPayload(BaseModel):
     autoStartSprint: Optional[bool] = None
     autonomousMode: Optional[bool] = None
     maxNeedsUserPerSprint: Optional[int] = None
+    needsUserCooldownSteps: Optional[int] = None
     enableWebSearch: Optional[bool] = None
     enableSemanticSearch: Optional[bool] = None
     qdrantUrl: Optional[str] = None

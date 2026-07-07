@@ -268,6 +268,7 @@ export default function TaskDetailModal({
   const [splitting, setSplitting] = useState(false)
   const [diagnosing, setDiagnosing] = useState(false)
   const [retrying, setRetrying] = useState(false)
+  const [showPriorAnswers, setShowPriorAnswers] = useState(false)
 
   useEffect(() => {
     if (!task) return
@@ -332,6 +333,8 @@ export default function TaskDetailModal({
     safeTask.needsUserAction?.trim() ||
     safeTask.userQuestion?.trim() ||
     'Describe the missing information or decision needed to continue.'
+  const priorUserAnswers = safeTask.userResolutions ?? []
+  const isDuplicateQuestion = safeTask.needsUserDuplicate === true
   const workLabel =
     safeTask.workType === 'planning' || safeTask.requiresDev === false
       ? 'PO only'
@@ -848,7 +851,14 @@ export default function TaskDetailModal({
 
           {taskLane === 'Needs User' && onResolveUser && (
             <div className="bg-amber-950/20 border border-amber-500/30 rounded-lg p-3 space-y-2">
-              <h4 className="text-xs font-bold text-amber-300">Why this needs you</h4>
+              <div className="flex items-center justify-between gap-2">
+                <h4 className="text-xs font-bold text-amber-300">Why this needs you</h4>
+                {isDuplicateQuestion && (
+                  <span className="text-[9px] px-1.5 py-0.5 rounded bg-rose-950/50 text-rose-300 border border-rose-500/40">
+                    Same question again?
+                  </span>
+                )}
+              </div>
               <p className="text-[11px] text-amber-100/90 whitespace-pre-wrap">{needsUserReason}</p>
               <div className="text-[10px] space-y-1">
                 <p className="text-amber-200 font-semibold">What to provide</p>
@@ -863,6 +873,33 @@ export default function TaskDetailModal({
                 <p className="text-[10px] text-rose-300/90">
                   Last failed tool: {lastFailedTool.toolName ?? 'unknown'}
                 </p>
+              )}
+              {priorUserAnswers.length > 0 && (
+                <div className="text-[10px] space-y-1">
+                  <button
+                    type="button"
+                    onClick={() => setShowPriorAnswers((o) => !o)}
+                    className="text-amber-200 font-semibold hover:text-amber-100"
+                  >
+                    {showPriorAnswers ? 'Hide' : 'Show'} prior answers ({priorUserAnswers.length})
+                  </button>
+                  {showPriorAnswers && (
+                    <ul className="space-y-2 max-h-32 overflow-y-auto">
+                      {[...priorUserAnswers].reverse().map((res, i) => (
+                        <li
+                          key={`${res.timestamp}-${i}`}
+                          className="text-amber-100/80 border border-amber-500/20 rounded p-1.5"
+                        >
+                          <p className="text-amber-200/90 font-semibold">Q: {res.question}</p>
+                          <p className="whitespace-pre-wrap">A: {res.answer}</p>
+                          <p className="text-amber-400/70 text-[9px]">
+                            → {res.targetLane} · {res.timestamp}
+                          </p>
+                        </li>
+                      ))}
+                    </ul>
+                  )}
+                </div>
               )}
               {commandDiagnostics.length > 0 && (
                 <div className="text-[10px] space-y-1">

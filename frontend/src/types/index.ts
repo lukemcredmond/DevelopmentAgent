@@ -58,6 +58,13 @@ export interface QaEvidence {
   userOverride?: boolean
 }
 
+export interface UserResolution {
+  question: string
+  answer: string
+  timestamp: string
+  targetLane: string
+}
+
 export interface Task {
   id: string
   title: string
@@ -76,6 +83,9 @@ export interface Task {
   userQuestion?: string | null
   needsUserReason?: string | null
   needsUserAction?: string | null
+  userResolutions?: UserResolution[]
+  needsUserCooldownUntilStep?: number | null
+  needsUserDuplicate?: boolean
   poRoundTrips?: number
   workType?: 'planning' | 'implementation' | 'review' | 'qa' | 'user_action'
   requiresDev?: boolean
@@ -207,6 +217,7 @@ export interface WorkflowSettings {
   autoStartSprint?: boolean
   autonomousMode?: boolean
   maxNeedsUserPerSprint?: number
+  needsUserCooldownSteps?: number
   enableWebSearch?: boolean
   enableSemanticSearch?: boolean
   qdrantUrl?: string
@@ -553,6 +564,7 @@ export interface WorkflowSettingsPayload {
   autoStartSprint?: boolean
   autonomousMode?: boolean
   maxNeedsUserPerSprint?: number
+  needsUserCooldownSteps?: number
   enableWebSearch?: boolean
   enableSemanticSearch?: boolean
   qdrantUrl?: string
@@ -754,6 +766,7 @@ export const DEFAULT_WORKFLOW_SETTINGS: WorkflowSettings = {
   autoStartSprint: true,
   autonomousMode: false,
   maxNeedsUserPerSprint: 2,
+  needsUserCooldownSteps: 3,
   enableWebSearch: false,
   enableSemanticSearch: true,
   qdrantUrl: 'http://localhost:6333',

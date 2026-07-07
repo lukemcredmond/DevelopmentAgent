@@ -48,6 +48,14 @@ from backend.services.events import publish_event
 from backend.services.feature_similarity import iter_board_tasks, link_related_features
 from backend.services.git_service import git_commit, git_init
 from backend.services.logs import add_system_log
+from backend.services.needs_user_guard import (
+    build_stuck_escalation_message,
+    dev_clarification_from_result,
+    dev_explicit_needs_user,
+    prefer_po_instruction_suffix,
+    should_escalate_to_needs_user,
+    stuck_is_tool_or_lint,
+)
 from backend.services.project_service import save_current_project_state
 from backend.services.workflow_settings import (
     get_active_lanes,
@@ -256,10 +264,12 @@ def _autonomous_mode_active() -> bool:
 
 
 def _autonomous_instruction_suffix() -> str:
+    base = prefer_po_instruction_suffix()
     if not _autonomous_mode_active():
-        return ""
+        return base
     return (
-        " Autonomous mode: act without asking the user when acceptance criteria exist; "
+        base
+        + " Autonomous mode: act without asking the user when acceptance criteria exist; "
         "only escalate to Needs User for true user-only decisions (secrets, irreversible design)."
     )
 
@@ -284,6 +294,29 @@ def _set_needs_user_fields(task: Dict[str, Any], msg: str) -> None:
         task["needsUserAction"] = "Review the task and provide a decision or missing information."
 
 
+def _redirect_to_needs_po(task_id: str, task: Dict[str, Any], msg: str, *, kind: str = "clarification") -> bool:
+    """Route clarification-shaped escalations to Needs PO instead of Needs User."""
+    if _escalate_po_limit(task):
+        add_system_log(
+            "System",
+            "warning",
+            f"{task_id}: clarification blocked — PO limit reached; staying in lane",
+        )
+        return False
+    increment_po_round_trips(task_id)
+    move_board_stage(task_id, "Needs PO")
+    publish_activity(
+        task_id,
+        kind,
+        msg[:500],
+        role="system",
+        agent="System",
+        lane="Needs PO",
+    )
+    add_system_log("System", "info", f"{task_id}: routed to Needs PO (not Needs User): {msg[:120]}")
+    return True
+
+
 def _try_move_to_needs_user(
     task_id: str,
     task: Dict[str, Any],
@@ -291,6 +324,22 @@ def _try_move_to_needs_user(
     *,
     kind: str = "stuck_loop",
 ) -> bool:
+    allowed, block_reason = should_escalate_to_needs_user(task, msg)
+    if not allowed:
+        if block_reason == "clarification_use_po":
+            return _redirect_to_needs_po(task_id, task, msg, kind=kind)
+        if block_reason in (
+            "duplicate_question",
+            "cooldown_active",
+            "same_reason_hash",
+            "already_in_needs_user",
+        ):
+            add_system_log(
+                "System",
+                "warning",
+                f"{task_id}: Needs User blocked ({block_reason}) — {msg[:120]}",
+            )
+        return False
     if _needs_user_cap_reached():
         add_system_log(
             "System",
@@ -333,23 +382,39 @@ def _check_stuck_and_escalate(task_id: str, lane_before: str) -> None:
 
     task["stuckLoops"] = 0
     max_po = int(ws.get("maxPoRoundTrips", 3))
+    msg = build_stuck_escalation_message(task, lane_after, max_stuck)
     if int(task.get("poRoundTrips", 0)) >= max_po:
-        msg = (
-            f"Agents made no progress after {max_stuck} steps in '{lane_after}'. "
-            "Please clarify requirements or make a decision."
-        )
-        _try_move_to_needs_user(task_id, task, msg)
+        if stuck_is_tool_or_lint(task):
+            record_task_decision(
+                task_id,
+                "System",
+                "stuck_loop",
+                f"Lint/tool blocker after {max_stuck} steps — not escalating to Needs User",
+                msg,
+            )
+            add_system_log(
+                "System",
+                "warning",
+                f"{task_id}: stuck on lint/tools — fix code or run diagnosis; not moving to Needs User",
+            )
+        else:
+            _try_move_to_needs_user(task_id, task, msg)
     else:
-        msg = (
+        stuck_msg = (
             f"Agents made no progress after {max_stuck} steps in '{lane_after}' — "
             "escalating to PO for clarification."
         )
+        if stuck_is_tool_or_lint(task):
+            stuck_msg = (
+                f"No progress after {max_stuck} steps — lint/tool issues remain. "
+                "PO will help refine approach."
+            )
         increment_po_round_trips(task_id)
         move_board_stage(task_id, "Needs PO")
         publish_activity(
             task_id,
             "stuck_loop",
-            msg,
+            stuck_msg,
             role="system",
             agent="System",
             lane="Needs PO",
@@ -373,19 +438,7 @@ def _escalate_po_limit(task: Dict[str, Any]) -> bool:
 
 
 def _dev_needs_user(result: str) -> bool:
-    lower = result.lower()
-    return any(
-        m in lower
-        for m in (
-            "needs user",
-            "need user",
-            "user decision",
-            "requires user input",
-            "move the task to 'needs user'",
-            "api key",
-            "design choice",
-        )
-    )
+    return dev_explicit_needs_user(result)
 
 
 def _mark_sprint_step_start() -> str:
@@ -1337,8 +1390,11 @@ def _run_developer_step(active_task: Dict[str, Any], brief: str) -> None:
         "Fix syntax/parse errors before logic changes. "
         "After edits, run the lint command once to verify. "
         "Do NOT re-run the same lint command without fixing code first. "
-        "Unclear requirements → move to 'Needs PO'. "
-        "User-only decisions (keys, design) → move to 'Needs User' with a specific userQuestion. "
+        "Unclear requirements → move to 'Needs PO' (not Needs User). "
+        "Needs User ONLY for: secrets/credentials you cannot invent, irreversible external "
+        "actions (production deploy, billing), or product choices with no default in brief/AC. "
+        "Set a specific userQuestion when moving to Needs User. "
+        "Do NOT move to Needs User for lint errors, missing files, or implementation questions. "
         f"When complete and files are written → move to '{target}'."
         f"{_autonomous_instruction_suffix()}"
     )
@@ -1361,16 +1417,34 @@ def _run_developer_step(active_task: Dict[str, Any], brief: str) -> None:
         else:
             record_task_decision(task_id, "Developer", "work", result[:500], result)
             if _task_in_lane(task_id, "In Progress"):
-                if _dev_needs_user(result):
-                    if not _needs_user_cap_reached():
-                        _set_needs_user_fields(task, result[:500])
-                        move_board_stage(task_id, "Needs User")
-                        state.SPRINT_NEEDS_USER_COUNT += 1
-                    else:
+                if dev_clarification_from_result(result):
+                    if not _escalate_po_limit(task):
+                        increment_po_round_trips(task_id)
+                        move_board_stage(task_id, "Needs PO")
+                        publish_activity(
+                            task_id,
+                            "dev_escalation",
+                            "Developer needs clarification — routed to PO",
+                            role="assistant",
+                            agent="Developer",
+                            lane="Needs PO",
+                        )
+                elif _dev_needs_user(result):
+                    if _needs_user_cap_reached():
                         add_system_log(
                             "Developer",
                             "warning",
                             f"{task_id}: autonomous cap — staying In Progress instead of Needs User",
+                        )
+                    elif _try_move_to_needs_user(
+                        task_id, task, result[:500], kind="dev_escalation"
+                    ):
+                        pass
+                    else:
+                        add_system_log(
+                            "Developer",
+                            "warning",
+                            f"{task_id}: Needs User escalation blocked — continuing In Progress",
                         )
                 elif _dev_needs_po(result, task):
                     if not _escalate_po_limit(task):

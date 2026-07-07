@@ -1,3 +1,5 @@
+from typing import Any, Dict, List, Optional
+
 from fastapi import APIRouter, HTTPException
 
 from backend import state
@@ -26,6 +28,7 @@ from backend.api.schemas import (
 from backend.services.board_lanes import normalize_board_lanes
 from backend.services.board_service import clear_all_board_tasks, move_board_stage, publish_board_update
 from backend.services.logs import add_system_log
+from backend.services.needs_user_guard import append_user_resolution, set_needs_user_cooldown
 from backend.services.project_service import save_current_project_state
 from backend.services.sprint_service import inject_tool_evidence_for_task, run_po_add_feature, run_po_split_task
 
@@ -133,6 +136,15 @@ def resolve_user_question(task_id: str, payload: ResolveUserPayload):
             raise HTTPException(status_code=400, detail="Task is not in Needs User")
         normalize_task(task)
         answer = payload.answer.strip()
+        prior_question = (
+            task.get("userQuestion")
+            or task.get("needsUserReason")
+            or task.get("needsUserAction")
+            or ""
+        )
+        append_user_resolution(task, str(prior_question), answer, target_lane)
+        set_needs_user_cooldown(task)
+        task["needsUserDuplicate"] = False
         record_task_transcript(
             task_id,
             "user",
@@ -156,6 +168,44 @@ def resolve_user_question(task_id: str, payload: ResolveUserPayload):
         move_board_stage(task_id, target_lane)
         add_system_log("System", "success", f"User resolved {task_id} → {target_lane}")
     return build_state_response()
+
+
+@router.post("/api/board/escalate-needs-user-to-po")
+def escalate_needs_user_to_po():
+    """Move all Needs User cards to Needs PO (bulk clarification routing)."""
+    moved: List[str] = []
+    with state.STATE_LOCK:
+        tasks = list(state.SHARED_BOARD.get("Needs User", []))
+        for task in tasks:
+            normalize_task(task)
+            task_id = str(task.get("id", ""))
+            if not task_id:
+                continue
+            note = (
+                task.get("needsUserReason")
+                or task.get("userQuestion")
+                or "User bulk-routed clarification to PO"
+            )
+            task["userQuestion"] = None
+            task["needsUserReason"] = None
+            task["needsUserAction"] = None
+            task["needsUserDuplicate"] = False
+            record_task_decision(
+                task_id,
+                "User",
+                "bulk_escalate",
+                "Bulk routed Needs User → Needs PO",
+                str(note)[:500],
+            )
+            move_board_stage(task_id, "Needs PO")
+            moved.append(task_id)
+        if moved:
+            add_system_log(
+                "System",
+                "success",
+                f"Bulk routed {len(moved)} card(s) from Needs User → Needs PO",
+            )
+    return {**build_state_response(), "movedTaskIds": moved}
 
 
 @router.post("/api/tasks/{task_id}/inject-tool-evidence")

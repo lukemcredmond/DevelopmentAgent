@@ -428,6 +428,10 @@ export async function resolveUserQuestion(
   )
 }
 
+export async function escalateNeedsUserToPo(): Promise<AppState & { movedTaskIds?: string[] }> {
+  return request('/api/board/escalate-needs-user-to-po', { method: 'POST' })
+}
+
 export async function reindexCodebase(
   ollamaUrl = 'http://localhost:11434',
 ): Promise<{

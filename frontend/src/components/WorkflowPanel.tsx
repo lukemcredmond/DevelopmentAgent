@@ -401,7 +401,13 @@ export default function WorkflowPanel({
       </label>
       <p className="text-[10px] text-cat-overlay leading-relaxed -mt-1 pl-5">
         When enabled, agents prefer acting over asking. Needs User moves are capped per sprint (
-        {settings.maxNeedsUserPerSprint ?? 2} by default).
+        {settings.maxNeedsUserPerSprint ?? 2} by default). Duplicate questions and clarification
+        requests are routed to Needs PO instead.
+      </p>
+      <p className="text-[10px] text-cat-overlay leading-relaxed pl-5 border-l-2 border-amber-500/30 ml-1">
+        <span className="text-amber-300/90 font-semibold">Too many Needs User cards?</span> Enable
+        autonomous mode, set max to 1, increase max stuck steps to 5, and put API keys or design
+        defaults in the Project Brief. Cards can be bulk-sent to PO from the Sprint panel.
       </p>
 
       <label className="flex items-center gap-2 text-[11px] text-cat-subtext cursor-pointer">
@@ -678,6 +684,23 @@ export default function WorkflowPanel({
           className="w-full bg-cat-base border border-cat-surface1 rounded p-1 text-white"
         />
       </label>
+      <label className="text-[11px] text-cat-subtext block">
+        <span className="text-[10px] text-cat-overlay block">Needs User cooldown (sprint steps)</span>
+        <input
+          type="number"
+          min={0}
+          max={20}
+          value={settings.needsUserCooldownSteps ?? 3}
+          onChange={(e) =>
+            onSettingsChange({ needsUserCooldownSteps: parseInt(e.target.value, 10) || 0 })
+          }
+          className="w-full bg-cat-base border border-cat-surface1 rounded p-1 text-white"
+        />
+      </label>
+      <p className="text-[10px] text-cat-overlay leading-relaxed -mt-1">
+        After you resolve a Needs User card, the same question cannot re-escalate for this many
+        sprint steps. Prior answers are injected into agent prompts.
+      </p>
 
       <div className="grid grid-cols-3 gap-2 text-[11px]">
         <label>

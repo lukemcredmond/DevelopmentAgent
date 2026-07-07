@@ -36,6 +36,7 @@ interface SidebarProps {
   onPlan: () => void
   onPlanAndRun: () => void
   onStep: () => void
+  onEscalateNeedsUserToPo?: () => void
   onClearAllTasks: () => void
   onReset: () => void
   onWorkflowSettingsChange: (partial: Partial<WorkflowSettings>) => void
@@ -89,6 +90,7 @@ export default function Sidebar({
   onPlan,
   onPlanAndRun,
   onStep,
+  onEscalateNeedsUserToPo,
   onClearAllTasks,
   onReset,
   onWorkflowSettingsChange,
@@ -455,6 +457,17 @@ export default function Sidebar({
               <p className="text-[10px] text-amber-400/90 italic">
                 Paused — waiting for backlog work
               </p>
+            )}
+            {(notifications.needsUser ?? 0) > 0 && onEscalateNeedsUserToPo && (
+              <button
+                type="button"
+                onClick={onEscalateNeedsUserToPo}
+                disabled={loading || sprintRunning}
+                className="w-full bg-amber-950/30 hover:bg-amber-950/50 disabled:opacity-50 text-amber-200 text-xs py-2 px-3 rounded-lg border border-amber-500/30"
+                title="Move all Needs User cards to Needs PO for clarification"
+              >
+                Send {notifications.needsUser} Needs User → PO
+              </button>
             )}
           </div>
         </div>

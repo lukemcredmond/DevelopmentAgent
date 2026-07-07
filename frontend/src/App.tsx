@@ -25,6 +25,7 @@ import {
   resetWorkspace,
   retryAgentStep,
   clearAllTasks,
+  escalateNeedsUserToPo,
   resolveToolApproval,
   resolveUserQuestion,
   injectToolEvidence,
@@ -617,6 +618,16 @@ export default function App() {
             }
           })
         }
+        onEscalateNeedsUserToPo={() => {
+          if (
+            !window.confirm(
+              'Move all Needs User cards to Needs PO? Use this when cards are clarification, not true user decisions.',
+            )
+          ) {
+            return
+          }
+          void withLoading(async () => handleState(await escalateNeedsUserToPo()))
+        }}
         onClearAllTasks={() => {
           if (
             !window.confirm(
