@@ -1,4 +1,4 @@
-import { useEffect, useState } from 'react'
+import { memo, useEffect, useState } from 'react'
 
 const BRIEF_OPEN_KEY = 'allhands-brief-open'
 
@@ -28,7 +28,7 @@ interface BriefPanelProps {
   autonomousMode?: boolean
 }
 
-export default function BriefPanel({
+export default memo(function BriefPanel({
   brief,
   onBriefChange,
   onOpenManualTask,
@@ -95,4 +95,4 @@ export default function BriefPanel({
       )}
     </div>
   )
-}
+})

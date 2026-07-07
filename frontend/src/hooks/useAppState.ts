@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useRef, useState } from 'react'
+import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import {
   cancelSprint,
   clearLogs as clearLogsApi,
@@ -28,6 +28,7 @@ import type {
 } from '../types'
 import { EMPTY_BOARD, hasSprintWork } from '../types'
 import { hydrateActivityFromBoard, mergeActivityEvents, filterActivityAfterClear, activityTimestampNow } from '../utils/activityFromBoard'
+import { appendTerminalOutput, capLogs } from '../utils/streamBuffers'
 
 const defaultState: AppState = {
   projectId: '',
@@ -287,7 +288,7 @@ export function useAppState() {
   const lastProjectIdRef = useRef<string>(defaultState.projectId)
   const boardRef = useRef<Board>(defaultState.board)
   const displayRunTimerRef = useRef<number | null>(null)
-  const toolHistoryDebounceRef = useRef<number | null>(null)
+  const sprintRefreshDebounceRef = useRef<number | null>(null)
   const [sseLive, setSseLive] = useState(true)
 
   const scheduleDisplayRunClear = useCallback(() => {
@@ -387,16 +388,6 @@ export function useAppState() {
     }
   }, [])
 
-  const debouncedRefreshToolHistory = useCallback(() => {
-    if (toolHistoryDebounceRef.current) {
-      window.clearTimeout(toolHistoryDebounceRef.current)
-    }
-    toolHistoryDebounceRef.current = window.setTimeout(() => {
-      toolHistoryDebounceRef.current = null
-      void refreshToolHistory()
-    }, 300)
-  }, [refreshToolHistory])
-
   const clearLogs = useCallback(async () => {
     try {
       await clearLogsApi()
@@ -445,8 +436,18 @@ export function useAppState() {
   )
 
   const appendLog = useCallback((log: SystemLog) => {
-    setState((prev) => ({ ...prev, logs: [...prev.logs, log] }))
+    setState((prev) => ({ ...prev, logs: capLogs(prev.logs, log) }))
   }, [])
+
+  const debouncedRefreshAfterSprint = useCallback(() => {
+    if (sprintRefreshDebounceRef.current) {
+      window.clearTimeout(sprintRefreshDebounceRef.current)
+    }
+    sprintRefreshDebounceRef.current = window.setTimeout(() => {
+      sprintRefreshDebounceRef.current = null
+      void refresh()
+    }, 500)
+  }, [refresh])
 
   const appendActivity = useCallback(
     (event: ActivityEvent) => {
@@ -469,8 +470,31 @@ export function useAppState() {
     setToolEvents((prev) => applyToolEnd(prev, payload))
   }, [])
 
-  const toolFailureCount = toolEvents.filter((e) => e.status === 'failed').length
-  const toolRunningCount = toolEvents.filter((e) => e.status === 'running').length
+  const toolFailureCount = useMemo(
+    () => toolEvents.filter((e) => e.status === 'failed').length,
+    [toolEvents],
+  )
+  const toolRunningCount = useMemo(
+    () => toolEvents.filter((e) => e.status === 'running').length,
+    [toolEvents],
+  )
+
+  const refreshRef = useRef(refresh)
+  refreshRef.current = refresh
+  const appendLogRef = useRef(appendLog)
+  appendLogRef.current = appendLog
+  const appendActivityRef = useRef(appendActivity)
+  appendActivityRef.current = appendActivity
+  const syncActivityFromBoardRef = useRef(syncActivityFromBoard)
+  syncActivityFromBoardRef.current = syncActivityFromBoard
+  const refreshPendingToolsRef = useRef(refreshPendingTools)
+  refreshPendingToolsRef.current = refreshPendingTools
+  const refreshPendingApprovalsRef = useRef(refreshPendingApprovals)
+  refreshPendingApprovalsRef.current = refreshPendingApprovals
+  const scheduleDisplayRunClearRef = useRef(scheduleDisplayRunClear)
+  scheduleDisplayRunClearRef.current = scheduleDisplayRunClear
+  const debouncedRefreshAfterSprintRef = useRef(debouncedRefreshAfterSprint)
+  debouncedRefreshAfterSprintRef.current = debouncedRefreshAfterSprint
 
   useEffect(() => {
     void refresh()
@@ -479,39 +503,32 @@ export function useAppState() {
   }, [refresh, refreshToolHistory, refreshTerminalSessions])
 
   useEffect(() => {
-    syncActivityFromBoard(state.board)
-  }, [state.board, syncActivityFromBoard])
-
-  useEffect(() => {
     const source = subscribeEvents((event) => {
       setSseLive(true)
       if (event.type === 'state' && event.data) {
         const data = event.data as AppState
         setState(data)
-        syncActivityFromBoard(data.board)
+        syncActivityFromBoardRef.current(data.board)
       } else if (event.type === 'log' && event.data) {
-        appendLog(event.data as SystemLog)
+        appendLogRef.current(event.data as SystemLog)
       } else if (event.type === 'board') {
         setState((prev) => {
           const next = patchBoardFromEvent(event.data, prev) ?? prev
-          syncActivityFromBoard(next.board)
+          syncActivityFromBoardRef.current(next.board)
           return next
         })
-        debouncedRefreshToolHistory()
       } else if (event.type === 'files') {
-        void refresh()
+        void refreshRef.current()
       } else if (event.type === 'sprint') {
-        void refresh()
-        void refreshToolHistory()
+        debouncedRefreshAfterSprintRef.current()
         setActiveRun(null)
         setCurrentTool(null)
         setDisplayRun(null)
       } else if (event.type === 'sprint_progress' && event.data) {
         const progress = mapSprintProgress(event.data as Record<string, unknown>)
         setSprintProgress(progress)
-        debouncedRefreshToolHistory()
         if (progress.phase === 'done' || progress.status === 'done') {
-          void refresh()
+          debouncedRefreshAfterSprintRef.current()
         }
       } else if (event.type === 'index_progress' && event.data) {
         const d = event.data as Record<string, unknown>
@@ -527,16 +544,16 @@ export function useAppState() {
           window.setTimeout(() => setIndexProgress(null), 4000)
         }
       } else if (event.type === 'activity' && event.data) {
-        appendActivity(event.data as ActivityEvent)
+        appendActivityRef.current(event.data as ActivityEvent)
       } else if (event.type === 'pending_tool' && event.data) {
-        void refreshPendingTools()
+        void refreshPendingToolsRef.current()
       } else if (event.type === 'agent_run' && event.data) {
         const run = mapAgentRun(event.data as Record<string, unknown>)
         if (run.status === 'completed' || run.status === 'failed') {
           setDisplayRun(run)
           setActiveRun(null)
           setCurrentTool(null)
-          scheduleDisplayRunClear()
+          scheduleDisplayRunClearRef.current()
         } else {
           setActiveRun(run)
           setDisplayRun(run)
@@ -580,13 +597,12 @@ export function useAppState() {
         setDisplayRun((prev) => mergeRun(prev))
         setCurrentTool(null)
         setToolEvents((prev) => applyToolEnd(prev, payload))
-        debouncedRefreshToolHistory()
       } else if (event.type === 'tool_approval_required' && event.data) {
         const approval = mapApprovalFromEvent(event.data as Record<string, unknown>)
         setPendingApprovals((prev) =>
           prev.some((p) => p.id === approval.id) ? prev : [...prev, approval],
         )
-        void refreshPendingApprovals()
+        void refreshPendingApprovalsRef.current()
       } else if (event.type === 'terminal_stream' && event.data) {
         const payload = event.data as Record<string, unknown>
         const sessionId = String(payload.sessionId ?? '')
@@ -620,7 +636,7 @@ export function useAppState() {
               s.id === sessionId
                 ? {
                     ...s,
-                    output: chunk ? s.output + chunk : s.output,
+                    output: appendTerminalOutput(s.output, chunk),
                     done: done || s.done,
                     exitCode: exitCode ?? s.exitCode,
                   }
@@ -631,7 +647,7 @@ export function useAppState() {
             {
               id: sessionId,
               command: '',
-              output: chunk,
+              output: appendTerminalOutput('', chunk),
               done,
               exitCode,
               startedAt: new Date().toISOString(),
@@ -648,21 +664,11 @@ export function useAppState() {
     return () => {
       source.removeEventListener('error', onError)
       source.close()
-      if (toolHistoryDebounceRef.current) {
-        window.clearTimeout(toolHistoryDebounceRef.current)
+      if (sprintRefreshDebounceRef.current) {
+        window.clearTimeout(sprintRefreshDebounceRef.current)
       }
     }
-  }, [
-    refresh,
-    appendLog,
-    appendActivity,
-    syncActivityFromBoard,
-    refreshPendingTools,
-    refreshPendingApprovals,
-    refreshToolHistory,
-    debouncedRefreshToolHistory,
-    scheduleDisplayRunClear,
-  ])
+  }, [])
 
   const runBarState = activeRun ?? displayRun
 

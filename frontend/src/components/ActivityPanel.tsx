@@ -1,4 +1,4 @@
-import { useMemo, useRef, useState } from 'react'
+import { memo, useMemo, useRef, useState } from 'react'
 import type { ActivityEvent } from '../types'
 import { formatTaskText } from '../utils/taskFormat'
 import VirtualScrollList from './VirtualScrollList'
@@ -12,7 +12,7 @@ interface ActivityPanelProps {
   wasCleared?: boolean
 }
 
-export default function ActivityPanel({ events, onTaskClick, onClear, wasCleared = false }: ActivityPanelProps) {
+export default memo(function ActivityPanel({ events, onTaskClick, onClear, wasCleared = false }: ActivityPanelProps) {
   const [filter, setFilter] = useState<ActivityFilter>('all')
   const [expanded, setExpanded] = useState<Set<number>>(new Set())
   const stickToBottomRef = useRef(true)
@@ -169,4 +169,4 @@ export default function ActivityPanel({ events, onTaskClick, onClear, wasCleared
       />
     </div>
   )
-}
+})

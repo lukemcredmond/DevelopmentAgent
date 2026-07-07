@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useRef, useState } from 'react'
+import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import {
   addManualTask,
   approveTask,
@@ -365,7 +365,18 @@ export default function App() {
 
   useEffect(() => {
     const key = `allhands-chat-draft-${state.projectId}`
-    sessionStorage.setItem(key, chatInput)
+    const timer = window.setTimeout(() => {
+      try {
+        if (chatInput.trim()) {
+          sessionStorage.setItem(key, chatInput)
+        } else {
+          sessionStorage.removeItem(key)
+        }
+      } catch {
+        /* ignore */
+      }
+    }, 400)
+    return () => window.clearTimeout(timer)
   }, [chatInput, state.projectId])
 
   useEffect(() => {
@@ -520,21 +531,78 @@ export default function App() {
     }
   }
 
-  const bottomTabs: { id: BottomTab; label: string; icon: string; badge?: number }[] = [
-    { id: 'console', label: 'Console', icon: 'fa-terminal' },
-    { id: 'model', label: 'Model', icon: 'fa-brain' },
-    {
-      id: 'tools',
-      label: 'Tools',
-      icon: 'fa-wrench',
-      badge: toolRunningCount > 0 ? toolRunningCount : toolFailureCount || undefined,
+  const chatFilePaths = useMemo(() => Object.keys(localFiles), [localFiles])
+
+  const bottomTabs = useMemo(
+    (): { id: BottomTab; label: string; icon: string; badge?: number }[] => [
+      { id: 'console', label: 'Console', icon: 'fa-terminal' },
+      { id: 'model', label: 'Model', icon: 'fa-brain' },
+      {
+        id: 'tools',
+        label: 'Tools',
+        icon: 'fa-wrench',
+        badge: toolRunningCount > 0 ? toolRunningCount : toolFailureCount || undefined,
+      },
+      {
+        id: 'activity',
+        label: 'Activity',
+        icon: 'fa-wave-square',
+        badge: activityEvents.length || undefined,
+      },
+      { id: 'chat', label: 'Chat', icon: 'fa-comments' },
+      { id: 'terminal', label: 'Terminal', icon: 'fa-square-terminal' },
+      { id: 'search', label: 'Search', icon: 'fa-magnifying-glass' },
+      { id: 'git', label: 'Git', icon: 'fa-code-branch' },
+    ],
+    [toolRunningCount, toolFailureCount, activityEvents.length],
+  )
+
+  const handleWorkflowSettingsChange = useCallback(
+    (partial: Partial<WorkflowSettings>) => {
+      void withLoading(async () => {
+        const data = await updateWorkflowSettings(partial)
+        setState((prev) => ({
+          ...prev,
+          workflowSettings: data.workflowSettings,
+          activeLanes: data.activeLanes,
+          notifications: data.notifications,
+          board: data.board,
+        }))
+      })
     },
-    { id: 'activity', label: 'Activity', icon: 'fa-wave-square', badge: activityEvents.length || undefined },
-    { id: 'chat', label: 'Chat', icon: 'fa-comments' },
-    { id: 'terminal', label: 'Terminal', icon: 'fa-square-terminal' },
-    { id: 'search', label: 'Search', icon: 'fa-magnifying-glass' },
-    { id: 'git', label: 'Git', icon: 'fa-code-branch' },
-  ]
+    [setState],
+  )
+
+  const handleEscalateNeedsUserToPo = useCallback(() => {
+    if (
+      !window.confirm(
+        'Move all Needs User cards to Needs PO? Use this when cards are clarification, not true user decisions.',
+      )
+    ) {
+      return
+    }
+    void withLoading(async () => handleState(await escalateNeedsUserToPo()))
+  }, [handleState])
+
+  const handleRefreshState = useCallback(() => {
+    void refresh()
+  }, [refresh])
+
+  const handleOpenConsoleTab = useCallback(() => {
+    setBottomTab('console')
+  }, [])
+
+  const handleActivityTaskClick = useCallback(
+    (taskId: string) => {
+      const task = findTaskOnBoard(state.board, taskId)
+      if (task) setSelectedTask(task)
+    },
+    [state.board],
+  )
+
+  const handleRefreshToolHistory = useCallback(() => {
+    void refreshToolHistory()
+  }, [refreshToolHistory])
 
   return (
     <div className={`flex h-full w-full flex-col lg:flex-row bg-cat-base overflow-hidden ${theme}`}>
@@ -618,16 +686,7 @@ export default function App() {
             }
           })
         }
-        onEscalateNeedsUserToPo={() => {
-          if (
-            !window.confirm(
-              'Move all Needs User cards to Needs PO? Use this when cards are clarification, not true user decisions.',
-            )
-          ) {
-            return
-          }
-          void withLoading(async () => handleState(await escalateNeedsUserToPo()))
-        }}
+        onEscalateNeedsUserToPo={handleEscalateNeedsUserToPo}
         onClearAllTasks={() => {
           if (
             !window.confirm(
@@ -664,18 +723,7 @@ export default function App() {
             handleState(await loadProject(state.projectId))
           })
         }}
-        onWorkflowSettingsChange={(partial: Partial<WorkflowSettings>) =>
-          void withLoading(async () => {
-            const data = await updateWorkflowSettings(partial)
-            setState((prev) => ({
-              ...prev,
-              workflowSettings: data.workflowSettings,
-              activeLanes: data.activeLanes,
-              notifications: data.notifications,
-              board: data.board,
-            }))
-          })
-        }
+        onWorkflowSettingsChange={handleWorkflowSettingsChange}
       />
 
       <main className="flex-1 flex flex-col h-full overflow-hidden min-w-0">
@@ -924,10 +972,7 @@ export default function App() {
                       events={activityEvents}
                       onClear={clearActivity}
                       wasCleared={activityWasCleared}
-                      onTaskClick={(taskId) => {
-                        const task = findTaskOnBoard(state.board, taskId)
-                        if (task) setSelectedTask(task)
-                      }}
+                      onTaskClick={handleActivityTaskClick}
                     />
                   </div>
                 )}
@@ -946,42 +991,46 @@ export default function App() {
                       onMergeToolEvent={mergeToolEvent}
                       board={state.board}
                       selectedTaskId={selectedTask?.id}
-                      onRefreshState={() => void refresh()}
-                      onRefreshToolHistory={() => void refreshToolHistory()}
+                      onRefreshState={handleRefreshState}
+                      onRefreshToolHistory={handleRefreshToolHistory}
                       sseLive={sseLive}
                       brief={brief}
                       preferredSubTab={toolsPreferredSubTab}
                       workspaceDir={state.workspaceDir}
                       sprintRunning={orchestratedActive}
-                      onOpenConsole={() => setBottomTab('console')}
+                      onOpenConsole={handleOpenConsoleTab}
                       onInjectToolEvidence={(taskId, payload) => handleInjectToolEvidence(taskId, payload)}
                     />
                   </div>
                 )}
-                <ChatPanel
-                  hidden={bottomTab !== 'chat'}
-                  ollamaUrl={ollamaUrl}
-                  filePaths={Object.keys(localFiles)}
-                  agent={chatAgent}
-                  onAgentChange={setChatAgent}
-                  input={chatInput}
-                  onInputChange={setChatInput}
-                  messages={chatMessages}
-                  onMessagesChange={setChatMessages}
-                  contextFiles={chatContextFiles}
-                  onContextFilesChange={setChatContextFiles}
-                  pinnedTask={chatPinnedTask}
-                  pinnedLane={chatPinnedLane}
-                  onClearPinnedTask={() => setChatPinnedTask(null)}
-                  onRefreshState={() => void refresh()}
-                  onSplitTask={(taskId) => void handleSplitTask(taskId)}
-                  toolEvents={toolEvents}
-                  onClearChat={handleClearChat}
-                />
-                <TerminalPanel
-                  hidden={bottomTab !== 'terminal'}
-                  workspaceDir={state.workspaceDir}
-                />
+                {bottomTab === 'chat' && (
+                  <div className="absolute inset-0 flex flex-col min-h-0">
+                    <ChatPanel
+                      ollamaUrl={ollamaUrl}
+                      filePaths={chatFilePaths}
+                      agent={chatAgent}
+                      onAgentChange={setChatAgent}
+                      input={chatInput}
+                      onInputChange={setChatInput}
+                      messages={chatMessages}
+                      onMessagesChange={setChatMessages}
+                      contextFiles={chatContextFiles}
+                      onContextFilesChange={setChatContextFiles}
+                      pinnedTask={chatPinnedTask}
+                      pinnedLane={chatPinnedLane}
+                      onClearPinnedTask={() => setChatPinnedTask(null)}
+                      onRefreshState={handleRefreshState}
+                      onSplitTask={(taskId) => void handleSplitTask(taskId)}
+                      toolEvents={toolEvents}
+                      onClearChat={handleClearChat}
+                    />
+                  </div>
+                )}
+                {bottomTab === 'terminal' && (
+                  <div className="absolute inset-0 flex flex-col min-h-0">
+                    <TerminalPanel workspaceDir={state.workspaceDir} />
+                  </div>
+                )}
                 {bottomTab === 'search' && (
                   <div className="absolute inset-0 flex flex-col min-h-0">
                     <SearchPanel onOpenFile={handleOpenFile} />

@@ -1,3 +1,4 @@
+import { memo } from 'react'
 import type { AgentId, AppState, ConfigPayload, WorkflowSettings } from '../types'
 import { AGENT_LABELS, DEFAULT_WORKFLOW_SETTINGS } from '../types'
 import GpuModelRecommendations from './GpuModelRecommendations'
@@ -57,7 +58,7 @@ const skillBadgeClass: Record<AgentId, string> = {
   qa: 'bg-purple-950/40 border border-purple-500/30 text-purple-300',
 }
 
-export default function Sidebar({
+export default memo(function Sidebar({
   state,
   ollamaUrl,
   brief,
@@ -499,4 +500,4 @@ export default function Sidebar({
       </div>
     </aside>
   )
-}
+})

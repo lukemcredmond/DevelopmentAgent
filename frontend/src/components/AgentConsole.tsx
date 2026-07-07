@@ -1,4 +1,4 @@
-import { useEffect, useRef } from 'react'
+import { memo, useEffect, useRef } from 'react'
 import type { SystemLog } from '../types'
 import VirtualScrollList from './VirtualScrollList'
 
@@ -18,7 +18,7 @@ function isActionableWarning(text: string): boolean {
   )
 }
 
-export default function AgentConsole({ logs, onClear, sseLive = true }: AgentConsoleProps) {
+export default memo(function AgentConsole({ logs, onClear, sseLive = true }: AgentConsoleProps) {
   const stickToBottomRef = useRef(true)
 
   const handleScroll = () => {
@@ -101,4 +101,4 @@ export default function AgentConsole({ logs, onClear, sseLive = true }: AgentCon
       />
     </div>
   )
-}
+})

@@ -1,5 +1,6 @@
 import {
   useCallback,
+  useEffect,
   useMemo,
   useRef,
   useState,
@@ -15,12 +16,16 @@ interface VirtualScrollListProps<T> {
   overscan?: number
   defaultCap?: number
   newestFirst?: boolean
+  /** When set, avoids re-copy/reverse unless length or tail key changes */
+  itemsTailKey?: string | number
+  /** When this value changes, scroll container to bottom (for chat-style feeds) */
+  autoScrollEndKey?: string | number
   className?: string
   empty?: ReactNode
   onScroll?: () => void
 }
 
-export default function VirtualScrollList<T>({
+function VirtualScrollListInner<T>({
   items,
   getKey,
   renderRow,
@@ -28,6 +33,8 @@ export default function VirtualScrollList<T>({
   overscan = 8,
   defaultCap = 150,
   newestFirst = true,
+  itemsTailKey,
+  autoScrollEndKey,
   className = '',
   empty,
   onScroll,
@@ -36,12 +43,25 @@ export default function VirtualScrollList<T>({
   const [scrollTop, setScrollTop] = useState(0)
   const [viewportHeight, setViewportHeight] = useState(400)
   const containerRef = useRef<HTMLDivElement>(null)
+  const orderedCacheRef = useRef<T[]>([])
+  const signatureRef = useRef<string>('')
+
+  const listSignature = String(
+    itemsTailKey ??
+      (items.length > 0
+        ? `${items.length}:${getKey(items[items.length - 1], items.length - 1)}`
+        : 'empty'),
+  )
 
   const displayItems = useMemo(() => {
-    const ordered = newestFirst ? [...items].reverse() : items
+    if (signatureRef.current !== listSignature || orderedCacheRef.current.length !== items.length) {
+      signatureRef.current = listSignature
+      orderedCacheRef.current = newestFirst ? [...items].reverse() : items
+    }
+    const ordered = orderedCacheRef.current
     if (showAll || ordered.length <= defaultCap) return ordered
     return newestFirst ? ordered.slice(0, defaultCap) : ordered.slice(-defaultCap)
-  }, [items, showAll, defaultCap, newestFirst])
+  }, [items, listSignature, showAll, defaultCap, newestFirst, getKey])
 
   const hiddenCount = items.length - displayItems.length
 
@@ -69,6 +89,13 @@ export default function VirtualScrollList<T>({
     },
     [onScroll],
   )
+
+  useEffect(() => {
+    if (autoScrollEndKey == null) return
+    const el = containerRef.current
+    if (!el) return
+    el.scrollTop = el.scrollHeight
+  }, [autoScrollEndKey, displayItems.length])
 
   if (items.length === 0) {
     return <div className={className}>{empty}</div>
@@ -106,3 +133,5 @@ export default function VirtualScrollList<T>({
     </div>
   )
 }
+
+export default VirtualScrollListInner

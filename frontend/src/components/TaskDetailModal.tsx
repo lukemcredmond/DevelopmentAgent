@@ -1,4 +1,4 @@
-import { useEffect, useState, type ReactNode } from 'react'
+import { useEffect, useMemo, useState, type ReactNode } from 'react'
 import type { BoardLane, CommandDiagnostic, Task, TaskFile, TaskGitCommit, TaskTranscriptEntry } from '../types'
 import { formatAcceptanceCriteria, formatTaskText, deriveTaskFiles, sanitizeTaskForUi } from '../utils/taskFormat'
 
@@ -288,20 +288,23 @@ export default function TaskDetailModal({
 
   useEffect(() => {
     if (!task?.id) return
-    try {
-      if (userAnswer.trim()) {
-        sessionStorage.setItem(`needs-user-draft-${task.id}`, userAnswer)
-      } else {
-        sessionStorage.removeItem(`needs-user-draft-${task.id}`)
+    const timer = window.setTimeout(() => {
+      try {
+        if (userAnswer.trim()) {
+          sessionStorage.setItem(`needs-user-draft-${task.id}`, userAnswer)
+        } else {
+          sessionStorage.removeItem(`needs-user-draft-${task.id}`)
+        }
+      } catch {
+        /* ignore */
       }
-    } catch {
-      /* ignore */
-    }
+    }, 400)
+    return () => window.clearTimeout(timer)
   }, [task?.id, userAnswer])
 
-  if (!task) return null
+  const safeTask = useMemo(() => (task ? sanitizeTaskForUi(task) : null), [task])
 
-  const safeTask = sanitizeTaskForUi(task)
+  if (!task || !safeTask) return null
   const files = deriveTaskFiles(safeTask)
   const filesFromTranscriptOnly = (safeTask.files ?? []).length === 0 && files.length > 0
   const decisions = [...(safeTask.decisions ?? [])].reverse()

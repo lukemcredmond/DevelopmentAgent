@@ -8,7 +8,7 @@ import {
   type DragEndEvent,
   type DragStartEvent,
 } from '@dnd-kit/core'
-import { useMemo, useState } from 'react'
+import { memo, useMemo, useState } from 'react'
 import type { Board, BoardLane, Task, WorkflowSettings } from '../types'
 import { getDisplayLanes } from '../types'
 import { deriveTaskFiles } from '../utils/taskFormat'
@@ -35,7 +35,7 @@ function getTaskDecisionCount(task: Task): number {
   return (task.decisions ?? []).length
 }
 
-export default function KanbanBoard({
+export default memo(function KanbanBoard({
   board,
   projectName,
   workspaceDir,
@@ -172,4 +172,4 @@ export default function KanbanBoard({
       </DndContext>
     </div>
   )
-}
+})

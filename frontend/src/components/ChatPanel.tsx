@@ -1,7 +1,8 @@
-import { useEffect, useRef, useState } from 'react'
+import { useEffect, useMemo, useRef, useState } from 'react'
 import { sendChat } from '../api/client'
 import type { AgentId, BoardLane, Task, ToolExecutionEvent } from '../types'
 import { AGENT_LABELS } from '../types'
+import VirtualScrollList from './VirtualScrollList'
 
 export interface ChatToolCallDisplay {
   toolName: string
@@ -119,14 +120,54 @@ export default function ChatPanel({
   const [streaming, setStreaming] = useState(false)
   const [clearing, setClearing] = useState(false)
   const [showFilePicker, setShowFilePicker] = useState(false)
-  const bottomRef = useRef<HTMLDivElement>(null)
   const abortRef = useRef<AbortController | null>(null)
+
+  const chatTailKey = useMemo(
+    () => (messages.length > 0 ? messages[messages.length - 1]?.id : 'empty'),
+    [messages],
+  )
 
   const taskActionMode = Boolean(pinnedTask)
 
-  useEffect(() => {
-    bottomRef.current?.scrollIntoView({ behavior: 'auto' })
-  }, [messages, toolEvents.length])
+  const renderChatMessage = (msg: ChatUiMessage) => (
+    <div className={`max-w-[90%] py-1.5 ${msg.role === 'user' ? 'ml-auto text-right' : ''}`}>
+      {msg.role === 'assistant' && msg.agent && (
+        <span className="text-[10px] text-indigo-400 block mb-0.5">
+          {AGENT_LABELS[msg.agent]}
+        </span>
+      )}
+      {msg.toolCalls && msg.toolCalls.length > 0 && (
+        <div className="mb-1 space-y-0.5">
+          {msg.toolCalls.map((call, i) => (
+            <ToolCallBlock key={`${msg.id}-tool-${i}`} call={call} />
+          ))}
+        </div>
+      )}
+      <div
+        className={`inline-block text-xs rounded-lg px-3 py-2 whitespace-pre-wrap ${
+          msg.role === 'user'
+            ? 'bg-indigo-600/30 text-white'
+            : 'bg-cat-surface0 text-cat-text border border-cat-surface1'
+        }`}
+      >
+        {msg.content || (streaming && msg.id === messages[messages.length - 1]?.id ? '…' : '')}
+      </div>
+      {msg.splitHint && (
+        <div className="mt-1 text-[10px] text-amber-200 bg-amber-950/30 border border-amber-500/30 rounded px-2 py-1.5">
+          {msg.splitHint}
+          {pinnedTask && onSplitTask && (
+            <button
+              type="button"
+              onClick={() => onSplitTask(pinnedTask.id)}
+              className="ml-2 text-violet-300 hover:text-violet-200 underline"
+            >
+              Split now
+            </button>
+          )}
+        </div>
+      )}
+    </div>
+  )
 
   useEffect(() => {
     return () => {
@@ -329,59 +370,32 @@ export default function ChatPanel({
         </div>
       )}
 
-      <div className="flex-1 overflow-y-auto p-3 space-y-3">
-        {messages.map((msg) => (
-          <div
-            key={msg.id}
-            className={`max-w-[90%] ${msg.role === 'user' ? 'ml-auto text-right' : ''}`}
-          >
-            {msg.role === 'assistant' && msg.agent && (
-              <span className="text-[10px] text-indigo-400 block mb-0.5">
-                {AGENT_LABELS[msg.agent]}
-              </span>
-            )}
-            {msg.toolCalls && msg.toolCalls.length > 0 && (
-              <div className="mb-1 space-y-0.5">
-                {msg.toolCalls.map((call, i) => (
-                  <ToolCallBlock key={`${msg.id}-tool-${i}`} call={call} />
-                ))}
-              </div>
-            )}
-            <div
-              className={`inline-block text-xs rounded-lg px-3 py-2 whitespace-pre-wrap ${
-                msg.role === 'user'
-                  ? 'bg-indigo-600/30 text-white'
-                  : 'bg-cat-surface0 text-cat-text border border-cat-surface1'
-              }`}
-            >
-              {msg.content || (streaming ? '…' : '')}
-            </div>
-            {msg.splitHint && (
-              <div className="mt-1 text-[10px] text-amber-200 bg-amber-950/30 border border-amber-500/30 rounded px-2 py-1.5">
-                {msg.splitHint}
-                {pinnedTask && onSplitTask && (
-                  <button
-                    type="button"
-                    onClick={() => onSplitTask(pinnedTask.id)}
-                    className="ml-2 text-violet-300 hover:text-violet-200 underline"
-                  >
-                    Split now
-                  </button>
-                )}
-              </div>
-            )}
-          </div>
-        ))}
+      <div className="flex-1 min-h-0 flex flex-col">
+        <VirtualScrollList
+          className="flex-1 min-h-0 p-3"
+          items={messages}
+          newestFirst={false}
+          estimateRowHeight={96}
+          defaultCap={150}
+          itemsTailKey={chatTailKey}
+          autoScrollEndKey={`${chatTailKey}-${toolEvents.length}`}
+          getKey={(msg) => msg.id}
+          empty={
+            <p className="text-[10px] text-cat-overlay italic text-center pt-4">
+              No messages yet — start a conversation below.
+            </p>
+          }
+          renderRow={(msg) => renderChatMessage(msg)}
+        />
         {streaming &&
           toolEvents
             .slice(-3)
             .filter((e) => e.status === 'running')
             .map((e) => (
-              <div key={e.id} className="max-w-[90%]">
+              <div key={e.id} className="max-w-[90%] px-3 pb-2 shrink-0">
                 <ToolCallBlock call={mapToolEvents([e])[0]} />
               </div>
             ))}
-        <div ref={bottomRef} />
       </div>
 
       <div className="p-3 border-t border-cat-surface1 flex gap-2 shrink-0">
