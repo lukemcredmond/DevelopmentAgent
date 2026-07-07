@@ -46,6 +46,7 @@ interface SidebarProps {
   onImportProject: (file: File) => void
   onDeleteProject: () => void
   indexProgress?: import('../types').IndexProgress | null
+  skillSuggestionCounts?: Record<AgentId, number>
 }
 
 const skillBadgeClass: Record<AgentId, string> = {
@@ -98,6 +99,7 @@ export default function Sidebar({
   onImportProject,
   onDeleteProject,
   indexProgress = null,
+  skillSuggestionCounts = { po: 0, dev: 0, cr: 0, qa: 0 },
 }: SidebarProps) {
   const agents: { id: AgentId; model: string }[] = [
     { id: 'po', model: poModel },
@@ -357,9 +359,14 @@ export default function Sidebar({
                 <button
                   type="button"
                   onClick={() => onOpenSkillModal(id)}
-                  className="bg-cat-surface0 hover:bg-cat-surface1 text-cat-subtext py-0.5 px-2 rounded border border-cat-surface1 text-[10px] font-semibold transition-colors"
+                  className="bg-cat-surface0 hover:bg-cat-surface1 text-cat-subtext py-0.5 px-2 rounded border border-cat-surface1 text-[10px] font-semibold transition-colors inline-flex items-center gap-1"
                 >
                   + Add Skill
+                  {(skillSuggestionCounts[id] ?? 0) > 0 && (
+                    <span className="text-[9px] bg-indigo-600/60 text-white px-1 py-0.5 rounded">
+                      {skillSuggestionCounts[id]} suggested
+                    </span>
+                  )}
                 </button>
               </div>
             ))}

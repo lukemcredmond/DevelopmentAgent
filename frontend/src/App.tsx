@@ -14,6 +14,7 @@ import {
   exportProject,
   fetchFileDiff,
   fetchSkills,
+  fetchSkillSuggestions,
   importProject,
   loadProject,
   moveTask,
@@ -64,7 +65,7 @@ import KanbanToggleBar, { readKanbanOpen, writeKanbanOpen } from './components/K
 import ToolsPanel from './components/ToolsPanel'
 import { useAppState, useAutoSprint } from './hooks/useAppState'
 import { useTheme } from './hooks/useTheme'
-import type { AgentId, AppState, BoardLane, ChatMessageRecord, PendingToolApproval, PendingToolRequest, Task, WorkflowSettings } from './types'
+import type { AgentId, AppState, BoardLane, BriefCategory, ChatMessageRecord, PendingToolApproval, PendingToolRequest, SkillSuggestion, Task, WorkflowSettings } from './types'
 import { getDisplayLanes } from './types'
 import { findTaskOnBoard } from './utils/taskFormat'
 
@@ -195,6 +196,14 @@ export default function App() {
   const [skillModalLoading, setSkillModalLoading] = useState(false)
   const [modalSkills, setModalSkills] = useState(state.availableSkills)
   const [modalSkillsDir, setModalSkillsDir] = useState(skillsDir)
+  const [modalBriefCategories, setModalBriefCategories] = useState<BriefCategory[]>([])
+  const [modalSuggestions, setModalSuggestions] = useState<SkillSuggestion[]>([])
+  const [skillSuggestionCounts, setSkillSuggestionCounts] = useState<Record<AgentId, number>>({
+    po: 0,
+    dev: 0,
+    cr: 0,
+    qa: 0,
+  })
 
   const [chatAgent, setChatAgent] = useState<AgentId>('dev')
   const [chatInput, setChatInput] = useState('')
@@ -397,15 +406,50 @@ export default function App() {
     setSelectedSkillFiles([])
     setSkillModalLoading(true)
     try {
-      const data = await fetchSkills()
-      setModalSkills(data.skills)
-      setModalSkillsDir(data.skillsDir)
+      const [skillsData, suggData] = await Promise.all([
+        fetchSkills(),
+        fetchSkillSuggestions(agent),
+      ])
+      setModalSkills(skillsData.skills)
+      setModalSkillsDir(skillsData.skillsDir)
+      setModalBriefCategories(suggData.briefCategories ?? [])
+      setModalSuggestions(suggData.suggestions ?? [])
     } catch {
       setModalSkills(state.availableSkills)
+      setModalBriefCategories([])
+      setModalSuggestions([])
     } finally {
       setSkillModalLoading(false)
     }
   }
+
+  const refreshSkillSuggestionCounts = useCallback(async () => {
+    if (!brief.trim()) {
+      setSkillSuggestionCounts({ po: 0, dev: 0, cr: 0, qa: 0 })
+      return
+    }
+    const agents: AgentId[] = ['po', 'dev', 'cr', 'qa']
+    const entries = await Promise.all(
+      agents.map(async (id) => {
+        try {
+          const data = await fetchSkillSuggestions(id, 5)
+          const assigned = state.assignedSkills[id] ?? []
+          const count = (data.suggestions ?? []).filter(
+            (s) => !assigned.includes(s.filename),
+          ).length
+          return [id, count] as const
+        } catch {
+          return [id, 0] as const
+        }
+      }),
+    )
+    setSkillSuggestionCounts(Object.fromEntries(entries) as Record<AgentId, number>)
+  }, [brief, state.assignedSkills])
+
+  useEffect(() => {
+    const timer = window.setTimeout(() => void refreshSkillSuggestionCounts(), 400)
+    return () => window.clearTimeout(timer)
+  }, [refreshSkillSuggestionCounts])
 
   useEffect(() => {
     if (pendingTools.length > 0 && !pendingToolModal) {
@@ -511,6 +555,7 @@ export default function App() {
         sprintRunning={orchestratedActive}
         isDark={isDark}
         indexProgress={indexProgress}
+        skillSuggestionCounts={skillSuggestionCounts}
         onOllamaUrlChange={setOllamaUrl}
         onProjectNameChange={setProjectName}
         onWorkspaceDirChange={setWorkspaceDir}
@@ -1084,6 +1129,8 @@ export default function App() {
         search={skillSearch}
         selectedFiles={selectedSkillFiles}
         assigning={loading}
+        briefCategories={modalBriefCategories}
+        suggestions={modalSuggestions}
         onSearchChange={setSkillSearch}
         onToggleFile={(filename) =>
           setSelectedSkillFiles((prev) =>
@@ -1102,6 +1149,7 @@ export default function App() {
             })
             handleState(data)
             setSelectedSkillFiles([])
+            void refreshSkillSuggestionCounts()
           })
         }
         onClose={() => setSkillModalAgent(null)}

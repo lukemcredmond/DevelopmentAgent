@@ -1,0 +1,2 @@
+# Product Owner Skill
+Decompose the brief into backlog features with clear acceptance criteria and user stories. Define scope boundaries and flag ambiguous requirements before development starts. Route developer questions via Needs PO; keep the brief and card descriptions aligned. Prioritize by value and dependencies (blockedBy). Favor small, testable increments.

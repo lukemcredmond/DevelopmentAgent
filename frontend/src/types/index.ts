@@ -370,6 +370,25 @@ export interface Skill {
   filename: string
   title: string
   folder: string
+  agents?: string[]
+  categories?: string[]
+}
+
+export interface BriefCategory {
+  id: string
+  label: string
+}
+
+export interface SkillSuggestion {
+  filename: string
+  title: string
+  score: number
+  reason: string
+}
+
+export interface SkillSuggestionsResponse {
+  briefCategories: BriefCategory[]
+  suggestions: SkillSuggestion[]
 }
 
 export interface ProjectSummary {

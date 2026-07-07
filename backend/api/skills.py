@@ -59,6 +59,15 @@ def list_skills():
     }
 
 
+@router.get("/api/skills/suggestions")
+def skill_suggestions(agent: str, limit: int = 5):
+    from backend.services.skill_suggestions import build_suggestions_response
+
+    if agent not in AGENT_MAP:
+        raise HTTPException(status_code=400, detail="Invalid agent")
+    return build_suggestions_response(agent, limit=min(limit, 20))
+
+
 @router.post("/api/assign-skill")
 def assign_skill_to_agent(payload: SkillPayload):
     with state.STATE_LOCK:

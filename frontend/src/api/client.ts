@@ -136,6 +136,15 @@ export async function fetchSkills(): Promise<SkillsResponse> {
   return request<SkillsResponse>('/api/skills')
 }
 
+export async function fetchSkillSuggestions(
+  agent: import('../types').AgentId,
+  limit = 5,
+): Promise<import('../types').SkillSuggestionsResponse> {
+  return request<import('../types').SkillSuggestionsResponse>(
+    `/api/skills/suggestions?agent=${encodeURIComponent(agent)}&limit=${limit}`,
+  )
+}
+
 export async function assignSkill(payload: SkillPayload): Promise<AppState> {
   return request<AppState>('/api/assign-skill', {
     method: 'POST',

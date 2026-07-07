@@ -1,4 +1,4 @@
-import type { AgentId, Skill } from '../types'
+import type { AgentId, BriefCategory, Skill, SkillSuggestion } from '../types'
 import { AGENT_LABELS } from '../types'
 
 interface SkillModalProps {
@@ -10,6 +10,8 @@ interface SkillModalProps {
   search: string
   selectedFiles: string[]
   assigning: boolean
+  briefCategories: BriefCategory[]
+  suggestions: SkillSuggestion[]
   onSearchChange: (v: string) => void
   onToggleFile: (filename: string) => void
   onAssign: () => void
@@ -25,6 +27,8 @@ export default function SkillModal({
   search,
   selectedFiles,
   assigning,
+  briefCategories,
+  suggestions,
   onSearchChange,
   onToggleFile,
   onAssign,
@@ -41,6 +45,9 @@ export default function SkillModal({
       s.folder.toLowerCase().includes(q),
   )
   const selectedSet = new Set(selectedFiles)
+  const suggestedNotAssigned = suggestions.filter(
+    (s) => !assignedSkills.includes(s.filename),
+  )
 
   return (
     <div className="fixed inset-0 bg-black/75 flex items-center justify-center p-4 z-50">
@@ -59,6 +66,61 @@ export default function SkillModal({
             <i className="fa-solid fa-xmark" />
           </button>
         </div>
+
+        {briefCategories.length > 0 && (
+          <div className="space-y-1.5">
+            <div className="text-[10px] uppercase tracking-wider text-cat-overlay">
+              Detected from brief
+            </div>
+            <div className="flex flex-wrap gap-1.5">
+              {briefCategories.map((cat) => (
+                <span
+                  key={cat.id}
+                  className="text-[10px] px-2 py-0.5 rounded-full bg-indigo-950/50 border border-indigo-500/30 text-indigo-200"
+                >
+                  {cat.label}
+                </span>
+              ))}
+            </div>
+          </div>
+        )}
+
+        {!loading && suggestedNotAssigned.length > 0 && (
+          <div className="space-y-1.5 border border-cat-surface1 rounded-lg p-3 bg-cat-base/50">
+            <div className="text-[10px] uppercase tracking-wider text-cat-overlay">
+              Suggested for {AGENT_LABELS[agent]}
+            </div>
+            <div className="space-y-1">
+              {suggestedNotAssigned.map((s) => {
+                const isSelected = selectedSet.has(s.filename)
+                return (
+                  <button
+                    key={s.filename}
+                    type="button"
+                    onClick={() => onToggleFile(s.filename)}
+                    className={`w-full text-left p-2 rounded-lg border text-xs flex items-center gap-2 transition-colors ${
+                      isSelected
+                        ? 'bg-indigo-950/40 border-indigo-500/60'
+                        : 'border-cat-surface1 hover:border-indigo-500/40'
+                    }`}
+                  >
+                    <input
+                      type="checkbox"
+                      readOnly
+                      checked={isSelected}
+                      className="shrink-0 pointer-events-none"
+                    />
+                    <div className="flex-1 min-w-0">
+                      <div className="font-semibold text-indigo-300 truncate">{s.title}</div>
+                      <div className="text-[10px] text-cat-overlay">{s.reason}</div>
+                    </div>
+                    <span className="text-[9px] text-cat-subtext shrink-0">{s.score} pts</span>
+                  </button>
+                )
+              })}
+            </div>
+          </div>
+        )}
 
         <div className="relative">
           <input

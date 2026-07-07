@@ -1,5 +1,5 @@
 import os
-from typing import Dict, List
+from typing import Any, Dict, List
 
 from backend import state
 
@@ -9,6 +9,13 @@ _DEFAULT_SKILL_TEMPLATES = {
     "javascript_optimizer.md": "# ES6 JS Optimization Skill\nWrite code utilizing modular functions, arrow notations, and clean error captures.",
     "acceptance_tester.md": "# Dynamic QA Acceptance Skill\nValidate user workflows match exact brief expectations. Write automated check reports.",
     "code_auditor.md": "# Code Reviewer Auditor Skill\nVerify architecture patterns, import structures, syntax errors, and complexity levels.",
+    "product_owner.md": (
+        "# Product Owner Skill\n"
+        "Decompose the brief into backlog features with clear acceptance criteria and user stories. "
+        "Define scope boundaries and flag ambiguous requirements before development starts. "
+        "Route developer questions via Needs PO; keep the brief and card descriptions aligned. "
+        "Prioritize by value and dependencies (blockedBy). Favor small, testable increments."
+    ),
     "csharp_api.md": (
         "# C# / .NET Application Skill\n"
         "Target ASP.NET Core or console apps with modern C# (10+). Use `dotnet build` and `dotnet test` via run_command. "
@@ -28,6 +35,35 @@ _DEFAULT_SKILL_TEMPLATES = {
     ),
 }
 
+_SKILL_METADATA: Dict[str, Dict[str, Any]] = {
+    "git_expert.md": {"agents": ["dev", "cr"], "categories": [], "universal": True},
+    "python_tester.md": {"agents": ["qa"], "categories": ["python"]},
+    "javascript_optimizer.md": {"agents": ["dev"], "categories": ["javascript", "web"]},
+    "acceptance_tester.md": {"agents": ["qa", "po"], "categories": ["product"]},
+    "code_auditor.md": {"agents": ["cr"], "categories": [], "all_stacks": True},
+    "product_owner.md": {"agents": ["po"], "categories": ["product"]},
+    "csharp_api.md": {"agents": ["dev", "qa"], "categories": ["csharp"]},
+    "unity_quest_vr.md": {"agents": ["dev", "qa"], "categories": ["vr", "csharp"]},
+}
+
+_DEFAULT_SKILL_AGENTS = ["dev"]
+_PO_ONLY_SKILLS = {"product_owner.md"}
+_CR_ONLY_SKILLS = {"code_auditor.md"}
+
+
+def get_skill_metadata(filename: str) -> Dict[str, Any]:
+    """Return agents/categories metadata for a skill file (basename or rel path)."""
+    base = os.path.basename(filename.replace("\\", "/"))
+    meta = _SKILL_METADATA.get(base, {})
+    return {
+        "agents": list(meta.get("agents") or _DEFAULT_SKILL_AGENTS),
+        "categories": list(meta.get("categories") or []),
+        "universal": bool(meta.get("universal")),
+        "all_stacks": bool(meta.get("all_stacks")),
+        "po_only": base in _PO_ONLY_SKILLS,
+        "cr_only": base in _CR_ONLY_SKILLS,
+    }
+
 
 def _ensure_skill_templates() -> None:
     """Create missing default skill files without overwriting existing ones."""
@@ -42,9 +78,9 @@ def _ensure_skill_templates() -> None:
         pass
 
 
-def scan_skills_directory() -> List[Dict[str, str]]:
+def scan_skills_directory() -> List[Dict[str, Any]]:
     """Recursively scans SKILLS_DIR for markdown or text skill files."""
-    skills: List[Dict[str, str]] = []
+    skills: List[Dict[str, Any]] = []
     _ensure_skill_templates()
 
     if os.path.exists(state.SKILLS_DIR):
@@ -57,11 +93,14 @@ def scan_skills_directory() -> List[Dict[str, str]]:
                     try:
                         with open(full_path, "r", encoding="utf-8") as f:
                             preview = f.readline().strip().replace("#", "").strip()
+                        meta = get_skill_metadata(rel_path)
                         skills.append(
                             {
                                 "filename": rel_path,
                                 "title": preview if preview else file,
                                 "folder": folder if folder else ".",
+                                "agents": meta["agents"],
+                                "categories": meta["categories"],
                             }
                         )
                     except Exception:
