@@ -10,6 +10,7 @@ from backend import state
 from backend.agents.task_context import record_task_decision, record_task_file
 from backend.services.logs import add_system_log
 from backend.services.project_service import save_current_project_state
+from backend.services.workflow_settings import get_workflow_settings
 
 
 def resolve_workspace_path(path: str) -> str:
@@ -147,11 +148,16 @@ def write_workspace_file(path: str, content: str, author: Optional[str] = None) 
             f"Wrote '{safe_path}' ({nbytes} bytes) → {phys_path}",
         )
         invalidate_step_file_read(safe_path)
+        state.STEP_PATCH_FAILURES.pop(safe_path, None)
         from backend.services.tool_cache import invalidate_fingerprint, register_touched_path
 
         register_touched_path(safe_path)
         invalidate_fingerprint()
-        return f"Successfully saved file physically at: '{phys_path}'"
+        format_note = maybe_auto_format_after_edit(safe_path)
+        msg = f"Successfully saved file physically at: '{phys_path}'"
+        if format_note:
+            msg += f"\n{format_note}"
+        return msg
     except Exception as e:
         msg = f"Error: physical write failed for '{safe_path}': {e}"
         add_system_log(state.ACTIVE_SPRINT_AGENT or "Developer", "error", msg)
@@ -160,6 +166,24 @@ def write_workspace_file(path: str, content: str, author: Optional[str] = None) 
 
 def clear_step_file_reads() -> None:
     state.STEP_FILE_READS.clear()
+    state.STEP_PATCH_FAILURES.clear()
+
+
+def maybe_auto_format_after_edit(safe_path: str) -> Optional[str]:
+    """Run dart format after Dart edits when autoFormatAfterEdit is enabled."""
+    ws = get_workflow_settings()
+    if ws.get("autoFormatAfterEdit") is False:
+        return None
+    if not safe_path.endswith(".dart"):
+        return None
+    if not os.path.exists(os.path.join(state.WORKSPACE_DIR, "pubspec.yaml")):
+        return None
+    from backend.services.command_result import run_workspace_command
+
+    result = run_workspace_command(f'dart format "{safe_path}"', timeout=30)
+    if result.success:
+        return f"Auto-formatted with dart format: {safe_path}"
+    return None
 
 
 def record_step_file_read(path: str, content: str) -> None:
@@ -242,7 +266,16 @@ def apply_workspace_patch(path: str, old_text: str, new_text: str) -> str:
 
     updated, count = _patch_match_and_replace(current, old_text, new_text)
     if count == 0:
-        return _patch_not_found_message(path, current, old_text)
+        state.STEP_PATCH_FAILURES[safe_path] = state.STEP_PATCH_FAILURES.get(safe_path, 0) + 1
+        fails = state.STEP_PATCH_FAILURES[safe_path]
+        base = _patch_not_found_message(path, current, old_text)
+        if fails >= 2:
+            return (
+                f"{base}\n\nPatch failed {fails} times on '{path}'. "
+                "Use read_file for the full file, then write_file with the complete corrected content "
+                "instead of apply_patch."
+            )
+        return base
     if count > 1:
         return f"Error: old_text appears {count} times in '{path}' — must be unique"
     assert updated is not None

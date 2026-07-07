@@ -12,6 +12,7 @@ import {
   stopBackgroundTerminal,
   subscribeEvents,
 } from '../api/client'
+import { mergeToolHistory } from '../utils/mergeToolHistory'
 import type {
   ActivityEvent,
   AgentRunState,
@@ -369,7 +370,7 @@ export function useAppState() {
         historyPayloadToEvent(e as Record<string, unknown>),
       )
       incoming.sort((a, b) => String(b.timestamp).localeCompare(String(a.timestamp)))
-      setToolEvents(incoming.slice(0, 200))
+      setToolEvents((prev) => mergeToolHistory(prev, incoming))
     } catch {
       /* history endpoint optional during startup */
     }

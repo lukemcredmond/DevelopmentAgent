@@ -1,13 +1,12 @@
 import { useEffect, useRef } from 'react'
 import type { SystemLog } from '../types'
+import VirtualScrollList from './VirtualScrollList'
 
 interface AgentConsoleProps {
   logs: SystemLog[]
   onClear?: () => void
   sseLive?: boolean
 }
-
-const SCROLL_THRESHOLD_PX = 48
 
 function isActionableWarning(text: string): boolean {
   const lower = text.toLowerCase()
@@ -20,20 +19,15 @@ function isActionableWarning(text: string): boolean {
 }
 
 export default function AgentConsole({ logs, onClear, sseLive = true }: AgentConsoleProps) {
-  const scrollRef = useRef<HTMLDivElement>(null)
   const stickToBottomRef = useRef(true)
 
   const handleScroll = () => {
-    const el = scrollRef.current
-    if (!el) return
-    stickToBottomRef.current =
-      el.scrollHeight - el.scrollTop - el.clientHeight <= SCROLL_THRESHOLD_PX
+    stickToBottomRef.current = false
   }
 
   useEffect(() => {
-    const el = scrollRef.current
-    if (!el || !stickToBottomRef.current) return
-    el.scrollTo({ top: el.scrollHeight, behavior: 'auto' })
+    if (!stickToBottomRef.current) return
+    stickToBottomRef.current = true
   }, [logs.length])
 
   return (
@@ -64,20 +58,18 @@ export default function AgentConsole({ logs, onClear, sseLive = true }: AgentCon
           )}
         </div>
       </div>
-      <div
-        ref={scrollRef}
+      <VirtualScrollList
+        className="flex-1 p-3 font-mono text-xs"
+        items={logs}
+        estimateRowHeight={80}
+        getKey={(_, i) => i}
         onScroll={handleScroll}
-        className="flex-1 p-3 overflow-y-auto space-y-2 font-mono text-xs"
-      >
-        {logs.length === 0 && (
-          <p className="text-cat-overlay italic">No log events yet.</p>
-        )}
-        {logs.map((log, i) => {
+        empty={<p className="text-cat-overlay italic">No log events yet.</p>}
+        renderRow={(log) => {
           const actionable = log.type === 'warning' && isActionableWarning(log.text)
           return (
             <div
-              key={i}
-              className={`p-2 rounded border ${
+              className={`p-2 rounded border mb-2 ${
                 actionable
                   ? 'text-amber-200 bg-amber-950/25 border-amber-500/50 ring-1 ring-amber-500/20'
                   : log.type === 'success'
@@ -103,8 +95,8 @@ export default function AgentConsole({ logs, onClear, sseLive = true }: AgentCon
               <p className="whitespace-pre-wrap">{log.text}</p>
             </div>
           )
-        })}
-      </div>
+        }}
+      />
     </div>
   )
 }

@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useState } from 'react'
-import { fetchIndexStatus, reindexCodebase } from '../api/client'
+import { checkQdrantHealth, fetchIndexStatus, reindexCodebase } from '../api/client'
 import type { BriefChangelogEntry, WorkflowNotifications, WorkflowSettings } from '../types'
 
 interface WorkflowPanelProps {
@@ -25,6 +25,9 @@ export default function WorkflowPanel({
   } | null>(null)
   const [reindexing, setReindexing] = useState(false)
   const [indexError, setIndexError] = useState<string | null>(null)
+  const [qdrantApiKeyInput, setQdrantApiKeyInput] = useState('')
+  const [qdrantTestStatus, setQdrantTestStatus] = useState<string | null>(null)
+  const [qdrantTesting, setQdrantTesting] = useState(false)
 
   const refreshIndexStatus = useCallback(async () => {
     try {
@@ -52,6 +55,26 @@ export default function WorkflowPanel({
       setIndexError(e instanceof Error ? e.message : 'Reindex failed')
     } finally {
       setReindexing(false)
+    }
+  }
+
+  const handleQdrantTest = async () => {
+    setQdrantTesting(true)
+    setQdrantTestStatus(null)
+    try {
+      const url = settings.qdrantUrl ?? 'http://localhost:6333'
+      const key = qdrantApiKeyInput.trim() || undefined
+      const result = await checkQdrantHealth(url, key)
+      if (result.ok) {
+        const cols = result.collections?.length ?? 0
+        setQdrantTestStatus(`Connected — ${cols} collection(s)`)
+      } else {
+        setQdrantTestStatus(result.error ?? 'Connection failed')
+      }
+    } catch (e) {
+      setQdrantTestStatus(e instanceof Error ? e.message : 'Connection failed')
+    } finally {
+      setQdrantTesting(false)
     }
   }
 
@@ -306,6 +329,27 @@ export default function WorkflowPanel({
       <label className="flex items-center gap-2 text-[11px] text-cat-subtext cursor-pointer">
         <input
           type="checkbox"
+          checked={settings.pauseSprintOnNeedsUser ?? false}
+          onChange={(e) => onSettingsChange({ pauseSprintOnNeedsUser: e.target.checked })}
+        />
+        Pause sprint when any card is in Needs User
+      </label>
+      <p className="text-[10px] text-cat-overlay leading-relaxed -mt-1 pl-5">
+        Off by default — sprint continues other lanes while cards wait for your input.
+      </p>
+
+      <label className="flex items-center gap-2 text-[11px] text-cat-subtext cursor-pointer">
+        <input
+          type="checkbox"
+          checked={settings.autoFormatAfterEdit !== false}
+          onChange={(e) => onSettingsChange({ autoFormatAfterEdit: e.target.checked })}
+        />
+        Auto-format Dart files after edits (dart format)
+      </label>
+
+      <label className="flex items-center gap-2 text-[11px] text-cat-subtext cursor-pointer">
+        <input
+          type="checkbox"
           checked={settings.autonomousMode ?? false}
           onChange={(e) => onSettingsChange({ autonomousMode: e.target.checked })}
         />
@@ -338,10 +382,59 @@ export default function WorkflowPanel({
         Enable semantic codebase search (Qdrant)
       </label>
       <p className="text-[10px] text-cat-overlay leading-relaxed -mt-1 pl-5">
-        Requires Qdrant at{' '}
-        <span className="font-mono">{settings.qdrantUrl ?? 'http://localhost:6333'}</span> and{' '}
+        Requires Qdrant and{' '}
         <span className="font-mono">ollama pull nomic-embed-text</span>.
       </p>
+      {(settings.enableSemanticSearch ?? true) && (
+        <div className="pl-5 space-y-2">
+          <label className="block text-[10px] text-cat-subtext">
+            Qdrant URL
+            <input
+              type="text"
+              value={settings.qdrantUrl ?? 'http://localhost:6333'}
+              onChange={(e) => onSettingsChange({ qdrantUrl: e.target.value })}
+              className="mt-0.5 w-full bg-cat-base border border-cat-surface1 rounded px-2 py-1 font-mono text-[10px] text-white"
+            />
+          </label>
+          <label className="block text-[10px] text-cat-subtext">
+            Qdrant API key
+            {settings.qdrantApiKeyConfigured && (
+              <span className="ml-1 text-emerald-400">(configured)</span>
+            )}
+            <input
+              type="password"
+              value={qdrantApiKeyInput}
+              onChange={(e) => setQdrantApiKeyInput(e.target.value)}
+              onBlur={() => {
+                if (qdrantApiKeyInput.trim()) {
+                  onSettingsChange({ qdrantApiKey: qdrantApiKeyInput.trim() })
+                }
+              }}
+              placeholder={settings.qdrantApiKeyConfigured ? '•••••••• (leave blank to keep)' : 'Optional API key'}
+              className="mt-0.5 w-full bg-cat-base border border-cat-surface1 rounded px-2 py-1 font-mono text-[10px] text-white"
+            />
+          </label>
+          <div className="flex flex-wrap items-center gap-2">
+            <button
+              type="button"
+              disabled={qdrantTesting}
+              onClick={() => void handleQdrantTest()}
+              className="text-[10px] text-indigo-300 hover:text-indigo-200 disabled:opacity-50"
+            >
+              {qdrantTesting ? 'Testing…' : 'Test connection'}
+            </button>
+            {qdrantTestStatus && (
+              <span
+                className={`text-[10px] ${
+                  qdrantTestStatus.startsWith('Connected') ? 'text-emerald-300' : 'text-rose-300'
+                }`}
+              >
+                {qdrantTestStatus}
+              </span>
+            )}
+          </div>
+        </div>
+      )}
       {(settings.enableSemanticSearch ?? true) && (
         <div className="pl-5 flex flex-wrap items-center gap-2 text-[10px]">
           <span

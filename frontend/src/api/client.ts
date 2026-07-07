@@ -562,8 +562,34 @@ export async function clearLlmLogs(): Promise<{ ok: boolean; entries: [] }> {
 
 export async function checkQdrantHealth(
   url = 'http://localhost:6333',
-): Promise<{ ok: boolean; collections?: string[]; error?: string }> {
-  return request(`/api/ollama/qdrant-health?url=${encodeURIComponent(url)}`)
+  apiKey?: string,
+): Promise<{ ok: boolean; collections?: string[]; error?: string; apiKeyConfigured?: boolean }> {
+  const q = new URLSearchParams({ url })
+  if (apiKey?.trim()) q.set('apiKey', apiKey.trim())
+  return request(`/api/ollama/qdrant-health?${q.toString()}`)
+}
+
+export async function fetchSystemCapacity(): Promise<{
+  gpuAvailable: boolean
+  vramMb?: number | null
+  ramGb?: number | null
+  platform?: string
+  tier: string
+}> {
+  return request('/api/ollama/system-capacity')
+}
+
+export async function fetchModelRecommendations(
+  ollamaUrl = 'http://localhost:11434',
+): Promise<{
+  capacity: Record<string, unknown>
+  tier: string
+  roles: Record<string, { model: string; status: string }>
+  note?: string
+}> {
+  return request(
+    `/api/ollama/model-recommendations?ollamaUrl=${encodeURIComponent(ollamaUrl)}`,
+  )
 }
 
 export async function retryAgentStep(payload: {
@@ -611,6 +637,7 @@ export async function fetchIndexStatus(): Promise<{
   available?: boolean
   chunks?: number
   qdrantUrl?: string
+  apiKeyConfigured?: boolean
 }> {
   return request('/api/search/index-status')
 }

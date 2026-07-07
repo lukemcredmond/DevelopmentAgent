@@ -1,6 +1,7 @@
-import { useEffect, useMemo, useRef, useState } from 'react'
+import { useMemo, useRef, useState } from 'react'
 import type { ActivityEvent } from '../types'
 import { formatTaskText } from '../utils/taskFormat'
+import VirtualScrollList from './VirtualScrollList'
 
 type ActivityFilter = 'all' | 'po_bounce' | 'transcript' | 'failures'
 
@@ -11,12 +12,9 @@ interface ActivityPanelProps {
   wasCleared?: boolean
 }
 
-const SCROLL_THRESHOLD_PX = 48
-
 export default function ActivityPanel({ events, onTaskClick, onClear, wasCleared = false }: ActivityPanelProps) {
   const [filter, setFilter] = useState<ActivityFilter>('all')
   const [expanded, setExpanded] = useState<Set<number>>(new Set())
-  const scrollRef = useRef<HTMLDivElement>(null)
   const stickToBottomRef = useRef(true)
 
   const filtered = useMemo(() => {
@@ -50,18 +48,11 @@ export default function ActivityPanel({ events, onTaskClick, onClear, wasCleared
     [events],
   )
 
-  const handleScroll = () => {
-    const el = scrollRef.current
-    if (!el) return
-    stickToBottomRef.current =
-      el.scrollHeight - el.scrollTop - el.clientHeight <= SCROLL_THRESHOLD_PX
-  }
+  const displayEvents = useMemo(() => [...filtered].reverse(), [filtered])
 
-  useEffect(() => {
-    const el = scrollRef.current
-    if (!el || !stickToBottomRef.current) return
-    el.scrollTo({ top: el.scrollHeight, behavior: 'auto' })
-  }, [filtered.length, events.length])
+  const handleScroll = () => {
+    stickToBottomRef.current = false
+  }
 
   const toggleExpand = (index: number) => {
     setExpanded((prev) => {
@@ -109,19 +100,20 @@ export default function ActivityPanel({ events, onTaskClick, onClear, wasCleared
           ))}
         </div>
       </div>
-      <div
-        ref={scrollRef}
+      <VirtualScrollList
+        className="flex-1 p-3 font-mono text-xs"
+        items={displayEvents}
+        estimateRowHeight={88}
+        getKey={(event, i) => `${event.timestamp}-${event.taskId}-${i}`}
         onScroll={handleScroll}
-        className="flex-1 p-3 overflow-y-auto space-y-2 font-mono text-xs"
-      >
-        {filtered.length === 0 && (
+        empty={
           <p className="text-cat-overlay italic">
             {wasCleared
               ? 'Cleared — new sprint events will appear here.'
               : 'No agent activity yet. Run a sprint step to see transcripts.'}
           </p>
-        )}
-        {[...filtered].reverse().map((event, i) => {
+        }
+        renderRow={(event, i) => {
           const idx = filtered.length - 1 - i
           const isOpen = expanded.has(idx)
           const isFailure = event.kind === 'tool_failed'
@@ -132,10 +124,9 @@ export default function ActivityPanel({ events, onTaskClick, onClear, wasCleared
               : contentStr
           return (
             <button
-              key={`${event.timestamp}-${event.taskId}-${idx}`}
               type="button"
               onClick={() => toggleExpand(idx)}
-              className={`w-full text-left p-2 rounded border transition-colors ${
+              className={`w-full text-left p-2 rounded border transition-colors mb-2 ${
                 isFailure
                   ? 'border-rose-500/60 bg-rose-950/30 hover:border-rose-400 ring-1 ring-rose-500/20'
                   : 'border-cat-surface1/40 bg-cat-surface0/30 hover:border-indigo-500/30'
@@ -175,8 +166,8 @@ export default function ActivityPanel({ events, onTaskClick, onClear, wasCleared
               )}
             </button>
           )
-        })}
-      </div>
+        }}
+      />
     </div>
   )
 }

@@ -1,4 +1,5 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
+import VirtualScrollList from './VirtualScrollList'
 import {
   executeTool,
   fetchTaskToolCalls,
@@ -14,7 +15,7 @@ import type {
   TranscriptToolEntry,
 } from '../types'
 
-type ToolFilter = 'all' | 'work' | 'failed' | 'agent' | 'manual' | 'replay' | 'orchestrator' | 'context_inject'
+type ToolFilter = 'all' | 'work' | 'this_task' | 'failed' | 'agent' | 'manual' | 'replay' | 'orchestrator' | 'context_inject'
 type ToolsSubTab = 'log' | 'manual' | 'replay'
 
 const WORK_SOURCES = new Set(['agent', 'orchestrator', 'manual', 'user'])
@@ -177,7 +178,7 @@ export default function ToolsPanel({
   onInjectToolEvidence,
 }: ToolsPanelProps) {
   const [subTab, setSubTab] = useState<ToolsSubTab>(readToolsSubTab)
-  const [filter, setFilter] = useState<ToolFilter>('work')
+  const [filter, setFilter] = useState<ToolFilter>('all')
   const [expanded, setExpanded] = useState<Set<string>>(new Set())
   const scrollRef = useRef<HTMLDivElement>(null)
   const stickToBottomRef = useRef(true)
@@ -277,6 +278,9 @@ export default function ToolsPanel({
   }, [subTab, replayTaskId, loadTranscript])
 
   const filtered = useMemo(() => {
+    if (filter === 'this_task' && selectedTaskId) {
+      return toolEvents.filter((e) => e.taskId === selectedTaskId)
+    }
     if (filter === 'failed') {
       return toolEvents.filter((e) => {
         if (
@@ -295,7 +299,7 @@ export default function ToolsPanel({
     if (filter === 'orchestrator') return toolEvents.filter((e) => e.source === 'orchestrator')
     if (filter === 'context_inject') return toolEvents.filter((e) => e.source === 'context_inject')
     return toolEvents
-  }, [toolEvents, filter])
+  }, [toolEvents, filter, selectedTaskId])
 
   const failureCount = useMemo(
     () => toolEvents.filter((e) => e.status === 'failed').length,
@@ -430,8 +434,9 @@ export default function ToolsPanel({
             <div className="flex gap-1 flex-wrap justify-end items-center">
               {(
                 [
-                  'work',
                   'all',
+                  ...(selectedTaskId ? (['this_task'] as const) : []),
+                  'work',
                   'failed',
                   'agent',
                   'orchestrator',
@@ -456,7 +461,9 @@ export default function ToolsPanel({
                       ? 'Context'
                       : f === 'work'
                         ? 'Work'
-                        : f}
+                        : f === 'this_task'
+                          ? 'This task'
+                          : f}
                   {f === 'failed' && failureCount > 0 ? ` (${failureCount})` : ''}
                 </button>
               ))}
@@ -475,12 +482,17 @@ export default function ToolsPanel({
               )}
             </div>
           </div>
-          <div
-            ref={scrollRef}
+          <p className="shrink-0 text-[9px] text-cat-overlay/90 px-4 py-1 border-b border-cat-surface1/40">
+            Commands mentioned in agent text are not tool runs — check Auto QA filter or the task
+            transcript.
+          </p>
+          <VirtualScrollList
+            className="flex-1 min-h-0 p-3 font-mono text-[11px]"
+            items={filtered}
+            estimateRowHeight={96}
+            getKey={(ev) => ev.id}
             onScroll={handleScroll}
-            className="flex-1 min-h-0 overflow-y-auto p-3 space-y-2 font-mono text-[11px]"
-          >
-            {filtered.length === 0 && (
+            empty={
               <p className="text-cat-overlay text-center py-8">
                 {sprintRunning && toolEvents.length === 0 && (
                   <span className="block mb-3 text-amber-200/90">
@@ -500,7 +512,20 @@ export default function ToolsPanel({
                     for system logs.
                   </span>
                 )}
-                {filter === 'work' || filter === 'agent' ? (
+                {filter === 'this_task' && selectedTaskId ? (
+                  <>
+                    No tool runs for this task in the log. Open the task transcript for command
+                    output mentioned in agent text, or try the{' '}
+                    <button
+                      type="button"
+                      onClick={() => setFilter('all')}
+                      className="text-indigo-400 hover:text-indigo-300 underline"
+                    >
+                      All
+                    </button>{' '}
+                    filter.
+                  </>
+                ) : filter === 'work' || filter === 'agent' ? (
                   <>
                     No agent tool calls yet this session — Context preload events are hidden by default.
                     Use the{' '}
@@ -544,8 +569,8 @@ export default function ToolsPanel({
                   </>
                 )}
               </p>
-            )}
-            {filtered.map((ev) => {
+            }
+            renderRow={(ev) => {
               const isOpen = expanded.has(ev.id)
               const badge = toolEventBadge(ev)
               const failed = badge.tone === 'failed'
@@ -553,8 +578,7 @@ export default function ToolsPanel({
               const runningEv = ev.status === 'running'
               return (
                 <div
-                  key={ev.id}
-                  className={`rounded border p-2 ${
+                  className={`rounded border p-2 mb-2 ${
                     failed
                       ? 'border-rose-500/40 bg-rose-950/20'
                       : findings
@@ -674,8 +698,8 @@ export default function ToolsPanel({
                   )}
                 </div>
               )
-            })}
-          </div>
+            }}
+          />
           {terminalSessions.length > 0 && (
             <div className="mt-4 border-t border-cat-surface1 pt-3">
               <p className="text-[10px] uppercase text-cat-overlay mb-2">Background terminals</p>

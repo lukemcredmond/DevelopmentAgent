@@ -38,12 +38,15 @@ DEFAULT_WORKFLOW_SETTINGS: Dict[str, Any] = {
     "enableWebSearch": False,
     "enableSemanticSearch": True,
     "qdrantUrl": "http://localhost:6333",
+    "qdrantApiKey": "",
     "embedModel": "nomic-embed-text",
     "ollamaNumCtx": 32768,
     "ollamaKeepAlive": "30m",
     "maxToolOutputCharsForLlm": 6000,
     "messagePruneThresholdPct": 60,
     "enableSemanticSprintContext": True,
+    "pauseSprintOnNeedsUser": False,
+    "autoFormatAfterEdit": True,
 }
 
 DEFAULT_SPRINT_SUMMARY: Dict[str, Any] = {
@@ -80,7 +83,10 @@ def get_workflow_settings(project_id: str | None = None) -> Dict[str, Any]:
 def save_workflow_settings(settings: Dict[str, Any], project_id: str | None = None) -> Dict[str, Any]:
     pid = project_id or state.CURRENT_PROJECT_ID
     current = get_workflow_settings(pid)
-    current.update(settings)
+    updates = dict(settings)
+    if not str(updates.get("qdrantApiKey") or "").strip():
+        updates.pop("qdrantApiKey", None)
+    current.update(updates)
     state.storage.set_setting(_settings_key(pid), json.dumps(current))
     return current
 

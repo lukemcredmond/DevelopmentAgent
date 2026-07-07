@@ -150,7 +150,7 @@ export default function TaskCard({
       <h4 className="font-bold text-white mb-1 leading-tight">{task.title}</h4>
       {needsUser && (
         <p className="text-[10px] text-amber-200/90 line-clamp-2 mb-1">
-          {task.userQuestion?.trim() || 'Action required — open for details'}
+          {task.needsUserAction?.trim() || task.userQuestion?.trim() || 'Action required — open for details'}
         </p>
       )}
       <p className="text-[11px] text-cat-subtext line-clamp-3">{formatTaskText(task.description)}</p>

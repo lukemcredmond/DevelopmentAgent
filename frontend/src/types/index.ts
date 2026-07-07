@@ -74,6 +74,8 @@ export interface Task {
   qaFailure?: QaFailure | null
   qaEvidence?: QaEvidence | null
   userQuestion?: string | null
+  needsUserReason?: string | null
+  needsUserAction?: string | null
   poRoundTrips?: number
   workType?: 'planning' | 'implementation' | 'review' | 'qa' | 'user_action'
   requiresDev?: boolean
@@ -155,12 +157,16 @@ export interface WorkflowSettings {
   enableWebSearch?: boolean
   enableSemanticSearch?: boolean
   qdrantUrl?: string
+  qdrantApiKey?: string
+  qdrantApiKeyConfigured?: boolean
   embedModel?: string
   ollamaNumCtx?: number
   ollamaKeepAlive?: string
   maxToolOutputCharsForLlm?: number
   messagePruneThresholdPct?: number
   enableSemanticSprintContext?: boolean
+  pauseSprintOnNeedsUser?: boolean
+  autoFormatAfterEdit?: boolean
 }
 
 export interface McpServerConfig {
@@ -461,12 +467,16 @@ export interface WorkflowSettingsPayload {
   enableWebSearch?: boolean
   enableSemanticSearch?: boolean
   qdrantUrl?: string
+  qdrantApiKey?: string
+  qdrantApiKeyConfigured?: boolean
   embedModel?: string
   ollamaNumCtx?: number
   ollamaKeepAlive?: string
   maxToolOutputCharsForLlm?: number
   messagePruneThresholdPct?: number
   enableSemanticSprintContext?: boolean
+  pauseSprintOnNeedsUser?: boolean
+  autoFormatAfterEdit?: boolean
 }
 
 export interface SkillsResponse {
@@ -657,12 +667,15 @@ export const DEFAULT_WORKFLOW_SETTINGS: WorkflowSettings = {
   enableWebSearch: false,
   enableSemanticSearch: true,
   qdrantUrl: 'http://localhost:6333',
+  qdrantApiKeyConfigured: false,
   embedModel: 'nomic-embed-text',
   ollamaNumCtx: 32768,
   ollamaKeepAlive: '30m',
   maxToolOutputCharsForLlm: 6000,
   messagePruneThresholdPct: 60,
   enableSemanticSprintContext: true,
+  pauseSprintOnNeedsUser: false,
+  autoFormatAfterEdit: true,
 }
 
 export const EMPTY_BOARD: Board = {

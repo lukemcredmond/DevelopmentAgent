@@ -1,8 +1,13 @@
+import subprocess
+from typing import Any, Dict, List, Optional
+
 import requests
 from fastapi import APIRouter, Query
 
 from backend import state
 from backend.services.llm_debug_log import clear_llm_log, get_llm_logs
+from backend.services.qdrant_auth import qdrant_connection_settings, qdrant_request_headers
+from backend.services.system_capacity import get_model_recommendations, probe_system_capacity
 
 router = APIRouter()
 
@@ -37,13 +42,44 @@ def clear_ollama_logs():
 
 
 @router.get("/api/ollama/qdrant-health")
-def qdrant_health(url: str = "http://localhost:6333"):
+def qdrant_health(
+    url: str | None = None,
+    apiKey: str | None = None,
+):
+    q_url, stored_key = qdrant_connection_settings()
+    target = (url or q_url).rstrip("/")
+    key = (apiKey or stored_key or "").strip() or None
+    headers = qdrant_request_headers(key)
     try:
-        response = requests.get(f"{url.rstrip('/')}/collections", timeout=5)
+        response = requests.get(f"{target}/collections", headers=headers, timeout=5)
         if response.status_code == 200:
             data = response.json()
             collections = [c.get("name") for c in data.get("result", {}).get("collections", [])]
-            return {"ok": True, "url": url, "collections": collections}
-        return {"ok": False, "url": url, "error": f"HTTP {response.status_code}"}
+            return {
+                "ok": True,
+                "url": target,
+                "collections": collections,
+                "apiKeyConfigured": bool(key),
+            }
+        body = response.text[:200]
+        return {"ok": False, "url": target, "error": f"HTTP {response.status_code}: {body}"}
     except requests.RequestException as e:
-        return {"ok": False, "url": url, "error": str(e)}
+        return {"ok": False, "url": target, "error": str(e)}
+
+
+@router.get("/api/ollama/system-capacity")
+def system_capacity():
+    return probe_system_capacity()
+
+
+@router.get("/api/ollama/model-recommendations")
+def model_recommendations(ollamaUrl: str = "http://localhost:11434"):
+    capacity = probe_system_capacity()
+    installed: List[str] = []
+    try:
+        resp = requests.get(f"{ollamaUrl.rstrip('/')}/api/tags", timeout=5)
+        if resp.status_code == 200:
+            installed = [m.get("name") for m in resp.json().get("models", []) if m.get("name")]
+    except requests.RequestException:
+        pass
+    return get_model_recommendations(capacity, installed_models=installed)

@@ -38,4 +38,7 @@ REFINEMENT_MODE: bool = False
 # Paths read via read_file during the current sprint agent step (safe_path -> content).
 STEP_FILE_READS: Dict[str, str] = {}
 
+# apply_patch failure counts per path within current sprint step.
+STEP_PATCH_FAILURES: Dict[str, int] = {}
+
 storage = ProjectStorage()

@@ -17,6 +17,8 @@ def build_state_response() -> dict:
     normalize_board_tasks()
     file_list = sync_virtual_filesystem_from_disk()
     ws = get_workflow_settings()
+    from backend.services.qdrant_auth import sanitize_workflow_settings_for_client
+
     return {
         "projectId": state.CURRENT_PROJECT_ID,
         "projectName": state.PROJECT_NAME,
@@ -41,7 +43,7 @@ def build_state_response() -> dict:
         },
         "projectsList": state.storage.list_projects(),
         "sprintCancel": state.SPRINT_CANCEL,
-        "workflowSettings": ws,
+        "workflowSettings": sanitize_workflow_settings_for_client(ws),
         "activeLanes": get_active_lanes(ws),
         "briefChangelog": state.storage.get_brief_changelog(state.CURRENT_PROJECT_ID, limit=50),
         "lastSprintSummary": get_last_sprint_summary(),

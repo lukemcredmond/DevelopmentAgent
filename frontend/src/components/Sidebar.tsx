@@ -1,5 +1,6 @@
 import type { AgentId, AppState, ConfigPayload, WorkflowSettings } from '../types'
 import { AGENT_LABELS, DEFAULT_WORKFLOW_SETTINGS } from '../types'
+import GpuModelRecommendations from './GpuModelRecommendations'
 import WorkflowPanel from './WorkflowPanel'
 
 interface SidebarProps {
@@ -276,6 +277,18 @@ export default function Sidebar({
                 </div>
               ))}
             </div>
+
+            <GpuModelRecommendations
+              ollamaUrl={ollamaUrl}
+              poModel={poModel}
+              devModel={devModel}
+              crModel={crModel}
+              qaModel={qaModel}
+              onPoModelChange={onPoModelChange}
+              onDevModelChange={onDevModelChange}
+              onCrModelChange={onCrModelChange}
+              onQaModelChange={onQaModelChange}
+            />
 
             <p className="text-[10px] text-cat-overlay leading-relaxed pt-1">
               Model changes apply after <strong className="text-cat-subtext">Save Custom Configurations</strong>.

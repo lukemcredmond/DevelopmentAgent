@@ -302,7 +302,9 @@ export default function App() {
   useEffect(() => {
     if (!selectedTask) return
     const fresh = findTaskOnBoard(state.board, selectedTask.id)
-    if (fresh) setSelectedTask(fresh)
+    if (fresh) {
+      setSelectedTask((prev) => (prev && prev.id === fresh.id ? { ...prev, ...fresh } : fresh))
+    }
   }, [state.board, selectedTask?.id])
   const [localFiles, setLocalFiles] = useState<Record<string, string>>({})
 

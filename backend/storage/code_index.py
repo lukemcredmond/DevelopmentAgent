@@ -25,10 +25,14 @@ class CodeIndexEngine:
         ollama_url: Optional[str] = None,
         qdrant_url: Optional[str] = None,
     ):
-        ws = get_workflow_settings(project_id)
         self.project_id = project_id or state.CURRENT_PROJECT_ID
+        ws = get_workflow_settings(self.project_id)
         self.ollama_url = (ollama_url or "http://localhost:11434").rstrip("/")
-        self.qdrant_url = (qdrant_url or ws.get("qdrantUrl") or "http://localhost:6333").rstrip("/")
+        from backend.services.qdrant_auth import qdrant_connection_settings
+
+        self.qdrant_url, self.qdrant_api_key = qdrant_connection_settings(self.project_id)
+        if qdrant_url:
+            self.qdrant_url = qdrant_url.rstrip("/")
         self.embed_model = ws.get("embedModel") or "nomic-embed-text"
         self._client = None
         self._available: Optional[bool] = None
@@ -44,7 +48,10 @@ class CodeIndexEngine:
             from qdrant_client import QdrantClient
             from qdrant_client.http.models import Distance, VectorParams
 
-            self._client = QdrantClient(url=self.qdrant_url, timeout=10)
+            kwargs: Dict[str, Any] = {"url": self.qdrant_url, "timeout": 10}
+            if self.qdrant_api_key:
+                kwargs["api_key"] = self.qdrant_api_key
+            self._client = QdrantClient(**kwargs)
             name = self._collection_name()
             collections = [c.name for c in self._client.get_collections().collections]
             if name not in collections:
@@ -240,6 +247,7 @@ class CodeIndexEngine:
                 "collection": name,
                 "chunks": info.points_count or 0,
                 "qdrantUrl": self.qdrant_url,
+                "apiKeyConfigured": bool(self.qdrant_api_key),
             }
         except Exception as exc:
             return {"ok": False, "available": False, "error": str(exc), "chunks": 0}

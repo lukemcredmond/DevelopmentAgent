@@ -1,6 +1,7 @@
 import { useCallback, useEffect, useState } from 'react'
 import type { LlmDebugEntry } from '../types'
 import { clearLlmLogs, fetchLlmLogs } from '../api/client'
+import VirtualScrollList from './VirtualScrollList'
 
 interface ModelDebugPanelProps {
   taskIdFilter?: string | null
@@ -31,8 +32,16 @@ export default function ModelDebugPanel({ taskIdFilter }: ModelDebugPanelProps) 
 
   useEffect(() => {
     void refresh()
-    const id = window.setInterval(() => void refresh(), 8000)
-    return () => window.clearInterval(id)
+    let id = window.setInterval(() => void refresh(), document.visibilityState === 'hidden' ? 15000 : 8000)
+    const onVisibility = () => {
+      window.clearInterval(id)
+      id = window.setInterval(() => void refresh(), document.visibilityState === 'hidden' ? 15000 : 8000)
+    }
+    document.addEventListener('visibilitychange', onVisibility)
+    return () => {
+      window.clearInterval(id)
+      document.removeEventListener('visibilitychange', onVisibility)
+    }
   }, [refresh])
 
   const handleClear = () => {
@@ -79,17 +88,18 @@ export default function ModelDebugPanel({ taskIdFilter }: ModelDebugPanelProps) 
           </button>
         )}
       </div>
-      <div className="flex-1 overflow-y-auto p-2 space-y-1 font-mono">
-        {entries.length === 0 && (
+      <VirtualScrollList
+        className="flex-1 p-2 font-mono"
+        items={entries}
+        estimateRowHeight={expandedId ? 280 : 56}
+        getKey={(e) => e.id}
+        empty={
           <p className="text-cat-overlay p-4 text-center">
             No LLM calls logged yet. Run a sprint step or chat to see Ollama requests here.
           </p>
-        )}
-        {entries.map((e) => (
-          <div
-            key={e.id}
-            className="border border-cat-surface1 rounded bg-cat-mantle/40 overflow-hidden"
-          >
+        }
+        renderRow={(e) => (
+          <div className="border border-cat-surface1 rounded bg-cat-mantle/40 overflow-hidden mb-1">
             <button
               type="button"
               onClick={() => setExpandedId(expandedId === e.id ? null : e.id)}
@@ -137,8 +147,8 @@ export default function ModelDebugPanel({ taskIdFilter }: ModelDebugPanelProps) 
               </div>
             )}
           </div>
-        ))}
-      </div>
+        )}
+      />
     </div>
   )
 }

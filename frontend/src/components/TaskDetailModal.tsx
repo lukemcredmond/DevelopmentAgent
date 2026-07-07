@@ -268,16 +268,33 @@ export default function TaskDetailModal({
   const [retrying, setRetrying] = useState(false)
 
   useEffect(() => {
-    if (task) {
-      setTitle(formatTaskText(task.title))
-      setDescription(formatTaskText(task.description))
-      setAcceptanceCriteria(formatAcceptanceCriteria(task.acceptanceCriteria).join('\n'))
-      setEditing(false)
+    if (!task) return
+    setTitle(formatTaskText(task.title))
+    setDescription(formatTaskText(task.description))
+    setAcceptanceCriteria(formatAcceptanceCriteria(task.acceptanceCriteria).join('\n'))
+    setEditing(false)
+    setShowAllTranscript(false)
+    setShowFailuresOnly(false)
+    try {
+      const draft = sessionStorage.getItem(`needs-user-draft-${task.id}`)
+      setUserAnswer(draft ?? '')
+    } catch {
       setUserAnswer('')
-      setShowAllTranscript(false)
-      setShowFailuresOnly(false)
     }
-  }, [task])
+  }, [task?.id])
+
+  useEffect(() => {
+    if (!task?.id) return
+    try {
+      if (userAnswer.trim()) {
+        sessionStorage.setItem(`needs-user-draft-${task.id}`, userAnswer)
+      } else {
+        sessionStorage.removeItem(`needs-user-draft-${task.id}`)
+      }
+    } catch {
+      /* ignore */
+    }
+  }, [task?.id, userAnswer])
 
   if (!task) return null
 
@@ -301,6 +318,18 @@ export default function TaskDetailModal({
   const relatedTaskIds = safeTask.relatedTaskIds ?? []
   const diagnosis = safeTask.lastDiagnosis
   const commandDiagnostics = getCommandDiagnostics(safeTask)
+  const stuckLoopCount = (safeTask.decisions ?? []).filter((d) => d.type === 'stuck_loop').length
+  const lastFailedTool = [...(safeTask.transcript ?? [])]
+    .reverse()
+    .find((e) => e.toolSuccess === false || (e.role === 'tool' && /FAILED|✗/i.test(e.content ?? '')))
+  const needsUserReason =
+    safeTask.needsUserReason?.trim() ||
+    deriveNeedsUserReason(safeTask).split('\n')[0] ||
+    'The agent could not proceed without your input.'
+  const needsUserAction =
+    safeTask.needsUserAction?.trim() ||
+    safeTask.userQuestion?.trim() ||
+    'Describe the missing information or decision needed to continue.'
   const workLabel =
     safeTask.workType === 'planning' || safeTask.requiresDev === false
       ? 'PO only'
@@ -818,9 +847,33 @@ export default function TaskDetailModal({
           {taskLane === 'Needs User' && onResolveUser && (
             <div className="bg-amber-950/20 border border-amber-500/30 rounded-lg p-3 space-y-2">
               <h4 className="text-xs font-bold text-amber-300">Why this needs you</h4>
-              <p className="text-[11px] text-amber-200 max-h-24 overflow-y-auto whitespace-pre-wrap">
-                {deriveNeedsUserReason(safeTask)}
-              </p>
+              <p className="text-[11px] text-amber-100/90 whitespace-pre-wrap">{needsUserReason}</p>
+              <div className="text-[10px] space-y-1">
+                <p className="text-amber-200 font-semibold">What to provide</p>
+                <p className="text-amber-100/80 whitespace-pre-wrap">{needsUserAction}</p>
+              </div>
+              {stuckLoopCount > 0 && (
+                <p className="text-[10px] text-amber-300/80">
+                  Stuck loop rounds: {stuckLoopCount}
+                </p>
+              )}
+              {lastFailedTool && (
+                <p className="text-[10px] text-rose-300/90">
+                  Last failed tool: {lastFailedTool.toolName ?? 'unknown'}
+                </p>
+              )}
+              {commandDiagnostics.length > 0 && (
+                <div className="text-[10px] space-y-1">
+                  <p className="text-amber-200 font-semibold">Top lint issues</p>
+                  <ul className="space-y-0.5 max-h-24 overflow-y-auto">
+                    {commandDiagnostics.slice(0, 5).map((d, i) => (
+                      <li key={i} className="text-amber-100/70 font-mono">
+                        {d.severity} · {d.file}:{d.line} — {d.message}
+                      </li>
+                    ))}
+                  </ul>
+                </div>
+              )}
               <textarea
                 value={userAnswer}
                 onChange={(e) => setUserAnswer(e.target.value)}
@@ -830,7 +883,15 @@ export default function TaskDetailModal({
               <button
                 type="button"
                 disabled={!userAnswer.trim()}
-                onClick={() => onResolveUser(task.id, userAnswer.trim())}
+                onClick={() => {
+                  try {
+                    sessionStorage.removeItem(`needs-user-draft-${task.id}`)
+                  } catch {
+                    /* ignore */
+                  }
+                  onResolveUser(task.id, userAnswer.trim())
+                  setUserAnswer('')
+                }}
                 className="bg-amber-600 hover:bg-amber-500 disabled:opacity-50 text-white text-xs py-1.5 px-3 rounded-lg"
               >
                 Resolve & Return to Dev

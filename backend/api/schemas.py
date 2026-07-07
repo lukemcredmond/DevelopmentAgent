@@ -113,12 +113,15 @@ class WorkflowSettingsPayload(BaseModel):
     enableWebSearch: Optional[bool] = None
     enableSemanticSearch: Optional[bool] = None
     qdrantUrl: Optional[str] = None
+    qdrantApiKey: Optional[str] = None
     embedModel: Optional[str] = None
     ollamaNumCtx: Optional[int] = None
     ollamaKeepAlive: Optional[str] = None
     maxToolOutputCharsForLlm: Optional[int] = None
     messagePruneThresholdPct: Optional[int] = None
     enableSemanticSprintContext: Optional[bool] = None
+    pauseSprintOnNeedsUser: Optional[bool] = None
+    autoFormatAfterEdit: Optional[bool] = None
 
 
 class DiagnoseTaskPayload(BaseModel):

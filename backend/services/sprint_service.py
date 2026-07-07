@@ -271,6 +271,19 @@ def _needs_user_cap_reached() -> bool:
     return state.SPRINT_NEEDS_USER_COUNT >= cap
 
 
+def _set_needs_user_fields(task: Dict[str, Any], msg: str) -> None:
+    """Populate structured Needs User fields from escalation message."""
+    text = str(msg or "").strip()
+    task["userQuestion"] = text[:500]
+    lines = [ln.strip() for ln in text.splitlines() if ln.strip()]
+    if lines:
+        task["needsUserReason"] = lines[0][:240]
+        task["needsUserAction"] = (lines[1] if len(lines) > 1 else lines[0])[:240]
+    else:
+        task["needsUserReason"] = "Agent requires your input to continue."
+        task["needsUserAction"] = "Review the task and provide a decision or missing information."
+
+
 def _try_move_to_needs_user(
     task_id: str,
     task: Dict[str, Any],
@@ -285,7 +298,7 @@ def _try_move_to_needs_user(
             f"{task_id}: Needs User blocked by autonomous cap ({state.SPRINT_NEEDS_USER_COUNT}) — {msg[:120]}",
         )
         return False
-    task["userQuestion"] = msg
+    _set_needs_user_fields(task, msg)
     move_board_stage(task_id, "Needs User")
     state.SPRINT_NEEDS_USER_COUNT += 1
     publish_activity(
@@ -379,6 +392,7 @@ def _mark_sprint_step_start() -> str:
     ts = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
     state.SPRINT_STEP_STARTED_AT = ts
     state.STEP_FILE_READS.clear()
+    state.STEP_PATCH_FAILURES.clear()
     from backend.services.tool_cache import clear_tool_cache
 
     clear_tool_cache()
@@ -1320,6 +1334,8 @@ def _run_developer_step(active_task: Dict[str, Any], brief: str) -> None:
         f"Use run_command with the project lint command{lint_hint}. "
         "Findings are expected — fix each file:line listed in the Problems section, "
         "don't treat lint output as a tool failure. "
+        "Fix syntax/parse errors before logic changes. "
+        "After edits, run the lint command once to verify. "
         "Do NOT re-run the same lint command without fixing code first. "
         "Unclear requirements → move to 'Needs PO'. "
         "User-only decisions (keys, design) → move to 'Needs User' with a specific userQuestion. "
@@ -1347,7 +1363,7 @@ def _run_developer_step(active_task: Dict[str, Any], brief: str) -> None:
             if _task_in_lane(task_id, "In Progress"):
                 if _dev_needs_user(result):
                     if not _needs_user_cap_reached():
-                        task["userQuestion"] = result[:500]
+                        _set_needs_user_fields(task, result[:500])
                         move_board_stage(task_id, "Needs User")
                         state.SPRINT_NEEDS_USER_COUNT += 1
                     else:
@@ -1516,7 +1532,10 @@ def run_sprint_step(brief: str, ollama_url: str) -> None:
         if state.SHARED_BOARD.get("Needs PO"):
             active_task = dict(state.SHARED_BOARD["Needs PO"][0])
             handler = "po"
-        elif state.SHARED_BOARD.get("Needs User"):
+        elif (
+            get_workflow_settings().get("pauseSprintOnNeedsUser")
+            and state.SHARED_BOARD.get("Needs User")
+        ):
             handler = "needs_user"
         elif state.SHARED_BOARD.get("In Progress"):
             active_task = dict(state.SHARED_BOARD["In Progress"][0])
@@ -1576,6 +1595,15 @@ def run_sprint_step(brief: str, ollama_url: str) -> None:
             handler = "idle"
 
     _emit_sprint_step_progress(handler or "idle", active_task)
+
+    with state.STATE_LOCK:
+        needs_user_count = len(state.SHARED_BOARD.get("Needs User", []))
+    if needs_user_count and handler != "needs_user":
+        add_system_log(
+            "System",
+            "info",
+            f"{needs_user_count} task(s) in Needs User — continuing other lanes this step.",
+        )
 
     try:
         if handler == "po" and active_task:

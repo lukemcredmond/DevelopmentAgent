@@ -248,6 +248,14 @@ def normalize_task(task: Dict[str, Any]) -> Dict[str, Any]:
         task["qaEvidence"] = None
     if "userQuestion" not in task:
         task["userQuestion"] = None
+    if task.get("needsUserReason") is not None:
+        task["needsUserReason"] = coerce_task_text(task["needsUserReason"])
+    if task.get("needsUserAction") is not None:
+        task["needsUserAction"] = coerce_task_text(task["needsUserAction"])
+    if "needsUserReason" not in task:
+        task["needsUserReason"] = None
+    if "needsUserAction" not in task:
+        task["needsUserAction"] = None
     if "poRoundTrips" not in task or not isinstance(task.get("poRoundTrips"), (int, float)):
         task["poRoundTrips"] = 0
     if "stuckLoops" not in task or not isinstance(task.get("stuckLoops"), (int, float)):
