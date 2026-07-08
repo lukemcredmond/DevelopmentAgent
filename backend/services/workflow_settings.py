@@ -13,6 +13,7 @@ DEFAULT_WORKFLOW_SETTINGS: Dict[str, Any] = {
     "requireDevVerification": False,
     "requireCleanLint": False,
     "requireBacklogRefinement": False,
+    "prioritizeImplementationOverRefinement": True,
     "maxRefinementRoundTrips": 3,
     "maxSubtaskDepth": 4,
     "maxSubtaskSpawns": 8,

@@ -100,14 +100,50 @@ def test_refinement_po_marks_complete_moves_to_backlog(monkeypatch):
     _reset_workflow_settings()
 
 
-def test_sprint_step_prioritizes_refinement_over_backlog_claim(monkeypatch):
+def test_sprint_step_prioritizes_backlog_claim_over_refinement_when_enabled(monkeypatch):
     from backend import state
     from backend.agents.task_context import init_new_task, init_refinement_fields
     from backend.services import sprint_service
 
     initialize()
     _reset_workflow_settings()
-    save_workflow_settings({"requireBacklogRefinement": True})
+    save_workflow_settings(
+        {"requireBacklogRefinement": True, "prioritizeImplementationOverRefinement": True}
+    )
+    ref_task = init_new_task({"id": "T-REF2", "title": "Refinement card", "description": "d"})
+    init_refinement_fields(ref_task)
+    ref_task["status"] = "Refinement"
+    backlog_task = init_new_task(
+        {"id": "T-BL", "title": "Ready backlog", "description": "d", "refinementComplete": True}
+    )
+    backlog_task["status"] = "Backlog"
+    state.SHARED_BOARD = _empty_board(Refinement=[ref_task], Backlog=[backlog_task])
+
+    called = []
+
+    monkeypatch.setattr(
+        sprint_service,
+        "_run_refinement_dev_review",
+        lambda t, b: called.append("refinement_dev"),
+    )
+    monkeypatch.setattr(sprint_service, "_run_developer_step", lambda t, b: called.append("dev"))
+    monkeypatch.setattr(sprint_service, "set_project_brief", lambda *a, **k: None)
+
+    sprint_service.run_sprint_step("brief", "http://localhost:11434")
+    assert called == ["dev"]
+    _reset_workflow_settings()
+
+
+def test_sprint_step_prioritizes_refinement_over_backlog_when_setting_disabled(monkeypatch):
+    from backend import state
+    from backend.agents.task_context import init_new_task, init_refinement_fields
+    from backend.services import sprint_service
+
+    initialize()
+    _reset_workflow_settings()
+    save_workflow_settings(
+        {"requireBacklogRefinement": True, "prioritizeImplementationOverRefinement": False}
+    )
     ref_task = init_new_task({"id": "T-REF2", "title": "Refinement card", "description": "d"})
     init_refinement_fields(ref_task)
     ref_task["status"] = "Refinement"

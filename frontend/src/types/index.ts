@@ -143,6 +143,8 @@ export interface LlmDebugEntry {
   responseToolCalls: unknown[]
   durationMs: number
   error?: string
+  memoriesUsed?: Array<{ category: string; content: string }>
+  decisionsIncluded?: number
 }
 
 export interface ModelTimelineItem {
@@ -160,6 +162,8 @@ export interface ModelTimelineItem {
   content?: string
   toolCalls?: unknown[]
   toolNames?: string[]
+  memoriesUsed?: Array<{ category: string; content: string }>
+  decisionsIncluded?: number
   toolName?: string
   toolArgs?: Record<string, unknown>
   toolOutput?: string
@@ -205,6 +209,7 @@ export interface WorkflowSettings {
   requireDevVerification?: boolean
   requireCleanLint?: boolean
   requireBacklogRefinement?: boolean
+  prioritizeImplementationOverRefinement?: boolean
   maxRefinementRoundTrips?: number
   maxSubtaskDepth?: number
   maxSubtaskSpawns?: number
@@ -546,6 +551,7 @@ export interface MoveTaskPayload {
   fromLane: BoardLane
   toLane: BoardLane
   index?: number
+  skipRefinement?: boolean
 }
 
 export interface WorkflowSettingsPayload {
@@ -757,6 +763,7 @@ export const DEFAULT_WORKFLOW_SETTINGS: WorkflowSettings = {
   requireDevVerification: false,
   requireCleanLint: false,
   requireBacklogRefinement: false,
+  prioritizeImplementationOverRefinement: true,
   maxRefinementRoundTrips: 3,
   maxSubtaskDepth: 4,
   maxSubtaskSpawns: 8,
@@ -805,10 +812,38 @@ export const EMPTY_BOARD: Board = {
 }
 
 export function hasSprintWork(board: Board, settings?: WorkflowSettings): boolean {
-  const lanes: BoardLane[] = ['Needs PO', 'In Progress', 'Backlog', 'QA']
-  if (settings?.requireBacklogRefinement) lanes.splice(2, 0, 'Refinement')
-  if (settings?.requireCodeReview) lanes.splice(lanes.indexOf('Backlog') + 1, 0, 'Code Review')
+  // Lane order mirrors backend _sprint_lanes_active (implementation before refinement when enabled).
+  const prioritizeImpl = settings?.prioritizeImplementationOverRefinement !== false
+  const lanes: BoardLane[] = ['Needs PO', 'In Progress']
+  if (prioritizeImpl && settings?.requireBacklogRefinement) {
+    lanes.push('Backlog', 'Refinement')
+  } else if (settings?.requireBacklogRefinement) {
+    lanes.push('Refinement', 'Backlog')
+  } else {
+    lanes.push('Backlog')
+  }
+  if (settings?.requireCodeReview) lanes.push('Code Review')
+  lanes.push('QA')
   return lanes.some((lane) => (board[lane]?.length ?? 0) > 0)
+}
+
+/** Backlog cards eligible for claim (approximates backend next_claimable_backlog_task). */
+export function countClaimableBacklogTasks(
+  board: Board,
+  settings?: WorkflowSettings,
+): number {
+  const requireRefinement = settings?.requireBacklogRefinement === true
+  return (board.Backlog ?? []).filter((task) => {
+    if (task.requiresDev === false) return false
+    if (task.workType === 'planning') return false
+    if (requireRefinement && task.refinementComplete === false) return false
+    const blocked = task.blockedBy ?? []
+    if (blocked.length > 0) {
+      const doneIds = new Set((board.Done ?? []).map((t) => t.id))
+      if (!blocked.every((id) => doneIds.has(id))) return false
+    }
+    return true
+  }).length
 }
 
 export function getDisplayLanes(

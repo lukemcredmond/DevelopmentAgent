@@ -44,6 +44,8 @@ def build_model_timeline(
                 "content": entry.get("responseContent") or "",
                 "toolCalls": entry.get("responseToolCalls") or [],
                 "toolNames": entry.get("toolNames") or [],
+                "memoriesUsed": entry.get("memoriesUsed") or [],
+                "decisionsIncluded": entry.get("decisionsIncluded"),
             }
         )
 

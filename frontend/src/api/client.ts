@@ -207,6 +207,15 @@ export async function moveTask(payload: MoveTaskPayload): Promise<AppState> {
   })
 }
 
+export async function claimReadyBacklogCards(
+  limit = 5,
+): Promise<AppState & { claimedTaskIds: string[]; readyCount: number }> {
+  return request('/api/board/claim-ready', {
+    method: 'POST',
+    body: JSON.stringify({ limit }),
+  })
+}
+
 export async function resetWorkspace(): Promise<AppState> {
   return request<AppState>('/api/reset', { method: 'POST' })
 }

@@ -1801,13 +1801,61 @@ def _run_qa_step(active_task: Dict[str, Any], brief: str) -> None:
 def _sprint_lanes_active() -> List[str]:
     ws = get_workflow_settings()
     lanes = ["Needs PO", "In Progress"]
-    if ws.get("requireBacklogRefinement"):
+    prioritize_impl = ws.get("prioritizeImplementationOverRefinement", True)
+    if prioritize_impl and ws.get("requireBacklogRefinement"):
+        lanes.append("Backlog")
         lanes.append("Refinement")
-    lanes.append("Backlog")
+    elif ws.get("requireBacklogRefinement"):
+        lanes.append("Refinement")
+        lanes.append("Backlog")
+    else:
+        lanes.append("Backlog")
     if ws.get("requireCodeReview"):
         lanes.insert(lanes.index("Backlog") + 1, "Code Review")
     lanes.append("QA")
     return lanes
+
+
+def _try_refinement_handler() -> tuple[Optional[str], Optional[Dict[str, Any]]]:
+    """Return (handler, active_task) for Refinement lane work, or (None, None)."""
+    ws = get_workflow_settings()
+    if not ws.get("requireBacklogRefinement") or not state.SHARED_BOARD.get("Refinement"):
+        return None, None
+    spike = next_spike_task()
+    if spike:
+        return "spike_dev", dict(spike)
+    task = next_refinement_task()
+    if task:
+        status = str(task.get("refinementStatus") or "pending")
+        handler = "refinement_po" if status == "dev_reviewed" else "refinement_dev"
+        return handler, dict(task)
+    return "idle", None
+
+
+def _try_backlog_handler() -> tuple[Optional[str], Optional[Dict[str, Any]]]:
+    """Return (handler, active_task) for Backlog lane work, or (None, None)."""
+    if not state.SHARED_BOARD.get("Backlog"):
+        return None, None
+    task = next_claimable_backlog_task()
+    if task:
+        move_board_stage(task["id"], "In Progress")
+        record_task_decision(task["id"], "Developer", "claim", "Claimed from Backlog")
+        claimed = find_task_by_id(task["id"]) or task
+        return "dev", dict(claimed)
+    po_plan = next_po_planning_backlog_task()
+    if po_plan:
+        move_board_stage(po_plan["id"], "Needs PO")
+        record_task_decision(
+            po_plan["id"],
+            "Product Owner",
+            "escalation",
+            "Planning card routed to PO",
+        )
+        return "po", dict(find_task_by_id(po_plan["id"]) or po_plan)
+    blocked = [t for t in state.SHARED_BOARD["Backlog"] if not task_dependencies_met(t)]
+    if blocked:
+        return "blocked", None
+    return "idle", None
 
 
 def has_sprint_work() -> bool:
@@ -1839,66 +1887,56 @@ def run_sprint_step(brief: str, ollama_url: str) -> None:
         elif state.SHARED_BOARD.get("In Progress"):
             active_task = dict(state.SHARED_BOARD["In Progress"][0])
             handler = "dev"
-        elif get_workflow_settings().get("requireBacklogRefinement") and state.SHARED_BOARD.get("Refinement"):
-            spike = next_spike_task()
-            if spike:
-                active_task = dict(spike)
-                handler = "spike_dev"
-            else:
-                task = next_refinement_task()
-                if task:
-                    active_task = dict(task)
-                    status = str(task.get("refinementStatus") or "pending")
-                    handler = "refinement_po" if status == "dev_reviewed" else "refinement_dev"
-                else:
-                    handler = "idle"
-        elif state.SHARED_BOARD.get("Backlog"):
-            task = next_claimable_backlog_task()
-            if task:
-                move_board_stage(task["id"], "In Progress")
-                record_task_decision(task["id"], "Developer", "claim", "Claimed from Backlog")
-                active_task = dict(find_task_by_id(task["id"]) or task)
-                handler = "dev"
-            else:
-                po_plan = next_po_planning_backlog_task()
-                if po_plan:
-                    move_board_stage(po_plan["id"], "Needs PO")
-                    record_task_decision(
-                        po_plan["id"],
-                        "Product Owner",
-                        "escalation",
-                        "Planning card routed to PO",
-                    )
-                    active_task = dict(find_task_by_id(po_plan["id"]) or po_plan)
-                    handler = "po"
-                else:
-                    blocked = [t for t in state.SHARED_BOARD["Backlog"] if not task_dependencies_met(t)]
-                    if blocked:
-                        handler = "blocked"
-                    else:
-                        handler = "idle"
-        elif get_workflow_settings().get("requireCodeReview") and state.SHARED_BOARD.get("Code Review"):
-            active_task = dict(state.SHARED_BOARD["Code Review"][0])
-            handler = "cr"
-        elif state.SHARED_BOARD.get("QA"):
-            qa_candidate = dict(state.SHARED_BOARD["QA"][0])
-            normalize_task(qa_candidate)
-            if not qa_candidate.get("requiresQa", True):
-                move_board_stage(qa_candidate["id"], "Done")
-                record_task_decision(
-                    qa_candidate["id"],
-                    "System",
-                    "move",
-                    "Skipped QA (requiresQa=false)",
-                )
-                handler = "idle"
-            else:
-                active_task = qa_candidate
-                handler = "qa"
         else:
-            handler = "idle"
+            handler = None
+            ws = get_workflow_settings()
+            prioritize_impl = ws.get("prioritizeImplementationOverRefinement", True)
+            if prioritize_impl and ws.get("requireBacklogRefinement"):
+                backlog_handler, backlog_task = _try_backlog_handler()
+                if backlog_handler is not None:
+                    handler, active_task = backlog_handler, backlog_task
+                if handler is None:
+                    refine_handler, refine_task = _try_refinement_handler()
+                    if refine_handler is not None:
+                        handler, active_task = refine_handler, refine_task
+            else:
+                refine_handler, refine_task = _try_refinement_handler()
+                if refine_handler is not None:
+                    handler, active_task = refine_handler, refine_task
+                if handler is None:
+                    backlog_handler, backlog_task = _try_backlog_handler()
+                    if backlog_handler is not None:
+                        handler, active_task = backlog_handler, backlog_task
+            if handler is None and ws.get("requireCodeReview") and state.SHARED_BOARD.get("Code Review"):
+                active_task = dict(state.SHARED_BOARD["Code Review"][0])
+                handler = "cr"
+            elif handler is None and state.SHARED_BOARD.get("QA"):
+                qa_candidate = dict(state.SHARED_BOARD["QA"][0])
+                normalize_task(qa_candidate)
+                if not qa_candidate.get("requiresQa", True):
+                    move_board_stage(qa_candidate["id"], "Done")
+                    record_task_decision(
+                        qa_candidate["id"],
+                        "System",
+                        "move",
+                        "Skipped QA (requiresQa=false)",
+                    )
+                    handler = "idle"
+                else:
+                    active_task = qa_candidate
+                    handler = "qa"
+            elif handler is None:
+                handler = "idle"
 
     _emit_sprint_step_progress(handler or "idle", active_task)
+    if handler and handler not in ("idle", "needs_user", "blocked"):
+        lane = get_task_lane(active_task["id"]) if active_task else None
+        title = active_task.get("title", "?") if active_task else "?"
+        add_system_log(
+            "System",
+            "info",
+            f"Sprint handler: {handler} — '{title}' ({lane or 'n/a'})",
+        )
 
     with state.STATE_LOCK:
         needs_user_count = len(state.SHARED_BOARD.get("Needs User", []))

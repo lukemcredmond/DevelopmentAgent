@@ -24,6 +24,7 @@ import {
   reorderTasks,
   resetWorkspace,
   retryAgentStep,
+  claimReadyBacklogCards,
   clearAllTasks,
   escalateNeedsUserToPo,
   resolveToolApproval,
@@ -68,7 +69,7 @@ import ToolsPanel from './components/ToolsPanel'
 import { useAppState, useAutoSprint } from './hooks/useAppState'
 import { useTheme } from './hooks/useTheme'
 import type { AgentId, AppState, BoardLane, BriefCategory, ChatMessageRecord, PendingToolApproval, PendingToolRequest, SkillSuggestion, Task, WorkflowSettings } from './types'
-import { getDisplayLanes } from './types'
+import { countClaimableBacklogTasks, getDisplayLanes } from './types'
 import { findTaskOnBoard } from './utils/taskFormat'
 
 type BottomTab = 'console' | 'activity' | 'tools' | 'model' | 'chat' | 'terminal' | 'search' | 'git'
@@ -493,14 +494,19 @@ export default function App() {
     }
   }, [pendingApprovals, approvalModal])
 
-  const handleMoveTask = async (taskId: string, fromLane: BoardLane, toLane: BoardLane) => {
+  const handleMoveTask = async (
+    taskId: string,
+    fromLane: BoardLane,
+    toLane: BoardLane,
+    skipRefinement?: boolean,
+  ) => {
     if (orchestratedActive) {
       setActionError('Wait for the current sprint step to finish before moving cards.')
       return
     }
     setActionError(null)
     try {
-      const data = await moveTask({ taskId, fromLane, toLane })
+      const data = await moveTask({ taskId, fromLane, toLane, skipRefinement })
       handleState(data)
     } catch (err) {
       const message =
@@ -512,6 +518,11 @@ export default function App() {
       setActionError(message)
     }
   }
+
+  const claimableBacklogCount = useMemo(
+    () => countClaimableBacklogTasks(state.board, state.workflowSettings),
+    [state.board, state.workflowSettings],
+  )
 
   useEffect(() => {
     writeBottomPanelHeight(bottomPanelHeight)
@@ -716,6 +727,28 @@ export default function App() {
             }
           })
         }
+        onClaimReadyCards={() =>
+          void withLoading(async () => {
+            if (orchestratedActive) {
+              setActionError('Wait for the current sprint step to finish before claiming cards.')
+              return
+            }
+            setActionError(null)
+            try {
+              const data = await claimReadyBacklogCards(5)
+              handleState(data)
+            } catch (err) {
+              const message =
+                err instanceof ApiError
+                  ? err.detail
+                  : err instanceof Error
+                    ? err.message
+                    : 'Failed to claim ready cards.'
+              setActionError(message)
+            }
+          })
+        }
+        claimableBacklogCount={claimableBacklogCount}
         onEscalateNeedsUserToPo={handleEscalateNeedsUserToPo}
         onClearAllTasks={() => {
           if (
@@ -1201,6 +1234,9 @@ export default function App() {
         onOpenModelTab={() => setBottomTab('model')}
         maxRefinementRoundTrips={state.workflowSettings?.maxRefinementRoundTrips ?? 3}
         requireBacklogRefinement={state.workflowSettings?.requireBacklogRefinement ?? false}
+        onMoveToInProgress={(taskId, fromLane, skipRefinement) =>
+          void handleMoveTask(taskId, fromLane, 'In Progress', skipRefinement)
+        }
         onEscapeSubtasks={(taskId) =>
           void withLoading(async () => {
             handleState(await escapeSubtaskLoop(taskId, 'needs_po'))

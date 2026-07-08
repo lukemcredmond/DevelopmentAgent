@@ -14,6 +14,7 @@ from backend.agents.task_context import (
 )
 from backend.api.helpers import build_state_response
 from backend.api.schemas import (
+    ClaimReadyPayload,
     DeleteTaskPayload,
     EscapeSubtaskPayload,
     InjectToolEvidencePayload,
@@ -26,7 +27,12 @@ from backend.api.schemas import (
     UpdateTaskPayload,
 )
 from backend.services.board_lanes import normalize_board_lanes
-from backend.services.board_service import clear_all_board_tasks, move_board_stage, publish_board_update
+from backend.services.board_service import (
+    claim_ready_backlog_tasks,
+    clear_all_board_tasks,
+    move_board_stage,
+    publish_board_update,
+)
 from backend.services.logs import add_system_log
 from backend.services.needs_user_guard import append_user_resolution, set_needs_user_cooldown
 from backend.services.project_service import save_current_project_state
@@ -60,11 +66,38 @@ def add_manual_task(payload: ManualTaskPayload):
 @router.post("/api/tasks/move")
 def move_task(payload: MoveTaskPayload):
     with state.STATE_LOCK:
+        if payload.skip_refinement and payload.target_lane == "In Progress":
+            task = find_task_by_id(payload.task_id)
+            if task:
+                normalize_task(task)
+                task["refinementComplete"] = True
         result = move_board_stage(payload.task_id, payload.target_lane)
         if result.startswith("Error"):
             raise HTTPException(status_code=404, detail=result)
         add_system_log("System", "info", result)
     return build_state_response()
+
+
+@router.post("/api/board/claim-ready")
+def claim_ready_cards(payload: ClaimReadyPayload):
+    from backend.agents.agent_run import get_active_run
+    from backend.agents.task_context import count_claimable_backlog_tasks
+
+    with state.STATE_LOCK:
+        if get_active_run() is not None:
+            raise HTTPException(
+                status_code=409,
+                detail="Cannot claim cards while an agent sprint step is running.",
+            )
+        if count_claimable_backlog_tasks() == 0:
+            return {**build_state_response(), "claimedTaskIds": [], "readyCount": 0}
+        claimed = claim_ready_backlog_tasks(limit=payload.limit)
+        remaining = count_claimable_backlog_tasks()
+    return {
+        **build_state_response(),
+        "claimedTaskIds": claimed,
+        "readyCount": remaining,
+    }
 
 
 def _apply_task_update(task: dict, payload: UpdateTaskPayload) -> None:

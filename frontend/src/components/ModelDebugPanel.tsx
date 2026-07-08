@@ -8,6 +8,77 @@ interface ModelDebugPanelProps {
 
 type ViewMode = 'list' | 'conversation'
 
+function LlmTimelineEntry({ item, itemKey }: { item: ModelTimelineItem; itemKey: string }) {
+  const [memoriesOpen, setMemoriesOpen] = useState(false)
+  const toolCalls = (item.toolCalls ?? []) as Array<{ name?: string; arguments?: unknown }>
+  const memoriesUsed = item.memoriesUsed ?? []
+  const decisionsIncluded = item.decisionsIncluded
+
+  return (
+    <div className="space-y-1">
+      <div className="rounded-lg border border-cat-surface1 bg-cat-mantle/40 px-3 py-2">
+        <div className="flex flex-wrap gap-2 text-[10px] mb-1">
+          <span className="text-indigo-300 font-semibold">{item.agent}</span>
+          <span className="text-cat-overlay">{item.timestamp}</span>
+          <span className="text-cat-subtext">iter {item.iteration}</span>
+          {item.durationMs != null && (
+            <span className="text-cat-subtext">{item.durationMs}ms</span>
+          )}
+          {item.error && <span className="text-rose-400">ERR</span>}
+          {decisionsIncluded != null && decisionsIncluded > 0 && (
+            <span className="text-violet-300">Decisions in prompt ({decisionsIncluded})</span>
+          )}
+          {memoriesUsed.length > 0 ? (
+            <button
+              type="button"
+              onClick={() => setMemoriesOpen((o) => !o)}
+              className="text-cyan-300 hover:text-cyan-200"
+            >
+              Memories injected ({memoriesUsed.length}) {memoriesOpen ? '▾' : '▸'}
+            </button>
+          ) : (
+            <span className="text-cat-overlay">Memories injected (0)</span>
+          )}
+        </div>
+        {memoriesOpen && memoriesUsed.length > 0 && (
+          <ul className="mb-2 space-y-1 text-[10px] text-cat-subtext border border-cat-surface1/50 rounded p-2 bg-black/20">
+            {memoriesUsed.map((m, i) => (
+              <li key={`${itemKey}-mem-${i}`}>
+                <span className="text-cyan-300/90">[{m.category}]</span> {m.content}
+              </li>
+            ))}
+          </ul>
+        )}
+        {item.content && (
+          <pre className="text-[10px] text-cat-subtext whitespace-pre-wrap max-h-32 overflow-y-auto">
+            {item.content}
+          </pre>
+        )}
+        {toolCalls.length > 0 && (
+          <div className="mt-2 space-y-1">
+            <div className="text-[9px] uppercase text-cat-overlay">Tool calls</div>
+            {toolCalls.map((tc, i) => (
+              <div
+                key={`${itemKey}-tc-${i}`}
+                className="text-[10px] font-mono text-amber-200/90 bg-black/20 rounded p-1.5"
+              >
+                {tc.name}
+                {tc.arguments != null && (
+                  <pre className="text-cat-overlay mt-1 whitespace-pre-wrap">
+                    {typeof tc.arguments === 'string'
+                      ? tc.arguments
+                      : JSON.stringify(tc.arguments, null, 2)}
+                  </pre>
+                )}
+              </div>
+            ))}
+          </div>
+        )}
+      </div>
+    </div>
+  )
+}
+
 export default function ModelDebugPanel({ taskIdFilter }: ModelDebugPanelProps) {
   const [entries, setEntries] = useState<LlmDebugEntry[]>([])
   const [threads, setThreads] = useState<ModelTimelineThread[]>([])
@@ -103,47 +174,7 @@ export default function ModelDebugPanel({ taskIdFilter }: ModelDebugPanelProps) 
       )
     }
 
-    const toolCalls = (item.toolCalls ?? []) as Array<{ name?: string; arguments?: unknown }>
-    return (
-      <div key={key} className="space-y-1">
-        <div className="rounded-lg border border-cat-surface1 bg-cat-mantle/40 px-3 py-2">
-          <div className="flex flex-wrap gap-2 text-[10px] mb-1">
-            <span className="text-indigo-300 font-semibold">{item.agent}</span>
-            <span className="text-cat-overlay">{item.timestamp}</span>
-            <span className="text-cat-subtext">iter {item.iteration}</span>
-            {item.durationMs != null && (
-              <span className="text-cat-subtext">{item.durationMs}ms</span>
-            )}
-            {item.error && <span className="text-rose-400">ERR</span>}
-          </div>
-          {item.content && (
-            <pre className="text-[10px] text-cat-subtext whitespace-pre-wrap max-h-32 overflow-y-auto">
-              {item.content}
-            </pre>
-          )}
-          {toolCalls.length > 0 && (
-            <div className="mt-2 space-y-1">
-              <div className="text-[9px] uppercase text-cat-overlay">Tool calls</div>
-              {toolCalls.map((tc, i) => (
-                <div
-                  key={`${key}-tc-${i}`}
-                  className="text-[10px] font-mono text-amber-200/90 bg-black/20 rounded p-1.5"
-                >
-                  {tc.name}
-                  {tc.arguments != null && (
-                    <pre className="text-cat-overlay mt-1 whitespace-pre-wrap">
-                      {typeof tc.arguments === 'string'
-                        ? tc.arguments
-                        : JSON.stringify(tc.arguments, null, 2)}
-                    </pre>
-                  )}
-                </div>
-              ))}
-            </div>
-          )}
-        </div>
-      </div>
-    )
+    return <LlmTimelineEntry key={key} item={item} itemKey={key} />
   }
 
   return (
@@ -231,6 +262,12 @@ export default function ModelDebugPanel({ taskIdFilter }: ModelDebugPanelProps) 
                     {e.toolNames?.length > 0 && (
                       <span className="text-amber-300/80">tools: {e.toolNames.join(', ')}</span>
                     )}
+                    {e.decisionsIncluded != null && e.decisionsIncluded > 0 && (
+                      <span className="text-violet-300/90">decisions: {e.decisionsIncluded}</span>
+                    )}
+                    {e.memoriesUsed != null && (
+                      <span className="text-cyan-300/80">memories: {e.memoriesUsed.length}</span>
+                    )}
                   </button>
                   {expandedId === e.id && (
                     <div className="px-3 pb-3 space-y-2 border-t border-cat-surface1">
@@ -240,6 +277,20 @@ export default function ModelDebugPanel({ taskIdFilter }: ModelDebugPanelProps) 
                           <pre className="whitespace-pre-wrap text-cat-subtext max-h-32 overflow-y-auto">
                             {e.responseContent}
                           </pre>
+                        </div>
+                      )}
+                      {e.memoriesUsed && e.memoriesUsed.length > 0 && (
+                        <div>
+                          <div className="text-[9px] uppercase text-cat-overlay mb-1">
+                            Memories injected ({e.memoriesUsed.length})
+                          </div>
+                          <ul className="text-[10px] text-cat-subtext space-y-1">
+                            {e.memoriesUsed.map((m, i) => (
+                              <li key={`${e.id}-mem-${i}`}>
+                                <span className="text-cyan-300/90">[{m.category}]</span> {m.content}
+                              </li>
+                            ))}
+                          </ul>
                         </div>
                       )}
                       <div>

@@ -66,6 +66,8 @@ class ScrumAgent:
         self.assigned_skills: List[str] = []
         self._client: Optional[Client] = None
         self._client_host: Optional[str] = None
+        self._last_memories_used: List[Dict[str, Any]] = []
+        self._decisions_in_prompt: int = 0
 
     def register_tool(self, tool) -> None:
         self.registry.register(tool)
@@ -120,6 +122,7 @@ class ScrumAgent:
             limit=3,
             project_id=project_id,
         )
+        self._last_memories_used = related_memories
         memory_context = ""
         if related_memories:
             memory_context = "\n=== RELEVANT HISTORICAL MEMORIES ===\n" + "\n".join(
@@ -211,6 +214,8 @@ class ScrumAgent:
                         response_content=(msg.content or "") if msg else "",
                         response_tool_calls=tool_calls,
                         duration_ms=duration_ms,
+                        memories_used=getattr(self, "_last_memories_used", None),
+                        decisions_included=getattr(self, "_decisions_in_prompt", None),
                     )
                 return result
             except Exception as exc:
@@ -227,6 +232,8 @@ class ScrumAgent:
                     tool_names=[n for n in tool_names if n],
                     duration_ms=duration_ms,
                     error=last_error,
+                    memories_used=getattr(self, "_last_memories_used", None),
+                    decisions_included=getattr(self, "_decisions_in_prompt", None),
                 )
                 if self._is_context_overflow_error(last_error):
                     overflow_msg = self._context_overflow_message()
@@ -433,6 +440,8 @@ class ScrumAgent:
                 "error",
                 "No tools registered for this agent — check Workflow settings and restart the backend.",
             )
+        self._last_memories_used = []
+        self._decisions_in_prompt = 0
         messages: List[ChatMessage] = [
             {"role": "system", "content": self._build_system_content()},
             {"role": "user", "content": self._build_user_content(user_prompt)},
@@ -444,6 +453,9 @@ class ScrumAgent:
         max_tool_failures = int(ws.get("maxToolFailuresPerStep", 5))
         task_id = state.ACTIVE_SPRINT_TASK_ID
         if task_id:
+            active_task = find_task_by_id(task_id)
+            if active_task:
+                self._decisions_in_prompt = min(len(active_task.get("decisions") or []), 8)
             start_run(task_id, self.role, max_iterations=max_iterations)
 
         try:

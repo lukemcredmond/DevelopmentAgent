@@ -155,6 +155,11 @@ interface TaskDetailModalProps {
   maxRefinementRoundTrips?: number
   requireBacklogRefinement?: boolean
   onEscapeSubtasks?: (taskId: string) => void | Promise<void>
+  onMoveToInProgress?: (
+    taskId: string,
+    fromLane: BoardLane,
+    skipRefinement?: boolean,
+  ) => void | Promise<void>
 }
 
 function CollapsibleSection({
@@ -253,6 +258,7 @@ export default function TaskDetailModal({
   maxRefinementRoundTrips,
   requireBacklogRefinement = false,
   onEscapeSubtasks,
+  onMoveToInProgress,
 }: TaskDetailModalProps) {
   const [title, setTitle] = useState('')
   const [description, setDescription] = useState('')
@@ -269,6 +275,8 @@ export default function TaskDetailModal({
   const [diagnosing, setDiagnosing] = useState(false)
   const [retrying, setRetrying] = useState(false)
   const [showPriorAnswers, setShowPriorAnswers] = useState(false)
+  const [skipRemainingRefinement, setSkipRemainingRefinement] = useState(false)
+  const [movingToProgress, setMovingToProgress] = useState(false)
 
   useEffect(() => {
     if (!task) return
@@ -344,6 +352,15 @@ export default function TaskDetailModal({
       : safeTask.requiresQa === false
         ? 'Dev (no QA)'
         : 'Dev + QA'
+  const canMoveToInProgress =
+    Boolean(onMoveToInProgress) &&
+    taskLane != null &&
+    taskLane !== 'In Progress' &&
+    taskLane !== 'Done' &&
+    (taskLane === 'Backlog' || taskLane === 'Refinement')
+  const showSkipRefinementOption =
+    requireBacklogRefinement &&
+    (taskLane === 'Refinement' || safeTask.refinementComplete === false)
 
   return (
     <div className="fixed inset-0 bg-black/75 flex items-center justify-center p-4 z-50">
@@ -425,6 +442,40 @@ export default function TaskDetailModal({
               <p className="text-[11px] text-cat-overlay italic">None defined</p>
             )}
           </CollapsibleSection>
+
+          {canMoveToInProgress && onMoveToInProgress && taskLane && (
+            <div className="bg-emerald-950/20 border border-emerald-500/30 rounded-lg p-3 space-y-2">
+              <h4 className="text-xs font-bold text-emerald-200">Run implementation now</h4>
+              <p className="text-[10px] text-cat-subtext">
+                Move this card to In Progress so the next sprint step runs dev work before more
+                refinement.
+              </p>
+              {showSkipRefinementOption && (
+                <label className="flex items-center gap-2 text-[11px] text-cat-subtext cursor-pointer">
+                  <input
+                    type="checkbox"
+                    checked={skipRemainingRefinement}
+                    onChange={(e) => setSkipRemainingRefinement(e.target.checked)}
+                    className="rounded border-cat-surface1"
+                  />
+                  Skip remaining refinement
+                </label>
+              )}
+              <button
+                type="button"
+                disabled={movingToProgress || sprintRunning}
+                onClick={() => {
+                  setMovingToProgress(true)
+                  void Promise.resolve(
+                    onMoveToInProgress(task.id, taskLane, skipRemainingRefinement || undefined),
+                  ).finally(() => setMovingToProgress(false))
+                }}
+                className="w-full bg-emerald-600/40 hover:bg-emerald-600/60 disabled:opacity-50 text-emerald-100 text-xs py-2 px-3 rounded-lg border border-emerald-500/30"
+              >
+                {movingToProgress ? 'Moving…' : 'Move to In Progress'}
+              </button>
+            </div>
+          )}
 
           {diagnosis && (
             <CollapsibleSection title="Diagnosis" defaultOpen>

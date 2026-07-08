@@ -122,6 +122,11 @@ export default function WorkflowPanel({
     }
   }
 
+  const lastMemoryTimestamp =
+    memories.length > 0
+      ? memories.reduce((latest, m) => (m.timestamp > latest ? m.timestamp : latest), memories[0].timestamp)
+      : null
+
   return (
     <div className="bg-cat-surface0 p-3 rounded-xl border border-cat-surface1 space-y-3">
       <div className="flex items-center justify-between">
@@ -168,6 +173,18 @@ export default function WorkflowPanel({
         />
         Require backlog refinement before dev
       </label>
+      {(settings.requireBacklogRefinement ?? false) && (
+        <label className="flex items-center gap-2 text-[11px] text-cat-subtext pl-5 cursor-pointer">
+          <input
+            type="checkbox"
+            checked={settings.prioritizeImplementationOverRefinement !== false}
+            onChange={(e) =>
+              onSettingsChange({ prioritizeImplementationOverRefinement: e.target.checked })
+            }
+          />
+          Claim Backlog / In Progress before more Refinement
+        </label>
+      )}
       {(settings.requireBacklogRefinement ?? false) && (
         <label className="flex items-center gap-2 text-[11px] text-cat-subtext pl-5">
           <span className="text-cat-overlay shrink-0">Max refinement rounds</span>
@@ -799,11 +816,24 @@ export default function WorkflowPanel({
           className="text-[10px] uppercase tracking-wider text-cat-overlay hover:text-cat-subtext"
         >
           {showMemory ? '▼' : '▶'} Project memory
+          {memories.length > 0 && (
+            <span className="ml-1 normal-case text-indigo-300">({memories.length})</span>
+          )}
         </button>
         {showMemory && (
           <div className="mt-2 space-y-2">
             <p className="text-[10px] text-cat-overlay leading-relaxed">
               Agents remember tool outcomes automatically. Pin facts here for persistent context.
+              {lastMemoryTimestamp && (
+                <span className="block mt-1 text-cat-subtext">
+                  Last saved: {lastMemoryTimestamp}
+                </span>
+              )}
+              {memories.length === 0 && (
+                <span className="block mt-1 text-amber-300/80">
+                  No memories matched yet — semantic search uses Ollama embeddings when available.
+                </span>
+              )}
             </p>
             <textarea
               value={memoryInput}

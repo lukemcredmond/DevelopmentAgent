@@ -39,6 +39,8 @@ interface SidebarProps {
   planOutlineReady?: boolean
   onPlanAndRun: () => void
   onStep: () => void
+  onClaimReadyCards?: () => void
+  claimableBacklogCount?: number
   onEscalateNeedsUserToPo?: () => void
   onClearAllTasks: () => void
   onReset: () => void
@@ -95,6 +97,8 @@ export default memo(function Sidebar({
   planOutlineReady = false,
   onPlanAndRun,
   onStep,
+  onClaimReadyCards,
+  claimableBacklogCount = 0,
   onEscalateNeedsUserToPo,
   onClearAllTasks,
   onReset,
@@ -444,6 +448,17 @@ export default memo(function Sidebar({
               )}
               Execute Sprint Step
             </button>
+            {onClaimReadyCards && claimableBacklogCount > 0 && (
+              <button
+                type="button"
+                onClick={onClaimReadyCards}
+                disabled={loading || sprintRunning}
+                className="w-full bg-teal-700 hover:bg-teal-600 disabled:opacity-50 text-white font-medium py-2 rounded-lg text-xs transition-colors flex items-center justify-center gap-2"
+              >
+                <i className="fa-solid fa-hand-pointer" />
+                Claim ready cards ({claimableBacklogCount})
+              </button>
+            )}
             <div className="flex items-center gap-2">
               <label className="flex items-center gap-2 text-xs text-cat-subtext cursor-pointer">
                 <input

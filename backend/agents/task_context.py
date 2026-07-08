@@ -728,6 +728,24 @@ def next_claimable_backlog_task() -> Optional[Dict[str, Any]]:
     return None
 
 
+def count_claimable_backlog_tasks() -> int:
+    """Count backlog cards eligible for claim (same rules as next_claimable_backlog_task)."""
+    sort_backlog()
+    ws = get_workflow_settings()
+    count = 0
+    for task in state.SHARED_BOARD.get("Backlog", []):
+        normalize_task(task)
+        if not task.get("requiresDev", True):
+            continue
+        if task.get("workType") == "planning":
+            continue
+        if ws.get("requireBacklogRefinement") and task.get("refinementComplete") is False:
+            continue
+        if task_dependencies_met(task):
+            count += 1
+    return count
+
+
 def next_refinement_task() -> Optional[Dict[str, Any]]:
     """First claimable task in Refinement lane."""
     ws = get_workflow_settings()
@@ -860,6 +878,13 @@ def build_task_prompt(task: Dict[str, Any], brief: str) -> str:
 
     if task.get("userQuestion"):
         prompt += f"\n=== USER QUESTION PENDING ===\n{task['userQuestion']}\n"
+
+    notes = coerce_task_text(task.get("refinementNotes") or "")
+    if notes:
+        prompt += f"\n=== REFINEMENT NOTES ===\n{notes[:2000]}\n"
+    spike_report = coerce_task_text(task.get("spikeReport") or "")
+    if spike_report:
+        prompt += f"\n=== SPIKE REPORT ===\n{spike_report[:2000]}\n"
 
     if task["decisions"]:
         prompt += "\n=== PRIOR AGENT DECISIONS ON THIS CARD ===\n"

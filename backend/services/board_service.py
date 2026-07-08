@@ -111,6 +111,28 @@ def move_board_stage(task_id: str, target_lane: str) -> str:
         return f"Successfully moved task {task_id} to '{target_lane}'."
 
 
+def claim_ready_backlog_tasks(limit: int = 5) -> List[str]:
+    """Move up to N refinement-ready backlog tasks into In Progress, by priority."""
+    from backend.agents.task_context import next_claimable_backlog_task
+
+    claimed: List[str] = []
+    for _ in range(max(1, min(limit, 50))):
+        task = next_claimable_backlog_task()
+        if not task:
+            break
+        task_id = str(task["id"])
+        move_board_stage(task_id, "In Progress")
+        record_task_decision(task_id, "User", "claim", "Claimed from Backlog (bulk)")
+        claimed.append(task_id)
+    if claimed:
+        add_system_log(
+            "System",
+            "success",
+            f"Claimed {len(claimed)} ready card(s) → In Progress",
+        )
+    return claimed
+
+
 def clear_all_board_tasks() -> None:
     """Remove all tasks from every board lane; keep workspace files and brief."""
     normalize_board_lanes(state.SHARED_BOARD)

@@ -52,6 +52,11 @@ class MoveTaskPayload(BaseModel):
     task_id: str = Field(alias="taskId")
     target_lane: str = Field(alias="toLane")
     from_lane: Optional[str] = Field(default=None, alias="fromLane")
+    skip_refinement: bool = Field(default=False, alias="skipRefinement")
+
+
+class ClaimReadyPayload(BaseModel):
+    limit: int = 5
 
 
 class UpdateTaskPayload(BaseModel):
@@ -105,6 +110,7 @@ class WorkflowSettingsPayload(BaseModel):
     requireDevVerification: Optional[bool] = None
     requireCleanLint: Optional[bool] = None
     requireBacklogRefinement: Optional[bool] = None
+    prioritizeImplementationOverRefinement: Optional[bool] = None
     maxRefinementRoundTrips: Optional[int] = None
     maxSubtaskDepth: Optional[int] = None
     maxSubtaskSpawns: Optional[int] = None
