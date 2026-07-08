@@ -124,7 +124,7 @@ def _emit_sprint_step_progress(
     handler: str,
     active_task: Optional[Dict[str, Any]],
 ) -> None:
-    step = state.SPRINT_PROGRESS_STEP or 0
+    step = state.SPRINT_PROGRESS_STEP or 1
     max_steps = state.SPRINT_PROGRESS_MAX or int(get_workflow_settings().get("maxSprintSteps", 20))
     task_id = str(active_task.get("id", "")) if active_task else ""
     task_title = str(active_task.get("title", handler)) if active_task else handler
@@ -138,6 +138,96 @@ def _emit_sprint_step_progress(
         task_title=task_title,
         lane=lane or "",
     )
+
+
+def _prepare_single_step_progress() -> bool:
+    """Configure progress for one manual step (Execute Step / Run In Progress)."""
+    if state.SPRINT_PROGRESS_STEP > 0 and state.SPRINT_PROGRESS_MAX > 1:
+        return False
+    state.LAST_STEP_OUTCOME = None
+    state.LAST_AGENT_STEP_RESULT = None
+    state.SPRINT_PROGRESS_MAX = 1
+    state.SPRINT_PROGRESS_STEP = 1
+    return True
+
+
+def _build_last_step_outcome(
+    task_id: str,
+    lane_before: str,
+    agent: str,
+    *,
+    agent_result: Optional[str] = None,
+) -> Dict[str, Any]:
+    task = find_task_by_id(task_id)
+    lane_after = get_task_lane(task_id) or lane_before
+    tool_failures = _count_task_tool_failures(task) if task else 0
+    title = str(task.get("title", task_id)) if task else task_id
+    ok = True
+    message = f"Step completed on '{title}'."
+    if agent_result:
+        if agent_result == "SIMULATION_FALLBACK":
+            ok = False
+            message = f"Ollama unavailable — simulation fallback on '{title}'."
+        elif agent_result.startswith("Stopped:") or agent_result.startswith("Max tool iterations"):
+            ok = False
+            message = f"{agent_result[:200]}"
+    if tool_failures > 0:
+        ok = False
+        message = (
+            f"Step finished with {tool_failures} tool failure(s) on '{title}'. "
+            f"Card still in {lane_after}. Open the card → Transcript or Tools tab."
+        )
+    elif lane_before != lane_after:
+        message = f"'{title}' moved from {lane_before} → {lane_after}."
+    elif lane_before == lane_after and lane_after == "In Progress":
+        message = f"Dev step finished on '{title}' — card still In Progress."
+    return {
+        "taskId": task_id,
+        "agent": agent,
+        "laneBefore": lane_before,
+        "laneAfter": lane_after,
+        "toolFailures": tool_failures,
+        "ok": ok,
+        "message": message,
+    }
+
+
+def _record_last_step_outcome(
+    task_id: str,
+    lane_before: str,
+    agent: str,
+    *,
+    agent_result: Optional[str] = None,
+) -> None:
+    state.LAST_STEP_OUTCOME = _build_last_step_outcome(
+        task_id,
+        lane_before,
+        agent,
+        agent_result=agent_result or state.LAST_AGENT_STEP_RESULT,
+    )
+
+
+def _finish_single_step_progress(
+    active_task: Optional[Dict[str, Any]],
+    *,
+    status: str = "done",
+) -> None:
+    if state.SPRINT_PROGRESS_MAX != 1:
+        return
+    task_id = str(active_task.get("id", "")) if active_task else ""
+    task_title = str(active_task.get("title", "")) if active_task else ""
+    lane = get_task_lane(task_id) if task_id else ""
+    publish_sprint_progress(
+        phase="done",
+        step=1,
+        max_steps=1,
+        task_id=task_id,
+        task_title=task_title,
+        lane=lane or "",
+        status=status,
+    )
+    state.SPRINT_PROGRESS_STEP = 0
+    state.SPRINT_PROGRESS_MAX = int(get_workflow_settings().get("maxSprintSteps", 20))
 
 
 def _po_chat_used_add_backlog_tool(task_id: str) -> bool:
@@ -1643,6 +1733,7 @@ def _run_developer_step(active_task: Dict[str, Any], brief: str) -> None:
         prompt,
         max_iterations=_llm_iterations(),
     )
+    state.LAST_AGENT_STEP_RESULT = result
 
     with state.STATE_LOCK:
         task = find_task_by_id(task_id)
@@ -1882,8 +1973,11 @@ def run_sprint_step(brief: str, ollama_url: str) -> None:
     agent_qa.ollama_url = ollama_url
     agent_cr.ollama_url = ollama_url
 
+    single_step = _prepare_single_step_progress()
     handler: Optional[str] = None
     active_task: Optional[Dict[str, Any]] = None
+    lane_before = ""
+    agent_name = "System"
 
     with state.STATE_LOCK:
         normalize_board_lanes(state.SHARED_BOARD)
@@ -1939,6 +2033,10 @@ def run_sprint_step(brief: str, ollama_url: str) -> None:
             elif handler is None:
                 handler = "idle"
 
+    if active_task and active_task.get("id"):
+        lane_before = get_task_lane(str(active_task["id"])) or ""
+        agent_name = _HANDLER_AGENT.get(handler or "idle", "System")
+
     _emit_sprint_step_progress(handler or "idle", active_task)
     if handler and handler not in ("idle", "needs_user", "blocked"):
         lane = get_task_lane(active_task["id"]) if active_task else None
@@ -1991,6 +2089,14 @@ def run_sprint_step(brief: str, ollama_url: str) -> None:
                 publish_board_delta(str(active_task["id"]), source="sprint_step")
             else:
                 publish_board_update(source="sprint_step")
+        if single_step:
+            if active_task and active_task.get("id") and handler not in ("idle", "needs_user", "blocked"):
+                _record_last_step_outcome(
+                    str(active_task["id"]),
+                    lane_before or get_task_lane(str(active_task["id"])) or "",
+                    agent_name,
+                )
+            _finish_single_step_progress(active_task)
 
 
 def run_in_progress_step(
@@ -2028,8 +2134,10 @@ def run_in_progress_step(
     if not active_task:
         raise ValueError("In Progress task not found")
 
+    _prepare_single_step_progress()
     tid = str(active_task.get("id", ""))
     title = str(active_task.get("title", tid))
+    lane_before = get_task_lane(tid) or "In Progress"
     add_system_log(
         "System",
         "info",
@@ -2045,6 +2153,8 @@ def run_in_progress_step(
         with state.STATE_LOCK:
             save_current_project_state()
             publish_board_delta(tid, source="sprint_step")
+        _record_last_step_outcome(tid, lane_before, "Developer")
+        _finish_single_step_progress(active_task)
 
 
 def _build_sprint_summary(steps: int, status: str = "completed") -> Dict[str, Any]:

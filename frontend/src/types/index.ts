@@ -409,6 +409,16 @@ export interface SprintProgress {
   status?: string
 }
 
+export interface LastStepOutcome {
+  taskId: string
+  agent: string
+  laneBefore: string
+  laneAfter: string
+  toolFailures: number
+  ok: boolean
+  message: string
+}
+
 export interface IndexProgress {
   phase: string
   filesDone: number
@@ -513,6 +523,7 @@ export interface AppState {
   chatMessages?: ChatMessageRecord[]
   activeAgentRun?: AgentRunState | null
   pendingToolApprovals?: PendingToolApproval[]
+  lastStepOutcome?: LastStepOutcome | null
 }
 
 export interface ConfigPayload {

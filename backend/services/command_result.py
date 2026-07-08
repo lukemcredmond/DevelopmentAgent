@@ -26,6 +26,10 @@ class CommandResult:
         parts = [part for part in (self.stdout, self.stderr) if part]
         return "\n".join(parts).strip() or "(no output)"
 
+    @property
+    def success(self) -> bool:
+        return self.outcome == "ok"
+
 
 def build_command_result(
     command: str,

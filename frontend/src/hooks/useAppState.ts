@@ -610,9 +610,11 @@ export function useAppState() {
         setDisplayRun(null)
       } else if (event.type === 'sprint_progress' && event.data) {
         const progress = mapSprintProgress(event.data as Record<string, unknown>)
-        setSprintProgress(progress)
         if (progress.phase === 'done' || progress.status === 'done') {
+          setSprintProgress(null)
           debouncedRefreshAfterSprintRef.current()
+        } else {
+          setSprintProgress(progress)
         }
       } else if (event.type === 'index_progress' && event.data) {
         const d = event.data as Record<string, unknown>

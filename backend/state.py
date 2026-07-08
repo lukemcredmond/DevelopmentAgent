@@ -33,6 +33,10 @@ SPRINT_PROGRESS_STEP: int = 0
 SPRINT_PROGRESS_MAX: int = 20
 SPRINT_NEEDS_USER_COUNT: int = 0
 
+# Outcome of the most recent manual sprint step (API + UI notification).
+LAST_STEP_OUTCOME: Optional[Dict[str, Any]] = None
+LAST_AGENT_STEP_RESULT: Optional[str] = None
+
 REFINEMENT_MODE: bool = False
 
 PROJECT_PLAN_OUTLINE: str = ""

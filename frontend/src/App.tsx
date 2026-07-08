@@ -549,6 +549,20 @@ export default function App() {
     setBottomTab('tools')
   }
 
+  const applyStepOutcome = useCallback(
+    (data: AppState) => {
+      const outcome = data.lastStepOutcome
+      if (!outcome) return
+      if (!outcome.ok || outcome.toolFailures > 0) {
+        setActionError(outcome.message)
+        if (outcome.toolFailures > 0) {
+          openToolsTab()
+        }
+      }
+    },
+    [],
+  )
+
   const togglePanelMaximize = () => {
     const col = workspaceColumnRef.current
     if (!col) return
@@ -734,6 +748,7 @@ export default function App() {
           void withLoading(async () => {
             const data = await triggerStep({ brief, ollama_url: ollamaUrl })
             handleState(data)
+            applyStepOutcome(data)
             const names = Object.keys(data.files)
             if (names.length > 0 && selectedFile && !names.includes(selectedFile)) {
               setSelectedFile(names[names.length - 1] ?? null)
@@ -750,6 +765,7 @@ export default function App() {
             try {
               const data = await runInProgressStep({ brief, ollama_url: ollamaUrl })
               handleState(data)
+              applyStepOutcome(data)
               const names = Object.keys(data.files)
               if (names.length > 0 && selectedFile && !names.includes(selectedFile)) {
                 setSelectedFile(names[names.length - 1] ?? null)
@@ -1293,6 +1309,7 @@ export default function App() {
             try {
               const data = await runInProgressStep({ brief, ollama_url: ollamaUrl, taskId })
               handleState(data)
+              applyStepOutcome(data)
               const updated = Object.values(data.board)
                 .flat()
                 .find((t) => t.id === taskId)

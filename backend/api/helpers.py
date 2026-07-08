@@ -55,4 +55,6 @@ def build_state_response(*, include_files: bool = True) -> dict:
         "activeAgentRun": get_active_run().to_dict() if get_active_run() else None,
         "pendingToolApprovals": list_pending_approvals(),
     }
+    if state.LAST_STEP_OUTCOME is not None:
+        response["lastStepOutcome"] = state.LAST_STEP_OUTCOME
     return response

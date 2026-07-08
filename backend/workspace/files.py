@@ -273,12 +273,15 @@ def maybe_auto_format_after_edit(safe_path: str) -> Optional[str]:
         return None
     if not os.path.exists(os.path.join(state.WORKSPACE_DIR, "pubspec.yaml")):
         return None
-    from backend.services.command_result import run_workspace_command
+    try:
+        from backend.services.command_result import run_workspace_command
 
-    result = run_workspace_command(f'dart format "{safe_path}"', timeout=30)
-    if result.success:
-        return f"Auto-formatted with dart format: {safe_path}"
-    return None
+        result = run_workspace_command(f'dart format "{safe_path}"', timeout=30)
+        if result.success:
+            return f"Auto-formatted with dart format: {safe_path}"
+        return f"Auto-format skipped ({result.outcome}): {safe_path}"
+    except Exception as exc:
+        return f"Auto-format skipped: {exc}"
 
 
 def record_step_file_read(path: str, content: str) -> None:

@@ -3,7 +3,7 @@
 from unittest.mock import patch
 
 from backend import state
-from backend.agents.task_context import init_new_task
+from backend.agents.task_context import init_new_task, record_task_decision
 from backend.bootstrap import initialize
 from backend.services.sprint_service import run_in_progress_step, run_sprint_step
 
@@ -103,3 +103,34 @@ def test_run_in_progress_api_returns_409_when_empty():
     client = TestClient(app)
     res = client.post("/api/sprint/run-in-progress", json={"brief": "test", "ollama_url": "http://localhost:11434"})
     assert res.status_code == 409
+
+
+def test_run_in_progress_step_sets_last_step_outcome_and_progress_done():
+    initialize()
+    state.SHARED_BOARD.clear()
+    for lane in ("Backlog", "In Progress", "Needs User", "Needs PO", "QA", "Done", "Refinement", "Code Review"):
+        state.SHARED_BOARD[lane] = []
+
+    task = init_new_task({"id": "T-IP", "title": "Active dev task", "description": "Keep working", "status": "In Progress"})
+    state.SHARED_BOARD["In Progress"] = [task]
+    record_task_decision("T-IP", "Developer", "tool_fail", "apply_patch failed")
+
+    progress_events = []
+
+    def capture_progress(**kwargs):
+        progress_events.append(kwargs)
+
+    def fake_dev_step(active_task, *_args, **_kwargs):
+        state.LAST_AGENT_STEP_RESULT = "Stopped: repeated tool failures"
+
+    with patch("backend.services.sprint_service._run_developer_step", side_effect=fake_dev_step):
+        with patch("backend.services.sprint_service.publish_sprint_progress", side_effect=capture_progress):
+            run_in_progress_step("brief", "http://localhost:11434")
+
+    assert state.LAST_STEP_OUTCOME is not None
+    assert state.LAST_STEP_OUTCOME["taskId"] == "T-IP"
+    assert state.LAST_STEP_OUTCOME["ok"] is False
+    assert state.LAST_STEP_OUTCOME["toolFailures"] >= 1
+    done_events = [e for e in progress_events if e.get("phase") == "done"]
+    assert len(done_events) == 1
+    assert done_events[0]["max_steps"] == 1
