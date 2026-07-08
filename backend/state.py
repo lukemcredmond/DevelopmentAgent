@@ -36,6 +36,7 @@ SPRINT_NEEDS_USER_COUNT: int = 0
 # Outcome of the most recent manual sprint step (API + UI notification).
 LAST_STEP_OUTCOME: Optional[Dict[str, Any]] = None
 LAST_AGENT_STEP_RESULT: Optional[str] = None
+DEV_STEP_READ_ONLY_NO_EDITS: bool = False
 
 REFINEMENT_MODE: bool = False
 

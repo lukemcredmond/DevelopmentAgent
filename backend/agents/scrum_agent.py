@@ -342,6 +342,18 @@ class ScrumAgent:
                     ),
                 }
             )
+        elif tool_name == "read_file":
+            path = str(arguments.get("path") or "?")
+            messages.append(
+                {
+                    "role": "system",
+                    "content": (
+                        f"read_file succeeded for '{path}'. Use apply_patch on this path next — "
+                        "copy old_text verbatim from the read_file output above. "
+                        "Do not stop until edits are written."
+                    ),
+                }
+            )
         elif tool_name == "run_command":
             exit_code, body = parse_run_command_exit(llm_output)
             command = str(arguments.get("command") or "")
@@ -376,6 +388,10 @@ class ScrumAgent:
         failed_tool_keys: List[Tuple[str, str]],
         total_failures: List[int],
         max_tool_failures: int,
+        *,
+        iteration: int,
+        max_iterations: int,
+        tools_used: set[str],
     ) -> Optional[str]:
         """Process tool calls; return early-stop message when limits exceeded."""
         messages.append(message)
@@ -424,7 +440,18 @@ class ScrumAgent:
             tool_name, arguments, result, early_stop = results_by_id[id(call)]
             if early_stop:
                 return early_stop
+            tools_used.add(tool_name)
             self._append_tool_messages(messages, tool_name, arguments, result.tool_output, result.success)
+
+        tool_summary = ", ".join(
+            call.function.name for call in all_calls if hasattr(call, "function")
+        )
+        next_iter = min(iteration + 1, max_iterations)
+        add_system_log(
+            self.role,
+            "info",
+            f"Tool batch done ({tool_summary}); continuing to LLM iteration {next_iter}/{max_iterations}",
+        )
         return None
 
     def execute_step(self, user_prompt: str, max_iterations: int = 8) -> str:
@@ -450,6 +477,7 @@ class ScrumAgent:
 
         failed_tool_keys: List[Tuple[str, str]] = []
         total_failures: List[int] = [0]
+        tools_used: set[str] = set()
         ws = get_workflow_settings()
         max_tool_failures = int(ws.get("maxToolFailuresPerStep", 5))
         task_id = state.ACTIVE_SPRINT_TASK_ID
@@ -507,6 +535,9 @@ class ScrumAgent:
                         failed_tool_keys,
                         total_failures,
                         max_tool_failures,
+                        iteration=iteration,
+                        max_iterations=max_iterations,
+                        tools_used=tools_used,
                     )
                     if early_stop:
                         return early_stop
@@ -520,10 +551,26 @@ class ScrumAgent:
                         content,
                         agent=self.role,
                     )
+                write_tools = tools_used & {"write_file", "apply_patch"}
+                if tools_used and not write_tools:
+                    tool_list = ", ".join(sorted(tools_used))
+                    add_system_log(
+                        self.role,
+                        "warning",
+                        f"Step ended after tools ({tool_list}) with no write_file or apply_patch",
+                    )
                 finish_run(status="completed")
                 return content or "Task completed."
 
             max_msg = "Max tool iterations reached without completing the task."
+            write_tools = tools_used & {"write_file", "apply_patch"}
+            if tools_used and not write_tools:
+                tool_list = ", ".join(sorted(tools_used))
+                add_system_log(
+                    self.role,
+                    "warning",
+                    f"Step ended after tools ({tool_list}) with no write_file or apply_patch",
+                )
             self._log_step_exit(max_msg, "warning")
             finish_run(status="failed", error=max_msg)
             return max_msg

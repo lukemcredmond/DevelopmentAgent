@@ -146,9 +146,48 @@ def _prepare_single_step_progress() -> bool:
         return False
     state.LAST_STEP_OUTCOME = None
     state.LAST_AGENT_STEP_RESULT = None
+    state.DEV_STEP_READ_ONLY_NO_EDITS = False
     state.SPRINT_PROGRESS_MAX = 1
     state.SPRINT_PROGRESS_STEP = 1
     return True
+
+
+def _step_transcript_tools_since(
+    task: Dict[str, Any],
+    since: Optional[str],
+) -> tuple[bool, bool]:
+    """Return (has_read, has_write) for tool entries since step start timestamp."""
+    has_read = False
+    has_write = False
+    for entry in task.get("transcript") or []:
+        if not isinstance(entry, dict):
+            continue
+        if since and str(entry.get("timestamp") or "") < since:
+            continue
+        name = entry.get("toolName")
+        if not name:
+            continue
+        if entry.get("toolSuccess") is False:
+            continue
+        if name == "read_file":
+            has_read = True
+        elif name in ("write_file", "apply_patch"):
+            has_write = True
+    return has_read, has_write
+
+
+def _dev_step_read_only_no_edits(
+    task: Dict[str, Any],
+    lane_before: str,
+    step_started: str,
+) -> bool:
+    lane_after = get_task_lane(str(task.get("id", ""))) or lane_before
+    if lane_before != lane_after or lane_after != "In Progress":
+        return False
+    if _task_has_work_files(task):
+        return False
+    has_read, has_write = _step_transcript_tools_since(task, step_started)
+    return has_read and not has_write
 
 
 def _build_last_step_outcome(
@@ -175,6 +214,12 @@ def _build_last_step_outcome(
         ok = False
         message = (
             f"Step finished with {tool_failures} tool failure(s) on '{title}'. "
+            f"Card still in {lane_after}. Open the card → Transcript or Tools tab."
+        )
+    elif state.DEV_STEP_READ_ONLY_NO_EDITS:
+        ok = False
+        message = (
+            f"Dev step read files but made no edits on '{title}'. "
             f"Card still in {lane_after}. Open the card → Transcript or Tools tab."
         )
     elif lane_before != lane_after:
@@ -205,6 +250,7 @@ def _record_last_step_outcome(
         agent,
         agent_result=agent_result or state.LAST_AGENT_STEP_RESULT,
     )
+    state.DEV_STEP_READ_ONLY_NO_EDITS = False
 
 
 def _finish_single_step_progress(
@@ -538,6 +584,7 @@ def _mark_sprint_step_start() -> str:
     state.SPRINT_STEP_STARTED_AT = ts
     state.STEP_FILE_READS.clear()
     state.STEP_PATCH_FAILURES.clear()
+    state.DEV_STEP_READ_ONLY_NO_EDITS = False
     from backend.services.tool_cache import clear_tool_cache
 
     clear_tool_cache()
@@ -1739,6 +1786,13 @@ def _run_developer_step(active_task: Dict[str, Any], brief: str) -> None:
         task = find_task_by_id(task_id)
         if not task:
             return
+        if _dev_step_read_only_no_edits(task, lane_before, step_started):
+            state.DEV_STEP_READ_ONLY_NO_EDITS = True
+            add_system_log(
+                "Developer",
+                "warning",
+                f"'{task.get('title', task_id)}': dev step read files but made no edits — staying In Progress",
+            )
         if result == "SIMULATION_FALLBACK":
             _simulate_dev_work(task)
         else:
