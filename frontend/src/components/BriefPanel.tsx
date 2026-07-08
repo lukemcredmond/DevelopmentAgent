@@ -1,6 +1,7 @@
 import { memo, useEffect, useState } from 'react'
 
 const BRIEF_OPEN_KEY = 'allhands-brief-open'
+const BRIEF_TAB_KEY = 'allhands-brief-tab'
 
 export function readBriefOpen(): boolean {
   try {
@@ -21,11 +22,28 @@ function writeBriefOpen(open: boolean): void {
   }
 }
 
+type BriefTab = 'brief' | 'plan'
+
+function readBriefTab(): BriefTab {
+  try {
+    const stored = localStorage.getItem(BRIEF_TAB_KEY)
+    if (stored === 'plan') return 'plan'
+  } catch {
+    /* ignore */
+  }
+  return 'brief'
+}
+
 interface BriefPanelProps {
   brief: string
   onBriefChange: (value: string) => void
   onOpenManualTask: () => void
   autonomousMode?: boolean
+  planOutline?: string
+  onPlanOutlineChange?: (value: string) => void
+  planOutlineStreaming?: boolean
+  onGenerateBacklog?: () => void
+  generateBacklogDisabled?: boolean
 }
 
 export default memo(function BriefPanel({
@@ -33,12 +51,26 @@ export default memo(function BriefPanel({
   onBriefChange,
   onOpenManualTask,
   autonomousMode = false,
+  planOutline = '',
+  onPlanOutlineChange,
+  planOutlineStreaming = false,
+  onGenerateBacklog,
+  generateBacklogDisabled = false,
 }: BriefPanelProps) {
   const [open, setOpen] = useState(readBriefOpen)
+  const [tab, setTab] = useState<BriefTab>(readBriefTab)
 
   useEffect(() => {
     writeBriefOpen(open)
   }, [open])
+
+  useEffect(() => {
+    try {
+      localStorage.setItem(BRIEF_TAB_KEY, tab)
+    } catch {
+      /* ignore */
+    }
+  }, [tab])
 
   const preview =
     brief.trim().length > 0
@@ -59,7 +91,9 @@ export default memo(function BriefPanel({
           </span>
           {!open && (
             <span className="text-[11px] text-cat-overlay truncate font-normal normal-case">
-              {preview}
+              {tab === 'plan' && planOutline.trim()
+                ? planOutline.trim().replace(/\s+/g, ' ').slice(0, 120) + '…'
+                : preview}
             </span>
           )}
         </button>
@@ -74,23 +108,71 @@ export default memo(function BriefPanel({
       </div>
       {open && (
         <div className="p-4 space-y-2">
-          {autonomousMode && (
-            <p className="text-[11px] text-violet-300 bg-violet-950/25 border border-violet-500/30 rounded-lg px-3 py-2">
-              Autonomous mode — sprint will proceed with minimal prompts. Needs User stops are
-              capped per sprint.
-            </p>
+          <div className="flex gap-1 border-b border-cat-surface1 pb-2">
+            <button
+              type="button"
+              onClick={() => setTab('brief')}
+              className={`text-[11px] px-2 py-1 rounded ${tab === 'brief' ? 'bg-indigo-600/30 text-indigo-200' : 'text-cat-overlay hover:text-cat-subtext'}`}
+            >
+              Brief
+            </button>
+            <button
+              type="button"
+              onClick={() => setTab('plan')}
+              className={`text-[11px] px-2 py-1 rounded ${tab === 'plan' ? 'bg-violet-600/30 text-violet-200' : 'text-cat-overlay hover:text-cat-subtext'}`}
+            >
+              Plan
+              {planOutlineStreaming && (
+                <i className="fa-solid fa-spinner animate-spin ml-1 text-[9px]" />
+              )}
+            </button>
+          </div>
+          {tab === 'brief' ? (
+            <>
+              {autonomousMode && (
+                <p className="text-[11px] text-violet-300 bg-violet-950/25 border border-violet-500/30 rounded-lg px-3 py-2">
+                  Autonomous mode — sprint will proceed with minimal prompts. Needs User stops are
+                  capped per sprint.
+                </p>
+              )}
+              <p className="text-[11px] text-cat-overlay leading-relaxed">
+                Describe your project. Use Plan outline for a fast markdown plan, then generate
+                backlog cards when ready.
+              </p>
+              <textarea
+                value={brief}
+                onChange={(e) => onBriefChange(e.target.value)}
+                rows={8}
+                className="w-full min-h-[140px] bg-cat-base border border-cat-surface1 rounded-lg p-3 text-sm text-white focus:outline-none focus:border-indigo-500 resize-y font-mono"
+                placeholder="Describe your project goals, features, and constraints…"
+              />
+            </>
+          ) : (
+            <>
+              <p className="text-[11px] text-cat-overlay leading-relaxed">
+                Review or edit the PO plan outline. Click Generate backlog in the sidebar when
+                ready to create Kanban cards.
+              </p>
+              <textarea
+                value={planOutline}
+                onChange={(e) => onPlanOutlineChange?.(e.target.value)}
+                rows={12}
+                readOnly={planOutlineStreaming}
+                className="w-full min-h-[180px] bg-cat-base border border-cat-surface1 rounded-lg p-3 text-sm text-white focus:outline-none focus:border-violet-500 resize-y font-mono"
+                placeholder="Run Plan outline from the sidebar — markdown plan streams here…"
+              />
+              {onGenerateBacklog && (
+                <button
+                  type="button"
+                  disabled={generateBacklogDisabled || planOutlineStreaming || !planOutline.trim()}
+                  onClick={onGenerateBacklog}
+                  className="text-xs bg-violet-700 hover:bg-violet-600 disabled:opacity-50 text-white font-medium py-2 px-3 rounded-lg transition-colors"
+                >
+                  Generate backlog from plan
+                </button>
+              )}
+            </>
           )}
-          <p className="text-[11px] text-cat-overlay leading-relaxed">
-            Describe your project. Plan & Run automates PO → Dev → QA. Developer questions go to
-            Needs PO; user decisions go to Needs User.
-          </p>
-          <textarea
-            value={brief}
-            onChange={(e) => onBriefChange(e.target.value)}
-            rows={8}
-            className="w-full min-h-[140px] bg-cat-base border border-cat-surface1 rounded-lg p-3 text-sm text-white focus:outline-none focus:border-indigo-500 resize-y font-mono"
-            placeholder="Describe your project goals, features, and constraints…"
-          />
         </div>
       )}
     </div>

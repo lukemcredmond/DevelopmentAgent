@@ -10,22 +10,25 @@ from backend.services.workflow_settings import (
     get_last_sprint_summary,
     get_workflow_settings,
 )
-from backend.workspace.files import sync_virtual_filesystem_from_disk
+from backend.workspace.files import list_workspace_file_paths, sync_virtual_filesystem_from_disk
 
 
-def build_state_response() -> dict:
+def build_state_response(*, include_files: bool = True) -> dict:
     normalize_board_tasks()
-    file_list = sync_virtual_filesystem_from_disk()
+    file_paths = list_workspace_file_paths()
+    file_list = sync_virtual_filesystem_from_disk() if include_files else {}
     ws = get_workflow_settings()
     from backend.services.qdrant_auth import sanitize_workflow_settings_for_client
 
-    return {
+    response: dict = {
         "projectId": state.CURRENT_PROJECT_ID,
         "projectName": state.PROJECT_NAME,
         "brief": state.PROJECT_BRIEF,
+        "projectPlanOutline": state.PROJECT_PLAN_OUTLINE,
         "workspaceDir": state.WORKSPACE_DIR,
         "skillsDir": state.SKILLS_DIR,
         "board": state.SHARED_BOARD,
+        "filePaths": file_paths,
         "files": file_list,
         "logs": state.SYSTEM_LOGS,
         "availableSkills": scan_skills_directory(),
@@ -52,3 +55,4 @@ def build_state_response() -> dict:
         "activeAgentRun": get_active_run().to_dict() if get_active_run() else None,
         "pendingToolApprovals": list_pending_approvals(),
     }
+    return response

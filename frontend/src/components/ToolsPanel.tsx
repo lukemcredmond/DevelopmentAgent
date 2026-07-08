@@ -52,6 +52,7 @@ interface ToolsPanelProps {
   onRefreshState?: () => void
   onRefreshToolHistory?: () => void
   sseLive?: boolean
+  lastToolEventAt?: string | null
   brief?: string
   preferredSubTab?: ToolsSubTab
   workspaceDir?: string
@@ -169,6 +170,17 @@ function listBoardTasks(board: Board): Task[] {
   return tasks
 }
 
+function formatLastToolAgo(timestamp: string | null | undefined): string {
+  if (!timestamp) return 'never'
+  const parsed = Date.parse(timestamp.replace(' ', 'T'))
+  if (Number.isNaN(parsed)) return timestamp
+  const sec = Math.max(0, Math.floor((Date.now() - parsed) / 1000))
+  if (sec < 60) return `${sec}s ago`
+  const min = Math.floor(sec / 60)
+  if (min < 60) return `${min}m ago`
+  return `${Math.floor(min / 60)}h ago`
+}
+
 export default function ToolsPanel({
   toolEvents,
   terminalSessions = [],
@@ -180,6 +192,7 @@ export default function ToolsPanel({
   onRefreshState,
   onRefreshToolHistory,
   sseLive = true,
+  lastToolEventAt = null,
   brief = '',
   preferredSubTab,
   workspaceDir,
@@ -223,6 +236,15 @@ export default function ToolsPanel({
       onRefreshToolHistory?.()
     }
   }, [subTab, onRefreshToolHistory])
+
+  useEffect(() => {
+    if (subTab !== 'log' && !sprintRunning) return
+    if (!onRefreshToolHistory) return
+    const interval = window.setInterval(() => {
+      onRefreshToolHistory()
+    }, 15000)
+    return () => window.clearInterval(interval)
+  }, [subTab, sprintRunning, onRefreshToolHistory])
 
   useEffect(() => {
     if (subTab !== 'reference') return
@@ -531,6 +553,22 @@ export default function ToolsPanel({
           <p className="shrink-0 text-[9px] text-cat-overlay/90 px-4 py-1 border-b border-cat-surface1/40">
             Commands mentioned in agent text are not tool runs — check Auto QA filter or the task
             transcript.
+          </p>
+          <p className="shrink-0 text-[9px] px-4 py-1 border-b border-cat-surface1/40 flex flex-wrap gap-x-3 gap-y-0.5">
+            <span className={sseLive ? 'text-emerald-300/90' : 'text-rose-300/90'}>
+              SSE {sseLive ? 'live' : 'disconnected'}
+            </span>
+            <span className="text-cat-overlay">Events: {toolEvents.length}</span>
+            <span className="text-cat-overlay">Last tool: {formatLastToolAgo(lastToolEventAt)}</span>
+            {!sseLive && toolEvents.length === 0 && onRefreshToolHistory && (
+              <button
+                type="button"
+                onClick={() => onRefreshToolHistory()}
+                className="text-indigo-300 hover:text-indigo-200 underline"
+              >
+                Reload history
+              </button>
+            )}
           </p>
           <VirtualScrollList
             className="flex-1 min-h-0 p-3 font-mono text-[11px]"

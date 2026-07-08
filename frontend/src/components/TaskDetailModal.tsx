@@ -705,6 +705,14 @@ export default function TaskDetailModal({
                   </ul>
                 </div>
               )}
+              {safeTask.spikeReport && (
+                <div className="mt-2">
+                  <p className="text-[10px] text-cyan-200 font-semibold">Spike report</p>
+                  <p className="text-[11px] text-cat-subtext mt-1 whitespace-pre-wrap">
+                    {safeTask.spikeReport}
+                  </p>
+                </div>
+              )}
               {safeTask.refinementNotes && (
                 <p className="text-[11px] text-cat-subtext mt-2 whitespace-pre-wrap">
                   {safeTask.refinementNotes}

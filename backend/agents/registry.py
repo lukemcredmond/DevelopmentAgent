@@ -412,7 +412,7 @@ tool_add_backlog_tasks = Tool(
                         "priority": {"type": "number"},
                         "workType": {
                             "type": "string",
-                            "enum": ["planning", "implementation", "review", "qa", "user_action"],
+                            "enum": ["planning", "implementation", "review", "qa", "user_action", "spike"],
                         },
                         "requiresDev": {"type": "boolean"},
                         "requiresQa": {"type": "boolean"},

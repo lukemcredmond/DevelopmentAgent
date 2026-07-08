@@ -308,7 +308,7 @@ def normalize_task(task: Dict[str, Any]) -> Dict[str, Any]:
     if "subtaskEscapeCount" in task:
         task["subtaskEscapeCount"] = int(task["subtaskEscapeCount"])
     wt = str(task.get("workType") or "implementation").lower()
-    if wt not in ("planning", "implementation", "review", "qa", "user_action"):
+    if wt not in ("planning", "implementation", "review", "qa", "user_action", "spike"):
         wt = "implementation"
     task["workType"] = wt
     if "requiresDev" not in task:
@@ -333,7 +333,7 @@ def normalize_task(task: Dict[str, Any]) -> Dict[str, Any]:
             **({"taskId": str(ld["taskId"])} if ld.get("taskId") else {}),
         }
     status = str(task.get("refinementStatus") or "pending")
-    if status not in ("pending", "dev_reviewed", "po_updated", "ready", "blocked"):
+    if status not in ("pending", "dev_reviewed", "po_updated", "ready", "blocked", "spike_pending"):
         status = "pending"
     if "refinementStatus" in task or str(task.get("status", "")) == "Refinement":
         task["refinementStatus"] = status
@@ -353,6 +353,17 @@ def normalize_task(task: Dict[str, Any]) -> Dict[str, Any]:
         task["refinementNotes"] = coerce_task_text(task["refinementNotes"])
     if "refinementDevReady" in task:
         task["refinementDevReady"] = bool(task["refinementDevReady"])
+    if "needsSpike" in task:
+        task["needsSpike"] = bool(task["needsSpike"])
+    if task.get("spikeForTaskId") is not None:
+        task["spikeForTaskId"] = str(task["spikeForTaskId"])
+    spike_status = str(task.get("spikeStatus") or "").lower()
+    if spike_status in ("pending", "running", "complete"):
+        task["spikeStatus"] = spike_status
+    if task.get("spikeObjective") is not None:
+        task["spikeObjective"] = coerce_task_text(task["spikeObjective"])
+    if task.get("spikeReport") is not None:
+        task["spikeReport"] = coerce_task_text(task["spikeReport"])
     return task
 
 
@@ -641,11 +652,64 @@ def sort_refinement() -> None:
     refinement = state.SHARED_BOARD.get("Refinement", [])
     refinement.sort(
         key=lambda t: (
+            0 if t.get("workType") == "spike" else 1,
             t.get("executionOrder", 100),
             t.get("priority", 100),
             t.get("id", ""),
         )
     )
+
+
+def create_spike_task(parent_task: Dict[str, Any], objective: str) -> Dict[str, Any]:
+    """Create a linked spike card in Refinement for exploratory work."""
+    from backend.services.board_service import publish_board_update
+
+    objective_text = coerce_task_text(objective).strip() or "Technical exploration"
+    parent_id = str(parent_task["id"])
+    spike: Dict[str, Any] = {
+        "title": f"Spike: {objective_text[:72]}",
+        "description": objective_text,
+        "acceptanceCriteria": ["Spike report JSON with findings and recommendations"],
+        "workType": "spike",
+        "requiresDev": True,
+        "requiresQa": False,
+        "spikeForTaskId": parent_id,
+        "spikeStatus": "pending",
+        "spikeObjective": objective_text,
+        "status": "Refinement",
+        "createdBy": "po",
+    }
+    init_new_task(spike)
+    assign_unique_task_id(spike, existing_ids=all_task_ids())
+    init_refinement_fields(spike)
+    state.SHARED_BOARD.setdefault("Refinement", []).append(spike)
+
+    parent = find_task_by_id(parent_id)
+    if parent:
+        parent["needsSpike"] = True
+        parent["refinementStatus"] = "spike_pending"
+        parent["refinementDevReady"] = False
+
+    sort_refinement()
+    publish_board_update(parent_id, "Refinement", source="spike_created")
+    return spike
+
+
+def next_spike_task() -> Optional[Dict[str, Any]]:
+    """First pending spike card in Refinement."""
+    ws = get_workflow_settings()
+    if not ws.get("requireBacklogRefinement"):
+        return None
+    sort_refinement()
+    for task in state.SHARED_BOARD.get("Refinement", []):
+        normalize_task(task)
+        if task.get("workType") != "spike":
+            continue
+        if str(task.get("spikeStatus") or "pending") == "complete":
+            continue
+        if task_dependencies_met(task):
+            return task
+    return None
 
 
 def next_claimable_backlog_task() -> Optional[Dict[str, Any]]:
@@ -671,6 +735,10 @@ def next_refinement_task() -> Optional[Dict[str, Any]]:
         return None
     for task in state.SHARED_BOARD.get("Refinement", []):
         normalize_task(task)
+        if task.get("workType") == "spike":
+            continue
+        if task.get("refinementStatus") == "spike_pending":
+            continue
         if not task.get("requiresDev", True):
             continue
         if task.get("workType") == "planning":

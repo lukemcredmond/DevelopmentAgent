@@ -67,8 +67,10 @@ async function request<T>(
   return (await res.json()) as T
 }
 
-export async function fetchState(): Promise<AppState> {
-  return request<AppState>('/api/state')
+export async function fetchState(options?: { includeFiles?: boolean }): Promise<AppState> {
+  const includeFiles = options?.includeFiles !== false
+  const qs = includeFiles ? '' : '?includeFiles=false'
+  return request<AppState>(`/api/state${qs}`)
 }
 
 export async function clearLogs(): Promise<{ ok: boolean; logs: [] }> {
@@ -215,6 +217,22 @@ export async function clearAllTasks(): Promise<AppState> {
 
 export async function triggerPlan(payload: BriefPayload): Promise<AppState> {
   return request<AppState>('/api/plan', {
+    method: 'POST',
+    body: JSON.stringify(payload),
+  })
+}
+
+export async function triggerPlanOutline(payload: BriefPayload): Promise<AppState> {
+  return request<AppState>('/api/plan/outline', {
+    method: 'POST',
+    body: JSON.stringify(payload),
+  })
+}
+
+export async function triggerPlanBacklog(
+  payload: BriefPayload & { outline?: string },
+): Promise<AppState> {
+  return request<AppState>('/api/plan/backlog', {
     method: 'POST',
     body: JSON.stringify(payload),
   })

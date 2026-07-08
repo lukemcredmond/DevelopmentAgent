@@ -20,9 +20,11 @@ from backend.agents.task_context import (
     get_task_lane,
     increment_po_round_trips,
     init_new_task,
+    create_spike_task,
     next_claimable_backlog_task,
     next_po_planning_backlog_task,
     next_refinement_task,
+    next_spike_task,
     normalize_acceptance_criteria,
     normalize_task,
     publish_activity,
@@ -35,7 +37,7 @@ from backend.agents.task_context import (
     task_dependencies_met,
 )
 from backend.services.board_lanes import normalize_board_lanes
-from backend.services.board_service import append_backlog_tasks, move_board_stage, publish_board_update
+from backend.services.board_service import append_backlog_tasks, move_board_stage, publish_board_delta, publish_board_update
 from backend.services.brief_service import (
     PO_SMALLEST_TASKS_GUIDANCE,
     append_feature_to_brief,
@@ -925,6 +927,107 @@ def _simulate_qa(active_task: Dict[str, Any]) -> None:
         record_task_decision(active_task["id"], "QA Tester", "qa_fail", "Offline QA FAILED")
 
 
+def _append_po_backlog_from_output(po_output: str, existing: set[str]) -> int:
+    """Parse PO JSON array output and append new backlog tasks."""
+    if po_output == "SIMULATION_FALLBACK":
+        tasks = [
+            {"title": "Create core scaffold", "description": "Primary module structure.", "acceptanceCriteria": ["Entry point runs"]},
+            {"title": "Implement main feature", "description": "Deliver brief capability.", "acceptanceCriteria": ["Feature works end-to-end"]},
+        ]
+        count = _append_tasks(tasks)
+        add_system_log("Product Owner", "success", f"Added {count} feature(s) (offline).")
+        return count
+    if not po_output:
+        return 0
+    try:
+        parsed = extract_json_array_from_text(po_output)
+        new_tasks = [t for t in parsed if t.get("title") not in existing]
+        count = _append_tasks(new_tasks)
+        add_system_log("Product Owner", "success", f"PO created {count} new feature(s).")
+        return count
+    except (ValueError, json.JSONDecodeError) as e:
+        add_system_log("Product Owner", "error", f"Failed to parse PO output: {e}")
+        return 0
+
+
+def run_po_plan_outline(brief: str, ollama_url: str) -> str:
+    """Generate a markdown plan outline (phase 1) without creating backlog cards."""
+    from backend.services.events import publish_event
+    from backend.services.prompt_budget import truncate_brief
+
+    set_project_brief(brief, source="user")
+    agent_po.ollama_url = ollama_url
+    normalize_board_lanes(state.SHARED_BOARD)
+    ws = get_workflow_settings()
+    num_ctx = int(ws.get("numCtx") or 8192)
+    brief_text = truncate_brief(brief, num_ctx)
+    publish_event("plan_chunk", {"phase": "start"})
+    add_system_log("Product Owner", "info", "Generating project plan outline…")
+
+    outline = ""
+    try:
+        set_active_sprint_context(PLANNING_TASK_ID, "Product Owner")
+        outline = agent_po.execute_step(
+            "You are the Product Owner. Produce a concise markdown project plan ONLY — no JSON, no code.\n"
+            "Use these sections:\n"
+            "## Summary\n## Approach\n## Risks\n## Open questions\n## Proposed epics\n"
+            f"{build_dod_block()}\nProject brief:\n{brief_text}",
+            max_iterations=1,
+        )
+    finally:
+        clear_active_sprint_context()
+
+    if outline == "SIMULATION_FALLBACK":
+        outline = (
+            "## Summary\nOffline plan stub.\n\n## Approach\nScaffold core modules first.\n\n"
+            "## Risks\nUnknown integration points.\n\n## Open questions\n(none)\n\n"
+            "## Proposed epics\n- Core scaffold\n- Main feature\n"
+        )
+
+    state.PROJECT_PLAN_OUTLINE = outline
+    for block in outline.split("\n\n"):
+        stripped = block.strip()
+        if stripped:
+            publish_event("plan_chunk", {"chunk": stripped + "\n\n"})
+    publish_event("plan_chunk", {"phase": "done", "outline": outline})
+    add_system_log("Product Owner", "success", "Plan outline ready — review before generating backlog.")
+    save_current_project_state()
+    return outline
+
+
+def run_po_plan_backlog(brief: str, ollama_url: str, outline: Optional[str] = None) -> int:
+    """Convert an approved plan outline into backlog JSON tasks (phase 2)."""
+    set_project_brief(brief, source="user")
+    agent_po.ollama_url = ollama_url
+    normalize_board_lanes(state.SHARED_BOARD)
+    existing = existing_backlog_titles()
+    existing_set = set(existing)
+    existing_hint = ", ".join(existing) if existing else "(none yet)"
+    outline_text = coerce_task_text(outline or state.PROJECT_PLAN_OUTLINE or "").strip()
+    if not outline_text:
+        add_system_log("Product Owner", "warning", "No plan outline — run Plan outline first.")
+        return 0
+
+    add_system_log("Product Owner", "info", "Generating backlog from approved plan outline…")
+    po_output = ""
+    try:
+        set_active_sprint_context(PLANNING_TASK_ID, "Product Owner")
+        po_output = agent_po.execute_step(
+            f"{PO_SMALLEST_TASKS_GUIDANCE}\n\n"
+            "You are the Product Owner. Convert the approved plan outline into developer-ready backlog cards.\n"
+            "Reply with ONLY a JSON array. Each object must have: title, description, "
+            "acceptanceCriteria (string array), optional blockedBy, optional priority.\n"
+            f"Existing titles (do NOT duplicate): {existing_hint}\n"
+            f"{build_dod_block()}\nApproved plan outline:\n{outline_text}\n\n"
+            f"Project brief (context):\n{brief}",
+            max_iterations=1,
+        )
+    finally:
+        clear_active_sprint_context()
+
+    return _append_po_backlog_from_output(po_output, existing_set)
+
+
 def run_po_plan(brief: str, ollama_url: str) -> None:
     max_steps = int(get_workflow_settings().get("maxSprintSteps", 20))
     if state.SPRINT_CANCEL:
@@ -1147,6 +1250,21 @@ def _apply_refinement_dev_result(task: Dict[str, Any], result: str) -> bool:
     if isinstance(questions, str):
         questions = [questions]
     notes = coerce_task_text(obj.get("explorationNotes") or obj.get("exploration_notes") or "")
+    needs_spike = bool(obj.get("needsSpike") or obj.get("needs_spike"))
+    spike_objective = coerce_task_text(
+        obj.get("spikeObjective") or obj.get("spike_objective") or notes or ""
+    )
+    if needs_spike and spike_objective:
+        create_spike_task(task, spike_objective)
+        task["refinementRoundTrips"] = int(task.get("refinementRoundTrips") or 0) + 1
+        record_task_decision(
+            task["id"],
+            "Developer",
+            "refinement_spike",
+            f"Spike requested: {spike_objective[:120]}",
+            result[:500],
+        )
+        return True
     task["refinementDevReady"] = ready
     task["refinementQuestions"] = [
         coerce_task_text(q).strip() for q in questions if coerce_task_text(q).strip()
@@ -1186,7 +1304,9 @@ def _run_refinement_dev_review(active_task: Dict[str, Any], brief: str) -> None:
         "Do NOT use write_file, apply_patch, run_command, or git_commit.\n"
         "Reply with a JSON object:\n"
         '{"ready": true} when acceptance criteria are sufficient to implement, OR\n'
-        '{"ready": false, "questions": ["..."], "explorationNotes": "..."} when clarification is needed.\n'
+        '{"ready": false, "questions": ["..."], "explorationNotes": "..."} when clarification is needed, OR\n'
+        '{"ready": false, "needsSpike": true, "spikeObjective": "...", "explorationNotes": "..."} '
+        "when technical unknowns require a dedicated spike exploration first.\n"
         "If blocked after repeated rounds, use update_board to move to 'Needs PO'."
     )
     try:
@@ -1232,6 +1352,111 @@ def _run_refinement_dev_review(active_task: Dict[str, Any], brief: str) -> None:
                 agent="System",
                 lane="Needs PO",
             )
+        _check_stuck_and_escalate(task_id, lane_before)
+
+
+def _apply_spike_result(spike_task: Dict[str, Any], result: str) -> bool:
+    """Parse spike JSON and merge findings into the parent refinement card."""
+    obj = extract_json_object_from_text(result)
+    if not obj:
+        return False
+    findings = coerce_task_text(obj.get("findings") or "")
+    recommendations = coerce_task_text(obj.get("recommendations") or "")
+    open_questions = obj.get("openQuestions") or obj.get("open_questions") or []
+    if isinstance(open_questions, str):
+        open_questions = [open_questions]
+    report = {
+        "findings": findings,
+        "recommendations": recommendations,
+        "openQuestions": [coerce_task_text(q).strip() for q in open_questions if coerce_task_text(q).strip()],
+    }
+    spike_task["spikeReport"] = json.dumps(report, ensure_ascii=False)
+    spike_task["spikeStatus"] = "complete"
+    spike_task["refinementStatus"] = "ready"
+
+    parent_id = str(spike_task.get("spikeForTaskId") or "")
+    parent = find_task_by_id(parent_id) if parent_id else None
+    if not parent:
+        return True
+
+    report_block = (
+        f"## Spike findings\n{findings}\n\n## Recommendations\n{recommendations}".strip()
+    )
+    existing = coerce_task_text(parent.get("refinementNotes") or "")
+    parent["refinementNotes"] = f"{existing}\n\n{report_block}".strip() if existing else report_block
+    if report["openQuestions"]:
+        parent["refinementQuestions"] = report["openQuestions"]
+    parent["needsSpike"] = False
+    parent["refinementStatus"] = "pending"
+    parent["refinementDevReady"] = False
+    record_task_decision(
+        parent_id,
+        "Developer",
+        "spike_complete",
+        f"Spike complete — {len(report['openQuestions'])} open question(s)",
+        result[:500],
+    )
+    return True
+
+
+def _run_spike_dev(active_task: Dict[str, Any], brief: str) -> None:
+    task_id = active_task["id"]
+    parent_id = str(active_task.get("spikeForTaskId") or "")
+    lane_before = get_task_lane(task_id) or "Refinement"
+    objective = coerce_task_text(active_task.get("spikeObjective") or active_task.get("description") or "")
+    set_active_sprint_context(task_id, "Developer")
+    state.REFINEMENT_MODE = True
+    add_system_log("Developer", "info", f"Spike exploration for '{active_task['title']}'…")
+    parent = find_task_by_id(parent_id) if parent_id else None
+    parent_block = ""
+    if parent:
+        parent_block = (
+            f"\nParent refinement card: {parent.get('title')}\n"
+            f"Acceptance criteria:\n"
+            + "\n".join(f"- {c}" for c in (parent.get("acceptanceCriteria") or []))
+            + "\n"
+        )
+    prompt = (
+        build_task_prompt(active_task, brief)
+        + parent_block
+        + f"\nSPIKE OBJECTIVE:\n{objective}\n"
+        + "\nSPIKE ONLY — read-only exploration (read_file, grep, glob_file_search, search_code, "
+        "git_status, git_diff). Do NOT modify files or run destructive commands.\n"
+        "Reply with ONLY a JSON object:\n"
+        '{"findings": "...", "recommendations": "...", "openQuestions": ["..."]}'
+    )
+    try:
+        with state.STATE_LOCK:
+            task = find_task_by_id(task_id)
+            if task:
+                task["spikeStatus"] = "running"
+        result = agent_dev.execute_step(prompt, max_iterations=_llm_iterations())
+    finally:
+        state.REFINEMENT_MODE = False
+
+    with state.STATE_LOCK:
+        spike = find_task_by_id(task_id)
+        if not spike:
+            return
+        if result == "SIMULATION_FALLBACK":
+            spike["spikeReport"] = json.dumps(
+                {"findings": "Offline spike simulation.", "recommendations": "", "openQuestions": []}
+            )
+            spike["spikeStatus"] = "complete"
+            if parent_id:
+                parent_task = find_task_by_id(parent_id)
+                if parent_task:
+                    parent_task["needsSpike"] = False
+                    parent_task["refinementStatus"] = "pending"
+        else:
+            record_task_decision(task_id, "Developer", "spike_dev", result[:500], result)
+            if not _apply_spike_result(spike, result):
+                add_system_log(
+                    "Developer",
+                    "warning",
+                    f"Spike incomplete for '{spike['title']}' — missing JSON",
+                )
+        publish_board_update(task_id, source="spike_complete")
         _check_stuck_and_escalate(task_id, lane_before)
 
 
@@ -1615,13 +1840,18 @@ def run_sprint_step(brief: str, ollama_url: str) -> None:
             active_task = dict(state.SHARED_BOARD["In Progress"][0])
             handler = "dev"
         elif get_workflow_settings().get("requireBacklogRefinement") and state.SHARED_BOARD.get("Refinement"):
-            task = next_refinement_task()
-            if task:
-                active_task = dict(task)
-                status = str(task.get("refinementStatus") or "pending")
-                handler = "refinement_po" if status == "dev_reviewed" else "refinement_dev"
+            spike = next_spike_task()
+            if spike:
+                active_task = dict(spike)
+                handler = "spike_dev"
             else:
-                handler = "idle"
+                task = next_refinement_task()
+                if task:
+                    active_task = dict(task)
+                    status = str(task.get("refinementStatus") or "pending")
+                    handler = "refinement_po" if status == "dev_reviewed" else "refinement_dev"
+                else:
+                    handler = "idle"
         elif state.SHARED_BOARD.get("Backlog"):
             task = next_claimable_backlog_task()
             if task:
@@ -1688,6 +1918,8 @@ def run_sprint_step(brief: str, ollama_url: str) -> None:
             _run_developer_step(active_task, brief)
         elif handler == "refinement_dev" and active_task:
             _run_refinement_dev_review(active_task, brief)
+        elif handler == "spike_dev" and active_task:
+            _run_spike_dev(active_task, brief)
         elif handler == "refinement_po" and active_task:
             _run_refinement_po_update(active_task, brief)
         elif handler == "blocked":
@@ -1706,7 +1938,10 @@ def run_sprint_step(brief: str, ollama_url: str) -> None:
         state.SPRINT_STEP_STARTED_AT = None
         with state.STATE_LOCK:
             save_current_project_state()
-            publish_board_update(source="sprint_step")
+            if active_task and active_task.get("id"):
+                publish_board_delta(str(active_task["id"]), source="sprint_step")
+            else:
+                publish_board_update(source="sprint_step")
 
 
 def _build_sprint_summary(steps: int, status: str = "completed") -> Dict[str, Any]:

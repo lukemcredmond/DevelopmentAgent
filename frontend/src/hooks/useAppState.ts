@@ -19,11 +19,13 @@ import type {
   AppState,
   BackgroundTerminalSession,
   Board,
+  BoardLane,
   CommandDiagnostic,
+  IndexProgress,
   PendingToolApproval,
   SprintProgress,
-  IndexProgress,
   SystemLog,
+  Task,
   ToolExecutionEvent,
 } from '../types'
 import { EMPTY_BOARD, hasSprintWork } from '../types'
@@ -50,9 +52,46 @@ const defaultState: AppState = {
   projectsList: [],
 }
 
+function mergeBoardDelta(board: Board, payload: { taskId: string; lane: string; task: Task }): Board {
+  const next: Board = { ...board }
+  for (const lane of Object.keys(next) as BoardLane[]) {
+    next[lane] = (next[lane] ?? []).filter((t: Task) => String(t.id) !== String(payload.taskId))
+  }
+  const targetLane = payload.lane as BoardLane
+  if (!next[targetLane]) {
+    next[targetLane] = []
+  }
+  const laneTasks = next[targetLane] ?? []
+  const existingIdx = laneTasks.findIndex((t: Task) => String(t.id) === String(payload.taskId))
+  if (existingIdx >= 0) {
+    const updated = [...laneTasks]
+    updated[existingIdx] = payload.task
+    next[targetLane] = updated
+  } else {
+    next[targetLane] = [...laneTasks, payload.task]
+  }
+  return next
+}
+
 function patchBoardFromEvent(data: unknown, prev: AppState): AppState | null {
   if (!data || typeof data !== 'object') return null
-  const payload = data as { board?: Board }
+  const payload = data as {
+    board?: Board
+    delta?: boolean
+    task?: Task
+    taskId?: string
+    lane?: string
+  }
+  if (payload.delta && payload.task && payload.taskId && payload.lane) {
+    return {
+      ...prev,
+      board: mergeBoardDelta(prev.board, {
+        taskId: String(payload.taskId),
+        lane: String(payload.lane),
+        task: payload.task,
+      }),
+    }
+  }
   if (!payload.board) return null
   return { ...prev, board: payload.board }
 }
@@ -283,13 +322,18 @@ export function useAppState() {
   const [toolStartTick, setToolStartTick] = useState(0)
   const [sprintProgress, setSprintProgress] = useState<SprintProgress | null>(null)
   const [indexProgress, setIndexProgress] = useState<IndexProgress | null>(null)
+  const [planOutline, setPlanOutline] = useState('')
+  const [planOutlineStreaming, setPlanOutlineStreaming] = useState(false)
   const liveActivityRef = useRef<ActivityEvent[]>([])
   const activityClearedAtRef = useRef<string | null>(null)
   const lastProjectIdRef = useRef<string>(defaultState.projectId)
   const boardRef = useRef<Board>(defaultState.board)
   const displayRunTimerRef = useRef<number | null>(null)
   const sprintRefreshDebounceRef = useRef<number | null>(null)
+  const activitySyncDebounceRef = useRef<number | null>(null)
+  const toolHistoryDebounceRef = useRef<number | null>(null)
   const [sseLive, setSseLive] = useState(true)
+  const [lastToolEventAt, setLastToolEventAt] = useState<string | null>(null)
 
   const scheduleDisplayRunClear = useCallback(() => {
     if (displayRunTimerRef.current) {
@@ -322,6 +366,19 @@ export function useAppState() {
       setActivityEvents(buildActivityEvents(board))
     },
     [buildActivityEvents],
+  )
+
+  const debouncedSyncActivityFromBoard = useCallback(
+    (board: Board) => {
+      if (activitySyncDebounceRef.current) {
+        window.clearTimeout(activitySyncDebounceRef.current)
+      }
+      activitySyncDebounceRef.current = window.setTimeout(() => {
+        activitySyncDebounceRef.current = null
+        syncActivityFromBoard(board)
+      }, 1500)
+    },
+    [syncActivityFromBoard],
   )
 
   const refreshPendingTools = useCallback(async () => {
@@ -388,6 +445,16 @@ export function useAppState() {
     }
   }, [])
 
+  const debouncedRefreshToolHistory = useCallback(() => {
+    if (toolHistoryDebounceRef.current) {
+      window.clearTimeout(toolHistoryDebounceRef.current)
+    }
+    toolHistoryDebounceRef.current = window.setTimeout(() => {
+      toolHistoryDebounceRef.current = null
+      void refreshToolHistory()
+    }, 300)
+  }, [refreshToolHistory])
+
   const clearLogs = useCallback(async () => {
     try {
       await clearLogsApi()
@@ -404,10 +471,17 @@ export function useAppState() {
     setActivityWasCleared(true)
   }, [])
 
-  const refresh = useCallback(async () => {
+  const refresh = useCallback(async (options?: { includeFiles?: boolean }) => {
     try {
-      const data = await fetchState()
-      setState(data)
+      const includeFiles = options?.includeFiles !== false
+      const data = await fetchState({ includeFiles })
+      setState((prev) => ({
+        ...data,
+        files: includeFiles ? data.files : prev.files,
+      }))
+      if (data.projectPlanOutline != null) {
+        setPlanOutline(String(data.projectPlanOutline))
+      }
       syncActivityFromBoard(data.board)
       setActiveRun(data.activeAgentRun ? mapAgentRun(data.activeAgentRun as unknown as Record<string, unknown>) : null)
       setPendingApprovals(data.pendingToolApprovals ?? [])
@@ -424,6 +498,9 @@ export function useAppState() {
   const applyState = useCallback(
     (data: AppState) => {
       setState(data)
+      if (data.projectPlanOutline != null) {
+        setPlanOutline(String(data.projectPlanOutline))
+      }
       syncActivityFromBoard(data.board)
       setActiveRun(data.activeAgentRun ? mapAgentRun(data.activeAgentRun as unknown as Record<string, unknown>) : null)
       setPendingApprovals(data.pendingToolApprovals ?? [])
@@ -445,7 +522,7 @@ export function useAppState() {
     }
     sprintRefreshDebounceRef.current = window.setTimeout(() => {
       sprintRefreshDebounceRef.current = null
-      void refresh()
+      void refresh({ includeFiles: false })
     }, 500)
   }, [refresh])
 
@@ -487,6 +564,8 @@ export function useAppState() {
   appendActivityRef.current = appendActivity
   const syncActivityFromBoardRef = useRef(syncActivityFromBoard)
   syncActivityFromBoardRef.current = syncActivityFromBoard
+  const debouncedSyncActivityFromBoardRef = useRef(debouncedSyncActivityFromBoard)
+  debouncedSyncActivityFromBoardRef.current = debouncedSyncActivityFromBoard
   const refreshPendingToolsRef = useRef(refreshPendingTools)
   refreshPendingToolsRef.current = refreshPendingTools
   const refreshPendingApprovalsRef = useRef(refreshPendingApprovals)
@@ -495,6 +574,8 @@ export function useAppState() {
   scheduleDisplayRunClearRef.current = scheduleDisplayRunClear
   const debouncedRefreshAfterSprintRef = useRef(debouncedRefreshAfterSprint)
   debouncedRefreshAfterSprintRef.current = debouncedRefreshAfterSprint
+  const debouncedRefreshToolHistoryRef = useRef(debouncedRefreshToolHistory)
+  debouncedRefreshToolHistoryRef.current = debouncedRefreshToolHistory
 
   useEffect(() => {
     void refresh()
@@ -508,17 +589,20 @@ export function useAppState() {
       if (event.type === 'state' && event.data) {
         const data = event.data as AppState
         setState(data)
+        if (data.projectPlanOutline != null) {
+          setPlanOutline(String(data.projectPlanOutline))
+        }
         syncActivityFromBoardRef.current(data.board)
       } else if (event.type === 'log' && event.data) {
         appendLogRef.current(event.data as SystemLog)
       } else if (event.type === 'board') {
         setState((prev) => {
           const next = patchBoardFromEvent(event.data, prev) ?? prev
-          syncActivityFromBoardRef.current(next.board)
+          debouncedSyncActivityFromBoardRef.current(next.board)
           return next
         })
       } else if (event.type === 'files') {
-        void refreshRef.current()
+        void refreshRef.current({ includeFiles: true })
       } else if (event.type === 'sprint') {
         debouncedRefreshAfterSprintRef.current()
         setActiveRun(null)
@@ -543,6 +627,19 @@ export function useAppState() {
         if (d.phase === 'done' || d.phase === 'error') {
           window.setTimeout(() => setIndexProgress(null), 4000)
         }
+      } else if (event.type === 'plan_chunk' && event.data) {
+        const d = event.data as Record<string, unknown>
+        if (d.phase === 'start') {
+          setPlanOutlineStreaming(true)
+          setPlanOutline('')
+        } else if (d.phase === 'done') {
+          setPlanOutlineStreaming(false)
+          if (d.outline != null) {
+            setPlanOutline(String(d.outline))
+          }
+        } else if (d.chunk != null) {
+          setPlanOutline((prev) => prev + String(d.chunk))
+        }
       } else if (event.type === 'activity' && event.data) {
         appendActivityRef.current(event.data as ActivityEvent)
       } else if (event.type === 'pending_tool' && event.data) {
@@ -561,6 +658,7 @@ export function useAppState() {
         }
       } else if (event.type === 'tool_start' && event.data) {
         const payload = event.data as Record<string, unknown>
+        setLastToolEventAt(String(payload.timestamp ?? new Date().toISOString()))
         setToolEvents((prev) => [...prev, mapToolStart(payload)].slice(-200))
         setToolStartTick((t) => t + 1)
         const toolName = payload.toolName != null ? String(payload.toolName) : null
@@ -581,6 +679,7 @@ export function useAppState() {
         })
       } else if (event.type === 'tool_end' && event.data) {
         const payload = event.data as Record<string, unknown>
+        setLastToolEventAt(String(payload.timestamp ?? new Date().toISOString()))
         const entry = {
           toolName: String(payload.toolName ?? '?'),
           toolSuccess: payload.toolSuccess !== false,
@@ -597,6 +696,7 @@ export function useAppState() {
         setDisplayRun((prev) => mergeRun(prev))
         setCurrentTool(null)
         setToolEvents((prev) => applyToolEnd(prev, payload))
+        debouncedRefreshToolHistoryRef.current()
       } else if (event.type === 'tool_approval_required' && event.data) {
         const approval = mapApprovalFromEvent(event.data as Record<string, unknown>)
         setPendingApprovals((prev) =>
@@ -667,6 +767,12 @@ export function useAppState() {
       if (sprintRefreshDebounceRef.current) {
         window.clearTimeout(sprintRefreshDebounceRef.current)
       }
+      if (activitySyncDebounceRef.current) {
+        window.clearTimeout(activitySyncDebounceRef.current)
+      }
+      if (toolHistoryDebounceRef.current) {
+        window.clearTimeout(toolHistoryDebounceRef.current)
+      }
     }
   }, [])
 
@@ -701,12 +807,16 @@ export function useAppState() {
     clearActivity,
     activityWasCleared,
     sseLive,
+    lastToolEventAt,
     toolFailureCount,
     toolRunningCount,
     toolStartTick,
     sprintProgress,
     setSprintProgress,
     indexProgress,
+    planOutline,
+    setPlanOutline,
+    planOutlineStreaming,
   }
 }
 

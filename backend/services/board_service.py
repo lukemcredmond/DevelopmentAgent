@@ -6,6 +6,7 @@ from backend.agents.task_context import (
     assign_unique_task_id,
     coerce_task_text,
     find_task_by_id,
+    get_task_lane,
     init_new_task,
     init_refinement_fields,
     normalize_acceptance_criteria,
@@ -36,6 +37,33 @@ def publish_board_update(
             "lane": lane,
             "source": source,
             "taskTitle": task.get("title") if task else None,
+        },
+    )
+
+
+def publish_board_delta(
+    task_id: Optional[str] = None,
+    lane: Optional[str] = None,
+    source: str = "sprint_step",
+) -> None:
+    """Push a single-task delta for sprint steps to avoid full board payloads."""
+    if not task_id:
+        publish_board_update(source=source)
+        return
+    task = find_task_by_id(task_id)
+    if not task:
+        publish_board_update(task_id, lane, source=source)
+        return
+    target_lane = lane or get_task_lane(task_id) or str(task.get("status") or "Backlog")
+    publish_event(
+        "board",
+        {
+            "delta": True,
+            "taskId": task_id,
+            "lane": target_lane,
+            "task": dict(task),
+            "source": source,
+            "taskTitle": task.get("title"),
         },
     )
 

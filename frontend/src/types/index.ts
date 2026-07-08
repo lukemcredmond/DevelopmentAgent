@@ -87,18 +87,29 @@ export interface Task {
   needsUserCooldownUntilStep?: number | null
   needsUserDuplicate?: boolean
   poRoundTrips?: number
-  workType?: 'planning' | 'implementation' | 'review' | 'qa' | 'user_action'
+  workType?: 'planning' | 'implementation' | 'review' | 'qa' | 'user_action' | 'spike'
   requiresDev?: boolean
   requiresQa?: boolean
   createdBy?: 'po' | 'user' | 'split'
   lastDiagnosis?: TaskDiagnosis
   lastCommandDiagnostics?: CommandDiagnostic[]
-  refinementStatus?: 'pending' | 'dev_reviewed' | 'po_updated' | 'ready' | 'blocked'
+  refinementStatus?:
+    | 'pending'
+    | 'dev_reviewed'
+    | 'po_updated'
+    | 'ready'
+    | 'blocked'
+    | 'spike_pending'
   refinementComplete?: boolean
   refinementRoundTrips?: number
   refinementQuestions?: string[]
   refinementNotes?: string | null
   refinementDevReady?: boolean
+  needsSpike?: boolean
+  spikeForTaskId?: string | null
+  spikeStatus?: 'pending' | 'running' | 'complete'
+  spikeObjective?: string | null
+  spikeReport?: string | null
   parentTaskId?: string | null
   subtaskIds?: string[]
   executionOrder?: number
@@ -464,9 +475,11 @@ export interface AppState {
   projectId: string
   projectName: string
   brief: string
+  projectPlanOutline?: string
   workspaceDir: string
   skillsDir: string
   board: Board
+  filePaths?: string[]
   files: Record<string, string>
   logs: SystemLog[]
   availableSkills: Skill[]
@@ -712,6 +725,7 @@ export type AppEventType =
   | 'terminal_stream'
   | 'sprint_progress'
   | 'index_progress'
+  | 'plan_chunk'
   | 'connected'
 
 export interface AppEvent {

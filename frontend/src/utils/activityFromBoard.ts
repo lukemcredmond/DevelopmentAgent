@@ -2,6 +2,9 @@ import type { ActivityEvent, Board, Task, TaskDecision, TaskTranscriptEntry } fr
 import { formatTaskText } from './taskFormat'
 
 const MAX_ACTIVITY = 200
+/** Tail scan per task when hydrating activity from board (full history stays in task modal). */
+export const MAX_TRANSCRIPT_TAIL = 30
+export const MAX_DECISION_TAIL = 10
 
 function activityKey(event: ActivityEvent): string {
   return `${event.timestamp}|${event.taskId}|${event.kind}|${event.content.slice(0, 80)}`
@@ -40,10 +43,18 @@ export function hydrateActivityFromBoard(board: Board): ActivityEvent[] {
   const events: ActivityEvent[] = []
   for (const lane of Object.values(board)) {
     for (const task of lane ?? []) {
-      for (const entry of task.transcript ?? []) {
+      const transcript = task.transcript ?? []
+      const transcriptTail =
+        transcript.length > MAX_TRANSCRIPT_TAIL
+          ? transcript.slice(-MAX_TRANSCRIPT_TAIL)
+          : transcript
+      for (const entry of transcriptTail) {
         events.push(transcriptToEvent(task, entry))
       }
-      for (const decision of task.decisions ?? []) {
+      const decisions = task.decisions ?? []
+      const decisionTail =
+        decisions.length > MAX_DECISION_TAIL ? decisions.slice(-MAX_DECISION_TAIL) : decisions
+      for (const decision of decisionTail) {
         events.push(decisionToEvent(task, decision))
       }
     }

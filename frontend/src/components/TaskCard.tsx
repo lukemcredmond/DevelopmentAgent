@@ -83,6 +83,16 @@ export default function TaskCard({
               No tests
             </span>
           )}
+          {task.workType === 'spike' && (
+            <span className="text-[9px] bg-cyan-950/50 text-cyan-300 px-1 py-0.5 rounded" title="Spike exploration">
+              Spike
+            </span>
+          )}
+          {task.needsSpike && task.workType !== 'spike' && (
+            <span className="text-[9px] bg-cyan-950/50 text-cyan-300 px-1 py-0.5 rounded" title="Awaiting spike">
+              Spike pending
+            </span>
+          )}
           {task.workType === 'planning' || task.requiresDev === false ? (
             <span className="text-[9px] bg-violet-950/50 text-violet-300 px-1 py-0.5 rounded" title="PO-only card">
               PO

@@ -149,6 +149,21 @@ def scan_indexable_workspace_files() -> tuple[Dict[str, str], int]:
     return file_list, skipped
 
 
+def list_workspace_file_paths() -> list[str]:
+    """Return relative workspace file paths without reading file contents."""
+    paths: list[str] = []
+    if not os.path.exists(state.WORKSPACE_DIR):
+        return paths
+    for root, _dirs, files_in_dir in os.walk(state.WORKSPACE_DIR):
+        for file in files_in_dir:
+            rel_path = os.path.relpath(os.path.join(root, file), state.WORKSPACE_DIR)
+            rel_norm = rel_path.replace("\\", "/")
+            if not _path_should_skip_index(rel_norm):
+                paths.append(rel_norm)
+    paths.sort()
+    return paths
+
+
 def sync_virtual_filesystem_from_disk() -> Dict[str, str]:
     """Scans the physical workspace and syncs VIRTUAL_FILESYSTEM."""
     file_list: Dict[str, str] = {}

@@ -35,6 +35,8 @@ SPRINT_NEEDS_USER_COUNT: int = 0
 
 REFINEMENT_MODE: bool = False
 
+PROJECT_PLAN_OUTLINE: str = ""
+
 # Paths read via read_file during the current sprint agent step (safe_path -> content).
 STEP_FILE_READS: Dict[str, str] = {}
 

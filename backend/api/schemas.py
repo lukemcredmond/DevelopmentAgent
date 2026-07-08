@@ -9,6 +9,12 @@ class BriefPayload(BaseModel):
     context_files: List[str] = Field(default_factory=list)
 
 
+class PlanBacklogPayload(BaseModel):
+    brief: str
+    ollama_url: str = "http://localhost:11434"
+    outline: Optional[str] = None
+
+
 class ConfigPayload(BaseModel):
     projectName: str
     workspaceDir: str

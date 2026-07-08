@@ -35,6 +35,8 @@ interface SidebarProps {
   onOpenSkillModal: (agent: AgentId) => void
   onRemoveSkill: (agent: AgentId, skill: string) => void
   onPlan: () => void
+  onGenerateBacklog?: () => void
+  planOutlineReady?: boolean
   onPlanAndRun: () => void
   onStep: () => void
   onEscalateNeedsUserToPo?: () => void
@@ -89,6 +91,8 @@ export default memo(function Sidebar({
   onOpenSkillModal,
   onRemoveSkill,
   onPlan,
+  onGenerateBacklog,
+  planOutlineReady = false,
   onPlanAndRun,
   onStep,
   onEscalateNeedsUserToPo,
@@ -396,6 +400,26 @@ export default memo(function Sidebar({
           <div className="space-y-2 pt-1">
             <button
               type="button"
+              onClick={onPlan}
+              disabled={loading || !brief.trim()}
+              className="w-full bg-indigo-600 hover:bg-indigo-500 disabled:opacity-50 text-white font-medium py-2 rounded-lg text-xs transition-colors flex items-center justify-center gap-2"
+            >
+              <i className="fa-solid fa-map" />
+              Plan outline (fast)
+            </button>
+            {onGenerateBacklog && (
+              <button
+                type="button"
+                onClick={onGenerateBacklog}
+                disabled={loading || !brief.trim() || !planOutlineReady}
+                className="w-full bg-violet-700 hover:bg-violet-600 disabled:opacity-50 text-white font-medium py-2 rounded-lg text-xs transition-colors flex items-center justify-center gap-2"
+              >
+                <i className="fa-solid fa-layer-group" />
+                Generate backlog from plan
+              </button>
+            )}
+            <button
+              type="button"
               onClick={onPlanAndRun}
               disabled={loading || !brief.trim()}
               className="w-full bg-violet-600 hover:bg-violet-500 disabled:opacity-50 text-white font-medium py-2 rounded-lg text-xs transition-colors flex items-center justify-center gap-2"
@@ -406,15 +430,6 @@ export default memo(function Sidebar({
                 <i className="fa-solid fa-rocket" />
               )}
               Plan & Run (Brief → PO → Sprint)
-            </button>
-            <button
-              type="button"
-              onClick={onPlan}
-              disabled={loading || !brief.trim()}
-              className="w-full bg-indigo-600 hover:bg-indigo-500 disabled:opacity-50 text-white font-medium py-2 rounded-lg text-xs transition-colors flex items-center justify-center gap-2"
-            >
-              <i className="fa-solid fa-layer-group" />
-              Send Brief to PO Only
             </button>
             <button
               type="button"

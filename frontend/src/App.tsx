@@ -30,7 +30,8 @@ import {
   resolveUserQuestion,
   injectToolEvidence,
   splitTask,
-  triggerPlan,
+  triggerPlanOutline,
+  triggerPlanBacklog,
   triggerStep,
   updateConfig,
   updateTask,
@@ -154,6 +155,10 @@ export default function App() {
     clearActivity,
     activityWasCleared,
     sseLive,
+    lastToolEventAt,
+    planOutline,
+    setPlanOutline,
+    planOutlineStreaming,
   } = useAppState()
 
   const [planRunActive, setPlanRunActive] = useState(false)
@@ -356,6 +361,19 @@ export default function App() {
     setLocalFiles(state.files)
     setChatMessages(chatRecordsToUi(state.chatMessages))
   }, [state.projectId])
+
+  useEffect(() => {
+    setLocalFiles(state.files)
+  }, [state.files])
+
+  useEffect(() => {
+    if (!showWorkspace) return
+    const pathCount = state.filePaths?.length ?? 0
+    const loadedCount = Object.keys(state.files).length
+    if (pathCount > 0 && loadedCount >= pathCount) return
+    if (pathCount === 0 && loadedCount > 0) return
+    void refresh({ includeFiles: true })
+  }, [showWorkspace, state.filePaths?.length, state.files, refresh])
 
   useEffect(() => {
     const key = `allhands-chat-draft-${state.projectId}`
@@ -652,9 +670,21 @@ export default function App() {
         }
         onPlan={() =>
           void withLoading(async () =>
-            handleState(await triggerPlan({ brief, ollama_url: ollamaUrl })),
+            handleState(await triggerPlanOutline({ brief, ollama_url: ollamaUrl })),
           )
         }
+        onGenerateBacklog={() =>
+          void withLoading(async () =>
+            handleState(
+              await triggerPlanBacklog({
+                brief,
+                ollama_url: ollamaUrl,
+                outline: planOutline,
+              }),
+            ),
+          )
+        }
+        planOutlineReady={planOutline.trim().length > 0}
         onPlanAndRun={() =>
           void withLoading(async () => {
             setPlanRunActive(true)
@@ -785,6 +815,21 @@ export default function App() {
           onBriefChange={setBrief}
           onOpenManualTask={() => setShowManualTask(true)}
           autonomousMode={state.workflowSettings?.autonomousMode ?? false}
+          planOutline={planOutline}
+          onPlanOutlineChange={setPlanOutline}
+          planOutlineStreaming={planOutlineStreaming}
+          onGenerateBacklog={() =>
+            void withLoading(async () =>
+              handleState(
+                await triggerPlanBacklog({
+                  brief,
+                  ollama_url: ollamaUrl,
+                  outline: planOutline,
+                }),
+              ),
+            )
+          }
+          generateBacklogDisabled={loading || !brief.trim()}
         />
 
         <KanbanToggleBar
@@ -994,6 +1039,7 @@ export default function App() {
                       onRefreshState={handleRefreshState}
                       onRefreshToolHistory={handleRefreshToolHistory}
                       sseLive={sseLive}
+                      lastToolEventAt={lastToolEventAt}
                       brief={brief}
                       preferredSubTab={toolsPreferredSubTab}
                       workspaceDir={state.workspaceDir}

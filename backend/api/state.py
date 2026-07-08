@@ -1,4 +1,4 @@
-from fastapi import APIRouter
+from fastapi import APIRouter, Query
 from fastapi.responses import StreamingResponse
 
 from backend import state
@@ -10,9 +10,9 @@ router = APIRouter()
 
 
 @router.get("/api/state")
-def get_state():
+def get_state(include_files: bool = Query(True, alias="includeFiles")):
     with state.STATE_LOCK:
-        return build_state_response()
+        return build_state_response(include_files=include_files)
 
 
 @router.get("/api/events")
