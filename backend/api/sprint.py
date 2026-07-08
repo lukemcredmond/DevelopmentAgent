@@ -1,11 +1,12 @@
-from fastapi import APIRouter
+from fastapi import APIRouter, HTTPException
 
 from backend import state
 from backend.api.helpers import build_state_response
-from backend.api.schemas import BriefPayload, PlanBacklogPayload, SprintRunPayload, WorkflowSettingsPayload
+from backend.api.schemas import BriefPayload, PlanBacklogPayload, RunInProgressPayload, SprintRunPayload, WorkflowSettingsPayload
 from backend.services.board_lanes import normalize_board_lanes
 from backend.services.sprint_service import (
     run_auto_sprint,
+    run_in_progress_step,
     run_plan_and_run,
     run_po_plan,
     run_po_plan_backlog,
@@ -44,6 +45,16 @@ def trigger_po_plan_backlog(payload: PlanBacklogPayload):
 def trigger_agent_turn(payload: BriefPayload):
     with state.STATE_LOCK:
         run_sprint_step(payload.brief, payload.ollama_url)
+    return build_state_response()
+
+
+@router.post("/api/sprint/run-in-progress")
+def trigger_run_in_progress(payload: RunInProgressPayload):
+    with state.STATE_LOCK:
+        try:
+            run_in_progress_step(payload.brief, payload.ollama_url, task_id=payload.task_id)
+        except ValueError as exc:
+            raise HTTPException(status_code=409, detail=str(exc)) from exc
     return build_state_response()
 
 

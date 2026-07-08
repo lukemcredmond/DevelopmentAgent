@@ -11,6 +11,8 @@ Local multi-agent AI development workspace with Kanban board, Ollama-powered age
 - [Ollama](https://ollama.com/) (optional; offline simulation fallbacks exist when Ollama is unreachable)
 - Git (optional; used for auto-commit on Done and the Git panel)
 - [Flutter SDK](https://docs.flutter.dev/get-started/install) on `PATH` (optional; required for Dev/QA agents to run `flutter analyze` via the `run_command` tool — point workspace at your Flutter project root where `pubspec.yaml` lives)
+- [Qdrant](https://qdrant.tech/) (optional; semantic codebase search — `docker run -p 6333:6333 qdrant/qdrant`)
+- [Graphify](https://github.com/graphify/graphify) CLI on `PATH` (optional; structural code graph for the `graph_query` agent tool)
 
 Recommended models:
 
@@ -85,9 +87,24 @@ The core loop is **Brief → PO → Dev → QA → Done**, with escalation lanes
 | Goal | Action |
 |------|--------|
 | Fully automated | Enter brief → **Plan & Run** (PO decomposes brief, then sprint runs) |
+| Fast planning | **Plan outline** → **Generate backlog from plan** → **Plan & Run** or manual sprint |
 | Manual control | **Send Brief to PO Only** → **Execute Sprint Step** (one agent tick per click) |
+| Dev on active cards | **Run In Progress (N)** — runs Dev on In Progress only; skips Needs PO / Backlog / Refinement |
+| Pull ready work | **Claim ready cards** — moves unblocked Backlog items to In Progress |
 | Continuous delivery | Enable **Auto Sprint** checkbox (re-runs sprint until blocked or max steps) |
 | Add scope mid-project | **Add Feature** → appends to brief and sends to PO |
+
+### Refinement lane & spikes
+
+When **Require backlog refinement** is ON, new Backlog cards can enter **Refinement** before implementation. Dev and PO agents iterate on `refinementNotes`; spike cards (`workType: spike`) produce a `spikeReport` for research tasks.
+
+**Prioritize implementation over refinement** (default ON) makes sprint steps pick **Backlog → In Progress** before more Refinement work when both lanes have cards.
+
+From task detail: **Move to In Progress** (optional **Skip remaining refinement**) starts implementation early.
+
+### Subtasks & dependencies
+
+Cards support `parentTaskId`, `subtaskIds`, and `blockedBy` (task IDs that must reach Done first). When blockers complete, **dependency outcome rollup** copies summaries onto the parent card (`dependencyOutcomes`) and injects them into Dev/PO prompts. Missing or invalid blockers show a warning in task detail.
 
 ### Step-by-step
 
@@ -102,18 +119,27 @@ The core loop is **Brief → PO → Dev → QA → Done**, with escalation lanes
 | Setting | Default | Purpose |
 |---------|---------|---------|
 | Require backlog approval | Off | New PO stories land in **Pending Approval** until you approve |
+| Require backlog refinement | Off | Backlog cards enter **Refinement** before In Progress |
+| Prioritize implementation over refinement | On | Sprint picks Backlog before Refinement when both have work |
 | Require code review | Off | Dev → **Code Review** (CR agent) → QA when ON |
 | Definition of Done | Empty | Project checklist injected into PO / Dev / QA prompts |
 | Max sprint steps | 20 | Cap for Auto Sprint and Plan & Run |
 | Max LLM iterations/step | 8 | Tool-call loop limit per agent turn |
+| Max refinement round trips | 3 | Dev/PO refinement loop cap before Needs PO |
+| Enable semantic search | On | Qdrant + Ollama embeddings for codebase search |
+| Qdrant URL / API key | localhost:6333 | Vector store for semantic search |
+| Embed model | nomic-embed-text | Ollama model for embeddings |
+| Require tool approval | Off | Pause for user approve/deny on write_file and run_command |
+| Pause sprint on Needs User | Off | When ON, sprint idle until Needs User cards are resolved |
+| Subtask limits | configurable | Max subtasks per parent; escape stuck subtask loops via task detail |
 
 ### Kanban lanes
 
 **Always visible:** Backlog → In Progress → Needs PO → Needs User → QA → Done
 
-**Conditional (when toggles ON):** Pending Approval, Code Review
+**Conditional (when toggles ON):** Pending Approval, Code Review, **Refinement**
 
-**Task card fields:** `acceptanceCriteria`, `priority` (lower = sooner), `blockedBy` (task IDs that must be Done first), `qaFailure`, `userQuestion`, plus `files`, `decisions`, and `transcript` for audit.
+**Task card fields:** `acceptanceCriteria`, `priority` (lower = sooner), `blockedBy`, `refinementNotes`, `spikeReport`, `dependencyOutcomes`, `parentTaskId`, `subtaskIds`, `qaEvidence`, `userResolutions`, `qaFailure`, `userQuestion`, plus `files`, `decisions`, and `transcript` for audit.
 
 ```mermaid
 flowchart TB
@@ -145,8 +171,8 @@ flowchart TB
 - **Load Workspace** — switch projects; Export / Import / Delete
 - **Project Config** — workspace dir, skills dir, Ollama URL, per-agent models
 - **Agent Team & Skills** — assign markdown skills from `global_skills/` to each agent
-- **Workflow** — toggles, DoD editor, step limits, notification badges, brief changelog
-- **Project Brief** — Plan & Run, Send Brief to PO, Execute Sprint Step, Auto Sprint
+- **Workflow** — toggles, DoD editor, semantic search / Qdrant, step limits, notification badges, brief changelog; link to **Memory** tab
+- **Sprint** — Plan outline, Generate backlog, Plan & Run, Execute Sprint Step, **Run In Progress**, **Claim ready cards**, Auto Sprint
 
 ### Kanban board
 
@@ -160,14 +186,21 @@ flowchart TB
 - View/edit title, description, acceptance criteria
 - **Approve** (when in Pending Approval)
 - **Resolve & Return to Dev** (when in Needs User)
+- **Move to In Progress** / **Skip remaining refinement** (Backlog or Refinement)
+- **Run dev step on this card** (In Progress — skips Needs PO)
+- Missing blocker warnings when `blockedBy` references invalid or incomplete tasks
 - Associated files, agent decisions, full transcript timeline
-- QA failure panel with reason and output
+- QA failure panel with reason and output; inject command output for next sprint step
 
 ### Bottom panels
 
 | Tab | Purpose |
 |-----|---------|
 | Console | Persisted agent system logs (survive restart) |
+| Model | LLM debug timeline — prompts, tool calls, `memoriesUsed`, `decisionsIncluded` |
+| Tools | Tool execution log, manual runs, replay, terminal sessions |
+| Activity | Board / sprint activity stream (debounced SSE sync) |
+| Memory | View, add, edit, delete project memories (injected into agent prompts) |
 | Chat | Streaming composer with agent selector and @file context |
 | Terminal | xterm.js panel — run commands in workspace via API |
 | Search | Workspace file content search (Ctrl+Shift+F style) |
@@ -195,20 +228,24 @@ After **Plan & Run** or **Auto Sprint**, a sprint summary modal shows steps run,
 
 ## Features
 
+**Recent capabilities:** Refinement lane & spikes, claim-ready backlog, Run In Progress sprint action, Memory bottom tab, Qdrant semantic search, Graphify structural graph, cross-agent project memory, model debug timeline, dependency outcome rollup, board delta SSE.
+
 | Area | Capabilities |
 |------|----------------|
 | **Agents** | PO, Developer, Code Reviewer (optional gate), QA — Ollama LLM + tools |
-| **Workflow** | Plan & Run, optional approval/review gates, DoD, brief changelog, sprint summary |
-| **Kanban** | Dynamic lanes, drag-drop, priority, dependencies, AC, QA failure tracking |
+| **Workflow** | Plan outline → backlog, Plan & Run, refinement/spikes, optional approval/review gates, DoD, brief changelog, sprint summary |
+| **Kanban** | Dynamic lanes, drag-drop, priority, dependencies, subtasks, AC, QA failure tracking, claim-ready |
 | **IDE** | Monaco editor, file tree, diff view, workspace search, tabs |
 | **Chat** | Streaming SSE composer, @file context injection, per-agent selection |
-| **Sprint** | Manual step, auto-sprint with cancel, configurable step/iteration limits |
+| **Sprint** | Manual step, Run In Progress (dev-only), auto-sprint with cancel, configurable step/iteration limits |
 | **Git** | Status panel, agent git tools, auto-commit on Done |
 | **Terminal** | Sandboxed command runner in workspace (localhost-only) |
 | **Skills** | Global library scan, per-agent assignment, copy into workspace |
-| **Memory** | TF-IDF + Ollama embeddings for agent context retrieval |
+| **Memory** | Project notes (`__project__` scope), cross-agent semantic search, TF-IDF + Ollama embeddings; Memory tab UI |
+| **Search** | Qdrant semantic codebase search, optional Graphify `graph_query` tool, reindex hook |
+| **Debug** | Model panel — memories and decisions shown per LLM call |
 | **Projects** | Multi-project SQLite storage, export/import zip, delete |
-| **Live updates** | SSE channel for board, files, logs, sprint events |
+| **Live updates** | SSE channel for board deltas, files, logs, sprint events, debounced activity |
 
 ---
 
@@ -222,6 +259,12 @@ Each task in `board_state` JSON supports:
 | `acceptanceCriteria` | string[] | PO-defined; QA validates against these |
 | `priority` | number | Lower = higher priority in Backlog |
 | `blockedBy` | string[] | Task IDs that must reach Done first |
+| `dependencyOutcomes` | array | Summaries rolled up from completed blockers |
+| `parentTaskId`, `subtaskIds` | string | Subtask hierarchy |
+| `refinementNotes` | string | PO/Dev refinement thread |
+| `spikeReport` | string | Output from spike (`workType: spike`) cards |
+| `qaEvidence` | object | Playbook run results, commands, pass/fail |
+| `userResolutions` | array | Prior Needs User Q&A (condensed in prompts) |
 | `qaFailure` | object \| null | `{ reason, output, timestamp }` after QA reject |
 | `userQuestion` | string \| null | Why the card is in Needs User |
 | `files` | array | `{ path, action }` — files touched for this card |
@@ -260,7 +303,10 @@ Returns the full workspace snapshot used by the frontend:
 | Method | Path | Description |
 |--------|------|-------------|
 | POST | `/api/plan` | Send brief to PO (create backlog features) |
+| POST | `/api/plan/outline` | Fast PO plan outline only |
+| POST | `/api/plan/backlog` | Generate backlog from stored outline |
 | POST | `/api/step` | Execute one sprint tick |
+| POST | `/api/sprint/run-in-progress` | Dev step on In Progress only (optional `taskId`; 409 if empty) |
 | POST | `/api/sprint/plan-and-run` | PO plan + auto-sprint in one call |
 | POST | `/api/sprint/run` | Auto-sprint until blocked or max steps |
 | POST | `/api/sprint/cancel` | Cancel running auto-sprint |
@@ -272,12 +318,24 @@ Returns the full workspace snapshot used by the frontend:
 | Method | Path | Description |
 |--------|------|-------------|
 | POST | `/api/tasks/manual` | Add feature → brief + PO |
-| POST | `/api/tasks/move` | Move card between lanes |
+| POST | `/api/tasks/move` | Move card between lanes (`skipRefinement` optional) |
+| POST | `/api/board/claim-ready` | Claim unblocked Backlog cards → In Progress |
 | PATCH | `/api/tasks/{id}` | Update title, description, AC, etc. |
 | DELETE | `/api/tasks/{id}` | Delete a task |
 | POST | `/api/tasks/{id}/approve` | Pending Approval → Backlog |
 | POST | `/api/tasks/{id}/resolve-user` | Needs User → In Progress |
 | POST | `/api/tasks/reorder` | Reorder Backlog by priority |
+
+### Memory & search
+
+| Method | Path | Description |
+|--------|------|-------------|
+| GET | `/api/memory` | List project memories |
+| POST | `/api/memory` | Create project note |
+| PATCH | `/api/memory/{id}` | Update memory content/category |
+| DELETE | `/api/memory/{id}` | Delete a memory entry |
+| GET | `/api/search/semantic` | Semantic codebase search (Qdrant) |
+| POST | `/api/search/reindex` | Reindex workspace into Qdrant |
 
 ### Chat
 
@@ -318,6 +376,8 @@ Returns the full workspace snapshot used by the frontend:
 | GET | `/api/git/status` | Git branch and file status |
 | POST | `/api/terminal/run` | Run command in workspace |
 | GET | `/api/ollama/health` | Ollama connectivity and models |
+| GET | `/api/ollama/logs` | LLM call log (model debug) |
+| GET | `/api/llm-logs/timeline` | Per-task model debug timeline |
 
 See `backend/api/` for implementation details.
 

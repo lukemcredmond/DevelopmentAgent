@@ -65,6 +65,17 @@ export interface UserResolution {
   targetLane: string
 }
 
+export interface DependencyOutcome {
+  taskId: string
+  title: string
+  completedAt: string
+  summary: string
+  decisions?: TaskDecision[]
+  files?: string[]
+  refinementNotes?: string
+  spikeReport?: string
+}
+
 export interface Task {
   id: string
   title: string
@@ -76,6 +87,7 @@ export interface Task {
   acceptanceCriteria?: string[]
   priority?: number
   blockedBy?: string[]
+  dependencyOutcomes?: DependencyOutcome[]
   relatedTaskIds?: string[]
   gitCommit?: TaskGitCommit | null
   qaFailure?: QaFailure | null

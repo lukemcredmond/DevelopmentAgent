@@ -97,9 +97,9 @@ def move_board_stage(task_id: str, target_lane: str) -> str:
             state.SHARED_BOARD[target_lane] = []
         state.SHARED_BOARD[target_lane].append(active_task)
         if target_lane == "Done":
-            from backend.services.subtask_service import on_subtask_completed
+            from backend.agents.task_context import on_task_completed
 
-            on_subtask_completed(active_task["id"])
+            on_task_completed(active_task["id"])
         record_task_decision(
             active_task["id"],
             state.ACTIVE_SPRINT_AGENT or "System",

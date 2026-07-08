@@ -63,7 +63,7 @@ def test_build_user_content_includes_memory_block(mock_memory_prop):
     initialize()
     from backend.agents.registry import agent_dev
 
-    agent_dev.memory.search = lambda role, query, limit=3, project_id=None: [
+    agent_dev.memory.search = lambda role, query, limit=3, project_id=None, **kwargs: [
         {"category": "fix_pattern", "content": "write_file auth.js succeeded"}
     ]
     content = agent_dev._build_user_content("Implement login endpoint")

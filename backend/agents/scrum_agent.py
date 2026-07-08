@@ -121,6 +121,7 @@ class ScrumAgent:
             user_prompt,
             limit=3,
             project_id=project_id,
+            include_all_agents=True,
         )
         self._last_memories_used = related_memories
         memory_context = ""

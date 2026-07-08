@@ -147,6 +147,7 @@ interface TaskDetailModalProps {
   ) => void | Promise<void>
   onRelatedTaskClick?: (taskId: string) => void
   getTaskTitle?: (taskId: string) => string | undefined
+  taskExistsOnBoard?: (taskId: string) => boolean
   ollamaUrl?: string
   onDiagnose?: (taskId: string) => void | Promise<void>
   onRetryStep?: (taskId: string, mode: 'same' | 'optimized' | 'fix_and_verify') => void | Promise<void>
@@ -160,6 +161,7 @@ interface TaskDetailModalProps {
     fromLane: BoardLane,
     skipRefinement?: boolean,
   ) => void | Promise<void>
+  onRunInProgressStep?: (taskId: string) => void | Promise<void>
 }
 
 function CollapsibleSection({
@@ -251,6 +253,7 @@ export default function TaskDetailModal({
   onInjectToolEvidence,
   onRelatedTaskClick,
   getTaskTitle,
+  taskExistsOnBoard,
   onDiagnose,
   onRetryStep,
   onViewFileDiff,
@@ -259,6 +262,7 @@ export default function TaskDetailModal({
   requireBacklogRefinement = false,
   onEscapeSubtasks,
   onMoveToInProgress,
+  onRunInProgressStep,
 }: TaskDetailModalProps) {
   const [title, setTitle] = useState('')
   const [description, setDescription] = useState('')
@@ -277,6 +281,7 @@ export default function TaskDetailModal({
   const [showPriorAnswers, setShowPriorAnswers] = useState(false)
   const [skipRemainingRefinement, setSkipRemainingRefinement] = useState(false)
   const [movingToProgress, setMovingToProgress] = useState(false)
+  const [runningDevStep, setRunningDevStep] = useState(false)
 
   useEffect(() => {
     if (!task) return
@@ -328,6 +333,10 @@ export default function TaskDetailModal({
   const visibleTranscript = showAllTranscript ? filteredTranscript : filteredTranscript.slice(0, 50)
   const acList = formatAcceptanceCriteria(safeTask.acceptanceCriteria)
   const blockedBy = safeTask.blockedBy ?? []
+  const missingBlockers = blockedBy.filter(
+    (id) => taskExistsOnBoard && !taskExistsOnBoard(id),
+  )
+  const dependencyOutcomes = safeTask.dependencyOutcomes ?? []
   const subtaskIds = safeTask.subtaskIds ?? []
   const relatedTaskIds = safeTask.relatedTaskIds ?? []
   const diagnosis = safeTask.lastDiagnosis
@@ -473,6 +482,28 @@ export default function TaskDetailModal({
                 className="w-full bg-emerald-600/40 hover:bg-emerald-600/60 disabled:opacity-50 text-emerald-100 text-xs py-2 px-3 rounded-lg border border-emerald-500/30"
               >
                 {movingToProgress ? 'Moving…' : 'Move to In Progress'}
+              </button>
+            </div>
+          )}
+
+          {taskLane === 'In Progress' && onRunInProgressStep && (
+            <div className="bg-teal-950/20 border border-teal-500/30 rounded-lg p-3 space-y-2">
+              <h4 className="text-xs font-bold text-teal-200">Run dev step</h4>
+              <p className="text-[10px] text-cat-subtext">
+                Run the Developer agent on this card now. Skips Needs PO, Backlog, and Refinement.
+              </p>
+              <button
+                type="button"
+                disabled={runningDevStep || sprintRunning}
+                onClick={() => {
+                  setRunningDevStep(true)
+                  void Promise.resolve(onRunInProgressStep(task.id)).finally(() =>
+                    setRunningDevStep(false),
+                  )
+                }}
+                className="w-full bg-teal-600/40 hover:bg-teal-600/60 disabled:opacity-50 text-teal-100 text-xs py-2 px-3 rounded-lg border border-teal-500/30"
+              >
+                {runningDevStep ? 'Running…' : 'Run dev step on this card'}
               </button>
             </div>
           )}
@@ -651,7 +682,42 @@ export default function TaskDetailModal({
                 Blocked By
               </h4>
               <p className="text-[11px] font-mono text-orange-300">{blockedBy.join(', ')}</p>
+              {missingBlockers.length > 0 && (
+                <p className="text-[11px] text-rose-300 mt-1">
+                  Missing blocker ID(s): {missingBlockers.join(', ')} — this card may never unblock
+                  until you remove or fix these references.
+                </p>
+              )}
             </div>
+          )}
+
+          {dependencyOutcomes.length > 0 && (
+            <CollapsibleSection title="Completed dependency outcomes" badge={dependencyOutcomes.length}>
+              <ul className="space-y-2 text-[11px] text-cat-subtext">
+                {dependencyOutcomes.map((outcome) => (
+                  <li
+                    key={outcome.taskId}
+                    className="border border-cat-surface1 rounded p-2 bg-cat-base/40"
+                  >
+                    <p className="text-white font-mono text-[10px]">
+                      {outcome.taskId} · {outcome.title}
+                      {outcome.completedAt ? ` · ${outcome.completedAt}` : ''}
+                    </p>
+                    <p className="mt-1 whitespace-pre-wrap">{outcome.summary}</p>
+                    {outcome.files && outcome.files.length > 0 && (
+                      <p className="mt-1 text-indigo-300/90 font-mono text-[10px]">
+                        Files: {outcome.files.join(', ')}
+                      </p>
+                    )}
+                    {outcome.refinementNotes && (
+                      <p className="mt-1 text-violet-200/90 whitespace-pre-wrap">
+                        {outcome.refinementNotes}
+                      </p>
+                    )}
+                  </li>
+                ))}
+              </ul>
+            </CollapsibleSection>
           )}
 
           {(subtaskIds.length > 0 || safeTask.parentTaskId) && (

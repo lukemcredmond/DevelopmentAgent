@@ -21,6 +21,7 @@ from backend.workspace.files import (
     write_workspace_file,
 )
 from backend.storage.code_index import format_semantic_search_results
+from backend.services.graphify_service import run_graph_query
 from backend.workspace.web_search import web_search
 
 agent_po = ScrumAgent(
@@ -342,6 +343,22 @@ tool_semantic = Tool(
     func=lambda query, limit=8: format_semantic_search_results(query, limit=int(limit or 8)),
 )
 
+tool_graph_query = Tool(
+    name="graph_query",
+    description=(
+        "Query the Graphify structural code graph (imports, call paths, modules). "
+        "Complements semantic_search — use for architecture and how components connect."
+    ),
+    parameters={
+        "type": "object",
+        "properties": {
+            "query": {"type": "string"},
+        },
+        "required": ["query"],
+    },
+    func=lambda query: run_graph_query(str(query or "")),
+)
+
 tool_delete = Tool(
     name="delete_file",
     description="Delete a file from the workspace. Requires tool approval when enabled.",
@@ -560,6 +577,7 @@ def configure_agent_tools(ws: dict | None = None) -> None:
     agent_po.registry.register(tool_glob)
     if enable_semantic:
         agent_po.registry.register(tool_semantic)
+        agent_po.registry.register(tool_graph_query)
     if enable_web:
         agent_po.registry.register(tool_web_search)
 
@@ -575,6 +593,7 @@ def configure_agent_tools(ws: dict | None = None) -> None:
         agent_dev.registry.register(tool_git_diff)
         if enable_semantic:
             agent_dev.registry.register(tool_semantic)
+            agent_dev.registry.register(tool_graph_query)
         if enable_web:
             agent_dev.registry.register(tool_web_search)
     else:
@@ -592,6 +611,7 @@ def configure_agent_tools(ws: dict | None = None) -> None:
         agent_dev.registry.register(tool_git_commit)
         if enable_semantic:
             agent_dev.registry.register(tool_semantic)
+            agent_dev.registry.register(tool_graph_query)
         if enable_web:
             agent_dev.registry.register(tool_web_search)
 
@@ -604,6 +624,7 @@ def configure_agent_tools(ws: dict | None = None) -> None:
     agent_cr.registry.register(tool_search)
     if enable_semantic:
         agent_cr.registry.register(tool_semantic)
+        agent_cr.registry.register(tool_graph_query)
     if enable_web:
         agent_cr.registry.register(tool_web_search)
 
@@ -617,6 +638,7 @@ def configure_agent_tools(ws: dict | None = None) -> None:
     agent_qa.registry.register(tool_board)
     if enable_semantic:
         agent_qa.registry.register(tool_semantic)
+        agent_qa.registry.register(tool_graph_query)
     if enable_web:
         agent_qa.registry.register(tool_web_search)
 

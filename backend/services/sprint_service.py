@@ -487,9 +487,20 @@ def _inject_sprint_context(
         active_task,
         max_chars=semantic_sprint_context_max_chars(num_ctx),
     )
-    file_budget = max(1000, total_budget - len(semantic_block)) if semantic_block else total_budget
+    graph_block = ""
+    try:
+        from backend.services.graphify_service import build_graphify_sprint_context, graphify_status
+
+        if graphify_status().get("available") or graphify_status().get("reportExists"):
+            graph_block = build_graphify_sprint_context(
+                active_task,
+                max_chars=min(2500, semantic_sprint_context_max_chars(num_ctx) // 2),
+            )
+    except Exception:
+        graph_block = ""
+    file_budget = max(1000, total_budget - len(semantic_block) - len(graph_block)) if (semantic_block or graph_block) else total_budget
     file_block, file_paths = build_sprint_file_context(active_task, max_chars=file_budget)
-    context_block = "".join(part for part in (semantic_block, file_block) if part)
+    context_block = "".join(part for part in (semantic_block, graph_block, file_block) if part)
     paths = list(dict.fromkeys([*sem_paths, *file_paths]))
     if paths:
         if semantic_block and file_block:
@@ -1980,6 +1991,60 @@ def run_sprint_step(brief: str, ollama_url: str) -> None:
                 publish_board_delta(str(active_task["id"]), source="sprint_step")
             else:
                 publish_board_update(source="sprint_step")
+
+
+def run_in_progress_step(
+    brief: str,
+    ollama_url: str,
+    task_id: Optional[str] = None,
+) -> None:
+    """Run Dev on an In Progress card only — skips Needs PO, Backlog, and Refinement."""
+    from backend.services.logs import add_system_log
+
+    set_project_brief(brief, source="user")
+    agent_dev.ollama_url = ollama_url
+    agent_po.ollama_url = ollama_url
+    agent_qa.ollama_url = ollama_url
+    agent_cr.ollama_url = ollama_url
+
+    active_task: Optional[Dict[str, Any]] = None
+    with state.STATE_LOCK:
+        normalize_board_lanes(state.SHARED_BOARD)
+        in_progress = list(state.SHARED_BOARD.get("In Progress", []))
+        if task_id:
+            needle = str(task_id)
+            if not _task_in_lane(needle, "In Progress"):
+                raise ValueError(f"Task '{needle}' is not in In Progress")
+            active_task = find_task_by_id(needle)
+        elif in_progress:
+            sorted_tasks = sorted(
+                in_progress,
+                key=lambda t: (t.get("priority") if isinstance(t.get("priority"), (int, float)) else 100, str(t.get("id", ""))),
+            )
+            active_task = dict(sorted_tasks[0])
+        else:
+            raise ValueError("No cards in In Progress")
+
+    if not active_task:
+        raise ValueError("In Progress task not found")
+
+    tid = str(active_task.get("id", ""))
+    title = str(active_task.get("title", tid))
+    add_system_log(
+        "System",
+        "info",
+        f"Sprint handler: dev (in-progress-only) — '{title}' (In Progress)",
+    )
+    _emit_sprint_step_progress("dev", active_task)
+
+    try:
+        _run_developer_step(dict(active_task), brief)
+    finally:
+        clear_active_sprint_context()
+        state.SPRINT_STEP_STARTED_AT = None
+        with state.STATE_LOCK:
+            save_current_project_state()
+            publish_board_delta(tid, source="sprint_step")
 
 
 def _build_sprint_summary(steps: int, status: str = "completed") -> Dict[str, Any]:

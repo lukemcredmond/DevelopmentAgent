@@ -21,6 +21,13 @@ def test_memory_crud_round_trip():
     assert any("Test project fact" in e.get("content", "") for e in entries)
 
     mem_id = next(e["id"] for e in entries if "Test project fact" in e.get("content", ""))
+    patched = client.patch(
+        f"/api/memory/{mem_id}",
+        json={"content": "Updated project fact for agents", "category": "user_note"},
+    )
+    assert patched.status_code == 200
+    assert patched.json().get("entry", {}).get("content") == "Updated project fact for agents"
+
     deleted = client.delete(f"/api/memory/{mem_id}")
     assert deleted.status_code == 200
 

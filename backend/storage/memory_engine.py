@@ -137,6 +137,22 @@ class SemanticMemoryEngine:
             return agent_id
         return f"{pid}:{agent_id}"
 
+    def _project_shared_scope(self, project_id: Optional[str] = None) -> str:
+        from backend import state
+
+        pid = project_id or state.CURRENT_PROJECT_ID or "default-proj"
+        return f"{pid}:__project__"
+
+    def save_project_note(
+        self,
+        content: str,
+        category: str = "user_note",
+        *,
+        project_id: Optional[str] = None,
+    ) -> None:
+        """Save a note visible to all agents via shared project scope."""
+        self.save("__project__", content, category, project_id=project_id)
+
     def save(
         self,
         agent_id: str,
@@ -173,15 +189,35 @@ class SemanticMemoryEngine:
         limit: int = 3,
         *,
         project_id: Optional[str] = None,
+        include_all_agents: bool = False,
     ) -> List[Dict[str, Any]]:
-        scoped = self._scoped_agent_id(agent_id, project_id)
+        from backend import state
+
+        pid = project_id or state.CURRENT_PROJECT_ID or "default-proj"
+        scoped = self._scoped_agent_id(agent_id, pid)
+        shared = self._project_shared_scope(pid)
+        prefix = f"{pid}:"
+
         with sqlite3.connect(self.db_path) as conn:
             conn.row_factory = sqlite3.Row
             cursor = conn.cursor()
-            cursor.execute(
-                "SELECT id, category, content, embedding, timestamp FROM memories WHERE agent_id = ?",
-                (scoped,),
-            )
+            if include_all_agents:
+                cursor.execute(
+                    """
+                    SELECT id, category, content, embedding, timestamp, agent_id
+                    FROM memories WHERE agent_id LIKE ?
+                    """,
+                    (f"{prefix}%",),
+                )
+            else:
+                cursor.execute(
+                    """
+                    SELECT id, category, content, embedding, timestamp, agent_id
+                    FROM memories
+                    WHERE agent_id IN (?, ?)
+                    """,
+                    (scoped, shared),
+                )
             records = cursor.fetchall()
 
         if not records:
@@ -190,13 +226,26 @@ class SemanticMemoryEngine:
                 conn.row_factory = sqlite3.Row
                 cursor = conn.cursor()
                 cursor.execute(
-                    "SELECT id, category, content, embedding, timestamp FROM memories WHERE agent_id = ?",
+                    """
+                    SELECT id, category, content, embedding, timestamp, agent_id
+                    FROM memories WHERE agent_id = ?
+                    """,
                     (legacy,),
                 )
                 records = cursor.fetchall()
 
         if not records:
             return []
+
+        seen_content: set[str] = set()
+        deduped: List[sqlite3.Row] = []
+        for record in records:
+            key = str(record["content"] or "")[:200]
+            if key in seen_content:
+                continue
+            seen_content.add(key)
+            deduped.append(record)
+        records = deduped
 
         query_embedding = self._embed_ollama(query)
         if query_embedding:
@@ -211,12 +260,15 @@ class SemanticMemoryEngine:
                 if not isinstance(stored, list):
                     continue
                 score = self._cosine_similarity(query_embedding, stored)
+                agent_scope = str(record["agent_id"] or "")
+                display_agent = agent_scope.split(":")[-1] if ":" in agent_scope else agent_scope
                 scored.append(
                     {
                         "id": record["id"],
                         "category": record["category"],
                         "content": record["content"],
                         "timestamp": record["timestamp"],
+                        "agent": display_agent,
                         "score": score,
                     }
                 )
@@ -224,7 +276,10 @@ class SemanticMemoryEngine:
                 scored.sort(key=lambda x: x["score"], reverse=True)
                 return scored[:limit]
 
-        return self._tfidf_search(query, records, limit)
+        tfidf = self._tfidf_search(query, records, limit)
+        for item in tfidf:
+            item.setdefault("agent", agent_id.split(":")[-1] if ":" in agent_id else agent_id)
+        return tfidf
 
     def list_for_project(
         self,
@@ -292,5 +347,52 @@ class SemanticMemoryEngine:
             if not agent_id.startswith(prefix) and ":" in agent_id:
                 return False
             cursor.execute("DELETE FROM memories WHERE id = ?", (memory_id,))
+            conn.commit()
+            return cursor.rowcount > 0
+
+    def update(
+        self,
+        memory_id: str,
+        content: str,
+        *,
+        category: Optional[str] = None,
+        project_id: Optional[str] = None,
+    ) -> bool:
+        from backend import state
+
+        pid = project_id or state.CURRENT_PROJECT_ID or "default-proj"
+        prefix = f"{pid}:"
+        text = content.strip()
+        if not text:
+            return False
+        embedding = self._embed_ollama(text)
+        embedding_json = json.dumps(embedding) if embedding else None
+        with sqlite3.connect(self.db_path) as conn:
+            cursor = conn.cursor()
+            cursor.execute("SELECT agent_id FROM memories WHERE id = ?", (memory_id,))
+            row = cursor.fetchone()
+            if not row:
+                return False
+            agent_id = str(row[0] or "")
+            if not agent_id.startswith(prefix) and ":" in agent_id:
+                return False
+            if category is not None:
+                cursor.execute(
+                    """
+                    UPDATE memories
+                    SET content = ?, category = ?, embedding = ?, timestamp = CURRENT_TIMESTAMP
+                    WHERE id = ?
+                    """,
+                    (text, category, embedding_json, memory_id),
+                )
+            else:
+                cursor.execute(
+                    """
+                    UPDATE memories
+                    SET content = ?, embedding = ?, timestamp = CURRENT_TIMESTAMP
+                    WHERE id = ?
+                    """,
+                    (text, embedding_json, memory_id),
+                )
             conn.commit()
             return cursor.rowcount > 0

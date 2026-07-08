@@ -39,8 +39,11 @@ interface SidebarProps {
   planOutlineReady?: boolean
   onPlanAndRun: () => void
   onStep: () => void
+  onRunInProgress?: () => void
+  inProgressCount?: number
   onClaimReadyCards?: () => void
   claimableBacklogCount?: number
+  onOpenMemoryTab?: () => void
   onEscalateNeedsUserToPo?: () => void
   onClearAllTasks: () => void
   onReset: () => void
@@ -97,8 +100,11 @@ export default memo(function Sidebar({
   planOutlineReady = false,
   onPlanAndRun,
   onStep,
+  onRunInProgress,
+  inProgressCount = 0,
   onClaimReadyCards,
   claimableBacklogCount = 0,
+  onOpenMemoryTab,
   onEscalateNeedsUserToPo,
   onClearAllTasks,
   onReset,
@@ -391,6 +397,7 @@ export default memo(function Sidebar({
           onSettingsChange={onWorkflowSettingsChange}
           ollamaUrl={ollamaUrl}
           indexProgress={indexProgress}
+          onOpenMemoryTab={onOpenMemoryTab}
         />
 
         <div className="bg-cat-surface0 p-3 rounded-xl border border-cat-surface1 space-y-3">
@@ -448,6 +455,21 @@ export default memo(function Sidebar({
               )}
               Execute Sprint Step
             </button>
+            {onRunInProgress && inProgressCount > 0 && (
+              <button
+                type="button"
+                onClick={onRunInProgress}
+                disabled={loading || sprintRunning}
+                className="w-full bg-teal-600 hover:bg-teal-500 disabled:opacity-50 text-white font-medium py-2 rounded-lg text-xs transition-colors flex items-center justify-center gap-2"
+              >
+                {loading ? (
+                  <i className="fa-solid fa-spinner animate-spin" />
+                ) : (
+                  <i className="fa-solid fa-forward" />
+                )}
+                Run In Progress ({inProgressCount})
+              </button>
+            )}
             {onClaimReadyCards && claimableBacklogCount > 0 && (
               <button
                 type="button"

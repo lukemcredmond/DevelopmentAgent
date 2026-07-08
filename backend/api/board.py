@@ -219,6 +219,7 @@ def escalate_needs_user_to_po():
                 or task.get("userQuestion")
                 or "User bulk-routed clarification to PO"
             )
+            append_user_resolution(task, str(note), "Bulk routed to PO", "Needs PO")
             task["userQuestion"] = None
             task["needsUserReason"] = None
             task["needsUserAction"] = None

@@ -364,6 +364,34 @@ def normalize_task(task: Dict[str, Any]) -> Dict[str, Any]:
         task["spikeObjective"] = coerce_task_text(task["spikeObjective"])
     if task.get("spikeReport") is not None:
         task["spikeReport"] = coerce_task_text(task["spikeReport"])
+    if "dependencyOutcomes" not in task or not isinstance(task.get("dependencyOutcomes"), list):
+        task["dependencyOutcomes"] = []
+    else:
+        normalized_outcomes: List[Dict[str, Any]] = []
+        for outcome in task["dependencyOutcomes"]:
+            if not isinstance(outcome, dict):
+                continue
+            normalized_outcomes.append(
+                {
+                    "taskId": str(outcome.get("taskId") or ""),
+                    "title": coerce_task_text(outcome.get("title") or ""),
+                    "completedAt": coerce_task_text(outcome.get("completedAt") or ""),
+                    "summary": coerce_task_text(outcome.get("summary") or ""),
+                    "decisions": outcome.get("decisions") if isinstance(outcome.get("decisions"), list) else [],
+                    "files": [str(f) for f in (outcome.get("files") or []) if f],
+                    **(
+                        {"refinementNotes": coerce_task_text(outcome["refinementNotes"])}
+                        if outcome.get("refinementNotes")
+                        else {}
+                    ),
+                    **(
+                        {"spikeReport": coerce_task_text(outcome["spikeReport"])}
+                        if outcome.get("spikeReport")
+                        else {}
+                    ),
+                }
+            )
+        task["dependencyOutcomes"] = normalized_outcomes
     return task
 
 
@@ -780,6 +808,134 @@ def next_po_planning_backlog_task() -> Optional[Dict[str, Any]]:
     return None
 
 
+MAX_DEPENDENCY_OUTCOMES = 20
+
+
+def validate_blocked_by(task: Dict[str, Any]) -> List[str]:
+    """Blocker IDs that are not on the board (task can never unblock)."""
+    normalize_task(task)
+    known = all_task_ids()
+    missing: List[str] = []
+    for blocker_id in task.get("blockedBy") or []:
+        bid = str(blocker_id)
+        if bid and bid not in known:
+            missing.append(bid)
+    return missing
+
+
+def build_dependency_outcome(completed_task: Dict[str, Any]) -> Dict[str, Any]:
+    """Compact rollup from a completed blocker/subtask for parent prompts."""
+    normalize_task(completed_task)
+    last_decisions: List[Dict[str, str]] = []
+    for decision in (completed_task.get("decisions") or [])[-3:]:
+        if isinstance(decision, dict):
+            last_decisions.append(
+                {
+                    "agent": coerce_task_text(decision.get("agent", "")),
+                    "type": coerce_task_text(decision.get("type", "")),
+                    "summary": coerce_task_text(decision.get("summary", ""))[:300],
+                }
+            )
+    file_paths: List[str] = []
+    for entry in (completed_task.get("files") or [])[-8:]:
+        if isinstance(entry, dict):
+            path = str(entry.get("path") or "")
+        else:
+            path = str(entry)
+        if path:
+            file_paths.append(path)
+    summary = ""
+    for decision in reversed(completed_task.get("decisions") or []):
+        if isinstance(decision, dict) and decision.get("summary"):
+            summary = coerce_task_text(decision["summary"])[:400]
+            break
+    if not summary:
+        summary = coerce_task_text(completed_task.get("description") or "")[:400]
+    if not summary:
+        summary = f"Completed: {completed_task.get('title', completed_task.get('id'))}"
+    notes = coerce_task_text(completed_task.get("refinementNotes") or "")
+    spike = coerce_task_text(completed_task.get("spikeReport") or "")
+    return {
+        "taskId": str(completed_task.get("id", "")),
+        "title": coerce_task_text(completed_task.get("title", "")),
+        "completedAt": datetime.datetime.now().strftime("%Y-%m-%d %H:%M:%S"),
+        "summary": summary,
+        "decisions": last_decisions,
+        "files": file_paths[:8],
+        **({"refinementNotes": notes[:500]} if notes else {}),
+        **({"spikeReport": spike[:500]} if spike else {}),
+    }
+
+
+def append_dependency_outcome(task: Dict[str, Any], outcome: Dict[str, Any]) -> None:
+    normalize_task(task)
+    outcomes = list(task.get("dependencyOutcomes") or [])
+    outcome_id = str(outcome.get("taskId") or "")
+    outcomes = [o for o in outcomes if str(o.get("taskId") or "") != outcome_id]
+    outcomes.append(outcome)
+    if len(outcomes) > MAX_DEPENDENCY_OUTCOMES:
+        outcomes = outcomes[-MAX_DEPENDENCY_OUTCOMES:]
+    task["dependencyOutcomes"] = outcomes
+
+
+def on_task_completed(task_id: str) -> None:
+    """Roll dependency outcomes to dependents when a card reaches Done."""
+    completed = find_task_by_id(task_id)
+    if not completed:
+        return
+    outcome = build_dependency_outcome(completed)
+    needle = str(task_id)
+    for lane_tasks in state.SHARED_BOARD.values():
+        for task in lane_tasks:
+            if str(task.get("id", "")) == needle:
+                continue
+            normalize_task(task)
+            blocked = [str(b) for b in (task.get("blockedBy") or [])]
+            is_parent = str(task.get("parentTaskId") or "") == needle
+            if needle in blocked or is_parent:
+                append_dependency_outcome(task, outcome)
+    from backend.services.subtask_service import on_subtask_completed
+
+    on_subtask_completed(task_id)
+
+
+def _format_older_decisions_block(decisions: List[Dict[str, Any]]) -> str:
+    if len(decisions) <= 8:
+        return ""
+    older = decisions[:-8]
+    lines = [
+        f"- [{d.get('timestamp', '?')}] {d.get('agent', 'Agent')} ({d.get('type', 'note')}): "
+        f"{coerce_task_text(d.get('summary', ''))[:200]}"
+        for d in older[-25:]
+        if isinstance(d, dict)
+    ]
+    if not lines:
+        return ""
+    return (
+        "\n=== EARLIER DECISIONS (condensed) ===\n"
+        + "\n".join(lines)
+        + f"\n({len(older)} earlier decision(s) summarized above; last 8 shown in full below.)\n"
+    )
+
+
+def _format_older_resolutions_block(resolutions: List[Dict[str, Any]]) -> str:
+    if len(resolutions) <= 5:
+        return ""
+    older = resolutions[:-5]
+    lines = [
+        f"- Q: {coerce_task_text(r.get('question', ''))[:180]}\n  A: {coerce_task_text(r.get('answer', ''))[:220]}"
+        for r in older[-15:]
+        if isinstance(r, dict)
+    ]
+    if not lines:
+        return ""
+    return (
+        "\n=== EARLIER USER ANSWERS (condensed) ===\n"
+        + "\n".join(lines)
+        + f"\n({len(older)} earlier answer(s) summarized above; last 5 shown in full below.)\n"
+    )
+
+
 def build_dod_block() -> str:
     settings = get_workflow_settings()
     dod = settings.get("definitionOfDone") or []
@@ -864,9 +1020,37 @@ def build_task_prompt(task: Dict[str, Any], brief: str) -> str:
             f"When: {qa_fail.get('timestamp', '')}\n"
         )
 
-    if task.get("userResolutions"):
+    dependency_outcomes = task.get("dependencyOutcomes") or []
+    if dependency_outcomes:
+        prompt += "\n=== COMPLETED DEPENDENCY OUTCOMES ===\n"
+        for outcome in dependency_outcomes[-10:]:
+            if not isinstance(outcome, dict):
+                continue
+            prompt += (
+                f"\n[{outcome.get('taskId')}] {outcome.get('title', '?')} "
+                f"(done {outcome.get('completedAt', '?')})\n"
+                f"Summary: {outcome.get('summary', '')}\n"
+            )
+            if outcome.get("refinementNotes"):
+                prompt += f"Refinement notes: {outcome['refinementNotes'][:400]}\n"
+            if outcome.get("spikeReport"):
+                prompt += f"Spike report: {outcome['spikeReport'][:400]}\n"
+            files = outcome.get("files") or []
+            if files:
+                prompt += f"Key files: {', '.join(str(f) for f in files[:6])}\n"
+            for decision in (outcome.get("decisions") or [])[:2]:
+                if isinstance(decision, dict):
+                    prompt += f"  - {decision.get('agent', '?')}: {decision.get('summary', '')}\n"
+        prompt += "Use these completed dependency results — do not redo finished blocker work.\n"
+
+    resolutions = task.get("userResolutions") or []
+    older_res_block = _format_older_resolutions_block(resolutions)
+    if older_res_block:
+        prompt += older_res_block
+
+    if resolutions:
         prompt += "\n=== PRIOR USER ANSWERS (do not re-ask) ===\n"
-        for res in task["userResolutions"][-5:]:
+        for res in resolutions[-5:]:
             if not isinstance(res, dict):
                 continue
             prompt += (
@@ -886,9 +1070,14 @@ def build_task_prompt(task: Dict[str, Any], brief: str) -> str:
     if spike_report:
         prompt += f"\n=== SPIKE REPORT ===\n{spike_report[:2000]}\n"
 
-    if task["decisions"]:
+    decisions = task.get("decisions") or []
+    older_dec_block = _format_older_decisions_block(decisions)
+    if older_dec_block:
+        prompt += older_dec_block
+
+    if decisions:
         prompt += "\n=== PRIOR AGENT DECISIONS ON THIS CARD ===\n"
-        for d in task["decisions"][-8:]:
+        for d in decisions[-8:]:
             prompt += (
                 f"[{d.get('timestamp', '?')}] {d.get('agent', 'Agent')} "
                 f"({d.get('type', 'note')}): {d.get('summary', '')}\n"

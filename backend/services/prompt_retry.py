@@ -23,7 +23,13 @@ from backend.services.workflow_settings import get_workflow_settings
 
 def _memory_context_for_retry(agent, task_id: str, query: str) -> str:
     project_id = state.CURRENT_PROJECT_ID or "default-proj"
-    hits = agent.memory.search(agent.role, query, limit=3, project_id=project_id)
+    hits = agent.memory.search(
+        agent.role,
+        query,
+        limit=3,
+        project_id=project_id,
+        include_all_agents=True,
+    )
     if not hits:
         return ""
     return "\n".join(f"[{item['category']}] {item['content']}" for item in hits)

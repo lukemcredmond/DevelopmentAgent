@@ -3,7 +3,7 @@
 from fastapi import APIRouter, HTTPException
 
 from backend import state
-from backend.api.schemas import MemoryCreatePayload
+from backend.api.schemas import MemoryCreatePayload, MemoryUpdatePayload
 from backend.storage.memory_engine import SemanticMemoryEngine, create_memory_engine
 
 router = APIRouter()
@@ -28,12 +28,7 @@ def create_memory(payload: MemoryCreatePayload, ollamaUrl: str = "http://localho
         raise HTTPException(status_code=400, detail="content is required")
     with state.STATE_LOCK:
         engine = _engine(ollamaUrl)
-        engine.save(
-            payload.agent or "System",
-            content,
-            payload.category or "user_note",
-            project_id=state.CURRENT_PROJECT_ID,
-        )
+        engine.save_project_note(content, payload.category or "user_note", project_id=state.CURRENT_PROJECT_ID)
         entries = engine.list_for_project(limit=1)
     return {"ok": True, "entry": entries[0] if entries else None}
 
@@ -45,3 +40,22 @@ def delete_memory(memory_id: str):
         if not engine.delete(memory_id, project_id=state.CURRENT_PROJECT_ID):
             raise HTTPException(status_code=404, detail="Memory not found")
     return {"ok": True}
+
+
+@router.patch("/api/memory/{memory_id}")
+def update_memory(memory_id: str, payload: MemoryUpdatePayload, ollamaUrl: str = "http://localhost:11434"):
+    content = payload.content.strip()
+    if not content:
+        raise HTTPException(status_code=400, detail="content is required")
+    with state.STATE_LOCK:
+        engine = _engine(ollamaUrl)
+        if not engine.update(
+            memory_id,
+            content,
+            category=payload.category,
+            project_id=state.CURRENT_PROJECT_ID,
+        ):
+            raise HTTPException(status_code=404, detail="Memory not found")
+        entries = engine.list_for_project(limit=200)
+        updated = next((e for e in entries if e.get("id") == memory_id), None)
+    return {"ok": True, "entry": updated}

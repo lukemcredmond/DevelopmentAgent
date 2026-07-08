@@ -107,10 +107,19 @@ def reindex_codebase(payload: ReindexPayload | None = None):
         result = engine.index_workspace()
         if not result.get("ok"):
             raise HTTPException(status_code=503, detail=result.get("error", "Reindex failed"))
+        from backend.services.graphify_service import run_graphify_update
+
+        graph_result = run_graphify_update()
+        if graph_result.get("ok"):
+            result["graphify"] = graph_result
+        elif not graph_result.get("skipped"):
+            result["graphify"] = graph_result
         return result
 
 
 @router.get("/api/search/index-status")
 def search_index_status():
     with state.STATE_LOCK:
-        return CodeIndexEngine().index_status()
+        from backend.services.graphify_service import graphify_status
+
+        return {**CodeIndexEngine().index_status(), "graphify": graphify_status()}

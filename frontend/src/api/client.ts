@@ -254,6 +254,15 @@ export async function triggerStep(payload: BriefPayload): Promise<AppState> {
   })
 }
 
+export async function runInProgressStep(
+  payload: BriefPayload & { taskId?: string },
+): Promise<AppState> {
+  return request<AppState>('/api/sprint/run-in-progress', {
+    method: 'POST',
+    body: JSON.stringify(payload),
+  })
+}
+
 export async function sendChat(
   payload: ChatPayload,
   signal?: AbortSignal,
@@ -729,6 +738,18 @@ export async function createProjectMemory(
   return request(`/api/memory?ollamaUrl=${encodeURIComponent(ollamaUrl)}`, {
     method: 'POST',
     body: JSON.stringify({ content, agent, category: 'user_note' }),
+  })
+}
+
+export async function updateProjectMemory(
+  memoryId: string,
+  content: string,
+  category = 'user_note',
+  ollamaUrl = 'http://localhost:11434',
+): Promise<{ ok: boolean; entry?: import('../types').ProjectMemoryEntry }> {
+  return request(`/api/memory/${encodeURIComponent(memoryId)}?ollamaUrl=${encodeURIComponent(ollamaUrl)}`, {
+    method: 'PATCH',
+    body: JSON.stringify({ content, category }),
   })
 }
 

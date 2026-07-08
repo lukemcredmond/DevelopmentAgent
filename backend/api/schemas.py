@@ -92,6 +92,19 @@ class MemoryCreatePayload(BaseModel):
     agent: str = "System"
 
 
+class MemoryUpdatePayload(BaseModel):
+    content: str
+    category: Optional[str] = None
+
+
+class RunInProgressPayload(BaseModel):
+    model_config = ConfigDict(populate_by_name=True)
+
+    brief: str = ""
+    ollama_url: str = "http://localhost:11434"
+    task_id: Optional[str] = Field(default=None, alias="taskId")
+
+
 class InjectToolEvidencePayload(BaseModel):
     toolName: str = "run_command"
     toolArgs: Dict[str, Any] = Field(default_factory=dict)

@@ -28,6 +28,7 @@ import {
   clearAllTasks,
   escalateNeedsUserToPo,
   resolveToolApproval,
+  runInProgressStep,
   resolveUserQuestion,
   injectToolEvidence,
   splitTask,
@@ -66,13 +67,14 @@ import BottomPanelResize, {
 } from './components/BottomPanelResize'
 import KanbanToggleBar, { readKanbanOpen, writeKanbanOpen } from './components/KanbanToggleBar'
 import ToolsPanel from './components/ToolsPanel'
+import MemoryPanel from './components/MemoryPanel'
 import { useAppState, useAutoSprint } from './hooks/useAppState'
 import { useTheme } from './hooks/useTheme'
 import type { AgentId, AppState, BoardLane, BriefCategory, ChatMessageRecord, PendingToolApproval, PendingToolRequest, SkillSuggestion, Task, WorkflowSettings } from './types'
 import { countClaimableBacklogTasks, getDisplayLanes } from './types'
 import { findTaskOnBoard } from './utils/taskFormat'
 
-type BottomTab = 'console' | 'activity' | 'tools' | 'model' | 'chat' | 'terminal' | 'search' | 'git'
+type BottomTab = 'console' | 'activity' | 'tools' | 'model' | 'memory' | 'chat' | 'terminal' | 'search' | 'git'
 
 const WORKSPACE_OPEN_KEY = 'allhands-workspace-open'
 
@@ -180,6 +182,7 @@ export default function App() {
   const showWorkspace = selectedFile != null || workspaceOpen
   const [showDiff, setShowDiff] = useState(false)
   const [bottomTab, setBottomTab] = useState<BottomTab>('console')
+  const [memoryCount, setMemoryCount] = useState(0)
   const [kanbanOpen, setKanbanOpen] = useState(readKanbanOpen)
   const [bottomPanelHeight, setBottomPanelHeight] = useState(readBottomPanelHeight)
   const [panelMaximized, setPanelMaximized] = useState(false)
@@ -578,12 +581,18 @@ export default function App() {
         icon: 'fa-wave-square',
         badge: activityEvents.length || undefined,
       },
+      {
+        id: 'memory',
+        label: 'Memory',
+        icon: 'fa-brain-circuit',
+        badge: memoryCount > 0 ? memoryCount : undefined,
+      },
       { id: 'chat', label: 'Chat', icon: 'fa-comments' },
       { id: 'terminal', label: 'Terminal', icon: 'fa-square-terminal' },
       { id: 'search', label: 'Search', icon: 'fa-magnifying-glass' },
       { id: 'git', label: 'Git', icon: 'fa-code-branch' },
     ],
-    [toolRunningCount, toolFailureCount, activityEvents.length],
+    [toolRunningCount, toolFailureCount, activityEvents.length, memoryCount],
   )
 
   const handleWorkflowSettingsChange = useCallback(
@@ -616,6 +625,10 @@ export default function App() {
   const handleRefreshState = useCallback(() => {
     void refresh()
   }, [refresh])
+
+  const handleOpenMemoryTab = useCallback(() => {
+    setBottomTab('memory')
+  }, [])
 
   const handleOpenConsoleTab = useCallback(() => {
     setBottomTab('console')
@@ -727,6 +740,33 @@ export default function App() {
             }
           })
         }
+        onRunInProgress={() =>
+          void withLoading(async () => {
+            if (orchestratedActive) {
+              setActionError('Wait for the current sprint step to finish before running in progress.')
+              return
+            }
+            setActionError(null)
+            try {
+              const data = await runInProgressStep({ brief, ollama_url: ollamaUrl })
+              handleState(data)
+              const names = Object.keys(data.files)
+              if (names.length > 0 && selectedFile && !names.includes(selectedFile)) {
+                setSelectedFile(names[names.length - 1] ?? null)
+              }
+            } catch (err) {
+              const message =
+                err instanceof ApiError
+                  ? err.detail
+                  : err instanceof Error
+                    ? err.message
+                    : 'Failed to run in-progress step.'
+              setActionError(message)
+            }
+          })
+        }
+        inProgressCount={state.board['In Progress']?.length ?? 0}
+        onOpenMemoryTab={handleOpenMemoryTab}
         onClaimReadyCards={() =>
           void withLoading(async () => {
             if (orchestratedActive) {
@@ -1059,6 +1099,11 @@ export default function App() {
                     <ModelDebugPanel taskIdFilter={selectedTask?.id ?? null} />
                   </div>
                 )}
+                {bottomTab === 'memory' && (
+                  <div className="absolute inset-0 flex flex-col min-h-0">
+                    <MemoryPanel ollamaUrl={ollamaUrl} onCountChange={setMemoryCount} />
+                  </div>
+                )}
                 {bottomTab === 'tools' && (
                   <div className="absolute inset-0 flex flex-col min-h-0">
                     <ToolsPanel
@@ -1191,6 +1236,7 @@ export default function App() {
         onSplit={(taskId) => handleSplitTask(taskId)}
         onInjectToolEvidence={(taskId, payload) => handleInjectToolEvidence(taskId, payload)}
         getTaskTitle={(taskId) => findTaskOnBoard(state.board, taskId)?.title}
+        taskExistsOnBoard={(taskId) => !!findTaskOnBoard(state.board, taskId)}
         ollamaUrl={ollamaUrl}
         onDiagnose={(taskId) =>
           void withLoading(async () => {
@@ -1236,6 +1282,31 @@ export default function App() {
         requireBacklogRefinement={state.workflowSettings?.requireBacklogRefinement ?? false}
         onMoveToInProgress={(taskId, fromLane, skipRefinement) =>
           void handleMoveTask(taskId, fromLane, 'In Progress', skipRefinement)
+        }
+        onRunInProgressStep={(taskId) =>
+          void withLoading(async () => {
+            if (orchestratedActive) {
+              setActionError('Wait for the current sprint step to finish before running dev on this card.')
+              return
+            }
+            setActionError(null)
+            try {
+              const data = await runInProgressStep({ brief, ollama_url: ollamaUrl, taskId })
+              handleState(data)
+              const updated = Object.values(data.board)
+                .flat()
+                .find((t) => t.id === taskId)
+              if (updated) setSelectedTask(updated)
+            } catch (err) {
+              const message =
+                err instanceof ApiError
+                  ? err.detail
+                  : err instanceof Error
+                    ? err.message
+                    : 'Failed to run dev step on this card.'
+              setActionError(message)
+            }
+          })
         }
         onEscapeSubtasks={(taskId) =>
           void withLoading(async () => {
