@@ -450,13 +450,6 @@ def _record_tool_side_effects(
                 "failure",
                 project_id=project_id,
             )
-        else:
-            memory_engine.save_outcome(
-                agent_role,
-                f"Invoked tool '{tool_name}' on task: {user_prompt[:200]}",
-                "tool_usage",
-                project_id=project_id,
-            )
 
     task = find_task_by_id(task_id)
     if task:

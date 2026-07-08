@@ -129,6 +129,11 @@ class SemanticMemoryEngine:
         scored_records.sort(key=lambda x: x["score"], reverse=True)
         return scored_records[:limit]
 
+    @staticmethod
+    def _normalize_content_key(content: str) -> str:
+        """Normalize memory content for deduplication (matches search() behavior)."""
+        return str(content or "").strip()[:200]
+
     def _scoped_agent_id(self, agent_id: str, project_id: Optional[str] = None) -> str:
         from backend import state
 
@@ -162,13 +167,33 @@ class SemanticMemoryEngine:
         project_id: Optional[str] = None,
     ) -> None:
         scoped = self._scoped_agent_id(agent_id, project_id)
-        mem_id = str(uuid.uuid4())
-        embedding = self._embed_ollama(content)
-        embedding_json = json.dumps(embedding) if embedding else None
+        text = content.strip()
+        if not text:
+            return
         with sqlite3.connect(self.db_path) as conn:
+            cursor = conn.cursor()
+            cursor.execute(
+                """
+                SELECT id FROM memories
+                WHERE agent_id = ? AND category = ? AND TRIM(content) = ?
+                LIMIT 1
+                """,
+                (scoped, category, text),
+            )
+            existing = cursor.fetchone()
+            if existing:
+                cursor.execute(
+                    "UPDATE memories SET timestamp = CURRENT_TIMESTAMP WHERE id = ?",
+                    (existing[0],),
+                )
+                conn.commit()
+                return
+            mem_id = str(uuid.uuid4())
+            embedding = self._embed_ollama(text)
+            embedding_json = json.dumps(embedding) if embedding else None
             conn.execute(
                 "INSERT INTO memories (id, agent_id, category, content, embedding) VALUES (?, ?, ?, ?, ?)",
-                (mem_id, scoped, category, content, embedding_json),
+                (mem_id, scoped, category, text, embedding_json),
             )
             conn.commit()
 
@@ -240,7 +265,7 @@ class SemanticMemoryEngine:
         seen_content: set[str] = set()
         deduped: List[sqlite3.Row] = []
         for record in records:
-            key = str(record["content"] or "")[:200]
+            key = self._normalize_content_key(str(record["content"] or ""))
             if key in seen_content:
                 continue
             seen_content.add(key)
@@ -286,35 +311,50 @@ class SemanticMemoryEngine:
         *,
         project_id: Optional[str] = None,
         agent: Optional[str] = None,
+        category: Optional[str] = None,
+        q: Optional[str] = None,
+        dedupe: bool = True,
         limit: int = 50,
     ) -> List[Dict[str, Any]]:
         from backend import state
 
         pid = project_id or state.CURRENT_PROJECT_ID or "default-proj"
         prefix = f"{pid}:"
+        clauses: List[str] = []
+        params: List[Any] = []
+
+        if agent:
+            scoped = self._scoped_agent_id(agent, pid)
+            clauses.append("agent_id = ?")
+            params.append(scoped)
+        else:
+            clauses.append("agent_id LIKE ?")
+            params.append(f"{prefix}%")
+
+        if category:
+            clauses.append("category = ?")
+            params.append(category)
+
+        if q and q.strip():
+            clauses.append("LOWER(content) LIKE ?")
+            params.append(f"%{q.strip().lower()}%")
+
+        where_sql = " AND ".join(clauses)
+        fetch_limit = min(max(limit * 4, limit), 800) if dedupe else min(limit, 200)
+
         with sqlite3.connect(self.db_path) as conn:
             conn.row_factory = sqlite3.Row
             cursor = conn.cursor()
-            if agent:
-                scoped = self._scoped_agent_id(agent, pid)
-                cursor.execute(
-                    """
-                    SELECT id, agent_id, category, content, timestamp
-                    FROM memories WHERE agent_id = ?
-                    ORDER BY timestamp DESC LIMIT ?
-                    """,
-                    (scoped, limit),
-                )
-            else:
-                cursor.execute(
-                    """
-                    SELECT id, agent_id, category, content, timestamp
-                    FROM memories
-                    WHERE agent_id LIKE ?
-                    ORDER BY timestamp DESC LIMIT ?
-                    """,
-                    (f"{prefix}%", limit),
-                )
+            cursor.execute(
+                f"""
+                SELECT id, agent_id, category, content, timestamp
+                FROM memories
+                WHERE {where_sql}
+                ORDER BY timestamp DESC
+                LIMIT ?
+                """,
+                (*params, fetch_limit),
+            )
             rows = cursor.fetchall()
 
         out: List[Dict[str, Any]] = []
@@ -330,7 +370,33 @@ class SemanticMemoryEngine:
                     "timestamp": row["timestamp"],
                 }
             )
-        return out
+
+        if not dedupe:
+            return out[:limit]
+
+        grouped: Dict[str, Dict[str, Any]] = {}
+        group_order: List[str] = []
+        for entry in out:
+            key = self._normalize_content_key(entry.get("content", ""))
+            if key not in grouped:
+                grouped[key] = {
+                    **entry,
+                    "duplicateCount": 1,
+                    "duplicateIds": [entry["id"]],
+                }
+                group_order.append(key)
+            else:
+                group = grouped[key]
+                group["duplicateCount"] = int(group.get("duplicateCount", 1)) + 1
+                group["duplicateIds"].append(entry["id"])
+                if str(entry.get("timestamp", "")) > str(group.get("timestamp", "")):
+                    group["id"] = entry["id"]
+                    group["timestamp"] = entry["timestamp"]
+                    group["agent"] = entry["agent"]
+                    group["category"] = entry["category"]
+                    group["content"] = entry["content"]
+
+        return [grouped[key] for key in group_order][:limit]
 
     def delete(self, memory_id: str, *, project_id: Optional[str] = None) -> bool:
         from backend import state

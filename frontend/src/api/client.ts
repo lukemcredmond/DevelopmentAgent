@@ -724,10 +724,22 @@ export async function fetchIndexStatus(): Promise<{
 export async function fetchProjectMemories(
   ollamaUrl = 'http://localhost:11434',
   limit = 30,
+  options: {
+    agent?: string
+    category?: string
+    q?: string
+    dedupe?: boolean
+  } = {},
 ): Promise<{ entries: import('../types').ProjectMemoryEntry[]; count: number }> {
-  return request(
-    `/api/memory?limit=${limit}&ollamaUrl=${encodeURIComponent(ollamaUrl)}`,
-  )
+  const params = new URLSearchParams({
+    limit: String(limit),
+    ollamaUrl,
+    dedupe: String(options.dedupe !== false),
+  })
+  if (options.agent) params.set('agent', options.agent)
+  if (options.category) params.set('category', options.category)
+  if (options.q) params.set('q', options.q)
+  return request(`/api/memory?${params.toString()}`)
 }
 
 export async function createProjectMemory(

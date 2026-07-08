@@ -7,7 +7,13 @@ import {
 } from '../api/client'
 import type { ProjectMemoryEntry } from '../types'
 
-type MemoryFilter = 'all' | 'user_note' | 'auto'
+type MemoryTypeFilter = 'all' | 'user_note' | 'auto'
+
+const CATEGORY_OPTIONS = ['user_note', 'fix_pattern', 'failure', 'tool_usage'] as const
+
+function agentLabel(agent: string): string {
+  return agent === '__project__' ? 'Project (all agents)' : agent
+}
 
 interface MemoryPanelProps {
   ollamaUrl?: string
@@ -17,41 +23,83 @@ interface MemoryPanelProps {
 export default function MemoryPanel({ ollamaUrl = 'http://localhost:11434', onCountChange }: MemoryPanelProps) {
   const [entries, setEntries] = useState<ProjectMemoryEntry[]>([])
   const [loading, setLoading] = useState(false)
-  const [filter, setFilter] = useState<MemoryFilter>('all')
+  const [typeFilter, setTypeFilter] = useState<MemoryTypeFilter>('all')
+  const [agentFilter, setAgentFilter] = useState('all')
+  const [categoryFilter, setCategoryFilter] = useState('all')
+  const [searchQuery, setSearchQuery] = useState('')
+  const [debouncedSearch, setDebouncedSearch] = useState('')
+  const [groupDuplicates, setGroupDuplicates] = useState(true)
   const [newNote, setNewNote] = useState('')
   const [saving, setSaving] = useState(false)
   const [editingId, setEditingId] = useState<string | null>(null)
   const [editContent, setEditContent] = useState('')
   const [editCategory, setEditCategory] = useState('user_note')
+  const [agentOptionsSource, setAgentOptionsSource] = useState<ProjectMemoryEntry[]>([])
+
+  useEffect(() => {
+    const timer = window.setTimeout(() => setDebouncedSearch(searchQuery.trim()), 300)
+    return () => window.clearTimeout(timer)
+  }, [searchQuery])
 
   const refresh = useCallback(async () => {
     setLoading(true)
     try {
-      const data = await fetchProjectMemories(ollamaUrl, 200)
-      const list = data.entries ?? []
+      const apiCategory =
+        categoryFilter !== 'all'
+          ? categoryFilter
+          : typeFilter === 'user_note'
+            ? 'user_note'
+            : undefined
+
+      const data = await fetchProjectMemories(ollamaUrl, 200, {
+        agent: agentFilter !== 'all' ? agentFilter : undefined,
+        category: apiCategory,
+        q: debouncedSearch || undefined,
+        dedupe: groupDuplicates,
+      })
+
+      let list = data.entries ?? []
+
+      if (categoryFilter === 'all' && typeFilter === 'auto') {
+        list = list.filter((e) => e.category !== 'user_note')
+      }
+
       setEntries(list)
       onCountChange?.(list.length)
+
+      if (agentFilter === 'all' && categoryFilter === 'all' && !debouncedSearch) {
+        setAgentOptionsSource(data.entries ?? [])
+      }
     } catch {
       setEntries([])
       onCountChange?.(0)
     } finally {
       setLoading(false)
     }
-  }, [ollamaUrl, onCountChange])
+  }, [
+    ollamaUrl,
+    onCountChange,
+    agentFilter,
+    categoryFilter,
+    typeFilter,
+    debouncedSearch,
+    groupDuplicates,
+  ])
 
   useEffect(() => {
     void refresh()
   }, [refresh])
 
-  const filtered = useMemo(() => {
-    if (filter === 'user_note') {
-      return entries.filter((e) => e.category === 'user_note')
+  const agentOptions = useMemo(() => {
+    const source = agentOptionsSource.length > 0 ? agentOptionsSource : entries
+    const counts = new Map<string, number>()
+    for (const e of source) {
+      counts.set(e.agent, (counts.get(e.agent) ?? 0) + 1)
     }
-    if (filter === 'auto') {
-      return entries.filter((e) => e.category !== 'user_note')
-    }
-    return entries
-  }, [entries, filter])
+    return Array.from(counts.entries())
+      .sort(([a], [b]) => agentLabel(a).localeCompare(agentLabel(b)))
+      .map(([agent, count]) => ({ agent, count }))
+  }, [agentOptionsSource, entries])
 
   const handleAdd = () => {
     const text = newNote.trim()
@@ -87,32 +135,81 @@ export default function MemoryPanel({ ollamaUrl = 'http://localhost:11434', onCo
       .finally(() => setSaving(false))
   }
 
-  const handleDelete = (id: string) => {
-    if (!window.confirm('Delete this memory entry?')) return
-    void deleteProjectMemory(id).then(() => refresh())
+  const handleDelete = (entry: ProjectMemoryEntry) => {
+    const ids = entry.duplicateIds?.length ? entry.duplicateIds : [entry.id]
+    const message =
+      ids.length > 1
+        ? `Delete ${ids.length} duplicate memory entries?`
+        : 'Delete this memory entry?'
+    if (!window.confirm(message)) return
+    void Promise.all(ids.map((id) => deleteProjectMemory(id))).then(() => refresh())
   }
 
   return (
     <div className="flex flex-col h-full min-h-0 bg-cat-base text-[11px]">
-      <div className="shrink-0 border-b border-cat-surface1 px-4 py-2 flex flex-wrap items-center gap-2">
-        <span className="text-[10px] uppercase text-cat-overlay tracking-wide">Project memory</span>
-        <select
-          value={filter}
-          onChange={(e) => setFilter(e.target.value as MemoryFilter)}
-          className="bg-cat-mantle border border-cat-surface1 rounded px-2 py-0.5 text-[10px]"
-        >
-          <option value="all">All ({entries.length})</option>
-          <option value="user_note">User notes</option>
-          <option value="auto">Tool outcomes</option>
-        </select>
-        <button
-          type="button"
-          onClick={() => void refresh()}
-          disabled={loading}
-          className="text-[10px] text-cat-overlay hover:text-white disabled:opacity-50 ml-auto"
-        >
-          {loading ? 'Loading…' : 'Refresh'}
-        </button>
+      <div className="shrink-0 border-b border-cat-surface1 px-4 py-2 space-y-2">
+        <div className="flex flex-wrap items-center gap-2">
+          <span className="text-[10px] uppercase text-cat-overlay tracking-wide">Project memory</span>
+          <button
+            type="button"
+            onClick={() => void refresh()}
+            disabled={loading}
+            className="text-[10px] text-cat-overlay hover:text-white disabled:opacity-50 ml-auto"
+          >
+            {loading ? 'Loading…' : 'Refresh'}
+          </button>
+        </div>
+        <div className="flex flex-wrap items-center gap-2">
+          <select
+            value={typeFilter}
+            onChange={(e) => setTypeFilter(e.target.value as MemoryTypeFilter)}
+            className="bg-cat-mantle border border-cat-surface1 rounded px-2 py-0.5 text-[10px]"
+          >
+            <option value="all">All types</option>
+            <option value="user_note">User notes</option>
+            <option value="auto">Tool outcomes</option>
+          </select>
+          <select
+            value={agentFilter}
+            onChange={(e) => setAgentFilter(e.target.value)}
+            className="bg-cat-mantle border border-cat-surface1 rounded px-2 py-0.5 text-[10px]"
+          >
+            <option value="all">All agents</option>
+            {agentOptions.map(({ agent, count }) => (
+              <option key={agent} value={agent}>
+                {agentLabel(agent)} ({count})
+              </option>
+            ))}
+          </select>
+          <select
+            value={categoryFilter}
+            onChange={(e) => setCategoryFilter(e.target.value)}
+            className="bg-cat-mantle border border-cat-surface1 rounded px-2 py-0.5 text-[10px]"
+          >
+            <option value="all">All categories</option>
+            {CATEGORY_OPTIONS.map((cat) => (
+              <option key={cat} value={cat}>
+                {cat}
+              </option>
+            ))}
+          </select>
+          <label className="flex items-center gap-1.5 text-[10px] text-cat-subtext cursor-pointer">
+            <input
+              type="checkbox"
+              checked={groupDuplicates}
+              onChange={(e) => setGroupDuplicates(e.target.checked)}
+              className="rounded border-cat-surface1"
+            />
+            Group duplicates
+          </label>
+        </div>
+        <input
+          type="search"
+          value={searchQuery}
+          onChange={(e) => setSearchQuery(e.target.value)}
+          placeholder="Search memory content…"
+          className="w-full text-[10px] bg-cat-mantle border border-cat-surface1 rounded px-2 py-1 text-white"
+        />
       </div>
 
       <div className="shrink-0 border-b border-cat-surface1 px-4 py-2 space-y-2">
@@ -137,21 +234,26 @@ export default function MemoryPanel({ ollamaUrl = 'http://localhost:11434', onCo
       </div>
 
       <div className="flex-1 min-h-0 overflow-y-auto p-3 space-y-2">
-        {filtered.length === 0 ? (
+        {entries.length === 0 ? (
           <p className="text-cat-overlay text-center py-8 italic">
-            No memories yet. Save notes above or run sprint steps — tool outcomes are recorded
-            automatically.
+            No memories match these filters. Save notes above or run sprint steps — tool outcomes are
+            recorded for file edits and failures.
           </p>
         ) : (
-          filtered.map((entry) => (
+          entries.map((entry) => (
             <div
               key={entry.id}
               className="border border-cat-surface1 rounded-lg p-3 bg-cat-mantle/30 space-y-2"
             >
-              <div className="flex flex-wrap gap-2 text-[10px]">
-                <span className="text-indigo-300 font-semibold">{entry.agent}</span>
+              <div className="flex flex-wrap gap-2 text-[10px] items-center">
+                <span className="text-indigo-300 font-semibold">{agentLabel(entry.agent)}</span>
                 <span className="text-cat-overlay">{entry.category}</span>
                 <span className="text-cat-overlay">{entry.timestamp}</span>
+                {(entry.duplicateCount ?? 1) > 1 && (
+                  <span className="text-[9px] bg-amber-950/50 text-amber-300 px-1.5 py-0.5 rounded-full">
+                    ×{entry.duplicateCount}
+                  </span>
+                )}
               </div>
               {editingId === entry.id ? (
                 <div className="space-y-2">
@@ -198,7 +300,7 @@ export default function MemoryPanel({ ollamaUrl = 'http://localhost:11434', onCo
                     </button>
                     <button
                       type="button"
-                      onClick={() => handleDelete(entry.id)}
+                      onClick={() => handleDelete(entry)}
                       className="text-[10px] text-rose-400 hover:text-rose-300"
                     >
                       Delete

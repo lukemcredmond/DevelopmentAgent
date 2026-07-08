@@ -424,6 +424,8 @@ export interface ProjectMemoryEntry {
   category: string
   content: string
   timestamp: string
+  duplicateCount?: number
+  duplicateIds?: string[]
 }
 
 export interface ActivityEvent {

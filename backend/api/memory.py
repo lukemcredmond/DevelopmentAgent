@@ -14,10 +14,23 @@ def _engine(ollama_url: str = "http://localhost:11434") -> SemanticMemoryEngine:
 
 
 @router.get("/api/memory")
-def list_memories(agent: str | None = None, limit: int = 50, ollamaUrl: str = "http://localhost:11434"):
+def list_memories(
+    agent: str | None = None,
+    category: str | None = None,
+    q: str | None = None,
+    dedupe: bool = True,
+    limit: int = 50,
+    ollamaUrl: str = "http://localhost:11434",
+):
     with state.STATE_LOCK:
         engine = _engine(ollamaUrl)
-        entries = engine.list_for_project(agent=agent, limit=min(limit, 200))
+        entries = engine.list_for_project(
+            agent=agent,
+            category=category,
+            q=q,
+            dedupe=dedupe,
+            limit=min(limit, 200),
+        )
     return {"entries": entries, "count": len(entries)}
 
 
