@@ -560,6 +560,10 @@ class ScrumAgent:
                     "info",
                     f"Awaiting Ollama (iter {iteration}/{max_iterations}, model={self.model})",
                 )
+                log_event(
+                    "ollama_wait",
+                    f"iter {iteration}/{max_iterations} model={self.model}",
+                )
                 ollama_started = time.time()
                 response = self._chat(
                     messages,

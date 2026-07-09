@@ -59,4 +59,9 @@ def build_state_response(*, include_files: bool = True) -> dict:
         response["lastStepOutcome"] = state.LAST_STEP_OUTCOME
     if state.LAST_STEP_DIAGNOSTICS is not None:
         response["lastStepDiagnostics"] = state.LAST_STEP_DIAGNOSTICS
+    from backend.services.step_diagnostics import get_active_trace_summary
+
+    active_diag = get_active_trace_summary()
+    if active_diag is not None:
+        response["activeStepDiagnostics"] = active_diag
     return response

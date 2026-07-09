@@ -265,6 +265,19 @@ def _finalize_step_diagnostics_if_traced(task_id: str) -> None:
     finalize_active_step_trace(lane_after=lane_after)
 
 
+def _ensure_dev_step_trace(task_id: str, task_title: str, lane_before: str) -> None:
+    from backend.services.step_diagnostics import get_active_trace, start_step_trace
+
+    if get_active_trace() is None:
+        start_step_trace(task_id, task_title, "Developer", lane_before)
+
+
+def _finalize_dev_step_diagnostics_if_auto_sprint(task_id: str, lane_before: str) -> None:
+    if state.SPRINT_PROGRESS_MAX == 1:
+        return
+    _finalize_step_diagnostics_if_traced(task_id)
+
+
 def _finish_single_step_progress(
     active_task: Optional[Dict[str, Any]],
     *,
@@ -1754,133 +1767,128 @@ def _run_po_clarification(active_task: Dict[str, Any], brief: str) -> None:
 def _run_developer_step(active_task: Dict[str, Any], brief: str) -> None:
     task_id = active_task["id"]
     lane_before = get_task_lane(task_id) or "In Progress"
+    title = str(active_task.get("title", task_id))
     step_started = _mark_sprint_step_start()
     set_active_sprint_context(task_id, "Developer")
-    if state.SPRINT_PROGRESS_MAX == 1:
-        from backend.services.step_diagnostics import get_active_trace, start_step_trace
+    _ensure_dev_step_trace(task_id, title, lane_before)
+    try:
+        add_system_log("Developer", "info", f"Implementing '{active_task['title']}'…")
+        target = _dev_complete_lane()
+        lint_cmd = derive_project_lint_command()
+        lint_hint = f" (e.g. '{lint_cmd}')" if lint_cmd else ""
+        instructions = (
+            "Registered tools: read_file, write_file, apply_patch, run_command, update_board, "
+            "grep, glob_file_search, git_status, git_diff, git_commit, search_code. "
+            "Use apply_patch for edits to existing files; write_file for new files. "
+            "Before apply_patch you must read_file on the same path in this step and copy old_text "
+            "verbatim from that read_file result — never from pre-loaded context or analyze output. "
+            "Implement using apply_patch and write_file. "
+            "Do not output implementation plans — use tools immediately. "
+            "Read each tool result before calling update_board — if write_file or apply_patch fails, "
+            "try a different path or approach (do not repeat the same failing arguments). "
+            f"Use run_command with the project lint command{lint_hint}. "
+            "Findings are expected — fix each file:line listed in the Problems section, "
+            "don't treat lint output as a tool failure. "
+            "Fix syntax/parse errors before logic changes. "
+            "After edits, run the lint command once to verify. "
+            "Do NOT re-run the same lint command without fixing code first. "
+            "Unclear requirements → move to 'Needs PO' (not Needs User). "
+            "Needs User ONLY for: secrets/credentials you cannot invent, irreversible external "
+            "actions (production deploy, billing), or product choices with no default in brief/AC. "
+            "Set a specific userQuestion when moving to Needs User. "
+            "Do NOT move to Needs User for lint errors, missing files, or implementation questions. "
+            f"When complete and files are written → move to '{target}'."
+            f"{_autonomous_instruction_suffix()}"
+        )
+        prompt = _inject_sprint_context(active_task, brief, "Developer", instructions)
+        from backend.services.fix_verify_loop import run_fix_verify_loop
 
-        if get_active_trace() is None:
-            start_step_trace(
-                task_id,
-                str(active_task.get("title", task_id)),
-                "Developer",
-                lane_before,
-            )
-    add_system_log("Developer", "info", f"Implementing '{active_task['title']}'…")
-    target = _dev_complete_lane()
-    lint_cmd = derive_project_lint_command()
-    lint_hint = f" (e.g. '{lint_cmd}')" if lint_cmd else ""
-    instructions = (
-        "Registered tools: read_file, write_file, apply_patch, run_command, update_board, "
-        "grep, glob_file_search, git_status, git_diff, git_commit, search_code. "
-        "Use apply_patch for edits to existing files; write_file for new files. "
-        "Before apply_patch you must read_file on the same path in this step and copy old_text "
-        "verbatim from that read_file result — never from pre-loaded context or analyze output. "
-        "Implement using apply_patch and write_file. "
-        "Do not output implementation plans — use tools immediately. "
-        "Read each tool result before calling update_board — if write_file or apply_patch fails, "
-        "try a different path or approach (do not repeat the same failing arguments). "
-        f"Use run_command with the project lint command{lint_hint}. "
-        "Findings are expected — fix each file:line listed in the Problems section, "
-        "don't treat lint output as a tool failure. "
-        "Fix syntax/parse errors before logic changes. "
-        "After edits, run the lint command once to verify. "
-        "Do NOT re-run the same lint command without fixing code first. "
-        "Unclear requirements → move to 'Needs PO' (not Needs User). "
-        "Needs User ONLY for: secrets/credentials you cannot invent, irreversible external "
-        "actions (production deploy, billing), or product choices with no default in brief/AC. "
-        "Set a specific userQuestion when moving to Needs User. "
-        "Do NOT move to Needs User for lint errors, missing files, or implementation questions. "
-        f"When complete and files are written → move to '{target}'."
-        f"{_autonomous_instruction_suffix()}"
-    )
-    prompt = _inject_sprint_context(active_task, brief, "Developer", instructions)
-    from backend.services.fix_verify_loop import run_fix_verify_loop
+        result = run_fix_verify_loop(
+            agent_dev,
+            active_task,
+            prompt,
+            max_iterations=_llm_iterations(),
+        )
+        state.LAST_AGENT_STEP_RESULT = result
 
-    result = run_fix_verify_loop(
-        agent_dev,
-        active_task,
-        prompt,
-        max_iterations=_llm_iterations(),
-    )
-    state.LAST_AGENT_STEP_RESULT = result
-
-    with state.STATE_LOCK:
-        task = find_task_by_id(task_id)
-        if not task:
-            return
-        if _dev_step_read_only_no_edits(task, lane_before, step_started):
-            state.DEV_STEP_READ_ONLY_NO_EDITS = True
-            add_system_log(
-                "Developer",
-                "warning",
-                f"'{task.get('title', task_id)}': dev step read files but made no edits — staying In Progress",
-            )
-        if result == "SIMULATION_FALLBACK":
-            _simulate_dev_work(task)
-        else:
-            record_task_decision(task_id, "Developer", "work", result[:500], result)
-            if _task_in_lane(task_id, "In Progress"):
-                if dev_clarification_from_result(result):
-                    if not _escalate_po_limit(task):
-                        increment_po_round_trips(task_id)
-                        move_board_stage(task_id, "Needs PO")
-                        publish_activity(
-                            task_id,
-                            "dev_escalation",
-                            "Developer needs clarification — routed to PO",
-                            role="assistant",
-                            agent="Developer",
-                            lane="Needs PO",
-                        )
-                elif _dev_needs_user(result):
-                    if _needs_user_cap_reached():
-                        add_system_log(
-                            "Developer",
-                            "warning",
-                            f"{task_id}: autonomous cap — staying In Progress instead of Needs User",
-                        )
-                    elif _try_move_to_needs_user(
-                        task_id, task, result[:500], kind="dev_escalation"
-                    ):
-                        pass
-                    else:
-                        add_system_log(
-                            "Developer",
-                            "warning",
-                            f"{task_id}: Needs User escalation blocked — continuing In Progress",
-                        )
-                elif _dev_needs_po(result, task):
-                    if not _escalate_po_limit(task):
-                        increment_po_round_trips(task_id)
-                        move_board_stage(task_id, "Needs PO")
-                        publish_activity(
-                            task_id,
-                            "dev_escalation",
-                            "Developer escalated to PO for clarification",
-                            role="assistant",
-                            agent="Developer",
-                            lane="Needs PO",
-                        )
-                else:
-                    fresh = find_task_by_id(task_id)
-                    if fresh and _task_has_work_files(fresh):
-                        blocked, reason = dev_gate_blocks_advance(fresh)
-                        if blocked:
-                            add_system_log("Developer", "warning", f"{task_id}: {reason}")
+        with state.STATE_LOCK:
+            task = find_task_by_id(task_id)
+            if not task:
+                return
+            if _dev_step_read_only_no_edits(task, lane_before, step_started):
+                state.DEV_STEP_READ_ONLY_NO_EDITS = True
+                add_system_log(
+                    "Developer",
+                    "warning",
+                    f"'{task.get('title', task_id)}': dev step read files but made no edits — staying In Progress",
+                )
+            if result == "SIMULATION_FALLBACK":
+                _simulate_dev_work(task)
+            else:
+                record_task_decision(task_id, "Developer", "work", result[:500], result)
+                if _task_in_lane(task_id, "In Progress"):
+                    if dev_clarification_from_result(result):
+                        if not _escalate_po_limit(task):
+                            increment_po_round_trips(task_id)
+                            move_board_stage(task_id, "Needs PO")
+                            publish_activity(
+                                task_id,
+                                "dev_escalation",
+                                "Developer needs clarification — routed to PO",
+                                role="assistant",
+                                agent="Developer",
+                                lane="Needs PO",
+                            )
+                    elif _dev_needs_user(result):
+                        if _needs_user_cap_reached():
+                            add_system_log(
+                                "Developer",
+                                "warning",
+                                f"{task_id}: autonomous cap — staying In Progress instead of Needs User",
+                            )
+                        elif _try_move_to_needs_user(
+                            task_id, task, result[:500], kind="dev_escalation"
+                        ):
+                            pass
                         else:
-                            clear_qa_failure(task_id)
-                            move_board_stage(task_id, target)
-                    elif fresh:
-                        add_system_log(
-                            "Developer",
-                            "warning",
-                            f"'{fresh.get('title', task_id)}' finished with no files — staying In Progress",
-                        )
-        _log_sprint_step_outcome("Developer", task_id, task.get("title", task_id), lane_before, result)
-        _audit_dev_files_written(find_task_by_id(task_id) or task, lane_before, task_id)
-        _audit_dev_verification(find_task_by_id(task_id) or task, lane_before, task_id, step_started)
-        _check_stuck_and_escalate(task_id, lane_before)
+                            add_system_log(
+                                "Developer",
+                                "warning",
+                                f"{task_id}: Needs User escalation blocked — continuing In Progress",
+                            )
+                    elif _dev_needs_po(result, task):
+                        if not _escalate_po_limit(task):
+                            increment_po_round_trips(task_id)
+                            move_board_stage(task_id, "Needs PO")
+                            publish_activity(
+                                task_id,
+                                "dev_escalation",
+                                "Developer escalated to PO for clarification",
+                                role="assistant",
+                                agent="Developer",
+                                lane="Needs PO",
+                            )
+                    else:
+                        fresh = find_task_by_id(task_id)
+                        if fresh and _task_has_work_files(fresh):
+                            blocked, reason = dev_gate_blocks_advance(fresh)
+                            if blocked:
+                                add_system_log("Developer", "warning", f"{task_id}: {reason}")
+                            else:
+                                clear_qa_failure(task_id)
+                                move_board_stage(task_id, target)
+                        elif fresh:
+                            add_system_log(
+                                "Developer",
+                                "warning",
+                                f"'{fresh.get('title', task_id)}' finished with no files — staying In Progress",
+                            )
+            _log_sprint_step_outcome("Developer", task_id, task.get("title", task_id), lane_before, result)
+            _audit_dev_files_written(find_task_by_id(task_id) or task, lane_before, task_id)
+            _audit_dev_verification(find_task_by_id(task_id) or task, lane_before, task_id, step_started)
+            _check_stuck_and_escalate(task_id, lane_before)
+    finally:
+        _finalize_dev_step_diagnostics_if_auto_sprint(task_id, lane_before)
 
 
 def _run_code_review_step(active_task: Dict[str, Any], brief: str) -> None:
@@ -2222,10 +2230,7 @@ def run_in_progress_step(
     )
     _emit_sprint_step_progress("dev", active_task)
 
-    from backend.services.step_diagnostics import get_active_trace, start_step_trace
-
-    if get_active_trace() is None:
-        start_step_trace(tid, title, "Developer", lane_before)
+    _ensure_dev_step_trace(tid, title, lane_before)
 
     try:
         _run_developer_step(dict(active_task), brief)

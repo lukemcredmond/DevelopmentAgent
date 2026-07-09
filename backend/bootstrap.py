@@ -85,6 +85,13 @@ def initialize() -> None:
     from backend.agents.registry import configure_agent_tools
 
     configure_agent_tools()
+    from backend.config import diagnostics_dir
+
+    add_system_log(
+        "System",
+        "info",
+        f"Step diagnostics enabled — folder: {diagnostics_dir(state.CURRENT_PROJECT_ID)}",
+    )
     print("=" * 70)
     print("      STARTING FASTAPI AGENT WEB INTERFACE")
     print("      Local dashboard url: http://127.0.0.1:6767")

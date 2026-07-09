@@ -553,7 +553,12 @@ export default function App() {
     (data: AppState) => {
       const outcome = data.lastStepOutcome
       const diagnostics = data.lastStepDiagnostics
-      if (diagnostics?.filePath) {
+      const activeDiag = data.activeStepDiagnostics
+      if (activeDiag?.filePath) {
+        setActionNotice(
+          `Live diagnostics: ${activeDiag.filePath} — copy path from Console`,
+        )
+      } else if (diagnostics?.filePath) {
         const diagNote = `Diagnostics saved: ${diagnostics.filePath}${diagnostics.hint ? ` — ${diagnostics.hint}` : ''}`
         if (outcome && (!outcome.ok || outcome.toolFailures > 0)) {
           setActionError(`${outcome.message}\n${diagNote}`)

@@ -571,6 +571,11 @@ def execute_tool(
         arg_summary = summarize_tool_args(tool_name, arguments)
         log_prefix = {"manual": "Manual", "replay": "Replay", "agent": "Calling"}[source]
         add_system_log(agent_role, "info", f"{log_prefix} {tool_name} — {arg_summary}")
+        if source == "agent":
+            from backend.services.step_diagnostics import get_active_trace, log_event
+
+            if get_active_trace():
+                log_event("tool_start", f"{tool_name} — {arg_summary}")
 
         publish_event(
             "tool_start",

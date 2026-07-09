@@ -425,12 +425,13 @@ export interface LastStepDiagnostics {
   taskId: string
   taskTitle: string
   agent: string
+  status?: 'running' | 'complete'
   startedAt: string
-  endedAt: string
+  endedAt?: string
   durationMs: number
-  exitReason: string
+  exitReason?: string
   laneBefore: string
-  laneAfter: string
+  laneAfter?: string
   toolsUsed: string[]
   toolFailures: number
   planRejections: number
@@ -439,7 +440,18 @@ export interface LastStepDiagnostics {
   agentResultSnippet?: string
   hint?: string
   filePath: string
-  ok: boolean
+  ok?: boolean
+  lastEvent?: string
+}
+
+export interface ActiveStepDiagnostics {
+  traceId: string
+  filePath: string
+  status: 'running'
+  taskId: string
+  taskTitle: string
+  lastEvent?: string
+  updatedAt?: string
 }
 
 export interface IndexProgress {
@@ -548,6 +560,7 @@ export interface AppState {
   pendingToolApprovals?: PendingToolApproval[]
   lastStepOutcome?: LastStepOutcome | null
   lastStepDiagnostics?: LastStepDiagnostics | null
+  activeStepDiagnostics?: ActiveStepDiagnostics | null
 }
 
 export interface ConfigPayload {

@@ -6,14 +6,21 @@ ROOT_DIR = Path(__file__).resolve().parent.parent
 FRONTEND_DIST = ROOT_DIR / "frontend" / "dist"
 
 # Runtime data lives outside the repo (override with ALLHANDS_HOME env var).
+# Use allhands_home() when resolving paths at runtime so env changes are respected.
 ALLHANDS_HOME = Path(os.environ.get("ALLHANDS_HOME", Path.home() / ".allhands"))
 LEGACY_DB_PATH = ROOT_DIR / "scrum_memory.db"
 DB_PATH = str(ALLHANDS_HOME / "scrum_memory.db")
 
 
+def allhands_home() -> Path:
+    """Resolve ALLHANDS_HOME from env on each call (tests, custom installs)."""
+    return Path(os.environ.get("ALLHANDS_HOME", Path.home() / ".allhands"))
+
+
 def ensure_allhands_home() -> Path:
-    ALLHANDS_HOME.mkdir(parents=True, exist_ok=True)
-    return ALLHANDS_HOME
+    home = allhands_home()
+    home.mkdir(parents=True, exist_ok=True)
+    return home
 
 
 def diagnostics_dir(project_id: str | None = None) -> Path:
@@ -29,7 +36,7 @@ def migrate_legacy_database() -> None:
     """Copy scrum_memory.db from repo root into ~/.allhands on first run."""
     ensure_allhands_home()
     legacy = LEGACY_DB_PATH
-    target = Path(DB_PATH)
+    target = Path(str(allhands_home() / "scrum_memory.db"))
     if legacy.is_file() and not target.is_file():
         shutil.copy2(legacy, target)
 

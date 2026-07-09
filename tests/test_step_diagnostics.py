@@ -10,6 +10,7 @@ from backend.agents.task_context import init_new_task
 from backend.bootstrap import initialize
 from backend.services.sprint_service import run_in_progress_step
 from backend.services.step_diagnostics import (
+    clear_active_step_trace,
     finalize_active_step_trace,
     get_active_trace,
     start_step_trace,
@@ -41,6 +42,7 @@ def test_tracker_writes_json_file(tmp_path, monkeypatch):
     assert summary is not None
     assert trace.file_path.is_file()
     data = json.loads(trace.file_path.read_text(encoding="utf-8"))
+    assert data["status"] == "complete"
     assert data["exitReason"] == "read_only_no_edits"
     assert data["ollamaCalls"][0]["toolCalls"] == ["read_file"]
     assert data["taskId"] == "T-1"
@@ -101,3 +103,74 @@ def test_diagnostics_api_latest(tmp_path, monkeypatch):
     state.LAST_STEP_DIAGNOSTICS = None
     res404 = client.get("/api/sprint/diagnostics/latest")
     assert res404.status_code == 404
+
+
+def test_checkpoint_written_on_start(tmp_path, monkeypatch):
+    monkeypatch.setenv("ALLHANDS_HOME", str(tmp_path))
+    initialize()
+    state.CURRENT_PROJECT_ID = "test-proj"
+
+    trace = start_step_trace("T-1", "Feature X", "Developer", "In Progress")
+
+    assert trace.file_path.is_file()
+    data = json.loads(trace.file_path.read_text(encoding="utf-8"))
+    assert data["status"] == "running"
+    assert data["taskId"] == "T-1"
+    live_logs = [log for log in state.SYSTEM_LOGS if "Step diagnostics (live):" in log.get("text", "")]
+    assert len(live_logs) >= 1
+    clear_active_step_trace()
+
+
+def test_checkpoint_updated_after_tool_start(tmp_path, monkeypatch):
+    monkeypatch.setenv("ALLHANDS_HOME", str(tmp_path))
+    initialize()
+    state.CURRENT_PROJECT_ID = "test-proj"
+
+    trace = start_step_trace("T-2", "Tool event", "Developer", "In Progress")
+    trace.log_event("tool_start", "read_file — pubspec.yaml")
+
+    data = json.loads(trace.file_path.read_text(encoding="utf-8"))
+    assert data["status"] == "running"
+    assert any(event["kind"] == "tool_start" for event in data["events"])
+    assert "read_file" in data["lastEvent"]
+    clear_active_step_trace()
+
+
+def test_auto_sprint_dev_step_writes_diagnostics(tmp_path, monkeypatch):
+    monkeypatch.setenv("ALLHANDS_HOME", str(tmp_path))
+    initialize()
+    state.SHARED_BOARD.clear()
+    for lane in (
+        "Backlog",
+        "In Progress",
+        "Needs User",
+        "Needs PO",
+        "QA",
+        "Done",
+        "Refinement",
+        "Code Review",
+    ):
+        state.SHARED_BOARD[lane] = []
+
+    task = init_new_task({"id": "T-AUTO", "title": "Auto sprint", "description": "d", "status": "In Progress"})
+    state.SHARED_BOARD["In Progress"] = [task]
+    state.SPRINT_PROGRESS_MAX = 20
+    state.SPRINT_PROGRESS_STEP = 1
+    state.SYSTEM_LOGS.clear()
+    clear_active_step_trace()
+    state.LAST_STEP_DIAGNOSTICS = None
+
+    def fake_fix_verify(*_args, **_kwargs):
+        return "done"
+
+    from backend.services.sprint_service import _run_developer_step
+
+    with patch("backend.services.fix_verify_loop.run_fix_verify_loop", side_effect=fake_fix_verify):
+        _run_developer_step(dict(task), "brief")
+
+    assert state.LAST_STEP_DIAGNOSTICS is not None
+    assert Path(state.LAST_STEP_DIAGNOSTICS["filePath"]).is_file()
+    data = json.loads(Path(state.LAST_STEP_DIAGNOSTICS["filePath"]).read_text(encoding="utf-8"))
+    assert data["status"] == "complete"
+    assert data["taskId"] == "T-AUTO"
+    assert get_active_trace() is None

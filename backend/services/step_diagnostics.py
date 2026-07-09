@@ -7,13 +7,14 @@ import re
 import uuid
 from datetime import datetime
 from pathlib import Path
-from typing import Any, Dict, List, Optional, Set
+from typing import Any, Dict, List, Literal, Optional, Set
 
 from backend import state
 from backend.config import diagnostics_dir
 from backend.services.logs import add_system_log
 
 MAX_FILES_PER_PROJECT = 50
+TraceStatus = Literal["running", "complete"]
 
 
 def _now_str() -> str:
@@ -25,7 +26,7 @@ def _safe_task_slug(task_id: str) -> str:
 
 
 class StepDiagnosticsTracker:
-    """Accumulates events for one manual sprint step and writes a JSON report."""
+    """Accumulates events for one sprint dev step and writes checkpoint JSON."""
 
     def __init__(
         self,
@@ -53,6 +54,8 @@ class StepDiagnosticsTracker:
         self.llm_iterations_used = 0
         self.llm_iterations_max = 0
         self.tool_failures = 0
+        self.last_event = "trace_started"
+        self._live_logged = False
 
     def log_ollama_call(
         self,
@@ -64,6 +67,7 @@ class StepDiagnosticsTracker:
         error: Optional[str] = None,
     ) -> None:
         self.llm_iterations_used = max(self.llm_iterations_used, iteration)
+        self.last_event = f"ollama:iter{iteration}"
         self.ollama_calls.append(
             {
                 "iteration": iteration,
@@ -73,6 +77,7 @@ class StepDiagnosticsTracker:
                 "error": error,
             }
         )
+        self._flush_checkpoint()
 
     def set_llm_iterations_max(self, max_iterations: int) -> None:
         self.llm_iterations_max = max_iterations
@@ -81,6 +86,7 @@ class StepDiagnosticsTracker:
         self.tools_used.add(name)
         if not success:
             self.tool_failures += 1
+        self.last_event = f"tool:{name}"
         self.tools_log.append(
             {
                 "timestamp": _now_str(),
@@ -89,12 +95,14 @@ class StepDiagnosticsTracker:
                 "summary": summary[:300],
             }
         )
+        self._flush_checkpoint()
 
     def log_event(self, kind: str, message: str) -> None:
         if kind == "plan_rejected":
             self.plan_rejections += 1
         elif kind == "text_rejected":
             self.text_rejections += 1
+        self.last_event = f"{kind}:{message[:80]}"
         self.events.append(
             {
                 "timestamp": _now_str(),
@@ -102,6 +110,7 @@ class StepDiagnosticsTracker:
                 "message": message[:500],
             }
         )
+        self._flush_checkpoint()
 
     def _build_hint(self, exit_reason: str) -> str:
         hints = {
@@ -122,29 +131,30 @@ class StepDiagnosticsTracker:
             "See ollamaCalls and events in this file; attach when reporting issues.",
         )
 
-    def finalize(
+    def _build_payload(
         self,
         *,
-        exit_reason: str,
-        lane_after: str,
-        ok: bool,
+        status: TraceStatus,
+        exit_reason: Optional[str] = None,
+        lane_after: Optional[str] = None,
+        ok: Optional[bool] = None,
         agent_result: Optional[str] = None,
         last_step_outcome: Optional[Dict[str, Any]] = None,
     ) -> Dict[str, Any]:
-        ended = datetime.now()
-        duration_ms = int((ended - self.started_monotonic).total_seconds() * 1000)
+        now = datetime.now()
+        duration_ms = int((now - self.started_monotonic).total_seconds() * 1000)
         payload: Dict[str, Any] = {
             "traceId": self.trace_id,
             "projectId": state.CURRENT_PROJECT_ID,
             "taskId": self.task_id,
             "taskTitle": self.task_title,
             "agent": self.agent,
+            "status": status,
+            "lastEvent": self.last_event,
+            "updatedAt": now.strftime("%Y-%m-%d %H:%M:%S"),
             "startedAt": self.started_at,
-            "endedAt": ended.strftime("%Y-%m-%d %H:%M:%S"),
             "durationMs": duration_ms,
-            "exitReason": exit_reason,
             "laneBefore": self.lane_before,
-            "laneAfter": lane_after,
             "toolsUsed": sorted(self.tools_used),
             "toolFailures": self.tool_failures,
             "planRejections": self.plan_rejections,
@@ -156,16 +166,57 @@ class StepDiagnosticsTracker:
             "ollamaCalls": self.ollama_calls,
             "toolsLog": self.tools_log,
             "events": self.events,
-            "agentResultSnippet": (agent_result or "")[:500],
-            "lastStepOutcome": last_step_outcome,
-            "hint": self._build_hint(exit_reason),
             "filePath": str(self.file_path),
-            "ok": ok,
         }
+        if status == "complete":
+            payload.update(
+                {
+                    "endedAt": now.strftime("%Y-%m-%d %H:%M:%S"),
+                    "exitReason": exit_reason,
+                    "laneAfter": lane_after,
+                    "ok": ok,
+                    "agentResultSnippet": (agent_result or "")[:500],
+                    "lastStepOutcome": last_step_outcome,
+                    "hint": self._build_hint(exit_reason or ""),
+                }
+            )
+        return payload
+
+    def _flush_checkpoint(self) -> None:
+        payload = self._build_payload(status="running")
+        self.file_path.parent.mkdir(parents=True, exist_ok=True)
+        with open(self.file_path, "w", encoding="utf-8") as f:
+            json.dump(payload, f, indent=2)
+        if not self._live_logged:
+            self._live_logged = True
+            add_system_log(
+                "System",
+                "info",
+                f"Step diagnostics (live): {self.file_path}",
+            )
+
+    def finalize(
+        self,
+        *,
+        exit_reason: str,
+        lane_after: str,
+        ok: bool,
+        agent_result: Optional[str] = None,
+        last_step_outcome: Optional[Dict[str, Any]] = None,
+    ) -> Dict[str, Any]:
+        payload = self._build_payload(
+            status="complete",
+            exit_reason=exit_reason,
+            lane_after=lane_after,
+            ok=ok,
+            agent_result=agent_result,
+            last_step_outcome=last_step_outcome,
+        )
         self.file_path.parent.mkdir(parents=True, exist_ok=True)
         with open(self.file_path, "w", encoding="utf-8") as f:
             json.dump(payload, f, indent=2)
         _prune_old_files(self.file_path.parent)
+        duration_ms = payload["durationMs"]
         tools_summary = ",".join(sorted(self.tools_used)) or "none"
         add_system_log(
             "System",
@@ -187,6 +238,21 @@ def _prune_old_files(project_dir: Path) -> None:
 
 def get_active_trace() -> Optional[StepDiagnosticsTracker]:
     return state.ACTIVE_STEP_DIAGNOSTICS
+
+
+def get_active_trace_summary() -> Optional[Dict[str, Any]]:
+    trace = get_active_trace()
+    if not trace:
+        return None
+    return {
+        "traceId": trace.trace_id,
+        "filePath": str(trace.file_path),
+        "status": "running",
+        "taskId": trace.task_id,
+        "taskTitle": trace.task_title,
+        "lastEvent": trace.last_event,
+        "updatedAt": _now_str(),
+    }
 
 
 def start_step_trace(
@@ -212,6 +278,7 @@ def start_step_trace(
         "info",
         f"Step diagnostics trace {tracker.trace_id} started — {file_path}",
     )
+    tracker._flush_checkpoint()
     return tracker
 
 
