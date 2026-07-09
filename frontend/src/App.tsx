@@ -552,12 +552,19 @@ export default function App() {
   const applyStepOutcome = useCallback(
     (data: AppState) => {
       const outcome = data.lastStepOutcome
-      if (!outcome) return
-      if (!outcome.ok || outcome.toolFailures > 0) {
-        setActionError(outcome.message)
-        if (outcome.toolFailures > 0) {
-          openToolsTab()
+      const diagnostics = data.lastStepDiagnostics
+      if (diagnostics?.filePath) {
+        const diagNote = `Diagnostics saved: ${diagnostics.filePath}${diagnostics.hint ? ` — ${diagnostics.hint}` : ''}`
+        if (outcome && (!outcome.ok || outcome.toolFailures > 0)) {
+          setActionError(`${outcome.message}\n${diagNote}`)
+        } else {
+          setActionNotice(diagNote)
         }
+      } else if (outcome && (!outcome.ok || outcome.toolFailures > 0)) {
+        setActionError(outcome.message)
+      }
+      if (outcome && (!outcome.ok || outcome.toolFailures > 0) && outcome.toolFailures > 0) {
+        openToolsTab()
       }
     },
     [],

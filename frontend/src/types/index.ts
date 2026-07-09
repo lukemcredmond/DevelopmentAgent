@@ -419,6 +419,29 @@ export interface LastStepOutcome {
   message: string
 }
 
+export interface LastStepDiagnostics {
+  traceId: string
+  projectId: string
+  taskId: string
+  taskTitle: string
+  agent: string
+  startedAt: string
+  endedAt: string
+  durationMs: number
+  exitReason: string
+  laneBefore: string
+  laneAfter: string
+  toolsUsed: string[]
+  toolFailures: number
+  planRejections: number
+  textRejections: number
+  llmIterations: { used: number; max: number }
+  agentResultSnippet?: string
+  hint?: string
+  filePath: string
+  ok: boolean
+}
+
 export interface IndexProgress {
   phase: string
   filesDone: number
@@ -524,6 +547,7 @@ export interface AppState {
   activeAgentRun?: AgentRunState | null
   pendingToolApprovals?: PendingToolApproval[]
   lastStepOutcome?: LastStepOutcome | null
+  lastStepDiagnostics?: LastStepDiagnostics | null
 }
 
 export interface ConfigPayload {

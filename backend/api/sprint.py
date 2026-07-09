@@ -58,6 +58,13 @@ def trigger_run_in_progress(payload: RunInProgressPayload):
     return build_state_response()
 
 
+@router.get("/api/sprint/diagnostics/latest")
+def get_latest_step_diagnostics():
+    if state.LAST_STEP_DIAGNOSTICS is None:
+        raise HTTPException(status_code=404, detail="No step diagnostics available")
+    return {"diagnostics": state.LAST_STEP_DIAGNOSTICS}
+
+
 @router.post("/api/sprint/run")
 def trigger_auto_sprint(payload: SprintRunPayload):
     run_auto_sprint(payload.brief, payload.ollama_url, max_steps=payload.max_steps)

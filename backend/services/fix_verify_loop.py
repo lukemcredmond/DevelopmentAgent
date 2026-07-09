@@ -2,11 +2,13 @@
 
 from __future__ import annotations
 
+import time
 from typing import Any, Dict
 
 from backend.agents.task_context import find_task_by_id, record_task_decision
 from backend.services.command_result import format_command_result_for_agent, run_workspace_command
 from backend.services.logs import add_system_log
+from backend.services.step_diagnostics import log_event
 from backend.services.workflow_settings import get_workflow_settings
 from backend.workspace.files import derive_project_lint_command
 
@@ -39,9 +41,22 @@ def run_fix_verify_loop(
             "info",
             f"Fix-verify round {round_num}/{max_rounds} ({iterations_per_round} tool iterations)",
         )
+        log_event("fix_verify_start", f"round {round_num}/{max_rounds}")
         last_result = agent.execute_step(prompt, max_iterations=iterations_per_round)
 
+        lint_started = time.time()
         cmd_result = run_workspace_command(lint_cmd)
+        lint_duration_ms = int((time.time() - lint_started) * 1000)
+        finding_count = len(cmd_result.diagnostics) if cmd_result.diagnostics else 0
+        add_system_log(
+            "Developer",
+            "info",
+            f"Fix-verify lint finished in {lint_duration_ms}ms — {finding_count} finding(s)",
+        )
+        log_event(
+            "lint_run",
+            f"{lint_cmd} {lint_duration_ms}ms findings={finding_count} outcome={cmd_result.outcome}",
+        )
         board_task = find_task_by_id(task_id)
         if board_task:
             if cmd_result.diagnostics:
@@ -57,6 +72,7 @@ def run_fix_verify_loop(
                 f"Lint clean after round {round_num}",
                 detail=cmd_result.summary or "no findings",
             )
+            log_event("fix_verify_done", f"clean after round {round_num}")
             return last_result
 
         if round_num >= max_rounds:
@@ -67,6 +83,7 @@ def run_fix_verify_loop(
                 f"Lint still has {len(cmd_result.diagnostics)} issue(s) after {max_rounds} rounds",
                 detail=cmd_result.summary,
             )
+            log_event("fix_verify_done", f"findings remain after {max_rounds} rounds")
             break
 
         problems = format_command_result_for_agent(cmd_result)

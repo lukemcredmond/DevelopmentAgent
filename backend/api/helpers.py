@@ -57,4 +57,6 @@ def build_state_response(*, include_files: bool = True) -> dict:
     }
     if state.LAST_STEP_OUTCOME is not None:
         response["lastStepOutcome"] = state.LAST_STEP_OUTCOME
+    if state.LAST_STEP_DIAGNOSTICS is not None:
+        response["lastStepDiagnostics"] = state.LAST_STEP_DIAGNOSTICS
     return response

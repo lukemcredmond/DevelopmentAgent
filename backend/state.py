@@ -38,6 +38,10 @@ LAST_STEP_OUTCOME: Optional[Dict[str, Any]] = None
 LAST_AGENT_STEP_RESULT: Optional[str] = None
 DEV_STEP_READ_ONLY_NO_EDITS: bool = False
 
+# Active per-step diagnostics trace (manual sprint steps).
+ACTIVE_STEP_DIAGNOSTICS: Optional[Any] = None
+LAST_STEP_DIAGNOSTICS: Optional[Dict[str, Any]] = None
+
 REFINEMENT_MODE: bool = False
 
 PROJECT_PLAN_OUTLINE: str = ""

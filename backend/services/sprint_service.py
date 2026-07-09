@@ -147,6 +147,10 @@ def _prepare_single_step_progress() -> bool:
     state.LAST_STEP_OUTCOME = None
     state.LAST_AGENT_STEP_RESULT = None
     state.DEV_STEP_READ_ONLY_NO_EDITS = False
+    state.LAST_STEP_DIAGNOSTICS = None
+    from backend.services.step_diagnostics import clear_active_step_trace
+
+    clear_active_step_trace()
     state.SPRINT_PROGRESS_MAX = 1
     state.SPRINT_PROGRESS_STEP = 1
     return True
@@ -250,7 +254,15 @@ def _record_last_step_outcome(
         agent,
         agent_result=agent_result or state.LAST_AGENT_STEP_RESULT,
     )
+    _finalize_step_diagnostics_if_traced(task_id)
     state.DEV_STEP_READ_ONLY_NO_EDITS = False
+
+
+def _finalize_step_diagnostics_if_traced(task_id: str) -> None:
+    from backend.services.step_diagnostics import finalize_active_step_trace
+
+    lane_after = get_task_lane(task_id) or ""
+    finalize_active_step_trace(lane_after=lane_after)
 
 
 def _finish_single_step_progress(
@@ -1744,6 +1756,16 @@ def _run_developer_step(active_task: Dict[str, Any], brief: str) -> None:
     lane_before = get_task_lane(task_id) or "In Progress"
     step_started = _mark_sprint_step_start()
     set_active_sprint_context(task_id, "Developer")
+    if state.SPRINT_PROGRESS_MAX == 1:
+        from backend.services.step_diagnostics import get_active_trace, start_step_trace
+
+        if get_active_trace() is None:
+            start_step_trace(
+                task_id,
+                str(active_task.get("title", task_id)),
+                "Developer",
+                lane_before,
+            )
     add_system_log("Developer", "info", f"Implementing '{active_task['title']}'…")
     target = _dev_complete_lane()
     lint_cmd = derive_project_lint_command()
@@ -2199,6 +2221,11 @@ def run_in_progress_step(
         f"Sprint handler: dev (in-progress-only) — '{title}' (In Progress)",
     )
     _emit_sprint_step_progress("dev", active_task)
+
+    from backend.services.step_diagnostics import get_active_trace, start_step_trace
+
+    if get_active_trace() is None:
+        start_step_trace(tid, title, "Developer", lane_before)
 
     try:
         _run_developer_step(dict(active_task), brief)

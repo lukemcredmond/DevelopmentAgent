@@ -16,6 +16,15 @@ def ensure_allhands_home() -> Path:
     return ALLHANDS_HOME
 
 
+def diagnostics_dir(project_id: str | None = None) -> Path:
+    """Per-project folder under ~/.allhands/diagnostics/."""
+    base = ensure_allhands_home() / "diagnostics"
+    pid = project_id or "default-proj"
+    path = base / pid
+    path.mkdir(parents=True, exist_ok=True)
+    return path
+
+
 def migrate_legacy_database() -> None:
     """Copy scrum_memory.db from repo root into ~/.allhands on first run."""
     ensure_allhands_home()

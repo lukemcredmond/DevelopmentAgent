@@ -470,6 +470,14 @@ class ScrumAgent:
                 return early_stop
             tools_used.add(tool_name)
             self._append_tool_messages(messages, tool_name, arguments, result.tool_output, result.success)
+            from backend.agents.tool_outcomes import summarize_tool_args
+            from backend.services.step_diagnostics import log_tool
+
+            log_tool(
+                tool_name,
+                result.success,
+                summarize_tool_args(tool_name, arguments),
+            )
 
         tool_summary = ", ".join(
             call.function.name for call in all_calls if hasattr(call, "function")
@@ -515,6 +523,10 @@ class ScrumAgent:
                 self._decisions_in_prompt = min(len(active_task.get("decisions") or []), 8)
             start_run(task_id, self.role, max_iterations=max_iterations)
 
+        from backend.services.step_diagnostics import log_event, set_llm_iterations_max
+
+        set_llm_iterations_max(max_iterations)
+
         try:
             for iteration in range(1, max_iterations + 1):
                 update_run(
@@ -543,18 +555,56 @@ class ScrumAgent:
                 from backend.services.llm_context import prune_messages_if_needed
 
                 prune_messages_if_needed(messages)
+                add_system_log(
+                    self.role,
+                    "info",
+                    f"Awaiting Ollama (iter {iteration}/{max_iterations}, model={self.model})",
+                )
+                ollama_started = time.time()
                 response = self._chat(
                     messages,
                     tools=tools or None,
                     iteration=iteration,
                     task_id=task_id,
                 )
+                ollama_duration_ms = int((time.time() - ollama_started) * 1000)
+                from backend.services.step_diagnostics import log_ollama_call
+
                 if response is None:
+                    log_ollama_call(
+                        iteration,
+                        duration_ms=ollama_duration_ms,
+                        error="unavailable",
+                    )
                     self._log_step_exit("Ollama unavailable — SIMULATION_FALLBACK", "warning")
                     finish_run(status="failed", error="SIMULATION_FALLBACK")
                     return "SIMULATION_FALLBACK"
 
                 message = response.message
+                tool_call_names = (
+                    [tc.function.name for tc in message.tool_calls]
+                    if message.tool_calls
+                    else []
+                )
+                text_chars = len((message.content or "").strip())
+                if tool_call_names:
+                    add_system_log(
+                        self.role,
+                        "info",
+                        f"Ollama responded in {ollama_duration_ms}ms — tools={tool_call_names}",
+                    )
+                else:
+                    add_system_log(
+                        self.role,
+                        "info",
+                        f"Ollama responded in {ollama_duration_ms}ms — text={text_chars} chars",
+                    )
+                log_ollama_call(
+                    iteration,
+                    duration_ms=ollama_duration_ms,
+                    tool_calls=tool_call_names,
+                    text_chars=text_chars,
+                )
                 if message.tool_calls:
                     early_stop = self._process_tool_calls(
                         message,
@@ -584,6 +634,14 @@ class ScrumAgent:
                             "warning",
                             "Plan-only response rejected — continuing tool loop",
                         )
+                        log_event("plan_rejected", content[:200])
+                    else:
+                        add_system_log(
+                            self.role,
+                            "warning",
+                            "Text-only response rejected — continuing (no writes yet)",
+                        )
+                        log_event("text_rejected", content[:200])
                     messages.append({"role": "system", "content": _PLAN_REJECTION_MESSAGE})
                     continue
 
@@ -602,6 +660,12 @@ class ScrumAgent:
                         "warning",
                         f"Step ended after tools ({tool_list}) with no write_file or apply_patch",
                     )
+                exit_reason = "completed_with_writes" if write_tools else "completed_text_only"
+                add_system_log(
+                    self.role,
+                    "info",
+                    f"Step exit: {exit_reason} tools=[{', '.join(sorted(tools_used)) or 'none'}]",
+                )
                 finish_run(status="completed")
                 return content or "Task completed."
 
@@ -614,6 +678,12 @@ class ScrumAgent:
                     "warning",
                     f"Step ended after tools ({tool_list}) with no write_file or apply_patch",
                 )
+            add_system_log(
+                self.role,
+                "info",
+                f"Step exit: max_iterations tools=[{', '.join(sorted(tools_used)) or 'none'}]",
+            )
+            log_event("max_iterations", max_msg)
             self._log_step_exit(max_msg, "warning")
             finish_run(status="failed", error=max_msg)
             return max_msg
