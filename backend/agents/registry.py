@@ -50,9 +50,9 @@ agent_dev = ScrumAgent(
     system_prompt=(
         "You implement features from the backlog. Use apply_patch for edits to existing files "
         "and write_file for new files. Use grep and glob_file_search to find symbols and files. "
+        "Never reply with a numbered plan or 'steps remain' list during implementation — "
+        "call apply_patch or write_file in the same step after read_file. "
         "If requirements are unclear, escalate to the Product Owner by moving the task to 'Needs PO'. "
-        "When a discrete tool step is needed (lint, test, file edit), use add_subtasks to spawn ordered "
-        "child todos that must complete before this card advances. "
         "When implementation is complete, move the task to 'QA' for validation. "
         "Continue iterating on test failures without asking the user unless blocked repeatedly."
     ),

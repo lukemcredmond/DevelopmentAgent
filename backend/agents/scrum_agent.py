@@ -1,5 +1,6 @@
 import json
 import os
+import re
 import threading
 import time
 from concurrent.futures import ThreadPoolExecutor
@@ -17,6 +18,7 @@ from backend.agents.agent_run import (
 )
 from backend.agents.task_context import (
     find_task_by_id,
+    get_task_lane,
     record_task_transcript,
     sync_task_files_from_transcript,
 )
@@ -45,6 +47,32 @@ def _normalize_tool_arguments(raw: Any) -> Dict[str, Any]:
     if isinstance(raw, dict):
         return dict(raw)
     return {}
+
+
+def _dev_step_needs_more_tools(tools_used: set[str], task_id: Optional[str]) -> bool:
+    """True when a Developer sprint step should not exit on text-only LLM output."""
+    if state.ACTIVE_SPRINT_AGENT != "Developer" or not task_id:
+        return False
+    if tools_used & {"write_file", "apply_patch"}:
+        return False
+    if get_task_lane(task_id) != "In Progress":
+        return False
+    return True
+
+
+def _looks_like_plan_response(content: str) -> bool:
+    lower = content.lower()
+    if "following steps remain" in lower or "steps remain" in lower:
+        return True
+    if "to complete the task" in lower:
+        return True
+    return bool(re.search(r"(?m)^\s*\d+\.", content))
+
+
+_PLAN_REJECTION_MESSAGE = (
+    "Do not respond with a plan or numbered steps. You already read the file — "
+    "call apply_patch or write_file now using the read_file output above."
+)
 
 
 class ScrumAgent:
@@ -544,6 +572,21 @@ class ScrumAgent:
                     continue
 
                 content = (message.content or "").strip()
+                if (
+                    content
+                    and iteration < max_iterations
+                    and _dev_step_needs_more_tools(tools_used, task_id)
+                ):
+                    messages.append({"role": "assistant", "content": content})
+                    if _looks_like_plan_response(content):
+                        add_system_log(
+                            self.role,
+                            "warning",
+                            "Plan-only response rejected — continuing tool loop",
+                        )
+                    messages.append({"role": "system", "content": _PLAN_REJECTION_MESSAGE})
+                    continue
+
                 if task_id and content:
                     record_task_transcript(
                         task_id,

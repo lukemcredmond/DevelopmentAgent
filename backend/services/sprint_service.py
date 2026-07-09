@@ -1755,6 +1755,7 @@ def _run_developer_step(active_task: Dict[str, Any], brief: str) -> None:
         "Before apply_patch you must read_file on the same path in this step and copy old_text "
         "verbatim from that read_file result — never from pre-loaded context or analyze output. "
         "Implement using apply_patch and write_file. "
+        "Do not output implementation plans — use tools immediately. "
         "Read each tool result before calling update_board — if write_file or apply_patch fails, "
         "try a different path or approach (do not repeat the same failing arguments). "
         f"Use run_command with the project lint command{lint_hint}. "
