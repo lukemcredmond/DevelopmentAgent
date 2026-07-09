@@ -125,6 +125,7 @@ class StepDiagnosticsTracker:
                 "Agent returned text without write tools while still In Progress."
             ),
             "plan_exhausted": "Multiple plan-only responses were rejected; no edits written.",
+            "interrupted": "Step was cancelled or raised an exception before completing.",
         }
         return hints.get(
             exit_reason,
@@ -327,6 +328,8 @@ def derive_exit_reason(
     lane_after: str,
 ) -> str:
     tools = tools_used or set()
+    if state.DEV_STEP_INTERRUPTED or state.SPRINT_CANCEL:
+        return "interrupted"
     if agent_result == "SIMULATION_FALLBACK":
         return "ollama_fallback"
     if agent_result and agent_result.startswith("Stopped:"):
@@ -356,6 +359,8 @@ def finalize_active_step_trace(
         return None
     outcome = state.LAST_STEP_OUTCOME
     ok = bool(outcome.get("ok")) if outcome else True
+    if state.DEV_STEP_INTERRUPTED or state.SPRINT_CANCEL:
+        ok = False
     exit_reason = derive_exit_reason(
         agent_result=agent_result or state.LAST_AGENT_STEP_RESULT,
         tools_used=tools_used or trace.tools_used,

@@ -43,18 +43,16 @@ def trigger_po_plan_backlog(payload: PlanBacklogPayload):
 
 @router.post("/api/step")
 def trigger_agent_turn(payload: BriefPayload):
-    with state.STATE_LOCK:
-        run_sprint_step(payload.brief, payload.ollama_url)
+    run_sprint_step(payload.brief, payload.ollama_url)
     return build_state_response()
 
 
 @router.post("/api/sprint/run-in-progress")
 def trigger_run_in_progress(payload: RunInProgressPayload):
-    with state.STATE_LOCK:
-        try:
-            run_in_progress_step(payload.brief, payload.ollama_url, task_id=payload.task_id)
-        except ValueError as exc:
-            raise HTTPException(status_code=409, detail=str(exc)) from exc
+    try:
+        run_in_progress_step(payload.brief, payload.ollama_url, task_id=payload.task_id)
+    except ValueError as exc:
+        raise HTTPException(status_code=409, detail=str(exc)) from exc
     return build_state_response()
 
 
@@ -68,15 +66,13 @@ def get_latest_step_diagnostics():
 @router.post("/api/sprint/run")
 def trigger_auto_sprint(payload: SprintRunPayload):
     run_auto_sprint(payload.brief, payload.ollama_url, max_steps=payload.max_steps)
-    with state.STATE_LOCK:
-        return build_state_response()
+    return build_state_response()
 
 
 @router.post("/api/sprint/plan-and-run")
 def trigger_plan_and_run(payload: SprintRunPayload):
     run_plan_and_run(payload.brief, payload.ollama_url, max_steps=payload.max_steps)
-    with state.STATE_LOCK:
-        return build_state_response()
+    return build_state_response()
 
 
 @router.post("/api/sprint/cancel")

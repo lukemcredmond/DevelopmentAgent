@@ -372,6 +372,13 @@ class ScrumAgent:
             )
         elif tool_name == "read_file":
             path = str(arguments.get("path") or "?")
+            path_lower = path.lower().replace("\\", "/")
+            dep_hint = ""
+            if path_lower.endswith("pubspec.yaml") or path_lower.endswith("package.json"):
+                dep_hint = (
+                    " This task requires dependency updates — call apply_patch now to add "
+                    "the required plugins/dependencies. Do not respond with text."
+                )
             messages.append(
                 {
                     "role": "system",
@@ -379,6 +386,7 @@ class ScrumAgent:
                         f"read_file succeeded for '{path}'. Use apply_patch on this path next — "
                         "copy old_text verbatim from the read_file output above. "
                         "Do not stop until edits are written."
+                        f"{dep_hint}"
                     ),
                 }
             )
@@ -470,14 +478,6 @@ class ScrumAgent:
                 return early_stop
             tools_used.add(tool_name)
             self._append_tool_messages(messages, tool_name, arguments, result.tool_output, result.success)
-            from backend.agents.tool_outcomes import summarize_tool_args
-            from backend.services.step_diagnostics import log_tool
-
-            log_tool(
-                tool_name,
-                result.success,
-                summarize_tool_args(tool_name, arguments),
-            )
 
         tool_summary = ", ".join(
             call.function.name for call in all_calls if hasattr(call, "function")

@@ -30,12 +30,15 @@ def run_fix_verify_loop(
         return agent.execute_step(user_prompt, max_iterations=max_iterations)
 
     max_rounds = max(1, int(ws.get("maxFixVerifyRounds", 3)))
-    iterations_per_round = max(4, max_iterations // 2)
     task_id = str(task.get("id") or "")
     prompt = user_prompt
     last_result = ""
 
     for round_num in range(1, max_rounds + 1):
+        if round_num == 1:
+            iterations_per_round = max(6, max_iterations)
+        else:
+            iterations_per_round = max(4, max_iterations // 2)
         add_system_log(
             "Developer",
             "info",

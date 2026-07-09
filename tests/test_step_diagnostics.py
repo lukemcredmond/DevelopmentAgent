@@ -174,3 +174,79 @@ def test_auto_sprint_dev_step_writes_diagnostics(tmp_path, monkeypatch):
     assert data["status"] == "complete"
     assert data["taskId"] == "T-AUTO"
     assert get_active_trace() is None
+
+
+def test_tool_end_logged_after_read_file(tmp_path, monkeypatch):
+    from backend.agents.registry import agent_dev
+    from backend.services.tool_execution_service import execute_tool
+
+    monkeypatch.setenv("ALLHANDS_HOME", str(tmp_path))
+    initialize()
+    state.CURRENT_PROJECT_ID = "test-proj"
+    start_step_trace("T-TOOL", "Tool end", "Developer", "In Progress")
+
+    with patch.object(agent_dev.registry, "invoke", return_value="name: test_app"):
+        execute_tool(
+            "dev",
+            "read_file",
+            {"path": "pubspec.yaml"},
+            task_id="T-TOOL",
+            source="agent",
+        )
+
+    trace = get_active_trace()
+    assert trace is not None
+    assert any(event["kind"] == "tool_end" for event in trace.events)
+    assert any(entry["toolName"] == "read_file" for entry in trace.tools_log)
+    clear_active_step_trace()
+
+
+def test_run_in_progress_does_not_hold_state_lock(tmp_path, monkeypatch):
+    import threading
+    import time
+
+    monkeypatch.setenv("ALLHANDS_HOME", str(tmp_path))
+    initialize()
+    state.SHARED_BOARD.clear()
+    for lane in (
+        "Backlog",
+        "In Progress",
+        "Needs User",
+        "Needs PO",
+        "QA",
+        "Done",
+        "Refinement",
+        "Code Review",
+    ):
+        state.SHARED_BOARD[lane] = []
+
+    task = init_new_task({"id": "T-LOCK", "title": "Lock test", "description": "d", "status": "In Progress"})
+    state.SHARED_BOARD["In Progress"] = [task]
+
+    dev_started = threading.Event()
+    poll_ok = threading.Event()
+
+    def fake_dev_step(_active_task, *_args, **_kwargs):
+        dev_started.set()
+        time.sleep(0.4)
+        state.LAST_AGENT_STEP_RESULT = "done"
+
+    def poll_lock():
+        dev_started.wait(timeout=2)
+        acquired = state.STATE_LOCK.acquire(timeout=0.25)
+        if acquired:
+            state.STATE_LOCK.release()
+            poll_ok.set()
+
+    with patch("backend.services.sprint_service._run_developer_step", side_effect=fake_dev_step):
+        runner = threading.Thread(
+            target=lambda: run_in_progress_step("brief", "http://localhost:11434"),
+            daemon=True,
+        )
+        poller = threading.Thread(target=poll_lock, daemon=True)
+        runner.start()
+        poller.start()
+        poller.join(timeout=2)
+        runner.join(timeout=5)
+
+    assert poll_ok.is_set()

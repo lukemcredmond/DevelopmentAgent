@@ -140,13 +140,14 @@ def _emit_sprint_step_progress(
     )
 
 
-def _prepare_single_step_progress() -> bool:
+def _prepare_single_step_progress(*, force: bool = False) -> bool:
     """Configure progress for one manual step (Execute Step / Run In Progress)."""
-    if state.SPRINT_PROGRESS_STEP > 0 and state.SPRINT_PROGRESS_MAX > 1:
+    if not force and state.SPRINT_PROGRESS_STEP > 0 and state.SPRINT_PROGRESS_MAX > 1:
         return False
     state.LAST_STEP_OUTCOME = None
     state.LAST_AGENT_STEP_RESULT = None
     state.DEV_STEP_READ_ONLY_NO_EDITS = False
+    state.DEV_STEP_INTERRUPTED = False
     state.LAST_STEP_DIAGNOSTICS = None
     from backend.services.step_diagnostics import clear_active_step_trace
 
@@ -256,6 +257,7 @@ def _record_last_step_outcome(
     )
     _finalize_step_diagnostics_if_traced(task_id)
     state.DEV_STEP_READ_ONLY_NO_EDITS = False
+    state.DEV_STEP_INTERRUPTED = False
 
 
 def _finalize_step_diagnostics_if_traced(task_id: str) -> None:
@@ -1887,6 +1889,9 @@ def _run_developer_step(active_task: Dict[str, Any], brief: str) -> None:
             _audit_dev_files_written(find_task_by_id(task_id) or task, lane_before, task_id)
             _audit_dev_verification(find_task_by_id(task_id) or task, lane_before, task_id, step_started)
             _check_stuck_and_escalate(task_id, lane_before)
+    except Exception:
+        state.DEV_STEP_INTERRUPTED = True
+        raise
     finally:
         _finalize_dev_step_diagnostics_if_auto_sprint(task_id, lane_before)
 
@@ -2219,7 +2224,7 @@ def run_in_progress_step(
     if not active_task:
         raise ValueError("In Progress task not found")
 
-    _prepare_single_step_progress()
+    _prepare_single_step_progress(force=True)
     tid = str(active_task.get("id", ""))
     title = str(active_task.get("title", tid))
     lane_before = get_task_lane(tid) or "In Progress"
@@ -2234,6 +2239,9 @@ def run_in_progress_step(
 
     try:
         _run_developer_step(dict(active_task), brief)
+    except Exception:
+        state.DEV_STEP_INTERRUPTED = True
+        raise
     finally:
         clear_active_sprint_context()
         state.SPRINT_STEP_STARTED_AT = None
