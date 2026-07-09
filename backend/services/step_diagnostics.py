@@ -116,6 +116,7 @@ class StepDiagnosticsTracker:
         hints = {
             "read_only_no_edits": (
                 "Model read files but never called apply_patch/write_file. "
+                "Text/plan responses are not tools, backlog items, or memory — model must call apply_patch. "
                 "Check Model tab iteration 2+ or attach this JSON."
             ),
             "max_iterations": "Agent hit max LLM iterations without finishing edits.",
@@ -124,7 +125,10 @@ class StepDiagnosticsTracker:
             "completed_text_only": (
                 "Agent returned text without write tools while still In Progress."
             ),
-            "plan_exhausted": "Multiple plan-only responses were rejected; no edits written.",
+            "plan_exhausted": (
+                "Multiple plan-only text responses were rejected; no edits written. "
+                "Plan text is not executed — model must call apply_patch or write_file."
+            ),
             "interrupted": "Step was cancelled or raised an exception before completing.",
         }
         return hints.get(

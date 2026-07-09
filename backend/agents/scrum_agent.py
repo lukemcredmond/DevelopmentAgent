@@ -66,6 +66,16 @@ def _looks_like_plan_response(content: str) -> bool:
         return True
     if "to complete the task" in lower:
         return True
+    if re.search(r"next\s+\d+\s+things", lower):
+        return True
+    if "next steps" in lower or "things to do" in lower:
+        return True
+    if "we need to" in lower or "remaining steps" in lower:
+        return True
+    if "here's what" in lower or "here is what" in lower:
+        return True
+    if "the following" in lower:
+        return True
     return bool(re.search(r"(?m)^\s*\d+\.", content))
 
 
@@ -626,26 +636,81 @@ class ScrumAgent:
                     continue
 
                 content = (message.content or "").strip()
-                if (
-                    content
-                    and iteration < max_iterations
-                    and _dev_step_needs_more_tools(tools_used, task_id)
-                ):
+                if content and _dev_step_needs_more_tools(tools_used, task_id):
+                    if iteration >= max_iterations:
+                        max_msg = "Max tool iterations reached without completing the task."
+                        add_system_log(
+                            self.role,
+                            "warning",
+                            "Model returned text-only on final iteration (not a tool). "
+                            "Not saved to backlog or memory — apply_patch required.",
+                        )
+                        log_event("text_rejected", content[:200])
+                        write_tools = tools_used & {"write_file", "apply_patch"}
+                        if tools_used and not write_tools:
+                            tool_list = ", ".join(sorted(tools_used))
+                            add_system_log(
+                                self.role,
+                                "warning",
+                                f"Step ended after tools ({tool_list}) with no write_file or apply_patch",
+                            )
+                        add_system_log(
+                            self.role,
+                            "info",
+                            f"Step exit: max_iterations tools=[{', '.join(sorted(tools_used)) or 'none'}]",
+                        )
+                        log_event("max_iterations", max_msg)
+                        self._log_step_exit(max_msg, "warning")
+                        finish_run(status="failed", error=max_msg)
+                        return max_msg
+
                     messages.append({"role": "assistant", "content": content})
+                    from backend.services.step_diagnostics import get_active_trace
+
+                    trace = get_active_trace()
+                    plan_n = (trace.plan_rejections if trace else 0) + (
+                        1 if _looks_like_plan_response(content) else 0
+                    )
+                    text_n = (trace.text_rejections if trace else 0) + (
+                        0 if _looks_like_plan_response(content) else 1
+                    )
+                    next_iter = min(iteration + 1, max_iterations)
                     if _looks_like_plan_response(content):
                         add_system_log(
                             self.role,
                             "warning",
-                            "Plan-only response rejected — continuing tool loop",
+                            f"Plan-only response rejected ({plan_n} plan / {text_n} text rejections) — "
+                            f"continuing to iter {next_iter}/{max_iterations}. "
+                            "Text is not a tool, backlog item, or memory entry.",
                         )
                         log_event("plan_rejected", content[:200])
+                        reject_label = "plan-only"
                     else:
                         add_system_log(
                             self.role,
                             "warning",
-                            "Text-only response rejected — continuing (no writes yet)",
+                            f"Text-only response rejected ({plan_n} plan / {text_n} text rejections) — "
+                            f"continuing to iter {next_iter}/{max_iterations}. "
+                            "Not saved to backlog or memory — apply_patch required.",
                         )
                         log_event("text_rejected", content[:200])
+                        reject_label = "text-only"
+                    if task_id and state.SPRINT_PROGRESS_MAX:
+                        from backend.services.sprint_service import publish_sprint_progress
+
+                        active = find_task_by_id(task_id) or {}
+                        publish_sprint_progress(
+                            phase="sprint_step",
+                            step=state.SPRINT_PROGRESS_STEP or iteration,
+                            max_steps=state.SPRINT_PROGRESS_MAX,
+                            agent=self.role,
+                            task_id=task_id,
+                            task_title=str(active.get("title") or task_id),
+                            status=(
+                                f"Retrying after {reject_label} text "
+                                f"(iter {next_iter}/{max_iterations} — need apply_patch)"
+                            ),
+                        )
                     messages.append({"role": "system", "content": _PLAN_REJECTION_MESSAGE})
                     continue
 

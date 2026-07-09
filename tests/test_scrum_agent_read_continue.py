@@ -7,7 +7,13 @@ from backend import state
 from backend.agents.registry import agent_dev
 from backend.agents.task_context import init_new_task, set_active_sprint_context
 from backend.bootstrap import initialize
-from backend.services.sprint_service import _dev_step_read_only_no_edits, run_in_progress_step
+from backend.services.sprint_service import (
+    _build_last_step_outcome,
+    _dev_step_read_only_no_edits,
+    run_in_progress_step,
+)
+from backend.agents.scrum_agent import _looks_like_plan_response
+from backend.services.step_diagnostics import start_step_trace
 
 
 class _FakeFunction:
@@ -271,3 +277,89 @@ def test_run_in_progress_read_only_sets_last_step_outcome():
     assert state.LAST_STEP_OUTCOME is not None
     assert state.LAST_STEP_OUTCOME["ok"] is False
     assert "read files but made no edits" in state.LAST_STEP_OUTCOME["message"]
+
+
+def test_next_n_things_detected_as_plan():
+    assert _looks_like_plan_response("ok now we have to do the next 6 things") is True
+    assert _looks_like_plan_response("Here are the next steps for pubspec.yaml") is True
+
+
+def test_plan_text_on_final_iteration_does_not_exit_early():
+    initialize()
+    state.SHARED_BOARD.clear()
+    for lane in ("Backlog", "In Progress", "Needs User", "Needs PO", "QA", "Done", "Refinement", "Code Review"):
+        state.SHARED_BOARD[lane] = []
+
+    task = init_new_task({"id": "T-FINAL", "title": "Final iter plan", "description": "d", "status": "In Progress"})
+    state.SHARED_BOARD["In Progress"] = [task]
+
+    chat_calls = {"count": 0}
+    plan_text = "ok now we have to do the next 6 things"
+
+    def fake_chat(messages, **kwargs):
+        chat_calls["count"] += 1
+        if chat_calls["count"] == 1:
+            return _FakeResponse(
+                _FakeMessage(tool_calls=[_FakeToolCall("read_file", {"path": "pubspec.yaml"})])
+            )
+        if chat_calls["count"] == 2:
+            return _FakeResponse(_FakeMessage(content=plan_text))
+        if chat_calls["count"] == 3:
+            return _FakeResponse(_FakeMessage(content=plan_text))
+        if chat_calls["count"] == 4:
+            return _FakeResponse(_FakeMessage(content=plan_text))
+        return _FakeResponse(_FakeMessage(content="unexpected"))
+
+    set_active_sprint_context("T-FINAL", "Developer")
+    state.STEP_FILE_READS.clear()
+
+    def fake_exec(agent_id, tool_name, arguments, **kwargs):
+        from backend.workspace.files import record_step_file_read
+
+        if tool_name == "read_file":
+            record_step_file_read(str(arguments.get("path") or ""), "name: app\n")
+        return type(
+            "R",
+            (),
+            {
+                "tool_name": tool_name,
+                "tool_output": "name: app\n",
+                "success": True,
+                "pending_approval": False,
+            },
+        )()
+
+    with patch.object(agent_dev, "_chat", side_effect=fake_chat):
+        with patch("backend.agents.scrum_agent.execute_tool", side_effect=fake_exec):
+            with patch("backend.services.llm_context.prune_messages_if_needed", lambda m: m):
+                result = agent_dev.execute_step("Update pubspec.yaml", max_iterations=4)
+
+    assert result.startswith("Max tool iterations")
+    assert plan_text not in result
+
+
+def test_last_step_outcome_includes_why_card_stayed(tmp_path, monkeypatch):
+    monkeypatch.setenv("ALLHANDS_HOME", str(tmp_path))
+    initialize()
+    task = init_new_task({"id": "T-OUT", "title": "Pubspec task", "description": "d", "status": "In Progress"})
+    state.SHARED_BOARD["In Progress"] = [task]
+    state.CURRENT_PROJECT_ID = "test-proj"
+
+    trace = start_step_trace("T-OUT", "Pubspec task", "Developer", "In Progress")
+    trace.log_event("plan_rejected", "next 6 things")
+    trace.log_tool("read_file", True, "pubspec.yaml")
+    state.DEV_STEP_READ_ONLY_NO_EDITS = True
+
+    outcome = _build_last_step_outcome(
+        "T-OUT",
+        "In Progress",
+        "Developer",
+        agent_result="Max tool iterations reached without completing the task.",
+    )
+
+    assert outcome["stopReason"] == "max_iterations"
+    assert outcome.get("whyCardStayed")
+    assert "not executed as tools" in outcome["whyCardStayed"]
+    assert outcome.get("suggestedAction")
+    assert outcome["planRejections"] >= 0
+    assert "read_file" in outcome.get("toolsUsed", [])

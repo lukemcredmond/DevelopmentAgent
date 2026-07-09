@@ -554,10 +554,20 @@ export default function App() {
       const outcome = data.lastStepOutcome
       const diagnostics = data.lastStepDiagnostics
       const activeDiag = data.activeStepDiagnostics
+
+      const cardStayedNote =
+        outcome?.laneAfter === 'In Progress' && outcome?.whyCardStayed
+          ? `Card stayed In Progress: ${outcome.whyCardStayed}${
+              outcome.suggestedAction ? ` ${outcome.suggestedAction}` : ''
+            }`
+          : null
+
       if (activeDiag?.filePath) {
         setActionNotice(
           `Live diagnostics: ${activeDiag.filePath} — copy path from Console`,
         )
+      } else if (cardStayedNote) {
+        setActionError(cardStayedNote)
       } else if (diagnostics?.filePath) {
         const diagNote = `Diagnostics saved: ${diagnostics.filePath}${diagnostics.hint ? ` — ${diagnostics.hint}` : ''}`
         if (outcome && (!outcome.ok || outcome.toolFailures > 0)) {
@@ -567,6 +577,8 @@ export default function App() {
         }
       } else if (outcome && (!outcome.ok || outcome.toolFailures > 0)) {
         setActionError(outcome.message)
+      } else if (outcome?.laneAfter === 'In Progress' && outcome.agent === 'Developer') {
+        setActionNotice(outcome.message)
       }
       if (outcome && (!outcome.ok || outcome.toolFailures > 0) && outcome.toolFailures > 0) {
         openToolsTab()

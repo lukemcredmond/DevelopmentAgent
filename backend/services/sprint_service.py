@@ -195,6 +195,73 @@ def _dev_step_read_only_no_edits(
     return has_read and not has_write
 
 
+def _outcome_stop_reason(
+    *,
+    agent_result: Optional[str],
+    lane_before: str,
+    lane_after: str,
+    tools_used: Optional[set[str]] = None,
+) -> str:
+    from backend.services.step_diagnostics import derive_exit_reason, get_active_trace
+
+    trace = get_active_trace()
+    tools = tools_used if tools_used is not None else (trace.tools_used if trace else set())
+    return derive_exit_reason(
+        agent_result=agent_result,
+        tools_used=tools,
+        lane_before=lane_before,
+        lane_after=lane_after,
+    )
+
+
+def _outcome_why_card_stayed(
+    stop_reason: str,
+    *,
+    title: str,
+    lane_after: str,
+    plan_rejections: int = 0,
+    text_rejections: int = 0,
+) -> str:
+    if lane_after != "In Progress":
+        return ""
+    if stop_reason == "completed_with_writes":
+        return ""
+    base = (
+        "Text responses are not executed as tools and are not added to the backlog or memory."
+    )
+    if stop_reason == "read_only_no_edits":
+        return (
+            f"Developer read files but never called apply_patch/write_file on '{title}'. {base}"
+        )
+    if stop_reason == "plan_exhausted":
+        return (
+            f"Model returned plan-only text {plan_rejections} time(s) without calling apply_patch "
+            f"on '{title}'. {base}"
+        )
+    if stop_reason == "max_iterations":
+        return (
+            f"Agent hit the LLM iteration limit on '{title}' without writing edits. {base}"
+        )
+    if stop_reason == "completed_text_only":
+        return (
+            f"Developer returned text-only on '{title}' without apply_patch/write_file. {base}"
+        )
+    if text_rejections or plan_rejections:
+        return (
+            f"Step on '{title}' ended with {plan_rejections} plan and {text_rejections} text "
+            f"rejections and no file edits. {base}"
+        )
+    return f"Card stayed in {lane_after} on '{title}'. {base}"
+
+
+def _outcome_suggested_action(stop_reason: str, lane_after: str) -> str:
+    if lane_after != "In Progress":
+        return ""
+    if stop_reason == "completed_with_writes":
+        return ""
+    return "Run In Progress again or edit the workspace files manually, then move the card to QA."
+
+
 def _build_last_step_outcome(
     task_id: str,
     lane_before: str,
@@ -202,10 +269,40 @@ def _build_last_step_outcome(
     *,
     agent_result: Optional[str] = None,
 ) -> Dict[str, Any]:
+    from backend.services.step_diagnostics import get_active_trace
+
     task = find_task_by_id(task_id)
     lane_after = get_task_lane(task_id) or lane_before
     tool_failures = _count_task_tool_failures(task) if task else 0
     title = str(task.get("title", task_id)) if task else task_id
+    trace = get_active_trace()
+    plan_rejections = trace.plan_rejections if trace else 0
+    text_rejections = trace.text_rejections if trace else 0
+    tools_used = sorted(trace.tools_used) if trace else []
+    agent_snippet = (agent_result or "")[:200]
+    if trace and not agent_snippet and trace.events:
+        for event in reversed(trace.events):
+            if event.get("kind") in ("plan_rejected", "text_rejected"):
+                agent_snippet = str(event.get("message", ""))[:200]
+                break
+
+    stop_reason = _outcome_stop_reason(
+        agent_result=agent_result,
+        lane_before=lane_before,
+        lane_after=lane_after,
+    )
+    why_card_stayed = _outcome_why_card_stayed(
+        stop_reason,
+        title=title,
+        lane_after=lane_after,
+        plan_rejections=plan_rejections,
+        text_rejections=text_rejections,
+    )
+    suggested_action = _outcome_suggested_action(stop_reason, lane_after)
+    model_response_type = "text_only" if agent_result and not (trace and trace.tools_used & {"write_file", "apply_patch"}) else None
+    if agent_result and agent_result.startswith("Max tool iterations"):
+        model_response_type = "text_only"
+
     ok = True
     message = f"Step completed on '{title}'."
     if agent_result:
@@ -230,8 +327,13 @@ def _build_last_step_outcome(
     elif lane_before != lane_after:
         message = f"'{title}' moved from {lane_before} → {lane_after}."
     elif lane_before == lane_after and lane_after == "In Progress":
-        message = f"Dev step finished on '{title}' — card still In Progress."
-    return {
+        ok = False if why_card_stayed else True
+        if why_card_stayed:
+            message = f"Card stayed In Progress: {why_card_stayed}"
+        else:
+            message = f"Dev step finished on '{title}' — card still In Progress."
+
+    outcome: Dict[str, Any] = {
         "taskId": task_id,
         "agent": agent,
         "laneBefore": lane_before,
@@ -239,7 +341,20 @@ def _build_last_step_outcome(
         "toolFailures": tool_failures,
         "ok": ok,
         "message": message,
+        "stopReason": stop_reason,
+        "planRejections": plan_rejections,
+        "textRejections": text_rejections,
+        "toolsUsed": tools_used,
     }
+    if why_card_stayed:
+        outcome["whyCardStayed"] = why_card_stayed
+    if suggested_action:
+        outcome["suggestedAction"] = suggested_action
+    if agent_snippet:
+        outcome["agentResultSnippet"] = agent_snippet
+    if model_response_type:
+        outcome["modelResponseType"] = model_response_type
+    return outcome
 
 
 def _record_last_step_outcome(

@@ -417,6 +417,14 @@ export interface LastStepOutcome {
   toolFailures: number
   ok: boolean
   message: string
+  stopReason?: string
+  whyCardStayed?: string
+  suggestedAction?: string
+  modelResponseType?: string
+  planRejections?: number
+  textRejections?: number
+  toolsUsed?: string[]
+  agentResultSnippet?: string
 }
 
 export interface LastStepDiagnostics {
