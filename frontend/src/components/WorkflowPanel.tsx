@@ -665,6 +665,81 @@ export default function WorkflowPanel({
       </p>
 
       <label className="text-[11px] text-cat-subtext block">
+        <span className="text-[10px] text-cat-overlay block">Ollama request timeout (seconds)</span>
+        <input
+          type="number"
+          min={60}
+          max={900}
+          value={settings.ollamaRequestTimeoutSec ?? 300}
+          onChange={(e) =>
+            onSettingsChange({
+              ollamaRequestTimeoutSec: Math.min(900, Math.max(60, parseInt(e.target.value, 10) || 300)),
+            })
+          }
+          className="w-full bg-cat-base border border-cat-surface1 rounded p-1 text-white"
+        />
+      </label>
+      <p className="text-[10px] text-cat-overlay leading-relaxed -mt-1">
+        Per-attempt HTTP timeout. Raise for slow models (default 300s; was 120s).
+      </p>
+
+      <label className="text-[11px] text-cat-subtext block">
+        <span className="text-[10px] text-cat-overlay block">Ollama max retries per call</span>
+        <input
+          type="number"
+          min={1}
+          max={10}
+          value={settings.ollamaMaxRetries ?? 4}
+          onChange={(e) =>
+            onSettingsChange({ ollamaMaxRetries: Math.min(10, Math.max(1, parseInt(e.target.value, 10) || 4)) })
+          }
+          className="w-full bg-cat-base border border-cat-surface1 rounded p-1 text-white"
+        />
+      </label>
+
+      <label className="flex items-center gap-2 text-[11px] text-cat-subtext cursor-pointer">
+        <input
+          type="checkbox"
+          checked={settings.ollamaCooldownRetryEnabled !== false}
+          onChange={(e) => onSettingsChange({ ollamaCooldownRetryEnabled: e.target.checked })}
+          className="rounded"
+        />
+        Cooldown retry after initial failures (extra attempts after pause)
+      </label>
+
+      <label className="text-[11px] text-cat-subtext block">
+        <span className="text-[10px] text-cat-overlay block">Cooldown pause (seconds)</span>
+        <input
+          type="number"
+          min={0}
+          max={120}
+          value={settings.ollamaCooldownRetrySec ?? 15}
+          onChange={(e) =>
+            onSettingsChange({
+              ollamaCooldownRetrySec: Math.min(120, Math.max(0, parseInt(e.target.value, 10) || 15)),
+            })
+          }
+          className="w-full bg-cat-base border border-cat-surface1 rounded p-1 text-white"
+        />
+      </label>
+
+      <label className="text-[11px] text-cat-subtext block">
+        <span className="text-[10px] text-cat-overlay block">Cooldown extra attempts</span>
+        <input
+          type="number"
+          min={0}
+          max={5}
+          value={settings.ollamaCooldownRetryAttempts ?? 2}
+          onChange={(e) =>
+            onSettingsChange({
+              ollamaCooldownRetryAttempts: Math.min(5, Math.max(0, parseInt(e.target.value, 10) || 2)),
+            })
+          }
+          className="w-full bg-cat-base border border-cat-surface1 rounded p-1 text-white"
+        />
+      </label>
+
+      <label className="text-[11px] text-cat-subtext block">
         <span className="text-[10px] text-cat-overlay block">Max Needs User per sprint</span>
         <input
           type="number"

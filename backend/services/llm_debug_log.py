@@ -68,6 +68,7 @@ def append_llm_log_entry(
     response_tool_calls: Optional[List[Any]] = None,
     duration_ms: int = 0,
     error: Optional[str] = None,
+    error_type: Optional[str] = None,
     run_id: Optional[str] = None,
     memories_used: Optional[List[Dict[str, Any]]] = None,
     decisions_included: Optional[int] = None,
@@ -88,6 +89,8 @@ def append_llm_log_entry(
         "durationMs": duration_ms,
         "error": error,
     }
+    if error_type:
+        entry["errorType"] = error_type
     if memories_used is not None:
         entry["memoriesUsed"] = [
             {

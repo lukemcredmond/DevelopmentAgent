@@ -267,6 +267,12 @@ export interface WorkflowSettings {
   embedModel?: string
   ollamaNumCtx?: number
   ollamaKeepAlive?: string
+  ollamaRequestTimeoutSec?: number
+  ollamaMaxRetries?: number
+  ollamaRetryDelaySec?: number[]
+  ollamaCooldownRetryEnabled?: boolean
+  ollamaCooldownRetrySec?: number
+  ollamaCooldownRetryAttempts?: number
   maxToolOutputCharsForLlm?: number
   messagePruneThresholdPct?: number
   enableSemanticSprintContext?: boolean
@@ -675,6 +681,12 @@ export interface WorkflowSettingsPayload {
   embedModel?: string
   ollamaNumCtx?: number
   ollamaKeepAlive?: string
+  ollamaRequestTimeoutSec?: number
+  ollamaMaxRetries?: number
+  ollamaRetryDelaySec?: number[]
+  ollamaCooldownRetryEnabled?: boolean
+  ollamaCooldownRetrySec?: number
+  ollamaCooldownRetryAttempts?: number
   maxToolOutputCharsForLlm?: number
   messagePruneThresholdPct?: number
   enableSemanticSprintContext?: boolean
@@ -878,6 +890,12 @@ export const DEFAULT_WORKFLOW_SETTINGS: WorkflowSettings = {
   embedModel: 'nomic-embed-text',
   ollamaNumCtx: 32768,
   ollamaKeepAlive: '30m',
+  ollamaRequestTimeoutSec: 300,
+  ollamaMaxRetries: 4,
+  ollamaRetryDelaySec: [0, 2, 5, 10],
+  ollamaCooldownRetryEnabled: true,
+  ollamaCooldownRetrySec: 15,
+  ollamaCooldownRetryAttempts: 2,
   maxToolOutputCharsForLlm: 6000,
   messagePruneThresholdPct: 60,
   enableSemanticSprintContext: true,

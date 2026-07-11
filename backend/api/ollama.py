@@ -1,12 +1,13 @@
-import subprocess
 from typing import Any, Dict, List, Optional
 
 import requests
 from fastapi import APIRouter, Query
+from fastapi.responses import StreamingResponse
 
 from backend import state
 from backend.services.llm_debug_log import clear_llm_log, get_llm_logs
 from backend.services.model_timeline import build_model_timeline
+from backend.services.ollama_service_log import read_service_log_snapshot, stream_service_logs
 from backend.services.qdrant_auth import qdrant_connection_settings, qdrant_request_headers
 from backend.services.system_capacity import get_model_recommendations, probe_system_capacity
 
@@ -75,6 +76,20 @@ def qdrant_health(
         return {"ok": False, "url": target, "error": f"HTTP {response.status_code}: {body}"}
     except requests.RequestException as e:
         return {"ok": False, "url": target, "error": str(e)}
+
+
+@router.get("/api/ollama/service-logs")
+def get_ollama_service_logs(lines: int = Query(default=50, ge=1, le=500)):
+    return read_service_log_snapshot(lines)
+
+
+@router.get("/api/ollama/service-logs/stream")
+def stream_ollama_service_logs(lines: int = Query(default=50, ge=1, le=500)):
+    return StreamingResponse(
+        stream_service_logs(lines),
+        media_type="text/event-stream",
+        headers={"Cache-Control": "no-cache", "X-Accel-Buffering": "no"},
+    )
 
 
 @router.get("/api/ollama/system-capacity")

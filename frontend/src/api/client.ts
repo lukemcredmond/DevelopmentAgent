@@ -626,6 +626,22 @@ export async function clearLlmLogs(): Promise<{ ok: boolean; entries: [] }> {
   return request('/api/ollama/logs/clear', { method: 'POST' })
 }
 
+export interface OllamaServiceLogSnapshot {
+  available: boolean
+  source: string
+  path?: string | null
+  note?: string | null
+  lines: string[]
+  text: string
+  error?: string | null
+}
+
+export async function fetchOllamaServiceLogs(
+  lines = 50,
+): Promise<OllamaServiceLogSnapshot> {
+  return request(`/api/ollama/service-logs?lines=${lines}`)
+}
+
 export async function fetchModelTimeline(params?: {
   taskId?: string
   limit?: number

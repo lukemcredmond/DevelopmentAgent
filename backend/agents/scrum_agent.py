@@ -104,16 +104,38 @@ class ScrumAgent:
         self.assigned_skills: List[str] = []
         self._client: Optional[Client] = None
         self._client_host: Optional[str] = None
+        self._client_timeout: Optional[float] = None
         self._last_memories_used: List[Dict[str, Any]] = []
         self._decisions_in_prompt: int = 0
+        self._last_chat_error_type: Optional[str] = None
+        self._last_chat_error: Optional[str] = None
 
     def register_tool(self, tool) -> None:
         self.registry.register(tool)
 
+    def _ollama_timeout_sec(self) -> float:
+        return float(get_workflow_settings().get("ollamaRequestTimeoutSec", 300))
+
+    def _ollama_max_retries(self) -> int:
+        return max(1, int(get_workflow_settings().get("ollamaMaxRetries", 4)))
+
+    def _ollama_retry_delays(self) -> List[int]:
+        ws = get_workflow_settings()
+        raw = ws.get("ollamaRetryDelaySec")
+        if isinstance(raw, list) and raw:
+            return [max(0, int(d)) for d in raw]
+        return [0, 2, 5, 10]
+
     def _get_client(self) -> Client:
-        if self._client is None or self._client_host != self.ollama_url:
-            self._client = Client(host=self.ollama_url, timeout=120.0)
+        timeout = self._ollama_timeout_sec()
+        if (
+            self._client is None
+            or self._client_host != self.ollama_url
+            or self._client_timeout != timeout
+        ):
+            self._client = Client(host=self.ollama_url, timeout=timeout)
             self._client_host = self.ollama_url
+            self._client_timeout = timeout
         return self._client
 
     def _get_skills_context(self) -> str:
@@ -186,6 +208,17 @@ class ScrumAgent:
         lower = error.lower()
         return "exceed_context" in lower or "context size" in lower
 
+    @staticmethod
+    def _classify_ollama_error(error: str) -> str:
+        if ScrumAgent._is_context_overflow_error(error):
+            return "context_overflow"
+        lower = error.lower()
+        if "timeout" in lower or "timed out" in lower:
+            return "timeout"
+        if any(k in lower for k in ("connection", "refused", "unreachable", "connect")):
+            return "connection"
+        return "other"
+
     def _context_overflow_message(self) -> str:
         ws = get_workflow_settings()
         num_ctx = int(ws.get("ollamaNumCtx", 32768))
@@ -193,6 +226,80 @@ class ScrumAgent:
             f"Request exceeded Ollama context (num_ctx={num_ctx}). "
             "Increase Ollama context size in Workflow settings, or shorten the project brief / remove assigned skills."
         )
+
+    def _single_chat_attempt(
+        self,
+        client: Client,
+        messages: Sequence[ChatMessage],
+        *,
+        stream: bool,
+        tools: Optional[Sequence[Dict[str, Any]]],
+        iteration: int,
+        task_id: Optional[str],
+        agent_id: str,
+        run_id: Optional[str],
+        tool_names: List[str],
+    ) -> Tuple[Optional[Any], Optional[str], Optional[str], int]:
+        """Returns (result, error, error_type, duration_ms)."""
+        from backend.services.llm_debug_log import append_llm_log_entry
+
+        started = time.time()
+        try:
+            result = client.chat(
+                model=self.model,
+                messages=list(messages),
+                tools=tools,
+                stream=stream,
+                options=self._chat_options(),
+            )
+            duration_ms = int((time.time() - started) * 1000)
+            if not stream and result is not None:
+                msg = result.message
+                tool_calls = []
+                if msg.tool_calls:
+                    for tc in msg.tool_calls:
+                        tool_calls.append(
+                            {
+                                "name": tc.function.name,
+                                "arguments": tc.function.arguments,
+                            }
+                        )
+                append_llm_log_entry(
+                    agent=self.role,
+                    agent_id=agent_id,
+                    task_id=task_id,
+                    run_id=run_id,
+                    model=self.model,
+                    iteration=iteration,
+                    request_messages=messages,
+                    tool_names=tool_names,
+                    response_content=(msg.content or "") if msg else "",
+                    response_tool_calls=tool_calls,
+                    duration_ms=duration_ms,
+                    memories_used=getattr(self, "_last_memories_used", None),
+                    decisions_included=getattr(self, "_decisions_in_prompt", None),
+                )
+            return result, None, None, duration_ms
+        except Exception as exc:
+            last_error = str(exc)
+            error_type = self._classify_ollama_error(last_error)
+            duration_ms = int((time.time() - started) * 1000)
+            append_llm_log_entry(
+                agent=self.role,
+                agent_id=agent_id,
+                task_id=task_id,
+                run_id=run_id,
+                model=self.model,
+                iteration=iteration,
+                request_messages=messages,
+                tool_names=tool_names,
+                duration_ms=duration_ms,
+                error=last_error,
+                error_type=error_type,
+                memories_used=getattr(self, "_last_memories_used", None),
+                decisions_included=getattr(self, "_decisions_in_prompt", None),
+            )
+            return None, last_error, error_type, duration_ms
 
     def _chat(
         self,
@@ -205,81 +312,96 @@ class ScrumAgent:
         agent_id: Optional[str] = None,
     ):
         from backend.agents.registry import AGENT_MAP
-        from backend.services.llm_debug_log import append_llm_log_entry
 
         client = self._get_client()
-        delays = [0, 1, 2, 4]
+        max_retries = self._ollama_max_retries()
+        delays = self._ollama_retry_delays()
+        while len(delays) < max_retries:
+            delays.append(delays[-1] if delays else 0)
+        delays = delays[:max_retries]
+
         if agent_id is None:
             agent_id = next((aid for aid, a in AGENT_MAP.items() if a is self), "dev")
         tid = task_id or state.ACTIVE_SPRINT_TASK_ID
         active_run = get_active_run()
         run_id = active_run.run_id if active_run else None
-        tool_names = [t.get("function", {}).get("name") for t in (tools or []) if isinstance(t, dict)]
+        tool_names = [n for n in (t.get("function", {}).get("name") for t in (tools or []) if isinstance(t, dict)) if n]
 
-        for delay in delays:
-            if delay:
-                time.sleep(delay)
-            started = time.time()
-            last_error: Optional[str] = None
-            try:
-                result = client.chat(
-                    model=self.model,
-                    messages=list(messages),
-                    tools=tools,
+        last_error: Optional[str] = None
+        last_error_type: Optional[str] = None
+        timeout_sec = int(self._ollama_timeout_sec())
+
+        def _run_attempts(attempt_delays: List[int], *, phase: str) -> Optional[Any]:
+            nonlocal last_error, last_error_type
+            total = len(attempt_delays)
+            for idx, delay in enumerate(attempt_delays):
+                if delay:
+                    time.sleep(delay)
+                attempt_num = idx + 1
+                result, err, err_type, duration_ms = self._single_chat_attempt(
+                    client,
+                    messages,
                     stream=stream,
-                    options=self._chat_options(),
-                )
-                duration_ms = int((time.time() - started) * 1000)
-                if not stream and result is not None:
-                    msg = result.message
-                    tool_calls = []
-                    if msg.tool_calls:
-                        for tc in msg.tool_calls:
-                            tool_calls.append(
-                                {
-                                    "name": tc.function.name,
-                                    "arguments": tc.function.arguments,
-                                }
-                            )
-                    append_llm_log_entry(
-                        agent=self.role,
-                        agent_id=agent_id or "dev",
-                        task_id=tid,
-                        run_id=run_id,
-                        model=self.model,
-                        iteration=iteration,
-                        request_messages=messages,
-                        tool_names=[n for n in tool_names if n],
-                        response_content=(msg.content or "") if msg else "",
-                        response_tool_calls=tool_calls,
-                        duration_ms=duration_ms,
-                        memories_used=getattr(self, "_last_memories_used", None),
-                        decisions_included=getattr(self, "_decisions_in_prompt", None),
-                    )
-                return result
-            except Exception as exc:
-                last_error = str(exc)
-                duration_ms = int((time.time() - started) * 1000)
-                append_llm_log_entry(
-                    agent=self.role,
-                    agent_id=agent_id or "dev",
-                    task_id=tid,
-                    run_id=run_id,
-                    model=self.model,
+                    tools=tools,
                     iteration=iteration,
-                    request_messages=messages,
-                    tool_names=[n for n in tool_names if n],
-                    duration_ms=duration_ms,
-                    error=last_error,
-                    memories_used=getattr(self, "_last_memories_used", None),
-                    decisions_included=getattr(self, "_decisions_in_prompt", None),
+                    task_id=tid,
+                    agent_id=agent_id or "dev",
+                    run_id=run_id,
+                    tool_names=tool_names,
                 )
-                if self._is_context_overflow_error(last_error):
+                if result is not None:
+                    self._last_chat_error = None
+                    self._last_chat_error_type = None
+                    return result
+                last_error = err
+                last_error_type = err_type
+                if err_type == "context_overflow":
                     overflow_msg = self._context_overflow_message()
                     add_system_log(self.role, "error", overflow_msg)
+                    self._last_chat_error = err
+                    self._last_chat_error_type = err_type
                     return None
-                continue
+                reason = err_type or "error"
+                if err_type == "timeout":
+                    detail = f"timeout after {timeout_sec}s"
+                else:
+                    detail = (err or "unknown")[:120]
+                prefix = f"Ollama {phase} attempt {attempt_num}/{total} failed ({reason}"
+                add_system_log(self.role, "warning", f"{prefix}: {detail})")
+            return None
 
+        result = _run_attempts(delays, phase="")
+        if result is not None:
+            return result
+
+        ws = get_workflow_settings()
+        if (
+            last_error_type != "context_overflow"
+            and ws.get("ollamaCooldownRetryEnabled", True)
+        ):
+            cooldown = max(0, int(ws.get("ollamaCooldownRetrySec", 15)))
+            extra_attempts = max(0, int(ws.get("ollamaCooldownRetryAttempts", 2)))
+            if extra_attempts > 0:
+                add_system_log(
+                    self.role,
+                    "info",
+                    f"Ollama cooldown retry in {cooldown}s ({extra_attempts} more attempt(s))…",
+                )
+                if cooldown:
+                    time.sleep(cooldown)
+                extra_delays = [0] * extra_attempts
+                result = _run_attempts(extra_delays, phase="cooldown")
+                if result is not None:
+                    return result
+
+        self._last_chat_error = last_error
+        self._last_chat_error_type = last_error_type
+        summary = last_error or "unknown"
+        add_system_log(
+            self.role,
+            "warning",
+            f"All Ollama attempts failed — last error ({last_error_type or 'other'}): {summary[:200]}",
+        )
         return None
 
     def _log_step_exit(self, message: str, log_type: str = "warning") -> None:
@@ -585,10 +707,12 @@ class ScrumAgent:
                 from backend.services.step_diagnostics import log_ollama_call
 
                 if response is None:
+                    err_type = getattr(self, "_last_chat_error_type", None) or "unavailable"
                     log_ollama_call(
                         iteration,
                         duration_ms=ollama_duration_ms,
                         error="unavailable",
+                        error_type=err_type,
                     )
                     self._log_step_exit("Ollama unavailable — SIMULATION_FALLBACK", "warning")
                     finish_run(status="failed", error="SIMULATION_FALLBACK")

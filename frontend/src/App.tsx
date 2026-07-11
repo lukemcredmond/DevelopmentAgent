@@ -43,9 +43,7 @@ import ActivityPanel from './components/ActivityPanel'
 import AgentConsole from './components/AgentConsole'
 import BriefPanel from './components/BriefPanel'
 import ChatPanel, { type ChatUiMessage } from './components/ChatPanel'
-import CodeEditor from './components/CodeEditor'
-import DiffPanel from './components/DiffPanel'
-import FileExplorer from './components/FileExplorer'
+import EditorPanel from './components/EditorPanel'
 import GitPanel from './components/GitPanel'
 import KanbanBoard from './components/KanbanBoard'
 import ManualTaskModal from './components/ManualTaskModal'
@@ -59,6 +57,7 @@ import ToolResolutionModal from './components/ToolResolutionModal'
 import ToolApprovalModal from './components/ToolApprovalModal'
 import AgentRunBar from './components/AgentRunBar'
 import ModelDebugPanel from './components/ModelDebugPanel'
+import OllamaServiceLogPanel from './components/OllamaServiceLogPanel'
 import FileDiffModal from './components/FileDiffModal'
 import SprintProgressBar from './components/SprintProgressBar'
 import BottomPanelResize, {
@@ -74,7 +73,18 @@ import type { AgentId, AppState, BoardLane, BriefCategory, ChatMessageRecord, Pe
 import { countClaimableBacklogTasks, getDisplayLanes } from './types'
 import { findTaskOnBoard } from './utils/taskFormat'
 
-type BottomTab = 'console' | 'activity' | 'tools' | 'model' | 'memory' | 'chat' | 'terminal' | 'search' | 'git'
+type BottomTab =
+  | 'console'
+  | 'activity'
+  | 'tools'
+  | 'model'
+  | 'ollamaServer'
+  | 'editor'
+  | 'memory'
+  | 'chat'
+  | 'terminal'
+  | 'search'
+  | 'git'
 
 const WORKSPACE_OPEN_KEY = 'allhands-workspace-open'
 
@@ -179,7 +189,6 @@ export default function App() {
   const [selectedFile, setSelectedFile] = useState<string | null>(null)
   const [workspaceOpen, setWorkspaceOpen] = useState(readWorkspaceOpen)
   const [workspaceBarDismissed, setWorkspaceBarDismissed] = useState(false)
-  const showWorkspace = selectedFile != null || workspaceOpen
   const [showDiff, setShowDiff] = useState(false)
   const [bottomTab, setBottomTab] = useState<BottomTab>('console')
   const [memoryCount, setMemoryCount] = useState(0)
@@ -372,13 +381,13 @@ export default function App() {
   }, [state.files])
 
   useEffect(() => {
-    if (!showWorkspace) return
+    if (!workspaceOpen && !selectedFile) return
     const pathCount = state.filePaths?.length ?? 0
     const loadedCount = Object.keys(state.files).length
     if (pathCount > 0 && loadedCount >= pathCount) return
     if (pathCount === 0 && loadedCount > 0) return
     void refresh({ includeFiles: true })
-  }, [showWorkspace, state.filePaths?.length, state.files, refresh])
+  }, [workspaceOpen, selectedFile, state.filePaths?.length, state.files, refresh])
 
   useEffect(() => {
     const key = `allhands-chat-draft-${state.projectId}`
@@ -624,6 +633,13 @@ export default function App() {
     (): { id: BottomTab; label: string; icon: string; badge?: number }[] => [
       { id: 'console', label: 'Console', icon: 'fa-terminal' },
       { id: 'model', label: 'Model', icon: 'fa-brain' },
+      { id: 'ollamaServer', label: 'Ollama Server', icon: 'fa-server' },
+      {
+        id: 'editor',
+        label: 'Editor',
+        icon: 'fa-file-code',
+        badge: selectedFile ? 1 : undefined,
+      },
       {
         id: 'tools',
         label: 'Tools',
@@ -647,7 +663,7 @@ export default function App() {
       { id: 'search', label: 'Search', icon: 'fa-magnifying-glass' },
       { id: 'git', label: 'Git', icon: 'fa-code-branch' },
     ],
-    [toolRunningCount, toolFailureCount, activityEvents.length, memoryCount],
+    [toolRunningCount, toolFailureCount, activityEvents.length, memoryCount, selectedFile],
   )
 
   const handleWorkflowSettingsChange = useCallback(
@@ -934,7 +950,7 @@ export default function App() {
             <div className="flex items-center gap-2">
               <i className="fa-solid fa-triangle-exclamation shrink-0" />
               <span>
-                Offline simulation — Ollama retries up to 4 times then uses SIMULATION_FALLBACK.
+                Offline simulation — Ollama retries (configurable) then cooldown burst; default timeout 300s per attempt.
                 {orchestratedActive ? ' Sprint steps use fallback behavior.' : ' Start Ollama for real agent behavior.'}
               </span>
             </div>
@@ -1013,59 +1029,35 @@ export default function App() {
         )}
 
         <div ref={workspaceColumnRef} className="flex-1 flex flex-col min-h-0 overflow-hidden">
-          {showWorkspace ? (
-            <div className="flex-1 min-h-0 grid grid-cols-1 lg:grid-cols-[200px_1fr] overflow-hidden">
-              <FileExplorer
-                selectedFile={selectedFile}
-                onSelectFile={handleOpenFile}
-                refreshKey={fileTreeKey}
-              />
-              <div className="min-h-0 flex flex-col overflow-hidden">
-                {showDiff ? (
-                  <DiffPanel
-                    path={selectedFile}
-                    currentContent={localFiles[selectedFile ?? '']}
-                  />
-                ) : (
-                  <CodeEditor
-                    files={localFiles}
-                    selectedFile={selectedFile}
-                    onSelectFile={handleOpenFile}
-                    onFilesChange={setLocalFiles}
-                    showDiff={showDiff}
-                    onToggleDiff={() => setShowDiff((d) => !d)}
-                    onCloseWorkspace={handleCloseWorkspace}
-                  />
-                )}
+          {!workspaceBarDismissed && (
+            <div className="shrink-0 mx-4 mb-2 flex items-center justify-between gap-3 px-3 py-2 text-[11px] text-cat-subtext bg-cat-surface0/60 border border-cat-surface1 rounded-lg">
+              <span>
+                {selectedFile
+                  ? `File ready: ${selectedFile} — open the Editor tab below`
+                  : 'No file open — open from a task card or browse files, then use the Editor tab'}
+              </span>
+              <div className="flex items-center gap-2 shrink-0">
+                <button
+                  type="button"
+                  onClick={() => {
+                    setWorkspaceOpen(true)
+                    writeWorkspaceOpen(true)
+                    setWorkspaceBarDismissed(false)
+                  }}
+                  className="px-2.5 py-1 rounded bg-indigo-600/40 hover:bg-indigo-600/60 text-indigo-200 text-[10px] font-semibold"
+                >
+                  Browse files
+                </button>
+                <button
+                  type="button"
+                  onClick={() => setWorkspaceBarDismissed(true)}
+                  className="text-cat-overlay hover:text-white px-1"
+                  aria-label="Dismiss"
+                >
+                  <i className="fa-solid fa-xmark" />
+                </button>
               </div>
             </div>
-          ) : (
-            !workspaceBarDismissed && (
-              <div className="shrink-0 mx-4 mb-2 flex items-center justify-between gap-3 px-3 py-2 text-[11px] text-cat-subtext bg-cat-surface0/60 border border-cat-surface1 rounded-lg">
-                <span>No file open — open from a task card or browse files</span>
-                <div className="flex items-center gap-2 shrink-0">
-                  <button
-                    type="button"
-                    onClick={() => {
-                      setWorkspaceOpen(true)
-                      writeWorkspaceOpen(true)
-                      setWorkspaceBarDismissed(false)
-                    }}
-                    className="px-2.5 py-1 rounded bg-indigo-600/40 hover:bg-indigo-600/60 text-indigo-200 text-[10px] font-semibold"
-                  >
-                    Browse files
-                  </button>
-                  <button
-                    type="button"
-                    onClick={() => setWorkspaceBarDismissed(true)}
-                    className="text-cat-overlay hover:text-white px-1"
-                    aria-label="Dismiss"
-                  >
-                    <i className="fa-solid fa-xmark" />
-                  </button>
-                </div>
-              </div>
-            )
           )}
 
           <div className="flex flex-col min-h-0 overflow-hidden flex-1 justify-end">
@@ -1177,6 +1169,26 @@ export default function App() {
                 {bottomTab === 'model' && (
                   <div className="absolute inset-0 flex flex-col min-h-0">
                     <ModelDebugPanel taskIdFilter={selectedTask?.id ?? null} />
+                  </div>
+                )}
+                {bottomTab === 'ollamaServer' && (
+                  <div className="absolute inset-0 flex flex-col min-h-0">
+                    <OllamaServiceLogPanel hidden={false} onOpenModelTab={openModelTab} />
+                  </div>
+                )}
+                {bottomTab === 'editor' && (
+                  <div className="absolute inset-0 flex flex-col min-h-0">
+                    <EditorPanel
+                      hidden={false}
+                      selectedFile={selectedFile}
+                      localFiles={localFiles}
+                      fileTreeKey={fileTreeKey}
+                      showDiff={showDiff}
+                      onSelectFile={handleOpenFile}
+                      onFilesChange={setLocalFiles}
+                      onToggleDiff={() => setShowDiff((d) => !d)}
+                      onCloseWorkspace={handleCloseWorkspace}
+                    />
                   </div>
                 )}
                 {bottomTab === 'memory' && (

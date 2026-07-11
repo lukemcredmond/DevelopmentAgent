@@ -65,18 +65,20 @@ class StepDiagnosticsTracker:
         tool_calls: Optional[List[str]] = None,
         text_chars: int = 0,
         error: Optional[str] = None,
+        error_type: Optional[str] = None,
     ) -> None:
         self.llm_iterations_used = max(self.llm_iterations_used, iteration)
         self.last_event = f"ollama:iter{iteration}"
-        self.ollama_calls.append(
-            {
-                "iteration": iteration,
-                "durationMs": duration_ms,
-                "toolCalls": tool_calls or [],
-                "textChars": text_chars,
-                "error": error,
-            }
-        )
+        entry: Dict[str, Any] = {
+            "iteration": iteration,
+            "durationMs": duration_ms,
+            "toolCalls": tool_calls or [],
+            "textChars": text_chars,
+            "error": error,
+        }
+        if error_type:
+            entry["errorType"] = error_type
+        self.ollama_calls.append(entry)
         self._flush_checkpoint()
 
     def set_llm_iterations_max(self, max_iterations: int) -> None:
@@ -294,6 +296,7 @@ def log_ollama_call(
     tool_calls: Optional[List[str]] = None,
     text_chars: int = 0,
     error: Optional[str] = None,
+    error_type: Optional[str] = None,
 ) -> None:
     trace = get_active_trace()
     if trace:
@@ -303,6 +306,7 @@ def log_ollama_call(
             tool_calls=tool_calls,
             text_chars=text_chars,
             error=error,
+            error_type=error_type,
         )
 
 
