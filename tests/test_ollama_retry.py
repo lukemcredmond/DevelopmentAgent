@@ -4,7 +4,7 @@ from unittest.mock import MagicMock, patch
 
 from backend.agents.scrum_agent import ScrumAgent
 from backend.bootstrap import initialize
-from backend.services.ollama_service_log import LogSource, resolve_log_source
+from backend.services.ollama_service_log import LogSource, read_service_log_snapshot, resolve_log_source
 from backend.services.workflow_settings import get_workflow_settings, reset_workflow_settings, save_workflow_settings
 
 
@@ -81,8 +81,45 @@ def test_chat_skips_cooldown_on_context_overflow():
 
 def test_resolve_log_source_ollama_cli_preferred():
     with patch("backend.services.ollama_service_log._which", return_value="/usr/bin/ollama"):
-        source = resolve_log_source()
+        with patch("backend.services.ollama_service_log._ollama_logs_cli_supported", return_value=True):
+            with patch("backend.services.ollama_service_log._platform_file_source", return_value=None):
+                source = resolve_log_source()
     assert source.kind == "ollama_cli"
+
+
+def test_resolve_log_source_windows_file_when_logs_unsupported():
+    with patch("backend.services.ollama_service_log._which", return_value=r"C:\Program Files\Ollama\ollama.exe"):
+        with patch("backend.services.ollama_service_log._ollama_logs_cli_supported", return_value=False):
+            with patch("backend.services.ollama_service_log.platform.system", return_value="Windows"):
+                with patch.dict("os.environ", {"LOCALAPPDATA": r"C:\Users\test\AppData\Local"}):
+                    with patch("backend.services.ollama_service_log.Path.exists", return_value=True):
+                        source = resolve_log_source()
+    assert source.kind == "file"
+    assert source.path is not None
+    assert "server.log" in source.path
+
+
+def test_read_service_log_falls_back_from_unsupported_cli(tmp_path):
+    log_path = tmp_path / "server.log"
+    log_path.write_text("line one\nline two\n", encoding="utf-8")
+    with patch("backend.services.ollama_service_log.resolve_log_source") as mock_resolve:
+        mock_resolve.return_value = LogSource(
+            kind="ollama_cli",
+            command=["ollama", "logs", "-n", "50"],
+            note="ollama logs CLI",
+        )
+        with patch(
+            "backend.services.ollama_service_log._run_command",
+            return_value=("", "ollama logs command not supported by this Ollama version"),
+        ):
+            with patch(
+                "backend.services.ollama_service_log._platform_file_source",
+                return_value=LogSource(kind="file", path=str(log_path), note="Windows server.log"),
+            ):
+                snapshot = read_service_log_snapshot(lines=10)
+    assert snapshot["source"] == "file"
+    assert "line two" in snapshot["text"]
+    assert snapshot["error"] is None
 
 
 def test_resolve_log_source_journalctl_on_linux():

@@ -1,5 +1,6 @@
 import { useCallback, useEffect, useRef, useState } from 'react'
 import { fetchOllamaServiceLogs } from '../api/client'
+import NumberSettingInput from './NumberSettingInput'
 
 interface OllamaServiceLogPanelProps {
   hidden?: boolean
@@ -109,12 +110,11 @@ export default function OllamaServiceLogPanel({
         </label>
         <label className="flex items-center gap-1 text-[10px] text-cat-subtext">
           Lines
-          <input
-            type="number"
+          <NumberSettingInput
+            value={lineCount}
             min={10}
             max={500}
-            value={lineCount}
-            onChange={(e) => setLineCount(Math.min(500, Math.max(10, parseInt(e.target.value, 10) || 50)))}
+            onCommit={setLineCount}
             className="w-12 bg-cat-base border border-cat-surface1 rounded px-1 text-white"
           />
         </label>

@@ -4,6 +4,7 @@ import {
   fetchIndexStatus,
   reindexCodebase,
 } from '../api/client'
+import NumberSettingInput from './NumberSettingInput'
 import type {
   BriefChangelogEntry,
   IndexProgress,
@@ -164,16 +165,11 @@ export default function WorkflowPanel({
       {(settings.requireBacklogRefinement ?? false) && (
         <label className="flex items-center gap-2 text-[11px] text-cat-subtext pl-5">
           <span className="text-cat-overlay shrink-0">Max refinement rounds</span>
-          <input
-            type="number"
+          <NumberSettingInput
+            value={settings.maxRefinementRoundTrips ?? 3}
             min={1}
             max={10}
-            value={settings.maxRefinementRoundTrips ?? 3}
-            onChange={(e) =>
-              onSettingsChange({
-                maxRefinementRoundTrips: Math.max(1, Number(e.target.value) || 3),
-              })
-            }
+            onCommit={(maxRefinementRoundTrips) => onSettingsChange({ maxRefinementRoundTrips })}
             className="w-16 bg-cat-base border border-cat-surface1 rounded px-2 py-0.5 text-cat-text"
           />
         </label>
@@ -187,27 +183,21 @@ export default function WorkflowPanel({
       )}
       <label className="flex items-center gap-2 text-[11px] text-cat-subtext pl-5">
         <span className="text-cat-overlay shrink-0">Max subtask depth</span>
-        <input
-          type="number"
+        <NumberSettingInput
+          value={settings.maxSubtaskDepth ?? 4}
           min={1}
           max={10}
-          value={settings.maxSubtaskDepth ?? 4}
-          onChange={(e) =>
-            onSettingsChange({ maxSubtaskDepth: Math.max(1, Number(e.target.value) || 4) })
-          }
+          onCommit={(maxSubtaskDepth) => onSettingsChange({ maxSubtaskDepth })}
           className="w-16 bg-cat-base border border-cat-surface1 rounded px-2 py-0.5 text-cat-text"
         />
       </label>
       <label className="flex items-center gap-2 text-[11px] text-cat-subtext pl-5">
         <span className="text-cat-overlay shrink-0">Max subtask spawns</span>
-        <input
-          type="number"
+        <NumberSettingInput
+          value={settings.maxSubtaskSpawns ?? 8}
           min={1}
           max={30}
-          value={settings.maxSubtaskSpawns ?? 8}
-          onChange={(e) =>
-            onSettingsChange({ maxSubtaskSpawns: Math.max(1, Number(e.target.value) || 8) })
-          }
+          onCommit={(maxSubtaskSpawns) => onSettingsChange({ maxSubtaskSpawns })}
           className="w-16 bg-cat-base border border-cat-surface1 rounded px-2 py-0.5 text-cat-text"
         />
       </label>
@@ -246,14 +236,11 @@ export default function WorkflowPanel({
       {(settings.enableFixVerifyLoop ?? false) && (
         <label className="flex items-center gap-2 text-[11px] text-cat-subtext pl-5">
           <span className="text-cat-overlay shrink-0">Max rounds</span>
-          <input
-            type="number"
+          <NumberSettingInput
+            value={settings.maxFixVerifyRounds ?? 3}
             min={1}
             max={10}
-            value={settings.maxFixVerifyRounds ?? 3}
-            onChange={(e) =>
-              onSettingsChange({ maxFixVerifyRounds: Math.max(1, Number(e.target.value) || 3) })
-            }
+            onCommit={(maxFixVerifyRounds) => onSettingsChange({ maxFixVerifyRounds })}
             className="w-16 bg-cat-base border border-cat-surface1 rounded px-2 py-0.5 text-cat-text"
           />
         </label>
@@ -346,14 +333,11 @@ export default function WorkflowPanel({
 
       <label className="text-[11px] text-cat-subtext block">
         <span className="text-[10px] text-cat-overlay block">Max MCP tools (budget)</span>
-        <input
-          type="number"
+        <NumberSettingInput
+          value={settings.maxMcpTools ?? 40}
           min={0}
           max={200}
-          value={settings.maxMcpTools ?? 40}
-          onChange={(e) =>
-            onSettingsChange({ maxMcpTools: Math.max(0, parseInt(e.target.value, 10) || 40) })
-          }
+          onCommit={(maxMcpTools) => onSettingsChange({ maxMcpTools })}
           className="w-full bg-cat-base border border-cat-surface1 rounded p-1 text-white"
         />
       </label>
@@ -609,36 +593,22 @@ export default function WorkflowPanel({
 
       <label className="text-[11px] text-cat-subtext block">
         <span className="text-[10px] text-cat-overlay block">Max tool output chars (to LLM)</span>
-        <input
-          type="number"
+        <NumberSettingInput
+          value={settings.maxToolOutputCharsForLlm ?? 6000}
           min={1000}
           max={50000}
-          step={500}
-          value={settings.maxToolOutputCharsForLlm ?? 6000}
-          onChange={(e) =>
-            onSettingsChange({
-              maxToolOutputCharsForLlm: Math.max(1000, parseInt(e.target.value, 10) || 6000),
-            })
-          }
+          onCommit={(maxToolOutputCharsForLlm) => onSettingsChange({ maxToolOutputCharsForLlm })}
           className="w-full bg-cat-base border border-cat-surface1 rounded p-1 text-white"
         />
       </label>
 
       <label className="text-[11px] text-cat-subtext block">
         <span className="text-[10px] text-cat-overlay block">Message prune threshold (% of num_ctx)</span>
-        <input
-          type="number"
+        <NumberSettingInput
+          value={settings.messagePruneThresholdPct ?? 60}
           min={30}
           max={90}
-          value={settings.messagePruneThresholdPct ?? 60}
-          onChange={(e) =>
-            onSettingsChange({
-              messagePruneThresholdPct: Math.min(
-                90,
-                Math.max(30, parseInt(e.target.value, 10) || 60),
-              ),
-            })
-          }
+          onCommit={(messagePruneThresholdPct) => onSettingsChange({ messagePruneThresholdPct })}
           className="w-full bg-cat-base border border-cat-surface1 rounded p-1 text-white"
         />
       </label>
@@ -648,15 +618,11 @@ export default function WorkflowPanel({
 
       <label className="text-[11px] text-cat-subtext block">
         <span className="text-[10px] text-cat-overlay block">Ollama context size (num_ctx)</span>
-        <input
-          type="number"
+        <NumberSettingInput
+          value={settings.ollamaNumCtx ?? 32768}
           min={4096}
           max={131072}
-          step={4096}
-          value={settings.ollamaNumCtx ?? 32768}
-          onChange={(e) =>
-            onSettingsChange({ ollamaNumCtx: parseInt(e.target.value, 10) || 32768 })
-          }
+          onCommit={(ollamaNumCtx) => onSettingsChange({ ollamaNumCtx })}
           className="w-full bg-cat-base border border-cat-surface1 rounded p-1 text-white"
         />
       </label>
@@ -666,16 +632,11 @@ export default function WorkflowPanel({
 
       <label className="text-[11px] text-cat-subtext block">
         <span className="text-[10px] text-cat-overlay block">Ollama request timeout (seconds)</span>
-        <input
-          type="number"
+        <NumberSettingInput
+          value={settings.ollamaRequestTimeoutSec ?? 300}
           min={60}
           max={900}
-          value={settings.ollamaRequestTimeoutSec ?? 300}
-          onChange={(e) =>
-            onSettingsChange({
-              ollamaRequestTimeoutSec: Math.min(900, Math.max(60, parseInt(e.target.value, 10) || 300)),
-            })
-          }
+          onCommit={(ollamaRequestTimeoutSec) => onSettingsChange({ ollamaRequestTimeoutSec })}
           className="w-full bg-cat-base border border-cat-surface1 rounded p-1 text-white"
         />
       </label>
@@ -685,14 +646,11 @@ export default function WorkflowPanel({
 
       <label className="text-[11px] text-cat-subtext block">
         <span className="text-[10px] text-cat-overlay block">Ollama max retries per call</span>
-        <input
-          type="number"
+        <NumberSettingInput
+          value={settings.ollamaMaxRetries ?? 4}
           min={1}
           max={10}
-          value={settings.ollamaMaxRetries ?? 4}
-          onChange={(e) =>
-            onSettingsChange({ ollamaMaxRetries: Math.min(10, Math.max(1, parseInt(e.target.value, 10) || 4)) })
-          }
+          onCommit={(ollamaMaxRetries) => onSettingsChange({ ollamaMaxRetries })}
           className="w-full bg-cat-base border border-cat-surface1 rounded p-1 text-white"
         />
       </label>
@@ -709,59 +667,43 @@ export default function WorkflowPanel({
 
       <label className="text-[11px] text-cat-subtext block">
         <span className="text-[10px] text-cat-overlay block">Cooldown pause (seconds)</span>
-        <input
-          type="number"
+        <NumberSettingInput
+          value={settings.ollamaCooldownRetrySec ?? 15}
           min={0}
           max={120}
-          value={settings.ollamaCooldownRetrySec ?? 15}
-          onChange={(e) =>
-            onSettingsChange({
-              ollamaCooldownRetrySec: Math.min(120, Math.max(0, parseInt(e.target.value, 10) || 15)),
-            })
-          }
+          onCommit={(ollamaCooldownRetrySec) => onSettingsChange({ ollamaCooldownRetrySec })}
           className="w-full bg-cat-base border border-cat-surface1 rounded p-1 text-white"
         />
       </label>
 
       <label className="text-[11px] text-cat-subtext block">
         <span className="text-[10px] text-cat-overlay block">Cooldown extra attempts</span>
-        <input
-          type="number"
+        <NumberSettingInput
+          value={settings.ollamaCooldownRetryAttempts ?? 2}
           min={0}
           max={5}
-          value={settings.ollamaCooldownRetryAttempts ?? 2}
-          onChange={(e) =>
-            onSettingsChange({
-              ollamaCooldownRetryAttempts: Math.min(5, Math.max(0, parseInt(e.target.value, 10) || 2)),
-            })
-          }
+          onCommit={(ollamaCooldownRetryAttempts) => onSettingsChange({ ollamaCooldownRetryAttempts })}
           className="w-full bg-cat-base border border-cat-surface1 rounded p-1 text-white"
         />
       </label>
 
       <label className="text-[11px] text-cat-subtext block">
         <span className="text-[10px] text-cat-overlay block">Max Needs User per sprint</span>
-        <input
-          type="number"
+        <NumberSettingInput
+          value={settings.maxNeedsUserPerSprint ?? 2}
           min={0}
           max={10}
-          value={settings.maxNeedsUserPerSprint ?? 2}
-          onChange={(e) =>
-            onSettingsChange({ maxNeedsUserPerSprint: parseInt(e.target.value, 10) || 0 })
-          }
+          onCommit={(maxNeedsUserPerSprint) => onSettingsChange({ maxNeedsUserPerSprint })}
           className="w-full bg-cat-base border border-cat-surface1 rounded p-1 text-white"
         />
       </label>
       <label className="text-[11px] text-cat-subtext block">
         <span className="text-[10px] text-cat-overlay block">Needs User cooldown (sprint steps)</span>
-        <input
-          type="number"
+        <NumberSettingInput
+          value={settings.needsUserCooldownSteps ?? 3}
           min={0}
           max={20}
-          value={settings.needsUserCooldownSteps ?? 3}
-          onChange={(e) =>
-            onSettingsChange({ needsUserCooldownSteps: parseInt(e.target.value, 10) || 0 })
-          }
+          onCommit={(needsUserCooldownSteps) => onSettingsChange({ needsUserCooldownSteps })}
           className="w-full bg-cat-base border border-cat-surface1 rounded p-1 text-white"
         />
       </label>
@@ -773,44 +715,31 @@ export default function WorkflowPanel({
       <div className="grid grid-cols-3 gap-2 text-[11px]">
         <label>
           <span className="text-[10px] text-cat-overlay block">Max sprint steps</span>
-          <input
-            type="number"
+          <NumberSettingInput
+            value={settings.maxSprintSteps}
             min={1}
             max={100}
-            value={settings.maxSprintSteps}
-            onChange={(e) =>
-              onSettingsChange({ maxSprintSteps: parseInt(e.target.value, 10) || 20 })
-            }
+            onCommit={(maxSprintSteps) => onSettingsChange({ maxSprintSteps })}
             className="w-full bg-cat-base border border-cat-surface1 rounded p-1 text-white"
           />
         </label>
         <label>
           <span className="text-[10px] text-cat-overlay block">Max LLM iter/step</span>
-          <input
-            type="number"
+          <NumberSettingInput
+            value={settings.maxLlmIterationsPerStep}
             min={1}
             max={20}
-            value={settings.maxLlmIterationsPerStep}
-            onChange={(e) =>
-              onSettingsChange({
-                maxLlmIterationsPerStep: parseInt(e.target.value, 10) || 8,
-              })
-            }
+            onCommit={(maxLlmIterationsPerStep) => onSettingsChange({ maxLlmIterationsPerStep })}
             className="w-full bg-cat-base border border-cat-surface1 rounded p-1 text-white"
           />
         </label>
         <label>
           <span className="text-[10px] text-cat-overlay block">Max PO round trips</span>
-          <input
-            type="number"
+          <NumberSettingInput
+            value={settings.maxPoRoundTrips ?? 3}
             min={1}
             max={10}
-            value={settings.maxPoRoundTrips ?? 3}
-            onChange={(e) =>
-              onSettingsChange({
-                maxPoRoundTrips: parseInt(e.target.value, 10) || 3,
-              })
-            }
+            onCommit={(maxPoRoundTrips) => onSettingsChange({ maxPoRoundTrips })}
             className="w-full bg-cat-base border border-cat-surface1 rounded p-1 text-white"
           />
         </label>
