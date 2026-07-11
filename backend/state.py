@@ -47,6 +47,9 @@ REFINEMENT_MODE: bool = False
 
 PROJECT_PLAN_OUTLINE: str = ""
 
+# Interrupted sprint session context surfaced on startup (crash recovery banner).
+RECOVERY_CONTEXT: Optional[Dict[str, Any]] = None
+
 # Paths read via read_file during the current sprint agent step (safe_path -> content).
 STEP_FILE_READS: Dict[str, str] = {}
 

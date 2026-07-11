@@ -481,6 +481,17 @@ export interface ActiveStepDiagnostics {
   updatedAt?: string
 }
 
+export interface RecoveryContext {
+  interrupted: boolean
+  taskId: string
+  taskTitle: string
+  lane: string
+  agent: string
+  diagnosticsFile?: string
+  lastEvent?: string
+  suggestedAction?: string
+}
+
 export interface IndexProgress {
   phase: string
   filesDone: number
@@ -588,6 +599,7 @@ export interface AppState {
   lastStepOutcome?: LastStepOutcome | null
   lastStepDiagnostics?: LastStepDiagnostics | null
   activeStepDiagnostics?: ActiveStepDiagnostics | null
+  recovery?: RecoveryContext | null
 }
 
 export interface ConfigPayload {

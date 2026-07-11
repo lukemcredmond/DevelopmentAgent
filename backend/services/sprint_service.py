@@ -398,6 +398,39 @@ def _ensure_dev_step_trace(task_id: str, task_title: str, lane_before: str) -> N
         start_step_trace(task_id, task_title, "Developer", lane_before)
 
 
+def _start_sprint_session(
+    handler: str,
+    active_task: Dict[str, Any],
+    *,
+    sprint_mode: Optional[str] = None,
+) -> None:
+    from backend.services.sprint_session import set_sprint_mode, start_session
+    from backend.services.step_diagnostics import get_active_trace
+
+    if sprint_mode:
+        set_sprint_mode(sprint_mode)  # type: ignore[arg-type]
+    task_id = str(active_task.get("id", ""))
+    lane = get_task_lane(task_id) or str(active_task.get("status", ""))
+    agent = _HANDLER_AGENT.get(handler, "System")
+    trace = get_active_trace()
+    diag_path = str(trace.file_path) if trace else None
+    start_session(
+        task_id=task_id,
+        task_title=str(active_task.get("title", task_id)),
+        lane=lane,
+        agent=agent,
+        handler=handler,
+        diagnostics_file=diag_path,
+    )
+
+
+def _finish_sprint_session(handler: Optional[str]) -> None:
+    from backend.services.sprint_session import clear_session
+
+    if handler and handler not in ("idle", "needs_user", "blocked"):
+        clear_session("idle")
+
+
 def _finalize_dev_step_diagnostics_if_auto_sprint(task_id: str, lane_before: str) -> None:
     if state.SPRINT_PROGRESS_MAX == 1:
         return
@@ -2286,6 +2319,10 @@ def run_sprint_step(brief: str, ollama_url: str) -> None:
     agent_cr.ollama_url = ollama_url
 
     single_step = _prepare_single_step_progress()
+    if single_step:
+        from backend.services.sprint_session import set_sprint_mode
+
+        set_sprint_mode("single_step")
     handler: Optional[str] = None
     active_task: Optional[Dict[str, Any]] = None
     lane_before = ""
@@ -2368,6 +2405,9 @@ def run_sprint_step(brief: str, ollama_url: str) -> None:
             f"{needs_user_count} task(s) in Needs User — continuing other lanes this step.",
         )
 
+    if handler and handler not in ("idle", "needs_user", "blocked") and active_task:
+        _start_sprint_session(handler, active_task)
+
     try:
         if handler == "po" and active_task:
             _run_po_clarification(active_task, brief)
@@ -2393,6 +2433,7 @@ def run_sprint_step(brief: str, ollama_url: str) -> None:
         elif handler == "idle":
             add_system_log("System", "warning", "No active features. Send brief to PO or add a feature.")
     finally:
+        _finish_sprint_session(handler)
         clear_active_sprint_context()
         state.SPRINT_STEP_STARTED_AT = None
         with state.STATE_LOCK:
@@ -2446,6 +2487,9 @@ def run_in_progress_step(
     if not active_task:
         raise ValueError("In Progress task not found")
 
+    from backend.services.sprint_session import set_sprint_mode
+
+    set_sprint_mode("in_progress")
     _prepare_single_step_progress(force=True)
     tid = str(active_task.get("id", ""))
     title = str(active_task.get("title", tid))
@@ -2458,6 +2502,7 @@ def run_in_progress_step(
     _emit_sprint_step_progress("dev", active_task)
 
     _ensure_dev_step_trace(tid, title, lane_before)
+    _start_sprint_session("dev", active_task, sprint_mode="in_progress")
 
     try:
         _run_developer_step(dict(active_task), brief)
@@ -2465,6 +2510,7 @@ def run_in_progress_step(
         state.DEV_STEP_INTERRUPTED = True
         raise
     finally:
+        _finish_sprint_session("dev")
         clear_active_sprint_context()
         state.SPRINT_STEP_STARTED_AT = None
         with state.STATE_LOCK:
@@ -2503,6 +2549,9 @@ def _build_sprint_summary(steps: int, status: str = "completed") -> Dict[str, An
 
 
 def run_auto_sprint(brief: str, ollama_url: str, max_steps: int | None = None) -> Dict[str, Any]:
+    from backend.services.sprint_session import set_sprint_mode
+
+    set_sprint_mode("auto")
     state.SPRINT_CANCEL = False
     state.SPRINT_NEEDS_USER_COUNT = 0
     ws = get_workflow_settings()

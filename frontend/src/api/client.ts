@@ -14,6 +14,7 @@ import type {
   MoveTaskPayload,
   OllamaHealthResponse,
   ProjectSummary,
+  RecoveryContext,
   SkillsResponse,
   SkillPayload,
   BulkSkillPayload,
@@ -261,6 +262,14 @@ export async function runInProgressStep(
     method: 'POST',
     body: JSON.stringify(payload),
   })
+}
+
+export async function getSprintRecovery(): Promise<{ recovery: RecoveryContext | null }> {
+  return request<{ recovery: RecoveryContext | null }>('/api/sprint/recovery')
+}
+
+export async function dismissSprintRecovery(): Promise<AppState> {
+  return request<AppState>('/api/sprint/recovery/dismiss', { method: 'POST' })
 }
 
 export async function sendChat(

@@ -56,6 +56,21 @@ def trigger_run_in_progress(payload: RunInProgressPayload):
     return build_state_response()
 
 
+@router.get("/api/sprint/recovery")
+def get_sprint_recovery():
+    from backend.services.sprint_session import get_recovery_context
+
+    return {"recovery": get_recovery_context()}
+
+
+@router.post("/api/sprint/recovery/dismiss")
+def dismiss_sprint_recovery():
+    from backend.services.sprint_session import dismiss_interrupted
+
+    dismiss_interrupted()
+    return build_state_response()
+
+
 @router.get("/api/sprint/diagnostics/latest")
 def get_latest_step_diagnostics():
     if state.LAST_STEP_DIAGNOSTICS is None:

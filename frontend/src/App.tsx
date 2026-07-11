@@ -11,6 +11,7 @@ import {
   deleteProject,
   deleteTask,
   diagnoseTask,
+  dismissSprintRecovery,
   exportProject,
   fetchFileDiff,
   fetchSkills,
@@ -942,6 +943,78 @@ export default function App() {
             >
               <i className="fa-solid fa-xmark" />
             </button>
+          </div>
+        )}
+
+        {state.recovery?.interrupted && (
+          <div className="mx-4 mt-2 shrink-0 flex flex-wrap items-center justify-between gap-2 text-[11px] text-amber-200 bg-amber-950/40 border border-amber-500/40 rounded-lg px-3 py-2">
+            <div className="flex items-start gap-2 min-w-0">
+              <i className="fa-solid fa-triangle-exclamation shrink-0 mt-0.5" />
+              <span>
+                Session interrupted — was working on &apos;{state.recovery.taskTitle}&apos; (
+                {state.recovery.taskId}) in {state.recovery.lane}
+                {state.recovery.agent ? ` (${state.recovery.agent})` : ''}.
+                {state.recovery.lastEvent ? ` Last event: ${state.recovery.lastEvent}.` : ''}
+              </span>
+            </div>
+            <div className="flex items-center gap-2 shrink-0">
+              <button
+                type="button"
+                onClick={() =>
+                  void withLoading(async () => {
+                    if (orchestratedActive) {
+                      setActionError('Wait for the current sprint step to finish before resuming.')
+                      return
+                    }
+                    setActionError(null)
+                    try {
+                      const data = await runInProgressStep({
+                        brief,
+                        ollama_url: ollamaUrl,
+                        taskId: state.recovery?.taskId,
+                      })
+                      handleState(data)
+                      applyStepOutcome(data)
+                    } catch (err) {
+                      const message =
+                        err instanceof ApiError
+                          ? err.detail
+                          : err instanceof Error
+                            ? err.message
+                            : 'Failed to resume in-progress step.'
+                      setActionError(message)
+                    }
+                  })
+                }
+                className="px-2.5 py-1 rounded bg-amber-600/50 hover:bg-amber-600/70 text-amber-100 text-[10px] font-semibold"
+              >
+                Run In Progress
+              </button>
+              {state.recovery.diagnosticsFile ? (
+                <button
+                  type="button"
+                  onClick={() => {
+                    void navigator.clipboard.writeText(state.recovery?.diagnosticsFile ?? '')
+                    setActionNotice(
+                      `Diagnostics path copied: ${state.recovery?.diagnosticsFile} — see Console tab`,
+                    )
+                    setBottomTab('console')
+                  }}
+                  className="text-amber-300 hover:text-white text-xs underline"
+                >
+                  Open diagnostics
+                </button>
+              ) : null}
+              <button
+                type="button"
+                onClick={() =>
+                  void withLoading(async () => handleState(await dismissSprintRecovery()))
+                }
+                className="text-amber-300 hover:text-white text-xs underline"
+              >
+                Dismiss
+              </button>
+            </div>
           </div>
         )}
 

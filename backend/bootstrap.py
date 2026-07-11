@@ -56,6 +56,9 @@ def load_project_into_state(project_id: str) -> bool:
     from backend.agents.registry import configure_agent_tools
 
     configure_agent_tools()
+    from backend.services.sprint_session import detect_recovery_on_startup
+
+    detect_recovery_on_startup(project_id)
     return True
 
 

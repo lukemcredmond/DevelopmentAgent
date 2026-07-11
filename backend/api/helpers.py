@@ -64,4 +64,9 @@ def build_state_response(*, include_files: bool = True) -> dict:
     active_diag = get_active_trace_summary()
     if active_diag is not None:
         response["activeStepDiagnostics"] = active_diag
+    from backend.services.sprint_session import get_recovery_context
+
+    recovery = get_recovery_context()
+    if recovery is not None:
+        response["recovery"] = recovery
     return response

@@ -1,3 +1,4 @@
+from contextlib import asynccontextmanager
 from pathlib import Path
 
 from fastapi import FastAPI
@@ -8,7 +9,16 @@ from fastapi.staticfiles import StaticFiles
 from backend.api import agents, board, chat, files, git, memory, ollama, projects, skills, sprint, state as state_routes, terminal, tools
 from backend.config import CORS_ORIGINS, FRONTEND_DIST
 
-app = FastAPI(title="All Hands Local Scrum Engine", version="1.0.0")
+
+@asynccontextmanager
+async def lifespan(_app: FastAPI):
+    yield
+    from backend.services.sprint_session import mark_interrupted
+
+    mark_interrupted()
+
+
+app = FastAPI(title="All Hands Local Scrum Engine", version="1.0.0", lifespan=lifespan)
 
 app.add_middleware(
     CORSMiddleware,

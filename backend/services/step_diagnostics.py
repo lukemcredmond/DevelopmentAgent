@@ -286,7 +286,86 @@ def start_step_trace(
         f"Step diagnostics trace {tracker.trace_id} started — {file_path}",
     )
     tracker._flush_checkpoint()
+    from backend.services.sprint_session import touch_session
+
+    touch_session(
+        last_event="trace_started",
+        diagnostics_file=str(tracker.file_path),
+        force=True,
+    )
     return tracker
+
+
+def finalize_orphaned_diagnostics(
+    *,
+    task_id: str,
+    diagnostics_path: Optional[str] = None,
+) -> Optional[Dict[str, Any]]:
+    """Finalize a diagnostics JSON file left in running state after app restart."""
+    project_dir = diagnostics_dir(state.CURRENT_PROJECT_ID)
+    target_path: Optional[Path] = None
+
+    if diagnostics_path:
+        candidate = Path(diagnostics_path)
+        if candidate.is_file():
+            target_path = candidate
+
+    if target_path is None and task_id:
+        matches: List[tuple[float, Path, Dict[str, Any]]] = []
+        for file_path in project_dir.glob("step-*.json"):
+            try:
+                data = json.loads(file_path.read_text(encoding="utf-8"))
+            except (json.JSONDecodeError, OSError):
+                continue
+            if data.get("status") == "running" and data.get("taskId") == task_id:
+                matches.append((file_path.stat().st_mtime, file_path, data))
+        if matches:
+            matches.sort(key=lambda item: item[0], reverse=True)
+            target_path = matches[0][1]
+
+    if target_path is None:
+        return None
+
+    try:
+        data = json.loads(target_path.read_text(encoding="utf-8"))
+    except (json.JSONDecodeError, OSError):
+        return None
+
+    if data.get("status") != "running":
+        return {
+            "filePath": str(target_path),
+            "lastEvent": data.get("lastEvent", ""),
+        }
+
+    now = datetime.now()
+    duration_ms = int(data.get("durationMs", 0))
+    started_at = data.get("startedAt")
+    if isinstance(started_at, str):
+        try:
+            started = datetime.strptime(started_at, "%Y-%m-%d %H:%M:%S")
+            duration_ms = int((now - started).total_seconds() * 1000)
+        except ValueError:
+            pass
+
+    data.update(
+        {
+            "status": "complete",
+            "exitReason": "interrupted",
+            "endedAt": now.strftime("%Y-%m-%d %H:%M:%S"),
+            "updatedAt": now.strftime("%Y-%m-%d %H:%M:%S"),
+            "ok": False,
+            "laneAfter": data.get("laneBefore"),
+            "hint": "App restarted during this step",
+            "durationMs": duration_ms,
+        }
+    )
+    with open(target_path, "w", encoding="utf-8") as handle:
+        json.dump(data, handle, indent=2)
+
+    return {
+        "filePath": str(target_path),
+        "lastEvent": data.get("lastEvent", ""),
+    }
 
 
 def log_ollama_call(
@@ -308,18 +387,36 @@ def log_ollama_call(
             error=error,
             error_type=error_type,
         )
+        from backend.services.sprint_session import touch_session
+
+        touch_session(
+            last_event=f"ollama:iter{iteration}",
+            diagnostics_file=str(trace.file_path),
+        )
 
 
 def log_tool(name: str, success: bool, summary: str) -> None:
     trace = get_active_trace()
     if trace:
         trace.log_tool(name, success, summary)
+        from backend.services.sprint_session import touch_session
+
+        touch_session(
+            last_event=f"tool:{name}",
+            diagnostics_file=str(trace.file_path),
+        )
 
 
 def log_event(kind: str, message: str) -> None:
     trace = get_active_trace()
     if trace:
         trace.log_event(kind, message)
+        from backend.services.sprint_session import touch_session
+
+        touch_session(
+            last_event=f"{kind}:{message[:80]}",
+            diagnostics_file=str(trace.file_path),
+        )
 
 
 def set_llm_iterations_max(max_iterations: int) -> None:
