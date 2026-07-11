@@ -1,6 +1,7 @@
 export type AgentId = 'po' | 'dev' | 'cr' | 'qa'
 
 export type BoardLane =
+  | 'Features'
   | 'Backlog'
   | 'Pending Approval'
   | 'Refinement'
@@ -99,7 +100,7 @@ export interface Task {
   needsUserCooldownUntilStep?: number | null
   needsUserDuplicate?: boolean
   poRoundTrips?: number
-  workType?: 'planning' | 'implementation' | 'review' | 'qa' | 'user_action' | 'spike'
+  workType?: 'planning' | 'implementation' | 'review' | 'qa' | 'user_action' | 'spike' | 'feature'
   requiresDev?: boolean
   requiresQa?: boolean
   createdBy?: 'po' | 'user' | 'split'
@@ -128,6 +129,18 @@ export interface Task {
   subtaskSpawnCount?: number
   subtaskEscapeCount?: number
   subtaskSkipped?: boolean
+  featureId?: string | null
+  featureHistory?: FeatureHistoryEntry[]
+  childTaskIds?: string[]
+}
+
+export interface FeatureHistoryEntry {
+  timestamp: string
+  source: string
+  requestTitle: string
+  requestBody: string
+  poSummary: string
+  childTaskId?: string
 }
 
 export interface TaskDiagnosis {
@@ -873,6 +886,7 @@ export const DEFAULT_WORKFLOW_SETTINGS: WorkflowSettings = {
 }
 
 export const EMPTY_BOARD: Board = {
+  Features: [],
   Backlog: [],
   'In Progress': [],
   'Needs PO': [],
@@ -905,7 +919,7 @@ export function countClaimableBacklogTasks(
   const requireRefinement = settings?.requireBacklogRefinement === true
   return (board.Backlog ?? []).filter((task) => {
     if (task.requiresDev === false) return false
-    if (task.workType === 'planning') return false
+    if (task.workType === 'planning' || task.workType === 'feature') return false
     if (requireRefinement && task.refinementComplete === false) return false
     const blocked = task.blockedBy ?? []
     if (blocked.length > 0) {
@@ -921,7 +935,7 @@ export function getDisplayLanes(
   settings?: WorkflowSettings,
 ): BoardLane[] {
   if (activeLanes && activeLanes.length > 0) return activeLanes
-  const lanes: BoardLane[] = ['Backlog']
+  const lanes: BoardLane[] = ['Features', 'Backlog']
   if (settings?.requireBacklogApproval) lanes.push('Pending Approval')
   if (settings?.requireBacklogRefinement) lanes.push('Refinement')
   lanes.push('In Progress', 'Needs PO', 'Needs User')

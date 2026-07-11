@@ -232,6 +232,7 @@ export default function App() {
   const [showSprintSummary, setShowSprintSummary] = useState(false)
   const [ollamaOk, setOllamaOk] = useState<boolean | null>(null)
   const [actionError, setActionError] = useState<string | null>(null)
+  const [actionErrorShowModelLink, setActionErrorShowModelLink] = useState(false)
   const [actionNotice, setActionNotice] = useState<string | null>(null)
   const [pendingToolModal, setPendingToolModal] = useState<PendingToolRequest | null>(null)
   const [approvalModal, setApprovalModal] = useState<PendingToolApproval | null>(null)
@@ -549,11 +550,20 @@ export default function App() {
     setBottomTab('tools')
   }
 
+  const openModelTab = () => {
+    setBottomTab('model')
+  }
+
   const applyStepOutcome = useCallback(
     (data: AppState) => {
       const outcome = data.lastStepOutcome
       const diagnostics = data.lastStepDiagnostics
       const activeDiag = data.activeStepDiagnostics
+      const ollamaFallback =
+        outcome?.stopReason === 'ollama_fallback' ||
+        (outcome?.message ?? '').includes('SIMULATION_FALLBACK') ||
+        (outcome?.message ?? '').toLowerCase().includes('simulation fallback') ||
+        diagnostics?.exitReason === 'ollama_fallback'
 
       const cardStayedNote =
         outcome?.laneAfter === 'In Progress' && outcome?.whyCardStayed
@@ -568,17 +578,24 @@ export default function App() {
         )
       } else if (cardStayedNote) {
         setActionError(cardStayedNote)
+        setActionErrorShowModelLink(false)
       } else if (diagnostics?.filePath) {
         const diagNote = `Diagnostics saved: ${diagnostics.filePath}${diagnostics.hint ? ` — ${diagnostics.hint}` : ''}`
         if (outcome && (!outcome.ok || outcome.toolFailures > 0)) {
           setActionError(`${outcome.message}\n${diagNote}`)
+          setActionErrorShowModelLink(ollamaFallback)
         } else {
           setActionNotice(diagNote)
+          setActionErrorShowModelLink(false)
         }
       } else if (outcome && (!outcome.ok || outcome.toolFailures > 0)) {
         setActionError(outcome.message)
+        setActionErrorShowModelLink(ollamaFallback)
       } else if (outcome?.laneAfter === 'In Progress' && outcome.agent === 'Developer') {
         setActionNotice(outcome.message)
+        setActionErrorShowModelLink(false)
+      } else {
+        setActionErrorShowModelLink(false)
       }
       if (outcome && (!outcome.ok || outcome.toolFailures > 0) && outcome.toolFailures > 0) {
         openToolsTab()
@@ -872,15 +889,29 @@ export default function App() {
       <main className="flex-1 flex flex-col h-full overflow-hidden min-w-0">
         {actionError && (
           <div className="mx-4 mt-2 shrink-0 flex items-center justify-between gap-2 text-[11px] text-rose-200 bg-rose-950/40 border border-rose-500/40 rounded-lg px-3 py-2">
-            <span>{actionError}</span>
-            <button
-              type="button"
-              onClick={() => setActionError(null)}
-              className="text-rose-300 hover:text-white shrink-0"
-              aria-label="Dismiss"
-            >
-              <i className="fa-solid fa-xmark" />
-            </button>
+            <span className="whitespace-pre-wrap">{actionError}</span>
+            <div className="flex items-center gap-2 shrink-0">
+              {actionErrorShowModelLink && (
+                <button
+                  type="button"
+                  onClick={openModelTab}
+                  className="text-indigo-300 hover:text-white text-xs underline"
+                >
+                  View in Model tab
+                </button>
+              )}
+              <button
+                type="button"
+                onClick={() => {
+                  setActionError(null)
+                  setActionErrorShowModelLink(false)
+                }}
+                className="text-rose-300 hover:text-white shrink-0"
+                aria-label="Dismiss"
+              >
+                <i className="fa-solid fa-xmark" />
+              </button>
+            </div>
           </div>
         )}
 
@@ -899,12 +930,21 @@ export default function App() {
         )}
 
         {ollamaOk === false && (
-          <div className="mx-4 mt-2 shrink-0 flex items-center gap-2 text-[11px] text-amber-200 bg-amber-950/40 border border-amber-500/40 rounded-lg px-3 py-2">
-            <i className="fa-solid fa-triangle-exclamation shrink-0" />
-            <span>
-              Offline simulation — tools are not running.
-              {orchestratedActive ? ' Sprint steps use fallback behavior.' : ' Start Ollama for real agent behavior.'}
-            </span>
+          <div className="mx-4 mt-2 shrink-0 flex items-center justify-between gap-2 text-[11px] text-amber-200 bg-amber-950/40 border border-amber-500/40 rounded-lg px-3 py-2">
+            <div className="flex items-center gap-2">
+              <i className="fa-solid fa-triangle-exclamation shrink-0" />
+              <span>
+                Offline simulation — Ollama retries up to 4 times then uses SIMULATION_FALLBACK.
+                {orchestratedActive ? ' Sprint steps use fallback behavior.' : ' Start Ollama for real agent behavior.'}
+              </span>
+            </div>
+            <button
+              type="button"
+              onClick={openModelTab}
+              className="text-amber-300 hover:text-white shrink-0 text-xs underline"
+            >
+              View in Model tab
+            </button>
           </div>
         )}
 

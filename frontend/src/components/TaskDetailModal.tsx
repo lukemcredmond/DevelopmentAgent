@@ -339,6 +339,10 @@ export default function TaskDetailModal({
   const dependencyOutcomes = safeTask.dependencyOutcomes ?? []
   const subtaskIds = safeTask.subtaskIds ?? []
   const relatedTaskIds = safeTask.relatedTaskIds ?? []
+  const featureHistory = safeTask.featureHistory ?? []
+  const childTaskIds = safeTask.childTaskIds ?? []
+  const parentFeatureId = safeTask.featureId
+  const isFeatureEpic = safeTask.workType === 'feature' || taskLane === 'Features'
   const diagnosis = safeTask.lastDiagnosis
   const commandDiagnostics = getCommandDiagnostics(safeTask)
   const stuckLoopCount = (safeTask.decisions ?? []).filter((d) => d.type === 'stuck_loop').length
@@ -355,8 +359,9 @@ export default function TaskDetailModal({
     'Describe the missing information or decision needed to continue.'
   const priorUserAnswers = safeTask.userResolutions ?? []
   const isDuplicateQuestion = safeTask.needsUserDuplicate === true
-  const workLabel =
-    safeTask.workType === 'planning' || safeTask.requiresDev === false
+  const workLabel = isFeatureEpic
+    ? 'Feature epic (stationary)'
+    : safeTask.workType === 'planning' || safeTask.requiresDev === false
       ? 'PO only'
       : safeTask.requiresQa === false
         ? 'Dev (no QA)'
@@ -768,6 +773,80 @@ export default function TaskDetailModal({
                   </button>
                 )}
             </div>
+          )}
+
+          {parentFeatureId && (
+            <CollapsibleSection title="Parent Feature" defaultOpen>
+              <button
+                type="button"
+                onClick={() => onRelatedTaskClick?.(parentFeatureId)}
+                className="w-full text-left text-[11px] font-mono bg-violet-950/30 border border-violet-500/30 rounded px-2 py-1.5 hover:border-violet-400/50 text-violet-200"
+              >
+                {parentFeatureId}
+                {getTaskTitle?.(parentFeatureId) && (
+                  <span className="text-cat-subtext font-sans ml-2">
+                    — {getTaskTitle(parentFeatureId)}
+                  </span>
+                )}
+              </button>
+              <p className="text-[10px] text-cat-subtext mt-1">
+                Living spec and prior decisions are injected into agent prompts for this card.
+              </p>
+            </CollapsibleSection>
+          )}
+
+          {isFeatureEpic && featureHistory.length > 0 && (
+            <CollapsibleSection title="Feature History" badge={featureHistory.length} defaultOpen>
+              <div className="space-y-2 max-h-48 overflow-y-auto">
+                {[...featureHistory].reverse().map((entry, idx) => (
+                  <div
+                    key={`${entry.timestamp}-${idx}`}
+                    className="text-[11px] bg-cat-base border border-cat-surface1 rounded px-2 py-1.5"
+                  >
+                    <p className="text-violet-300 font-semibold">
+                      [{entry.timestamp}] {entry.requestTitle}
+                      {entry.source !== 'user' && (
+                        <span className="text-cat-subtext font-normal ml-1">({entry.source})</span>
+                      )}
+                    </p>
+                    {entry.poSummary && (
+                      <p className="text-white mt-0.5">{entry.poSummary}</p>
+                    )}
+                    {entry.childTaskId && (
+                      <button
+                        type="button"
+                        onClick={() => onRelatedTaskClick?.(entry.childTaskId!)}
+                        className="text-[10px] text-indigo-300 font-mono mt-1 hover:underline"
+                      >
+                        Child: {entry.childTaskId}
+                      </button>
+                    )}
+                  </div>
+                ))}
+              </div>
+            </CollapsibleSection>
+          )}
+
+          {isFeatureEpic && childTaskIds.length > 0 && (
+            <CollapsibleSection title="Implementation Cards" badge={childTaskIds.length} defaultOpen>
+              <div className="space-y-1">
+                {childTaskIds.map((childId) => (
+                  <button
+                    key={childId}
+                    type="button"
+                    onClick={() => onRelatedTaskClick?.(childId)}
+                    className="w-full text-left text-[11px] font-mono bg-cat-base border border-cat-surface1 rounded px-2 py-1.5 hover:border-indigo-500/50 text-indigo-300"
+                  >
+                    {childId}
+                    {getTaskTitle?.(childId) && (
+                      <span className="text-cat-subtext font-sans ml-2">
+                        — {getTaskTitle(childId)}
+                      </span>
+                    )}
+                  </button>
+                ))}
+              </div>
+            </CollapsibleSection>
           )}
 
           {relatedTaskIds.length > 0 && (

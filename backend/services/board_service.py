@@ -81,6 +81,11 @@ def move_board_stage(task_id: str, target_lane: str) -> str:
             return f"Error: Task '{task_id}' was not found on the board."
 
         source_lane, active_task = matches[0]
+        normalize_task(active_task)
+        if active_task.get("workType") == "feature" and target_lane != "Features":
+            return (
+                f"Error: Feature '{task_id}' is stationary — it cannot move to '{target_lane}'."
+            )
         if len(matches) == 1 and source_lane == target_lane:
             return f"Task {task_id} is already in '{target_lane}'."
 

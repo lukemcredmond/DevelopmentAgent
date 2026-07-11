@@ -214,6 +214,10 @@ def _guarded_update_board(task_id: str, target_lane: str, user_question: Optiona
     task = find_task_by_id(task_id)
     if task:
         normalize_task(task)
+        if task.get("workType") == "feature" and target_lane.strip() != "Features":
+            return (
+                f"Error: Feature '{task_id}' is stationary — it cannot move to '{target_lane}'."
+            )
         lane = get_task_lane(task_id) or ""
         target_stripped = target_lane.strip()
         if target_stripped == "Needs User":

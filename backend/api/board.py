@@ -66,6 +66,14 @@ def add_manual_task(payload: ManualTaskPayload):
 @router.post("/api/tasks/move")
 def move_task(payload: MoveTaskPayload):
     with state.STATE_LOCK:
+        task = find_task_by_id(payload.task_id)
+        if task:
+            normalize_task(task)
+            if task.get("workType") == "feature" and payload.target_lane != "Features":
+                raise HTTPException(
+                    status_code=400,
+                    detail=f"Feature '{payload.task_id}' is stationary and cannot be moved.",
+                )
         if payload.skip_refinement and payload.target_lane == "In Progress":
             task = find_task_by_id(payload.task_id)
             if task:

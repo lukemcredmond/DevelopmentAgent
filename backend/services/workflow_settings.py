@@ -119,7 +119,7 @@ def save_sprint_summary(summary: Dict[str, Any], project_id: str | None = None) 
 
 def get_active_lanes(settings: Dict[str, Any] | None = None) -> List[str]:
     ws = settings or get_workflow_settings()
-    lanes = ["Backlog"]
+    lanes = ["Features", "Backlog"]
     if ws.get("requireBacklogApproval"):
         lanes.append("Pending Approval")
     if ws.get("requireBacklogRefinement"):

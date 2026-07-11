@@ -5,7 +5,18 @@ from typing import Any, Dict
 from backend.services.workflow_settings import get_workflow_settings
 
 
-BASE_LANES = ["Backlog", "Refinement", "In Progress", "Needs PO", "Needs User", "QA", "Done"]
+FEATURES_LANE = "Features"
+
+BASE_LANES = [
+    FEATURES_LANE,
+    "Backlog",
+    "Refinement",
+    "In Progress",
+    "Needs PO",
+    "Needs User",
+    "QA",
+    "Done",
+]
 
 
 def normalize_board_lanes(board: Dict[str, Any]) -> Dict[str, Any]:

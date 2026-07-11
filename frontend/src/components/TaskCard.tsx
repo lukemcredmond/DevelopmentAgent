@@ -31,7 +31,10 @@ export default function TaskCard({
 
   const blocked = (task.blockedBy ?? []).length > 0
   const subtaskCount = (task.subtaskIds ?? []).length
+  const childTaskCount = (task.childTaskIds ?? []).length
   const isSubtask = Boolean(task.parentTaskId)
+  const isFeature = task.workType === 'feature' || lane === 'Features'
+  const featureParentId = task.featureId
   const relatedCount = (task.relatedTaskIds ?? []).length
   const hasCommit = Boolean(task.gitCommit?.hash)
   const isDone = task.status === 'Done'
@@ -55,7 +58,11 @@ export default function TaskCard({
       {...listeners}
       onClick={onClick}
       className={`w-full text-left bg-cat-surface0 p-2.5 rounded-lg border border-cat-surface1 hover:border-indigo-500/50 transition-all text-xs ${
-        dragDisabled ? 'cursor-not-allowed opacity-70' : 'cursor-grab active:cursor-grabbing'
+        isFeature
+          ? 'cursor-pointer border-violet-500/30 hover:border-violet-400/50'
+          : dragDisabled
+            ? 'cursor-not-allowed opacity-70'
+            : 'cursor-grab active:cursor-grabbing'
       }`}
     >
       <div className="flex items-center justify-between mb-1.5">
@@ -93,11 +100,24 @@ export default function TaskCard({
               Spike pending
             </span>
           )}
-          {task.workType === 'planning' || task.requiresDev === false ? (
+          {task.workType === 'planning' || (task.requiresDev === false && !isFeature) ? (
             <span className="text-[9px] bg-violet-950/50 text-violet-300 px-1 py-0.5 rounded" title="PO-only card">
               PO
             </span>
           ) : null}
+          {isFeature && (
+            <span className="text-[9px] bg-violet-950/60 text-violet-200 px-1 py-0.5 rounded" title="Feature epic (stationary)">
+              Epic
+            </span>
+          )}
+          {featureParentId && (
+            <span
+              className="text-[9px] bg-violet-950/50 text-violet-300 px-1 py-0.5 rounded font-mono"
+              title={`Parent feature ${featureParentId}`}
+            >
+              ↗{featureParentId.slice(0, 8)}
+            </span>
+          )}
           {task.requiresQa === false && task.requiresDev !== false && (
             <span className="text-[9px] bg-slate-800 text-slate-300 px-1 py-0.5 rounded" title="Skips QA">
               No QA
@@ -125,6 +145,14 @@ export default function TaskCard({
               title="Child todos"
             >
               ↳{subtaskCount}
+            </span>
+          )}
+          {childTaskCount > 0 && (
+            <span
+              className="text-[9px] bg-violet-950/50 text-violet-300 px-1 py-0.5 rounded"
+              title="Implementation cards"
+            >
+              +{childTaskCount}
             </span>
           )}
           {isSubtask && (

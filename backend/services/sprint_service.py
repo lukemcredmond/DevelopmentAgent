@@ -47,7 +47,16 @@ from backend.services.brief_service import (
     set_project_brief,
 )
 from backend.services.events import publish_event
-from backend.services.feature_similarity import iter_board_tasks, link_related_features
+from backend.services.feature_service import (
+    build_feature_context_for_po,
+    create_feature,
+    find_feature_by_id,
+    intake_feature_offline,
+    list_features,
+    parse_po_feature_intake,
+    update_feature,
+)
+from backend.services.feature_similarity import iter_board_tasks, link_related_features, score_task_similarity
 from backend.services.git_service import git_commit, git_init
 from backend.services.logs import add_system_log
 from backend.services.needs_user_guard import (
@@ -1419,25 +1428,123 @@ def run_po_add_feature(title: str, description: str, ollama_url: str) -> None:
     normalize_board_lanes(state.SHARED_BOARD)
     add_system_log("Product Owner", "info", f"Refining feature '{title}'…")
 
-    po_output = agent_po.execute_step(
+    existing_features = list_features()
+    feature_context = build_feature_context_for_po(
+        {"title": title, "description": description},
+        features=existing_features,
+    )
+    match_hint = ""
+    if existing_features:
+        probe = {"title": title, "description": description}
+        scored: List[tuple[float, str]] = []
+        for feat in existing_features:
+            score, _ = score_task_similarity(probe, feat)
+            if score >= 0.65:
+                scored.append((score, str(feat.get("id", ""))))
+        if scored:
+            scored.sort(reverse=True)
+            match_hint = f"\nLikely match (similarity hint): {scored[0][1]} (score {scored[0][0]:.2f})\n"
+
+    intake_prompt = (
         f"{PO_SMALLEST_TASKS_GUIDANCE}\n\n"
-        "Reply with ONLY a JSON array with ONE object: id, title, description, acceptanceCriteria, "
-        "optional blockedBy, optional priority.\n\n"
-        f"Brief:\n{state.PROJECT_BRIEF}\n\nFeature:\n{title}: {description}",
-        max_iterations=_llm_iterations(),
+        "The user added a feature request. Decide whether this is a NEW feature or an UPDATE to an "
+        "existing feature in the Features lane.\n"
+        "Reply with ONLY a JSON object (not an array) with:\n"
+        "- action: \"new\" or \"update\"\n"
+        "- featureId: required when action is \"update\" (must match an existing feature id)\n"
+        "- featureTitle: title for the feature parent (updated living spec title)\n"
+        "- featureDescription: updated living spec for the feature parent\n"
+        "- historySummary: brief note on what changed and why\n"
+        "- childTask: { title, description, acceptanceCriteria } — ONE smallest achievable backlog card "
+        "for this specific request slice\n\n"
+        f"Brief:\n{state.PROJECT_BRIEF}\n\n"
+        f"{feature_context}"
+        f"{match_hint}"
     )
 
+    po_output = agent_po.execute_step(intake_prompt, max_iterations=_llm_iterations())
+
     if po_output == "SIMULATION_FALLBACK":
-        _append_tasks([{"title": title, "description": description, "acceptanceCriteria": [description]}])
+        intake_feature_offline(title, description)
     else:
-        try:
-            parsed = extract_json_array_from_text(po_output)
-            if parsed:
-                _append_tasks(parsed[:1])
+        parsed_obj = extract_json_object_from_text(po_output)
+        if parsed_obj:
+            intake = parse_po_feature_intake(parsed_obj)
+            child_task = intake["childTask"]
+            if not child_task.get("acceptanceCriteria"):
+                child_task["acceptanceCriteria"] = [child_task.get("description") or title]
+            req_title = intake["featureTitle"] or title
+            req_desc = intake["featureDescription"] or description
+            po_summary = intake["historySummary"] or "PO classified feature intake"
+            if intake["action"] == "update" and intake["featureId"]:
+                existing = find_feature_by_id(intake["featureId"])
+                if existing:
+                    feature, child = update_feature(
+                        intake["featureId"],
+                        title=req_title or str(existing.get("title", "")),
+                        description=req_desc or str(existing.get("description", "")),
+                        request_title=title,
+                        request_body=description,
+                        child_task=child_task,
+                        po_summary=po_summary,
+                    )
+                    add_system_log(
+                        "Product Owner",
+                        "success",
+                        f"Updated feature '{feature.get('title')}' — child {child.get('id')}",
+                    )
+                else:
+                    feature, child = create_feature(
+                        req_title or title,
+                        req_desc or description,
+                        request_title=title,
+                        request_body=description,
+                        child_task=child_task,
+                        po_summary=f"{po_summary} (invalid featureId — created new)",
+                    )
+                    add_system_log(
+                        "Product Owner",
+                        "warning",
+                        f"Unknown featureId — created new feature '{feature.get('title')}'",
+                    )
             else:
-                _append_tasks([{"title": title, "description": description}])
-        except (ValueError, json.JSONDecodeError):
-            _append_tasks([{"title": title, "description": description}])
+                feature, child = create_feature(
+                    req_title or title,
+                    req_desc or description,
+                    request_title=title,
+                    request_body=description,
+                    child_task=child_task,
+                    po_summary=po_summary,
+                )
+                add_system_log(
+                    "Product Owner",
+                    "success",
+                    f"Created feature '{feature.get('title')}' — child {child.get('id')}",
+                )
+        else:
+            try:
+                parsed_arr = extract_json_array_from_text(po_output)
+                if parsed_arr:
+                    raw = parsed_arr[0]
+                    child_task = {
+                        "title": str(raw.get("title") or title),
+                        "description": str(raw.get("description") or description),
+                        "acceptanceCriteria": raw.get("acceptanceCriteria")
+                        if isinstance(raw.get("acceptanceCriteria"), list)
+                        else [description],
+                    }
+                    create_feature(
+                        title,
+                        description,
+                        request_title=title,
+                        request_body=description,
+                        child_task=child_task,
+                        po_summary="Legacy PO array response — created new feature",
+                    )
+                else:
+                    intake_feature_offline(title, description)
+            except (ValueError, json.JSONDecodeError):
+                intake_feature_offline(title, description)
 
     save_current_project_state()
 

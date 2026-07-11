@@ -88,6 +88,7 @@ export default memo(function KanbanBoard({
     const taskId = String(active.id)
     const fromLane = findLane(taskId)
     if (!fromLane) return
+    if (fromLane === 'Features') return
 
     let toLane: BoardLane | null = null
     if (lanes.includes(over.id as BoardLane)) {
@@ -112,6 +113,8 @@ export default memo(function KanbanBoard({
       }
       return
     }
+
+    if (toLane === 'Features') return
 
     onMoveTask(taskId, fromLane, toLane)
   }
@@ -154,7 +157,7 @@ export default memo(function KanbanBoard({
               onTaskClick={onTaskClick}
               getTaskFileCount={getTaskFileCount}
               getTaskDecisionCount={getTaskDecisionCount}
-              dragDisabled={sprintRunning}
+              dragDisabled={sprintRunning || lane === 'Features'}
             />
           ))}
         </div>

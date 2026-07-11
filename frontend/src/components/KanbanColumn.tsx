@@ -22,6 +22,7 @@ export default function KanbanColumn({
 }: KanbanColumnProps) {
   const { setNodeRef, isOver } = useDroppable({ id: lane })
   const highlightNeedsUser = lane === 'Needs User' && tasks.length > 0
+  const isFeaturesLane = lane === 'Features'
 
   return (
     <div
@@ -31,12 +32,18 @@ export default function KanbanColumn({
           ? 'border-indigo-500/60'
           : highlightNeedsUser
             ? 'border-amber-500/50 bg-amber-950/10'
-            : 'border-cat-surface1'
+            : isFeaturesLane
+              ? 'border-violet-500/40 bg-violet-950/10'
+              : 'border-cat-surface1'
       }`}
     >
       <div className="flex items-center justify-between pb-1.5 border-b border-cat-surface1 mb-2.5">
-        <span className="text-xs font-bold text-cat-text uppercase tracking-wider">
-          {lane}
+        <span
+          className={`text-xs font-bold uppercase tracking-wider ${
+            isFeaturesLane ? 'text-violet-300' : 'text-cat-text'
+          }`}
+        >
+          {isFeaturesLane ? 'Features (Epics)' : lane}
         </span>
         <span className="bg-cat-surface0 text-cat-subtext text-[10px] font-mono px-2 py-0.5 rounded-full">
           {tasks.length}

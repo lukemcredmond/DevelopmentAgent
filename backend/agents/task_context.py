@@ -307,11 +307,37 @@ def normalize_task(task: Dict[str, Any]) -> Dict[str, Any]:
         task["subtaskSpawnCount"] = int(task["subtaskSpawnCount"])
     if "subtaskEscapeCount" in task:
         task["subtaskEscapeCount"] = int(task["subtaskEscapeCount"])
+    if task.get("featureId") is not None:
+        task["featureId"] = str(task["featureId"])
+    if "featureHistory" not in task or not isinstance(task.get("featureHistory"), list):
+        task["featureHistory"] = []
+    else:
+        normalized_hist: List[Dict[str, Any]] = []
+        for entry in task["featureHistory"]:
+            if isinstance(entry, dict):
+                normalized_hist.append(
+                    {
+                        "timestamp": coerce_task_text(entry.get("timestamp", "")),
+                        "source": coerce_task_text(entry.get("source", "")),
+                        "requestTitle": coerce_task_text(entry.get("requestTitle", "")),
+                        "requestBody": coerce_task_text(entry.get("requestBody", "")),
+                        "poSummary": coerce_task_text(entry.get("poSummary", "")),
+                        "childTaskId": coerce_task_text(entry.get("childTaskId", "")),
+                    }
+                )
+        task["featureHistory"] = normalized_hist
+    if "childTaskIds" in task:
+        task["childTaskIds"] = [str(c) for c in (task.get("childTaskIds") or [])]
+    elif task.get("workType") == "feature":
+        task["childTaskIds"] = []
     wt = str(task.get("workType") or "implementation").lower()
-    if wt not in ("planning", "implementation", "review", "qa", "user_action", "spike"):
+    if wt not in ("planning", "implementation", "review", "qa", "user_action", "spike", "feature"):
         wt = "implementation"
     task["workType"] = wt
-    if "requiresDev" not in task:
+    if wt == "feature":
+        task["requiresDev"] = False
+        task["requiresQa"] = False
+    elif "requiresDev" not in task:
         task["requiresDev"] = wt not in ("planning", "user_action")
     else:
         task["requiresDev"] = bool(task["requiresDev"])
@@ -897,6 +923,11 @@ def on_task_completed(task_id: str) -> None:
     from backend.services.subtask_service import on_subtask_completed
 
     on_subtask_completed(task_id)
+    completed_norm = find_task_by_id(task_id)
+    if completed_norm and completed_norm.get("featureId"):
+        from backend.services.feature_service import rollup_child_to_feature
+
+        rollup_child_to_feature(task_id)
 
 
 def _format_older_decisions_block(decisions: List[Dict[str, Any]]) -> str:
@@ -996,6 +1027,10 @@ def build_task_prompt(task: Dict[str, Any], brief: str) -> str:
         )
     if task.get("parentTaskId"):
         subtask_extra += f"\nParent todo: {task['parentTaskId']}\n"
+    if task.get("featureId"):
+        from backend.services.feature_service import build_feature_context_block
+
+        subtask_extra += build_feature_context_block(str(task["featureId"]))
 
     prompt = (
         f"Project brief:\n{brief}\n"
