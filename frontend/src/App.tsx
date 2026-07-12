@@ -667,18 +667,44 @@ export default function App() {
     [toolRunningCount, toolFailureCount, activityEvents.length, memoryCount, selectedFile],
   )
 
+  const pendingWorkflowRef = useRef<Partial<WorkflowSettings>>({})
+  const workflowSaveTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null)
+
+  useEffect(() => {
+    return () => {
+      if (workflowSaveTimerRef.current) clearTimeout(workflowSaveTimerRef.current)
+    }
+  }, [])
+
   const handleWorkflowSettingsChange = useCallback(
     (partial: Partial<WorkflowSettings>) => {
-      void withLoading(async () => {
-        const data = await updateWorkflowSettings(partial)
-        setState((prev) => ({
-          ...prev,
-          workflowSettings: data.workflowSettings,
-          activeLanes: data.activeLanes,
-          notifications: data.notifications,
-          board: data.board,
-        }))
-      })
+      setState((prev) => ({
+        ...prev,
+        workflowSettings: {
+          ...(prev.workflowSettings ?? {}),
+          ...partial,
+        } as WorkflowSettings,
+      }))
+      pendingWorkflowRef.current = { ...pendingWorkflowRef.current, ...partial }
+      if (workflowSaveTimerRef.current) clearTimeout(workflowSaveTimerRef.current)
+      workflowSaveTimerRef.current = setTimeout(() => {
+        workflowSaveTimerRef.current = null
+        const payload = pendingWorkflowRef.current
+        pendingWorkflowRef.current = {}
+        void updateWorkflowSettings(payload)
+          .then((data) => {
+            setState((prev) => ({
+              ...prev,
+              workflowSettings: data.workflowSettings,
+              activeLanes: data.activeLanes,
+              notifications: data.notifications,
+              board: data.board,
+            }))
+          })
+          .catch(() => {
+            pendingWorkflowRef.current = { ...payload, ...pendingWorkflowRef.current }
+          })
+      }, 350)
     },
     [setState],
   )

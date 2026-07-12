@@ -1,4 +1,4 @@
-import { useEffect, useState } from 'react'
+import { useEffect, useRef, useState } from 'react'
 
 interface NumberSettingInputProps {
   value: number
@@ -6,13 +6,13 @@ interface NumberSettingInputProps {
   min?: number
   max?: number
   className?: string
-  /** When true, allow clearing the field while typing (reverts on blur if empty). */
-  allowEmptyWhileTyping?: boolean
+  /** Milliseconds to wait after typing stops before auto-saving. */
+  debounceMs?: number
 }
 
 /**
- * Numeric setting field that commits on blur/Enter instead of every keystroke.
- * Avoids fighting the user when replacing values like 300 → 500.
+ * Numeric setting field — edits freely while focused, saves after pause or on blur/Enter.
+ * Reverts invalid partial values instead of snapping to min (e.g. "5" while typing "500").
  */
 export default function NumberSettingInput({
   value,
@@ -20,39 +20,72 @@ export default function NumberSettingInput({
   min,
   max,
   className,
-  allowEmptyWhileTyping = true,
+  debounceMs = 500,
 }: NumberSettingInputProps) {
   const [draft, setDraft] = useState(String(value))
   const [focused, setFocused] = useState(false)
+  const debounceRef = useRef<ReturnType<typeof setTimeout> | null>(null)
+  const lastCommittedRef = useRef(value)
 
   useEffect(() => {
+    lastCommittedRef.current = value
     if (!focused) {
       setDraft(String(value))
     }
   }, [value, focused])
 
-  const clamp = (num: number): number => {
-    let next = num
-    if (min != null) next = Math.max(min, next)
-    if (max != null) next = Math.min(max, next)
-    return next
+  useEffect(() => {
+    return () => {
+      if (debounceRef.current) clearTimeout(debounceRef.current)
+    }
+  }, [])
+
+  const parseDraft = (text: string): number | null => {
+    const trimmed = text.trim()
+    if (trimmed === '' || trimmed === '-') return null
+    const parsed = parseInt(trimmed, 10)
+    return Number.isNaN(parsed) ? null : parsed
   }
 
-  const commit = () => {
-    const trimmed = draft.trim()
-    if (trimmed === '' || trimmed === '-') {
-      setDraft(String(value))
-      return
+  const isInRange = (num: number): boolean => {
+    if (min != null && num < min) return false
+    if (max != null && num > max) return false
+    return true
+  }
+
+  const commit = (opts?: { allowOutOfRange?: boolean }): boolean => {
+    const parsed = parseDraft(draft)
+    if (parsed === null) {
+      setDraft(String(lastCommittedRef.current))
+      return false
     }
-    const parsed = parseInt(trimmed, 10)
-    if (Number.isNaN(parsed)) {
-      setDraft(String(value))
-      return
+    if (!opts?.allowOutOfRange && !isInRange(parsed)) {
+      setDraft(String(lastCommittedRef.current))
+      return false
     }
-    const next = clamp(parsed)
+    let next = parsed
+    if (min != null) next = Math.max(min, next)
+    if (max != null) next = Math.min(max, next)
     setDraft(String(next))
-    if (next !== value) {
+    if (next !== lastCommittedRef.current) {
+      lastCommittedRef.current = next
       onCommit(next)
+    }
+    return true
+  }
+
+  const scheduleCommit = () => {
+    if (debounceRef.current) clearTimeout(debounceRef.current)
+    debounceRef.current = setTimeout(() => {
+      debounceRef.current = null
+      if (focused) commit()
+    }, debounceMs)
+  }
+
+  const handleChange = (next: string) => {
+    if (next === '' || next === '-' || /^-?\d*$/.test(next)) {
+      setDraft(next)
+      scheduleCommit()
     }
   }
 
@@ -63,30 +96,32 @@ export default function NumberSettingInput({
       autoComplete="off"
       spellCheck={false}
       value={draft}
-      onChange={(e) => {
-        const next = e.target.value
-        if (allowEmptyWhileTyping && (next === '' || next === '-')) {
-          setDraft(next)
-          return
-        }
-        if (/^-?\d*$/.test(next)) {
-          setDraft(next)
-        }
-      }}
-      onFocus={(e) => {
-        setFocused(true)
-        e.target.select()
-      }}
+      onChange={(e) => handleChange(e.target.value)}
+      onFocus={() => setFocused(true)}
       onBlur={() => {
         setFocused(false)
+        if (debounceRef.current) {
+          clearTimeout(debounceRef.current)
+          debounceRef.current = null
+        }
         commit()
       }}
       onKeyDown={(e) => {
         if (e.key === 'Enter') {
+          e.preventDefault()
+          if (debounceRef.current) {
+            clearTimeout(debounceRef.current)
+            debounceRef.current = null
+          }
+          commit({ allowOutOfRange: true })
           e.currentTarget.blur()
         }
         if (e.key === 'Escape') {
-          setDraft(String(value))
+          if (debounceRef.current) {
+            clearTimeout(debounceRef.current)
+            debounceRef.current = null
+          }
+          setDraft(String(lastCommittedRef.current))
           e.currentTarget.blur()
         }
       }}
