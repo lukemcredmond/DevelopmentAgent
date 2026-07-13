@@ -73,6 +73,7 @@ import { useTheme } from './hooks/useTheme'
 import type { AgentId, AppState, BoardLane, BriefCategory, ChatMessageRecord, PendingToolApproval, PendingToolRequest, SkillSuggestion, Task, WorkflowSettings } from './types'
 import { countClaimableBacklogTasks, getDisplayLanes } from './types'
 import { findTaskOnBoard } from './utils/taskFormat'
+import { buildTaskRunInfo } from './utils/taskRunInfo'
 
 type BottomTab =
   | 'console'
@@ -363,6 +364,17 @@ export default function App() {
     useAutoSprint(brief, ollamaUrl, state.board, state.workflowSettings, handleState)
 
   const orchestratedActive = sprintRunning || planRunActive
+
+  const activeTaskRunInfo = useMemo(
+    () =>
+      buildTaskRunInfo({
+        activeRun,
+        sprintProgress,
+        activeStepDiagnostics: state.activeStepDiagnostics,
+        currentTool,
+      }),
+    [activeRun, sprintProgress, state.activeStepDiagnostics, currentTool],
+  )
 
   useEffect(() => {
     if (!planRunActive) return
@@ -1116,6 +1128,7 @@ export default function App() {
             activeLanes={state.activeLanes}
             workflowSettings={state.workflowSettings}
             sprintRunning={orchestratedActive}
+            activeRunInfo={activeTaskRunInfo}
             onTaskClick={(task) => setSelectedTask(findTaskOnBoard(state.board, task.id) ?? task)}
             onMoveTask={(taskId, from, to) => void handleMoveTask(taskId, from, to)}
             onReorderBacklog={(taskIds) =>

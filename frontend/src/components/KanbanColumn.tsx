@@ -1,6 +1,7 @@
 import { useDroppable } from '@dnd-kit/core'
 import { SortableContext, verticalListSortingStrategy } from '@dnd-kit/sortable'
 import type { BoardLane, Task } from '../types'
+import type { TaskRunInfo } from '../utils/taskRunInfo'
 import TaskCard from './TaskCard'
 
 interface KanbanColumnProps {
@@ -10,6 +11,7 @@ interface KanbanColumnProps {
   getTaskFileCount: (task: Task) => number
   getTaskDecisionCount: (task: Task) => number
   dragDisabled?: boolean
+  activeRunInfo?: TaskRunInfo | null
 }
 
 export default function KanbanColumn({
@@ -19,6 +21,7 @@ export default function KanbanColumn({
   getTaskFileCount,
   getTaskDecisionCount,
   dragDisabled = false,
+  activeRunInfo = null,
 }: KanbanColumnProps) {
   const { setNodeRef, isOver } = useDroppable({ id: lane })
   const highlightNeedsUser = lane === 'Needs User' && tasks.length > 0
@@ -60,6 +63,7 @@ export default function KanbanColumn({
               onClick={() => onTaskClick(task)}
               dragDisabled={dragDisabled}
               lane={lane}
+              runInfo={activeRunInfo?.taskId === task.id ? activeRunInfo : null}
             />
           ))}
         </div>

@@ -10,6 +10,7 @@ import {
 } from '@dnd-kit/core'
 import { memo, useMemo, useState } from 'react'
 import type { Board, BoardLane, Task, WorkflowSettings } from '../types'
+import type { TaskRunInfo } from '../utils/taskRunInfo'
 import { getDisplayLanes } from '../types'
 import { deriveTaskFiles } from '../utils/taskFormat'
 import KanbanColumn from './KanbanColumn'
@@ -21,6 +22,7 @@ interface KanbanBoardProps {
   activeLanes?: BoardLane[]
   workflowSettings?: WorkflowSettings
   sprintRunning?: boolean
+  activeRunInfo?: TaskRunInfo | null
   onTaskClick: (task: Task) => void
   onMoveTask: (taskId: string, fromLane: BoardLane, toLane: BoardLane) => void
   onReorderBacklog?: (taskIds: string[]) => void
@@ -42,6 +44,7 @@ export default memo(function KanbanBoard({
   activeLanes,
   workflowSettings,
   sprintRunning = false,
+  activeRunInfo = null,
   onTaskClick,
   onMoveTask,
   onReorderBacklog,
@@ -158,6 +161,7 @@ export default memo(function KanbanBoard({
               getTaskFileCount={getTaskFileCount}
               getTaskDecisionCount={getTaskDecisionCount}
               dragDisabled={sprintRunning || lane === 'Features'}
+              activeRunInfo={activeRunInfo}
             />
           ))}
         </div>

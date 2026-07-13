@@ -154,6 +154,12 @@ class WorkflowSettingsPayload(BaseModel):
     embedModel: Optional[str] = None
     ollamaNumCtx: Optional[int] = None
     ollamaKeepAlive: Optional[str] = None
+    ollamaRequestTimeoutSec: Optional[int] = None
+    ollamaMaxRetries: Optional[int] = None
+    ollamaRetryDelaySec: Optional[List[int]] = None
+    ollamaCooldownRetryEnabled: Optional[bool] = None
+    ollamaCooldownRetrySec: Optional[int] = None
+    ollamaCooldownRetryAttempts: Optional[int] = None
     maxToolOutputCharsForLlm: Optional[int] = None
     messagePruneThresholdPct: Optional[int] = None
     enableSemanticSprintContext: Optional[bool] = None

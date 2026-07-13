@@ -1,6 +1,8 @@
 import { useSortable } from '@dnd-kit/sortable'
 import { CSS } from '@dnd-kit/utilities'
 import type { BoardLane, Task } from '../types'
+import type { TaskRunInfo } from '../utils/taskRunInfo'
+import { formatRunStatus } from '../utils/taskRunInfo'
 import { deriveTaskFiles, formatTaskText } from '../utils/taskFormat'
 
 interface TaskCardProps {
@@ -10,6 +12,7 @@ interface TaskCardProps {
   onClick: () => void
   dragDisabled?: boolean
   lane?: BoardLane
+  runInfo?: TaskRunInfo | null
 }
 
 export default function TaskCard({
@@ -19,6 +22,7 @@ export default function TaskCard({
   onClick,
   dragDisabled = false,
   lane,
+  runInfo = null,
 }: TaskCardProps) {
   const { attributes, listeners, setNodeRef, transform, transition, isDragging } =
     useSortable({ id: task.id, disabled: dragDisabled })
@@ -49,6 +53,9 @@ export default function TaskCard({
     return `…/${parts.slice(-2).join('/')}`
   }
 
+  const isActiveRun = runInfo != null && runInfo.taskId === task.id
+  const statusLabel = isActiveRun ? formatRunStatus(runInfo) : ''
+
   return (
     <button
       ref={setNodeRef}
@@ -57,14 +64,44 @@ export default function TaskCard({
       {...attributes}
       {...listeners}
       onClick={onClick}
-      className={`w-full text-left bg-cat-surface0 p-2.5 rounded-lg border border-cat-surface1 hover:border-indigo-500/50 transition-all text-xs ${
-        isFeature
-          ? 'cursor-pointer border-violet-500/30 hover:border-violet-400/50'
-          : dragDisabled
-            ? 'cursor-not-allowed opacity-70'
-            : 'cursor-grab active:cursor-grabbing'
-      }`}
+      className={`w-full text-left bg-cat-surface0 p-2.5 rounded-lg border transition-all text-xs ${
+        isActiveRun
+          ? 'border-indigo-400/70 ring-1 ring-indigo-500/40 shadow-md shadow-indigo-950/30'
+          : isFeature
+            ? 'border-violet-500/30 hover:border-violet-400/50'
+            : dragDisabled
+              ? 'cursor-not-allowed opacity-70 border-cat-surface1'
+              : 'border-cat-surface1 hover:border-indigo-500/50 cursor-grab active:cursor-grabbing'
+      } ${isFeature ? 'cursor-pointer' : ''}`}
     >
+      {isActiveRun && (
+        <div className="mb-2 rounded-md bg-indigo-950/50 border border-indigo-500/40 px-2 py-1.5 space-y-1">
+          <div className="flex items-center gap-1.5 text-[10px] text-indigo-200">
+            <span className="inline-block w-1.5 h-1.5 rounded-full bg-indigo-400 animate-pulse shrink-0" />
+            <span className="font-semibold">{runInfo.agent}</span>
+            <span className="text-indigo-300/80">·</span>
+            <span className="text-indigo-100">{statusLabel}</span>
+          </div>
+          {runInfo.iteration != null && runInfo.maxIterations != null && (
+            <p className="text-[9px] text-cat-subtext font-mono">
+              LLM iteration {runInfo.iteration}/{runInfo.maxIterations}
+            </p>
+          )}
+          {runInfo.currentTool && (
+            <p className="text-[9px] text-amber-200/90 font-mono truncate" title={runInfo.currentTool}>
+              Tool: {runInfo.currentTool}
+            </p>
+          )}
+          {runInfo.lastEvent && (
+            <p className="text-[9px] text-cyan-200/80 font-mono truncate" title={runInfo.lastEvent}>
+              {runInfo.lastEvent}
+            </p>
+          )}
+          {runInfo.lane && (
+            <p className="text-[9px] text-cat-overlay">Lane: {runInfo.lane}</p>
+          )}
+        </div>
+      )}
       <div className="flex items-center justify-between mb-1.5">
         <span className="text-[10px] bg-indigo-950 text-indigo-300 px-1.5 py-0.5 rounded font-mono font-bold">
           {task.id}

@@ -79,6 +79,19 @@ def test_chat_skips_cooldown_on_context_overflow():
     assert mock_client.chat.call_count == 1
 
 
+def test_save_ollama_timeout_via_api(tmp_path, monkeypatch):
+    monkeypatch.setenv("ALLHANDS_HOME", str(tmp_path))
+    initialize()
+    from fastapi.testclient import TestClient
+    from backend.main import app
+
+    client = TestClient(app)
+    resp = client.post("/api/workflow/settings", json={"ollamaRequestTimeoutSec": 500})
+    assert resp.status_code == 200
+    ws = resp.json().get("workflowSettings") or {}
+    assert ws.get("ollamaRequestTimeoutSec") == 500
+
+
 def test_resolve_log_source_ollama_cli_preferred():
     with patch("backend.services.ollama_service_log._which", return_value="/usr/bin/ollama"):
         with patch("backend.services.ollama_service_log._ollama_logs_cli_supported", return_value=True):
