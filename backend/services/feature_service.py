@@ -121,12 +121,37 @@ def _place_feature(feature: Dict[str, Any]) -> None:
 
 
 def _spawn_child_task(feature_id: str, child_raw: Dict[str, Any]) -> Dict[str, Any]:
-    before = all_task_ids()
+    from backend.services.feature_similarity import (
+        apply_same_request_reuse,
+        find_same_request_match,
+        iter_board_tasks,
+    )
+
+    feature = find_feature_by_id(feature_id)
     child_payload = dict(child_raw)
     child_payload["featureId"] = feature_id
     child_payload.setdefault("requiresDev", True)
     child_payload.setdefault("requiresQa", True)
     child_payload.setdefault("workType", "implementation")
+
+    # Prefer reusing an existing same-request child (or any board card)
+    child_ids = set(str(c) for c in (feature.get("childTaskIds") or []) if feature) if feature else set()
+    pool = iter_board_tasks()
+    match_result = find_same_request_match(child_payload, pool=pool)
+    if match_result:
+        match, score, reasons = match_result
+        apply_same_request_reuse(feature, match, score=score, reasons=reasons)
+        if feature:
+            _link_child_to_feature(feature, match)
+        add_system_log(
+            "Product Owner",
+            "info",
+            f"Feature {feature_id}: reused existing child {match.get('id')} "
+            f"(score {score:.2f}) instead of spawning a duplicate",
+        )
+        return match
+
+    before = all_task_ids()
     append_backlog_tasks([child_payload])
     after = all_task_ids()
     new_ids = after - before
@@ -138,6 +163,16 @@ def _spawn_child_task(feature_id: str, child_raw: Dict[str, Any]) -> Dict[str, A
         child = find_task_by_id(tid)
         if child:
             return child
+    # append may have reused without creating — find via related on feature
+    if feature:
+        for rid in feature.get("relatedTaskIds") or []:
+            child = find_task_by_id(str(rid))
+            if child and str(child.get("workType") or "") != "feature":
+                return child
+        for cid in child_ids:
+            child = find_task_by_id(cid)
+            if child:
+                return child
     return {}
 
 

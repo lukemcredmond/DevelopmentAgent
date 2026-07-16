@@ -12,6 +12,7 @@ from backend.services.logs import add_system_log
 
 RELATED_THRESHOLD = 0.35
 BLOCKED_THRESHOLD = 0.65
+REUSE_THRESHOLD = 0.75  # Same-request: skip create and reuse existing card
 
 STOPWORDS = frozenset(
     {
@@ -216,3 +217,95 @@ def link_related_features(
     if linked:
         publish_board_update(task_id, source="related_features")
     return linked
+
+
+def find_same_request_match(
+    candidate: Dict[str, Any],
+    *,
+    exclude_ids: Optional[Set[str]] = None,
+    pool: Optional[List[Dict[str, Any]]] = None,
+    threshold: float = REUSE_THRESHOLD,
+) -> Optional[Tuple[Dict[str, Any], float, List[str]]]:
+    """Return the best board task that covers the same request, if any."""
+    exclude = set(exclude_ids or set())
+    cand_id = str(candidate.get("id") or "")
+    if cand_id:
+        exclude.add(cand_id)
+    tasks = pool if pool is not None else iter_board_tasks(exclude_ids=exclude)
+    best: Optional[Tuple[Dict[str, Any], float, List[str]]] = None
+    for other in tasks:
+        other_id = str(other.get("id", ""))
+        if not other_id or other_id in exclude:
+            continue
+        # Feature epics are parents, not implementation duplicates
+        if str(other.get("workType") or "") == "feature":
+            continue
+        score, reasons = score_task_similarity(candidate, other)
+        if score < threshold:
+            continue
+        if best is None or score > best[1]:
+            best = (other, score, reasons)
+    return best
+
+
+def apply_same_request_reuse(
+    requester: Optional[Dict[str, Any]],
+    match: Dict[str, Any],
+    *,
+    score: float = 0.0,
+    reasons: Optional[List[str]] = None,
+) -> str:
+    """Link requester ↔ match, attach outcomes / soft block. Returns status message."""
+    from backend.agents.task_context import (
+        append_dependency_outcome,
+        build_dependency_outcome,
+        get_task_lane,
+    )
+
+    normalize_task(match)
+    match_id = str(match.get("id", ""))
+    match_lane = get_task_lane(match_id) or str(match.get("status") or "?")
+    done = is_task_done(match_id)
+    reason_text = "; ".join(reasons or []) if reasons else f"score {score:.2f}"
+
+    if requester:
+        normalize_task(requester)
+        requester_id = str(requester.get("id", ""))
+        related = list(requester.get("relatedTaskIds") or [])
+        if match_id and match_id not in related:
+            related.append(match_id)
+        requester["relatedTaskIds"] = related
+
+        reverse = list(match.get("relatedTaskIds") or [])
+        if requester_id and requester_id not in reverse:
+            reverse.append(requester_id)
+            match["relatedTaskIds"] = reverse
+
+        has_useful = bool(match.get("decisions") or match.get("files") or done)
+        if has_useful:
+            outcome = build_dependency_outcome(match)
+            if not done:
+                outcome["completedAt"] = f"in-flight ({match_lane})"
+                outcome["summary"] = (
+                    f"[In flight / {match_lane}] {outcome.get('summary', '')}"
+                )[:400]
+            append_dependency_outcome(requester, outcome)
+
+        if not done:
+            blocked = list(requester.get("blockedBy") or [])
+            if match_id and match_id not in blocked and match_id != requester_id:
+                blocked.append(match_id)
+            requester["blockedBy"] = blocked
+
+        add_system_log(
+            "Product Owner",
+            "info",
+            f"Reused existing {match_id} ({match_lane}) for '{requester.get('title', requester_id)}' "
+            f"— same request ({reason_text})",
+        )
+
+    status = "Done" if done else match_lane
+    return (
+        f"Reused existing {match_id} ({status}) — same request ({reason_text}). "
+        "Outcomes attached. Do not recreate."
+    )

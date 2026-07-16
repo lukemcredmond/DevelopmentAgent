@@ -196,16 +196,92 @@ def _new_task_lane() -> str:
     return "Backlog"
 
 
+MAX_AC_FOR_IMPLEMENTATION = 5
+OVERSIZE_DESC_CHARS = 800
+_OVERSIZE_VERBS = (
+    "implement",
+    "add",
+    "create",
+    "build",
+    "refactor",
+    "migrate",
+    "integrate",
+    "wire",
+    "fix",
+    "update",
+    "remove",
+    "delete",
+)
+
+
+def is_oversized_implementation(task: Dict[str, Any]) -> Optional[str]:
+    """Return a rejection reason if this card is too large for one focused pass."""
+    if task.get("requiresDev") is False:
+        return None
+    if str(task.get("workType") or "") == "planning":
+        return None
+    ac = task.get("acceptanceCriteria") or []
+    if len(ac) > MAX_AC_FOR_IMPLEMENTATION:
+        return (
+            f"Too many acceptance criteria ({len(ac)} > {MAX_AC_FOR_IMPLEMENTATION}). "
+            "Split into smaller cards via add_backlog_tasks."
+        )
+    desc = str(task.get("description") or "")
+    if len(desc) > OVERSIZE_DESC_CHARS:
+        return (
+            f"Description is too long ({len(desc)} chars) for one focused pass. "
+            "Split into smaller cards."
+        )
+    lower = desc.lower()
+    verb_hits = sum(1 for v in _OVERSIZE_VERBS if v in lower)
+    if verb_hits >= 4:
+        return (
+            f"Description spans too many concerns ({verb_hits} action verbs). "
+            "Split into the smallest achievable cards — one focused change each."
+        )
+    return None
+
+
+def _resolve_reuse_requester(source_id: Optional[str], proposed: Dict[str, Any]) -> Optional[Dict[str, Any]]:
+    if source_id:
+        requester = find_task_by_id(source_id)
+        if requester:
+            return requester
+    active_id = state.ACTIVE_SPRINT_TASK_ID
+    if active_id:
+        requester = find_task_by_id(str(active_id))
+        if requester:
+            return requester
+    feature_id = proposed.get("featureId")
+    if feature_id:
+        from backend.services.feature_service import find_feature_by_id
+
+        feature = find_feature_by_id(str(feature_id))
+        if feature:
+            return feature
+    return None
+
+
 def append_backlog_tasks(
     tasks: List[Dict[str, Any]],
     *,
     split_from_task_id: Optional[str] = None,
 ) -> str:
-    """Add tasks to Backlog (or Pending Approval). Optionally split a source task to Done."""
+    """Add tasks to Backlog (or Pending Approval). Optionally split a source task to Done.
+
+    Same-request cards (similarity >= REUSE_THRESHOLD) are not recreated — the existing
+    card is linked and its outcomes are attached to the requester instead.
+    Oversized implementation cards are rejected with a split instruction.
+    """
     if not tasks:
         return "Error: No tasks provided."
 
-    from backend.services.feature_similarity import iter_board_tasks, link_related_features
+    from backend.services.feature_similarity import (
+        apply_same_request_reuse,
+        find_same_request_match,
+        iter_board_tasks,
+        link_related_features,
+    )
 
     with state.STATE_LOCK:
         lane = _new_task_lane()
@@ -213,9 +289,15 @@ def append_backlog_tasks(
         existing_ids = all_task_ids()
         prepared: List[Dict[str, Any]] = []
         id_map: Dict[str, str] = {}
+        oversize_errors: List[str] = []
 
         for i, raw in enumerate(tasks):
             task = _enrich_task_from_po(raw)
+            oversize = is_oversized_implementation(task)
+            if oversize:
+                title = task.get("title") or f"item {i + 1}"
+                oversize_errors.append(f"'{title}': {oversize}")
+                continue
             po_ref = task.get("id")
             new_id = assign_unique_task_id(task, preserve_po_ref=True, existing_ids=existing_ids)
             if po_ref is not None:
@@ -224,9 +306,16 @@ def append_backlog_tasks(
                 id_map[str(i)] = new_id
             prepared.append(task)
 
+        if oversize_errors and not prepared:
+            return (
+                "Error: Card(s) too large for one focused pass — split into smallest parts:\n- "
+                + "\n- ".join(oversize_errors)
+            )
+
         batch_ids = {str(t["id"]) for t in prepared}
         prior_candidates = iter_board_tasks(exclude_ids=batch_ids)
         added_tasks: List[Dict[str, Any]] = []
+        reused_msgs: List[str] = []
         source_id = str(split_from_task_id) if split_from_task_id else None
 
         for task in prepared:
@@ -240,6 +329,24 @@ def append_backlog_tasks(
                 else:
                     remapped.append(ref_str)
             task["blockedBy"] = remapped
+
+            match_result = find_same_request_match(
+                task,
+                exclude_ids=batch_ids | {str(t["id"]) for t in added_tasks},
+                pool=prior_candidates + added_tasks,
+            )
+            if match_result:
+                match, score, reasons = match_result
+                requester = _resolve_reuse_requester(source_id, task)
+                msg = apply_same_request_reuse(
+                    requester,
+                    match,
+                    score=score,
+                    reasons=reasons,
+                )
+                reused_msgs.append(msg)
+                continue
+
             if source_id:
                 related = list(task.get("relatedTaskIds") or [])
                 if source_id not in related:
@@ -260,7 +367,7 @@ def append_backlog_tasks(
         if lane == "Backlog":
             sort_backlog()
 
-        if source_id:
+        if source_id and added_tasks:
             source_task = find_task_by_id(source_id)
             if source_task:
                 n = len(added_tasks)
@@ -277,7 +384,6 @@ def append_backlog_tasks(
                     if tid not in related:
                         related.append(tid)
                 source_task["relatedTaskIds"] = related
-                # Inline move to avoid nested lock re-entry issues during board mutation
                 needle = source_id
                 for ln in list(state.SHARED_BOARD.keys()):
                     state.SHARED_BOARD[ln] = [
@@ -294,5 +400,18 @@ def append_backlog_tasks(
 
         save_current_project_state()
         publish_board_update(source="append_tasks")
-        ids = ", ".join(str(t["id"]) for t in added_tasks)
-        return f"Added {len(added_tasks)} task(s) to '{lane}': {ids}."
+
+        parts: List[str] = []
+        if added_tasks:
+            ids = ", ".join(str(t["id"]) for t in added_tasks)
+            parts.append(f"Added {len(added_tasks)} task(s) to '{lane}': {ids}.")
+        if reused_msgs:
+            parts.extend(reused_msgs)
+        if oversize_errors:
+            parts.append(
+                "Skipped oversized card(s) — split into smallest parts:\n- "
+                + "\n- ".join(oversize_errors)
+            )
+        if not parts:
+            return "No tasks added."
+        return " ".join(parts) if len(parts) == 1 else "\n".join(parts)

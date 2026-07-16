@@ -38,6 +38,7 @@ agent_po = ScrumAgent(
         "pass split_from_task_id so the original moves to Done with a split note. "
         "Use add_subtasks for ordered child todos under a parent card (during refinement set executionOrder). "
         "Invoke add_backlog_tasks yourself — never instruct the user to call it. "
+        "If a card already covers the same request, do not recreate it — reuse that card and its outcomes. "
         "Prefer acting (split, move board) over asking clarifying questions when acceptance criteria exist. "
         "Use grep and glob_file_search to explore the codebase; prefer grep over search_code for patterns. "
         f"{PO_SMALLEST_TASKS_GUIDANCE}"

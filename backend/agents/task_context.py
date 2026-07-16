@@ -1078,6 +1078,44 @@ def build_task_prompt(task: Dict[str, Any], brief: str) -> str:
                     prompt += f"  - {decision.get('agent', '?')}: {decision.get('summary', '')}\n"
         prompt += "Use these completed dependency results — do not redo finished blocker work.\n"
 
+    related_ids = [str(r) for r in (task.get("relatedTaskIds") or []) if r][:5]
+    if related_ids:
+        related_blocks: List[str] = []
+        for rid in related_ids:
+            related = find_task_by_id(rid)
+            if not related:
+                continue
+            normalize_task(related)
+            done = is_task_done(rid)
+            has_useful = bool(related.get("decisions") or related.get("files") or done)
+            if not has_useful and not done:
+                # Still surface in-flight same-request cards briefly
+                related_blocks.append(
+                    f"[{rid}] {related.get('title', '?')} — status {related.get('status', '?')} "
+                    "(in flight; reuse, do not recreate)"
+                )
+                continue
+            outcome = build_dependency_outcome(related)
+            status_label = "Done" if done else str(related.get("status") or "in flight")
+            block = (
+                f"[{rid}] {outcome.get('title', '?')} ({status_label})\n"
+                f"Summary: {outcome.get('summary', '')}\n"
+            )
+            files = outcome.get("files") or []
+            if files:
+                block += f"Key files: {', '.join(str(f) for f in files[:6])}\n"
+            for decision in (outcome.get("decisions") or [])[:2]:
+                if isinstance(decision, dict):
+                    block += f"  - {decision.get('agent', '?')}: {decision.get('summary', '')}\n"
+            related_blocks.append(block)
+        if related_blocks:
+            prompt += (
+                "\n=== RELATED WORK (reuse — do not redo) ===\n"
+                "Related work already done / in flight — reuse outputs, do not recreate the same request.\n"
+                + "\n".join(related_blocks)
+                + "\n"
+            )
+
     resolutions = task.get("userResolutions") or []
     older_res_block = _format_older_resolutions_block(resolutions)
     if older_res_block:
