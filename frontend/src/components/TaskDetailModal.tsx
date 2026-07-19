@@ -1,6 +1,7 @@
 import { useEffect, useMemo, useState, type ReactNode } from 'react'
 import type { BoardLane, CommandDiagnostic, Task, TaskFile, TaskGitCommit, TaskTranscriptEntry } from '../types'
 import { formatAcceptanceCriteria, formatTaskText, deriveTaskFiles, sanitizeTaskForUi } from '../utils/taskFormat'
+import SlideOver from './SlideOver'
 
 function getCommandDiagnostics(task: Task): CommandDiagnostic[] {
   if (task.lastCommandDiagnostics?.length) {
@@ -381,9 +382,16 @@ export default function TaskDetailModal({
     (taskLane === 'Refinement' || safeTask.refinementComplete === false)
 
   return (
-    <div className="fixed inset-0 bg-black/75 flex items-center justify-center p-4 z-50">
-      <div className="bg-cat-surface0 rounded-2xl max-w-2xl w-full border border-cat-surface1 shadow-2xl flex flex-col max-h-[85vh]">
-        <div className="sticky top-0 z-10 bg-cat-surface0 rounded-t-2xl border-b border-cat-surface1 px-6 py-4 flex items-center justify-between shrink-0">
+    <SlideOver
+      open
+      onClose={onClose}
+      side="right"
+      hideHeader
+      widthClass="w-full max-w-[min(560px,90vw)]"
+      zIndexClass="z-50"
+    >
+      <div className="flex flex-col h-full min-h-0">
+        <div className="sticky top-0 z-10 bg-cat-surface0 border-b border-cat-surface1 px-5 py-3 flex items-center justify-between shrink-0">
           <div className="min-w-0 flex-1 pr-4">
             {editing ? (
               <input
@@ -396,7 +404,7 @@ export default function TaskDetailModal({
               <h3 className="text-base font-bold text-white truncate">{safeTask.title}</h3>
             )}
             <p className="text-[10px] text-indigo-300 font-mono mt-0.5">
-              {task.id} · {task.status}
+              {task.id} · {taskLane ?? task.status}
               {task.priority != null && ` · P${task.priority}`}
               {(task.poRoundTrips ?? 0) > 0 && (
                 <span className="ml-2 text-amber-400">PO↔Dev ×{task.poRoundTrips}</span>
@@ -421,13 +429,18 @@ export default function TaskDetailModal({
             >
               {editing ? 'Cancel Edit' : 'Edit'}
             </button>
-            <button type="button" onClick={onClose} className="text-cat-subtext hover:text-white">
+            <button
+              type="button"
+              onClick={onClose}
+              className="p-1.5 rounded-lg text-cat-subtext hover:text-white hover:bg-cat-surface1"
+              aria-label="Close"
+            >
               <i className="fa-solid fa-xmark" />
             </button>
           </div>
         </div>
 
-        <div className="flex-1 overflow-y-auto px-6 py-4 space-y-3 min-h-0">
+        <div className="flex-1 overflow-y-auto px-5 py-4 space-y-3 min-h-0">
           <CollapsibleSection title="Description" defaultOpen>
             {editing ? (
               <textarea
@@ -1441,6 +1454,6 @@ export default function TaskDetailModal({
           </CollapsibleSection>
         </div>
       </div>
-    </div>
+    </SlideOver>
   )
 }

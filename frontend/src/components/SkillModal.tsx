@@ -1,5 +1,6 @@
 import type { AgentId, BriefCategory, Skill, SkillSuggestion } from '../types'
 import { AGENT_LABELS } from '../types'
+import SlideOver from './SlideOver'
 
 interface SkillModalProps {
   agent: AgentId | null
@@ -50,23 +51,53 @@ export default function SkillModal({
   )
 
   return (
-    <div className="fixed inset-0 bg-black/75 flex items-center justify-center p-4 z-50">
-      <div className="bg-cat-surface0 rounded-2xl max-w-2xl w-full p-6 border border-cat-surface1 space-y-4 shadow-2xl flex flex-col max-h-[85vh]">
-        <div className="flex items-center justify-between">
-          <div>
-            <h3 className="text-base font-bold text-white flex items-center gap-2">
-              <i className="fa-solid fa-graduation-cap text-indigo-400" />
-              Add Skills — {AGENT_LABELS[agent]}
-            </h3>
-            <p className="text-[10px] text-cat-subtext font-mono mt-1">
-              Library: {skillsDir}
-            </p>
+    <SlideOver
+      open
+      onClose={onClose}
+      side="right"
+      title={
+        <span className="flex flex-col min-w-0">
+          <span className="flex items-center gap-2">
+            <i className="fa-solid fa-graduation-cap text-indigo-400" />
+            Add Skills — {AGENT_LABELS[agent]}
+          </span>
+          <span className="text-[10px] text-cat-subtext font-mono font-normal mt-0.5 truncate">
+            Library: {skillsDir}
+          </span>
+        </span>
+      }
+      widthClass="w-full max-w-2xl"
+      footer={
+        <div className="flex items-center justify-between gap-2">
+          <p className="text-[10px] text-cat-overlay italic">
+            Select multiple skills, then assign in one batch
+          </p>
+          <div className="flex gap-2 shrink-0">
+            <button
+              type="button"
+              onClick={onClose}
+              className="bg-cat-base border border-cat-surface1 hover:bg-cat-surface1 text-cat-subtext py-1.5 px-3 rounded-lg text-xs"
+            >
+              Close
+            </button>
+            <button
+              type="button"
+              disabled={selectedFiles.length === 0 || assigning}
+              onClick={onAssign}
+              className="bg-indigo-600 hover:bg-indigo-500 disabled:opacity-40 disabled:cursor-not-allowed text-white font-semibold py-1.5 px-4 rounded-lg text-xs transition-colors flex items-center gap-1"
+            >
+              {assigning ? (
+                <i className="fa-solid fa-spinner animate-spin" />
+              ) : (
+                <i className="fa-solid fa-check" />
+              )}
+              Assign ({selectedFiles.length})
+            </button>
           </div>
-          <button type="button" onClick={onClose} className="text-cat-subtext hover:text-white">
-            <i className="fa-solid fa-xmark" />
-          </button>
         </div>
-
+      }
+    >
+      <div className="p-4 space-y-4">
         {briefCategories.length > 0 && (
           <div className="space-y-1.5">
             <div className="text-[10px] uppercase tracking-wider text-cat-overlay">
@@ -191,31 +222,7 @@ export default function SkillModal({
             </div>
           )}
         </div>
-
-        <div className="flex items-center justify-between pt-2 border-t border-cat-surface1">
-          <p className="text-[10px] text-cat-overlay italic">
-            Select multiple skills, then assign in one batch
-          </p>
-          <div className="flex gap-2">
-            <button
-              type="button"
-              onClick={onClose}
-              className="bg-cat-base border border-cat-surface1 hover:bg-cat-surface1 text-cat-subtext py-1.5 px-3 rounded-lg text-xs"
-            >
-              Close
-            </button>
-            <button
-              type="button"
-              disabled={selectedFiles.length === 0 || assigning}
-              onClick={onAssign}
-              className="bg-indigo-600 hover:bg-indigo-500 disabled:opacity-40 disabled:cursor-not-allowed text-white font-semibold py-1.5 px-4 rounded-lg text-xs transition-colors flex items-center gap-1"
-            >
-              <i className="fa-solid fa-copy text-[10px]" />
-              Assign {selectedFiles.length} skill(s)
-            </button>
-          </div>
-        </div>
       </div>
-    </div>
+    </SlideOver>
   )
 }

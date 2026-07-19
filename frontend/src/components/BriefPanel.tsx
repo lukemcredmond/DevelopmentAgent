@@ -44,6 +44,9 @@ interface BriefPanelProps {
   planOutlineStreaming?: boolean
   onGenerateBacklog?: () => void
   generateBacklogDisabled?: boolean
+  /** Controlled open state (optional). */
+  open?: boolean
+  onOpenChange?: (open: boolean) => void
 }
 
 export default memo(function BriefPanel({
@@ -56,8 +59,16 @@ export default memo(function BriefPanel({
   planOutlineStreaming = false,
   onGenerateBacklog,
   generateBacklogDisabled = false,
+  open: openProp,
+  onOpenChange,
 }: BriefPanelProps) {
-  const [open, setOpen] = useState(readBriefOpen)
+  const [openInternal, setOpenInternal] = useState(readBriefOpen)
+  const open = openProp ?? openInternal
+  const setOpen = (next: boolean | ((prev: boolean) => boolean)) => {
+    const value = typeof next === 'function' ? next(open) : next
+    if (onOpenChange) onOpenChange(value)
+    else setOpenInternal(value)
+  }
   const [tab, setTab] = useState<BriefTab>(readBriefTab)
 
   useEffect(() => {

@@ -42,7 +42,7 @@ import {
 } from './api/client'
 import ActivityPanel from './components/ActivityPanel'
 import AgentConsole from './components/AgentConsole'
-import BriefPanel from './components/BriefPanel'
+import BriefPanel, { readBriefOpen } from './components/BriefPanel'
 import ChatPanel, { type ChatUiMessage } from './components/ChatPanel'
 import EditorPanel from './components/EditorPanel'
 import GitPanel from './components/GitPanel'
@@ -50,8 +50,11 @@ import KanbanBoard from './components/KanbanBoard'
 import ManualTaskModal from './components/ManualTaskModal'
 import NewProjectModal from './components/NewProjectModal'
 import SearchPanel from './components/SearchPanel'
+import SettingsSlideOver from './components/SettingsSlideOver'
 import Sidebar from './components/Sidebar'
 import SkillModal from './components/SkillModal'
+import SlideOver from './components/SlideOver'
+import StatusStrip, { type StatusItem } from './components/StatusStrip'
 import TaskDetailModal from './components/TaskDetailModal'
 import TerminalPanel from './components/TerminalPanel'
 import ToolResolutionModal from './components/ToolResolutionModal'
@@ -195,6 +198,8 @@ export default function App() {
   const [bottomTab, setBottomTab] = useState<BottomTab>('console')
   const [memoryCount, setMemoryCount] = useState(0)
   const [kanbanOpen, setKanbanOpen] = useState(readKanbanOpen)
+  const [briefOpen, setBriefOpen] = useState(() => (readKanbanOpen() ? false : readBriefOpen()))
+  const [settingsOpen, setSettingsOpen] = useState(false)
   const [bottomPanelHeight, setBottomPanelHeight] = useState(readBottomPanelHeight)
   const [panelMaximized, setPanelMaximized] = useState(false)
   const [retryingStep, setRetryingStep] = useState(false)
@@ -558,9 +563,26 @@ export default function App() {
     setKanbanOpen((open) => {
       const next = !open
       writeKanbanOpen(next)
+      if (next) {
+        setBriefOpen(false)
+        setBottomPanelHeight((h) => Math.min(h, 260))
+      } else {
+        setBottomPanelHeight((h) => Math.max(h, 320))
+      }
       return next
     })
   }
+
+  useEffect(() => {
+    const onKey = (e: KeyboardEvent) => {
+      if ((e.ctrlKey || e.metaKey) && e.key === ',') {
+        e.preventDefault()
+        setSettingsOpen(true)
+      }
+    }
+    window.addEventListener('keydown', onKey)
+    return () => window.removeEventListener('keydown', onKey)
+  }, [])
 
   const handleBottomPanelResize = (height: number) => {
     setPanelMaximized(false)
@@ -643,38 +665,18 @@ export default function App() {
   const chatFilePaths = useMemo(() => Object.keys(localFiles), [localFiles])
 
   const bottomTabs = useMemo(
-    (): { id: BottomTab; label: string; icon: string; badge?: number }[] => [
-      { id: 'console', label: 'Console', icon: 'fa-terminal' },
-      { id: 'model', label: 'Model', icon: 'fa-brain' },
-      { id: 'ollamaServer', label: 'Ollama Server', icon: 'fa-server' },
-      {
-        id: 'editor',
-        label: 'Editor',
-        icon: 'fa-file-code',
-        badge: selectedFile ? 1 : undefined,
-      },
-      {
-        id: 'tools',
-        label: 'Tools',
-        icon: 'fa-wrench',
-        badge: toolRunningCount > 0 ? toolRunningCount : toolFailureCount || undefined,
-      },
-      {
-        id: 'activity',
-        label: 'Activity',
-        icon: 'fa-wave-square',
-        badge: activityEvents.length || undefined,
-      },
-      {
-        id: 'memory',
-        label: 'Memory',
-        icon: 'fa-brain-circuit',
-        badge: memoryCount > 0 ? memoryCount : undefined,
-      },
-      { id: 'chat', label: 'Chat', icon: 'fa-comments' },
-      { id: 'terminal', label: 'Terminal', icon: 'fa-square-terminal' },
-      { id: 'search', label: 'Search', icon: 'fa-magnifying-glass' },
-      { id: 'git', label: 'Git', icon: 'fa-code-branch' },
+    (): { id: BottomTab; label: string; icon: string; badge?: number; group?: string }[] => [
+      { id: 'console', label: 'Console', icon: 'fa-terminal', group: 'Work' },
+      { id: 'tools', label: 'Tools', icon: 'fa-wrench', group: 'Work', badge: toolRunningCount > 0 ? toolRunningCount : toolFailureCount || undefined },
+      { id: 'activity', label: 'Activity', icon: 'fa-wave-square', group: 'Work', badge: activityEvents.length || undefined },
+      { id: 'chat', label: 'Chat', icon: 'fa-comments', group: 'Work' },
+      { id: 'editor', label: 'Editor', icon: 'fa-file-code', group: 'Code', badge: selectedFile ? 1 : undefined },
+      { id: 'terminal', label: 'Terminal', icon: 'fa-square-terminal', group: 'Code' },
+      { id: 'search', label: 'Search', icon: 'fa-magnifying-glass', group: 'Code' },
+      { id: 'git', label: 'Git', icon: 'fa-code-branch', group: 'Code' },
+      { id: 'model', label: 'Model', icon: 'fa-brain', group: 'Debug' },
+      { id: 'ollamaServer', label: 'Ollama Server', icon: 'fa-server', group: 'Debug' },
+      { id: 'memory', label: 'Memory', icon: 'fa-brain-circuit', group: 'Debug', badge: memoryCount > 0 ? memoryCount : undefined },
     ],
     [toolRunningCount, toolFailureCount, activityEvents.length, memoryCount, selectedFile],
   )
@@ -756,52 +758,168 @@ export default function App() {
     void refreshToolHistory()
   }, [refreshToolHistory])
 
+  const statusItems = useMemo((): StatusItem[] => {
+    const items: StatusItem[] = []
+    if (actionError) {
+      items.push({
+        id: 'error',
+        tone: 'error',
+        summary: actionError.split('\n')[0] ?? actionError,
+        detail: actionError.includes('\n') ? (
+          <span className="whitespace-pre-wrap">{actionError}</span>
+        ) : undefined,
+        actions: (
+          <>
+            {actionErrorShowModelLink && (
+              <button type="button" onClick={openModelTab} className="underline text-xs">
+                Model tab
+              </button>
+            )}
+            <button
+              type="button"
+              onClick={() => {
+                setActionError(null)
+                setActionErrorShowModelLink(false)
+              }}
+              aria-label="Dismiss"
+            >
+              <i className="fa-solid fa-xmark" />
+            </button>
+          </>
+        ),
+      })
+    }
+    if (actionNotice) {
+      items.push({
+        id: 'notice',
+        tone: 'notice',
+        summary: actionNotice,
+        actions: (
+          <button type="button" onClick={() => setActionNotice(null)} aria-label="Dismiss">
+            <i className="fa-solid fa-xmark" />
+          </button>
+        ),
+      })
+    }
+    if (state.recovery?.interrupted) {
+      items.push({
+        id: 'recovery',
+        tone: 'warning',
+        summary: `Session interrupted — ${state.recovery.taskTitle} (${state.recovery.taskId})`,
+        detail: (
+          <span>
+            Lane {state.recovery.lane}
+            {state.recovery.agent ? ` · ${state.recovery.agent}` : ''}
+            {state.recovery.lastEvent ? ` · Last: ${state.recovery.lastEvent}` : ''}
+          </span>
+        ),
+        actions: (
+          <>
+            <button
+              type="button"
+              onClick={() =>
+                void withLoading(async () => {
+                  if (orchestratedActive) {
+                    setActionError('Wait for the current sprint step to finish before resuming.')
+                    return
+                  }
+                  setActionError(null)
+                  try {
+                    const data = await runInProgressStep({
+                      brief,
+                      ollama_url: ollamaUrl,
+                      taskId: state.recovery?.taskId,
+                    })
+                    handleState(data)
+                    applyStepOutcome(data)
+                  } catch (err) {
+                    const message =
+                      err instanceof ApiError
+                        ? err.detail
+                        : err instanceof Error
+                          ? err.message
+                          : 'Failed to resume in-progress step.'
+                    setActionError(message)
+                  }
+                })
+              }
+              className="px-2 py-0.5 rounded bg-amber-600/50 text-[10px] font-semibold"
+            >
+              Resume
+            </button>
+            <button
+              type="button"
+              onClick={() =>
+                void withLoading(async () => handleState(await dismissSprintRecovery()))
+              }
+              className="underline text-xs"
+            >
+              Dismiss
+            </button>
+          </>
+        ),
+      })
+    }
+    if (ollamaOk === false) {
+      items.push({
+        id: 'ollama',
+        tone: 'warning',
+        summary: 'Ollama offline — using simulation fallback',
+        actions: (
+          <button type="button" onClick={openModelTab} className="underline text-xs">
+            Model tab
+          </button>
+        ),
+      })
+    }
+    if (pendingTools.length > 0) {
+      items.push({
+        id: 'pending-tools',
+        tone: 'warning',
+        summary: `${pendingTools.length} unknown tool call(s)`,
+        actions: (
+          <button
+            type="button"
+            onClick={() => setPendingToolModal(pendingTools[0] ?? null)}
+            className="underline text-xs"
+          >
+            Resolve
+          </button>
+        ),
+      })
+    }
+    return items
+  }, [
+    actionError,
+    actionErrorShowModelLink,
+    actionNotice,
+    state.recovery,
+    ollamaOk,
+    pendingTools,
+    orchestratedActive,
+    brief,
+    ollamaUrl,
+    handleState,
+    applyStepOutcome,
+    openModelTab,
+  ])
+
   return (
     <div className={`flex h-full w-full flex-col lg:flex-row bg-cat-base overflow-hidden ${theme}`}>
       <Sidebar
         state={state}
-        ollamaUrl={ollamaUrl}
         brief={brief}
-        projectName={projectName}
-        workspaceDir={workspaceDir}
-        skillsDir={skillsDir}
-        poModel={poModel}
-        devModel={devModel}
-        crModel={crModel}
-        qaModel={qaModel}
         loading={loading}
         ollamaOk={ollamaOk}
         autoSprint={autoSprint}
         autoSprintPaused={autoSprintPaused}
         sprintRunning={orchestratedActive}
         isDark={isDark}
-        indexProgress={indexProgress}
-        skillSuggestionCounts={skillSuggestionCounts}
-        onOllamaUrlChange={setOllamaUrl}
-        onProjectNameChange={setProjectName}
-        onWorkspaceDirChange={setWorkspaceDir}
-        onSkillsDirChange={setSkillsDir}
-        onPoModelChange={setPoModel}
-        onDevModelChange={setDevModel}
-        onCrModelChange={setCrModel}
-        onQaModelChange={setQaModel}
+        onOpenSettings={() => setSettingsOpen(true)}
         onLoadProject={(id) =>
           void withLoading(async () => handleState(await loadProject(id)))
         }
-        onSaveConfig={(payload) =>
-          void withLoading(async () => {
-            const data = await updateConfig(payload)
-            handleState(data)
-            applyStateFields(data, setters)
-          })
-        }
         onOpenNewProject={() => setShowNewProject(true)}
-        onOpenSkillModal={(agent) => void openSkillModal(agent)}
-        onRemoveSkill={(agent, skill) =>
-          void withLoading(async () =>
-            handleState(await removeSkill({ agent, skillFile: skill })),
-          )
-        }
         onPlan={() =>
           void withLoading(async () =>
             handleState(await triggerPlanOutline({ brief, ollama_url: ollamaUrl })),
@@ -878,7 +996,6 @@ export default function App() {
           })
         }
         inProgressCount={state.board['In Progress']?.length ?? 0}
-        onOpenMemoryTab={handleOpenMemoryTab}
         onClaimReadyCards={() =>
           void withLoading(async () => {
             if (orchestratedActive) {
@@ -925,6 +1042,48 @@ export default function App() {
         onToggleTheme={toggleTheme}
         onToggleAutoSprint={setAutoSprint}
         onCancelSprint={() => void stopAutoSprint()}
+      />
+
+      <SettingsSlideOver
+        open={settingsOpen}
+        onClose={() => setSettingsOpen(false)}
+        state={state}
+        ollamaUrl={ollamaUrl}
+        projectName={projectName}
+        workspaceDir={workspaceDir}
+        skillsDir={skillsDir}
+        poModel={poModel}
+        devModel={devModel}
+        crModel={crModel}
+        qaModel={qaModel}
+        indexProgress={indexProgress}
+        skillSuggestionCounts={skillSuggestionCounts}
+        onOllamaUrlChange={setOllamaUrl}
+        onProjectNameChange={setProjectName}
+        onWorkspaceDirChange={setWorkspaceDir}
+        onSkillsDirChange={setSkillsDir}
+        onPoModelChange={setPoModel}
+        onDevModelChange={setDevModel}
+        onCrModelChange={setCrModel}
+        onQaModelChange={setQaModel}
+        onLoadProject={(id) =>
+          void withLoading(async () => handleState(await loadProject(id)))
+        }
+        onSaveConfig={(payload) =>
+          void withLoading(async () => {
+            const data = await updateConfig(payload)
+            handleState(data)
+            applyStateFields(data, setters)
+          })
+        }
+        onOpenNewProject={() => setShowNewProject(true)}
+        onOpenSkillModal={(agent) => void openSkillModal(agent)}
+        onRemoveSkill={(agent, skill) =>
+          void withLoading(async () =>
+            handleState(await removeSkill({ agent, skillFile: skill })),
+          )
+        }
+        onWorkflowSettingsChange={handleWorkflowSettingsChange}
         onExportProject={() => exportProject(state.projectId)}
         onImportProject={(file) =>
           void withLoading(async () => handleState(await importProject(file)))
@@ -938,161 +1097,18 @@ export default function App() {
             handleState(await loadProject(state.projectId))
           })
         }}
-        onWorkflowSettingsChange={handleWorkflowSettingsChange}
+        onOpenMemoryTab={handleOpenMemoryTab}
       />
 
+
       <main className="flex-1 flex flex-col h-full overflow-hidden min-w-0">
-        {actionError && (
-          <div className="mx-4 mt-2 shrink-0 flex items-center justify-between gap-2 text-[11px] text-rose-200 bg-rose-950/40 border border-rose-500/40 rounded-lg px-3 py-2">
-            <span className="whitespace-pre-wrap">{actionError}</span>
-            <div className="flex items-center gap-2 shrink-0">
-              {actionErrorShowModelLink && (
-                <button
-                  type="button"
-                  onClick={openModelTab}
-                  className="text-indigo-300 hover:text-white text-xs underline"
-                >
-                  View in Model tab
-                </button>
-              )}
-              <button
-                type="button"
-                onClick={() => {
-                  setActionError(null)
-                  setActionErrorShowModelLink(false)
-                }}
-                className="text-rose-300 hover:text-white shrink-0"
-                aria-label="Dismiss"
-              >
-                <i className="fa-solid fa-xmark" />
-              </button>
-            </div>
-          </div>
-        )}
-
-        {actionNotice && (
-          <div className="mx-4 mt-2 shrink-0 flex items-center justify-between gap-2 text-[11px] text-emerald-200 bg-emerald-950/40 border border-emerald-500/40 rounded-lg px-3 py-2">
-            <span>{actionNotice}</span>
-            <button
-              type="button"
-              onClick={() => setActionNotice(null)}
-              className="text-emerald-300 hover:text-white shrink-0"
-              aria-label="Dismiss"
-            >
-              <i className="fa-solid fa-xmark" />
-            </button>
-          </div>
-        )}
-
-        {state.recovery?.interrupted && (
-          <div className="mx-4 mt-2 shrink-0 flex flex-wrap items-center justify-between gap-2 text-[11px] text-amber-200 bg-amber-950/40 border border-amber-500/40 rounded-lg px-3 py-2">
-            <div className="flex items-start gap-2 min-w-0">
-              <i className="fa-solid fa-triangle-exclamation shrink-0 mt-0.5" />
-              <span>
-                Session interrupted — was working on &apos;{state.recovery.taskTitle}&apos; (
-                {state.recovery.taskId}) in {state.recovery.lane}
-                {state.recovery.agent ? ` (${state.recovery.agent})` : ''}.
-                {state.recovery.lastEvent ? ` Last event: ${state.recovery.lastEvent}.` : ''}
-              </span>
-            </div>
-            <div className="flex items-center gap-2 shrink-0">
-              <button
-                type="button"
-                onClick={() =>
-                  void withLoading(async () => {
-                    if (orchestratedActive) {
-                      setActionError('Wait for the current sprint step to finish before resuming.')
-                      return
-                    }
-                    setActionError(null)
-                    try {
-                      const data = await runInProgressStep({
-                        brief,
-                        ollama_url: ollamaUrl,
-                        taskId: state.recovery?.taskId,
-                      })
-                      handleState(data)
-                      applyStepOutcome(data)
-                    } catch (err) {
-                      const message =
-                        err instanceof ApiError
-                          ? err.detail
-                          : err instanceof Error
-                            ? err.message
-                            : 'Failed to resume in-progress step.'
-                      setActionError(message)
-                    }
-                  })
-                }
-                className="px-2.5 py-1 rounded bg-amber-600/50 hover:bg-amber-600/70 text-amber-100 text-[10px] font-semibold"
-              >
-                Run In Progress
-              </button>
-              {state.recovery.diagnosticsFile ? (
-                <button
-                  type="button"
-                  onClick={() => {
-                    void navigator.clipboard.writeText(state.recovery?.diagnosticsFile ?? '')
-                    setActionNotice(
-                      `Diagnostics path copied: ${state.recovery?.diagnosticsFile} — see Console tab`,
-                    )
-                    setBottomTab('console')
-                  }}
-                  className="text-amber-300 hover:text-white text-xs underline"
-                >
-                  Open diagnostics
-                </button>
-              ) : null}
-              <button
-                type="button"
-                onClick={() =>
-                  void withLoading(async () => handleState(await dismissSprintRecovery()))
-                }
-                className="text-amber-300 hover:text-white text-xs underline"
-              >
-                Dismiss
-              </button>
-            </div>
-          </div>
-        )}
-
-        {ollamaOk === false && (
-          <div className="mx-4 mt-2 shrink-0 flex items-center justify-between gap-2 text-[11px] text-amber-200 bg-amber-950/40 border border-amber-500/40 rounded-lg px-3 py-2">
-            <div className="flex items-center gap-2">
-              <i className="fa-solid fa-triangle-exclamation shrink-0" />
-              <span>
-                Offline simulation — Ollama retries (configurable) then cooldown burst; default timeout 300s per attempt.
-                {orchestratedActive ? ' Sprint steps use fallback behavior.' : ' Start Ollama for real agent behavior.'}
-              </span>
-            </div>
-            <button
-              type="button"
-              onClick={openModelTab}
-              className="text-amber-300 hover:text-white shrink-0 text-xs underline"
-            >
-              View in Model tab
-            </button>
-          </div>
-        )}
-
-        {pendingTools.length > 0 && (
-          <div className="mx-4 mt-2 shrink-0 flex items-center justify-between gap-2 text-[11px] text-amber-200 bg-amber-950/40 border border-amber-500/40 rounded-lg px-3 py-2">
-            <span>
-              {pendingTools.length} unknown tool call(s) — map them to run_command or other actions.
-            </span>
-            <button
-              type="button"
-              onClick={() => setPendingToolModal(pendingTools[0] ?? null)}
-              className="text-amber-300 hover:text-white shrink-0 text-xs underline"
-            >
-              Resolve
-            </button>
-          </div>
-        )}
+        <StatusStrip items={statusItems} />
 
         <BriefPanel
           brief={brief}
           onBriefChange={setBrief}
+          open={briefOpen}
+          onOpenChange={setBriefOpen}
           onOpenManualTask={() => setShowManualTask(true)}
           autonomousMode={state.workflowSettings?.autonomousMode ?? false}
           planOutline={planOutline}
@@ -1223,28 +1239,40 @@ export default function App() {
               />
               <div className="flex bg-cat-mantle border-b border-cat-surface1 shrink-0 items-stretch">
                 <div className="flex-1 min-w-0 overflow-x-auto">
-                  <div className="flex whitespace-nowrap">
-                    {bottomTabs.map((tab) => (
-                      <button
-                        key={tab.id}
-                        type="button"
-                        onClick={() => setBottomTab(tab.id)}
-                        title={tab.label}
-                        className={`px-3 md:px-4 py-2 text-[11px] font-semibold uppercase tracking-wider border-r border-cat-surface1 transition-colors shrink-0 ${
-                          bottomTab === tab.id
-                            ? 'bg-cat-base text-indigo-400'
-                            : 'text-cat-subtext hover:text-white hover:bg-cat-surface0'
-                        }`}
-                      >
-                        <i className={`fa-solid ${tab.icon} md:mr-1.5`} />
-                        <span className="hidden md:inline">{tab.label}</span>
-                        {tab.badge != null && tab.badge > 0 && (
-                          <span className="ml-1.5 text-[9px] bg-indigo-950 text-indigo-300 px-1.5 py-0.5 rounded-full">
-                            {tab.badge > 99 ? '99+' : tab.badge}
-                          </span>
-                        )}
-                      </button>
-                    ))}
+                  <div className="flex whitespace-nowrap items-stretch">
+                    {bottomTabs.map((tab, idx) => {
+                      const prevGroup = idx > 0 ? bottomTabs[idx - 1]?.group : undefined
+                      const showDivider = tab.group && prevGroup && tab.group !== prevGroup
+                      return (
+                        <div key={tab.id} className="flex items-stretch shrink-0">
+                          {showDivider && (
+                            <div
+                              className="w-px bg-cat-surface1/80 mx-0.5 self-stretch"
+                              title={tab.group}
+                              aria-hidden
+                            />
+                          )}
+                          <button
+                            type="button"
+                            onClick={() => setBottomTab(tab.id)}
+                            title={tab.group ? `${tab.group}: ${tab.label}` : tab.label}
+                            className={`px-3 md:px-4 py-2 text-[11px] font-semibold uppercase tracking-wider border-r border-cat-surface1 transition-colors ${
+                              bottomTab === tab.id
+                                ? 'bg-cat-base text-indigo-400'
+                                : 'text-cat-subtext hover:text-white hover:bg-cat-surface0'
+                            }`}
+                          >
+                            <i className={`fa-solid ${tab.icon} md:mr-1.5`} />
+                            <span className="hidden md:inline">{tab.label}</span>
+                            {tab.badge != null && tab.badge > 0 && (
+                              <span className="ml-1.5 text-[9px] bg-indigo-950 text-indigo-300 px-1.5 py-0.5 rounded-full">
+                                {tab.badge > 99 ? '99+' : tab.badge}
+                              </span>
+                            )}
+                          </button>
+                        </div>
+                      )
+                    })}
                   </div>
                 </div>
                 <button
@@ -1622,9 +1650,23 @@ export default function App() {
       />
 
       {showSprintSummary && state.lastSprintSummary && (
-        <div className="fixed inset-0 bg-black/75 flex items-center justify-center p-4 z-50">
-          <div className="bg-cat-surface0 rounded-2xl max-w-md w-full p-6 border border-cat-surface1 space-y-3">
-            <h3 className="text-base font-bold text-white">Sprint Summary</h3>
+        <SlideOver
+          open
+          onClose={() => setShowSprintSummary(false)}
+          side="right"
+          title="Sprint Summary"
+          widthClass="w-full max-w-md"
+          footer={
+            <button
+              type="button"
+              onClick={() => setShowSprintSummary(false)}
+              className="w-full bg-indigo-600 text-white text-xs py-2 rounded-lg"
+            >
+              Close
+            </button>
+          }
+        >
+          <div className="p-4 space-y-3">
             <p className="text-xs text-cat-subtext">
               Steps run: {state.lastSprintSummary.stepsRun}
             </p>
@@ -1637,15 +1679,8 @@ export default function App() {
             <p className="text-xs text-cat-subtext">
               Blocked: {state.lastSprintSummary.blocked.join(', ') || 'none'}
             </p>
-            <button
-              type="button"
-              onClick={() => setShowSprintSummary(false)}
-              className="w-full bg-indigo-600 text-white text-xs py-2 rounded-lg"
-            >
-              Close
-            </button>
           </div>
-        </div>
+        </SlideOver>
       )}
 
       <ToolResolutionModal
