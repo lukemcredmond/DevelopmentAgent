@@ -8,6 +8,8 @@ from backend.agents.registry import AGENT_MAP
 from backend.api.helpers import build_state_response
 from backend.services.tool_aliases import (
     delete_alias,
+    dismiss_all_pending_tools,
+    dismiss_pending_tool,
     get_aliases,
     list_pending_tools,
     resolve_pending_tool,
@@ -46,6 +48,12 @@ class ResolvePendingPayload(BaseModel):
 
 class ToolApprovalPayload(BaseModel):
     approved: bool
+
+
+class DismissAllPendingPayload(BaseModel):
+    model_config = ConfigDict(populate_by_name=True)
+
+    cancel_sprint: bool = Field(default=False, alias="cancelSprint")
 
 
 class ToolExecutePayload(BaseModel):
@@ -211,6 +219,28 @@ def post_tool_replay(payload: ToolReplayPayload):
 def get_pending_tools():
     with state.STATE_LOCK:
         return {"pending": list_pending_tools()}
+
+
+@router.post("/api/tools/pending/dismiss-all")
+def dismiss_all_pending(payload: Optional[DismissAllPendingPayload] = None):
+    body = payload or DismissAllPendingPayload()
+    with state.STATE_LOCK:
+        count = dismiss_all_pending_tools(cancel_sprint=body.cancel_sprint)
+        return {
+            "ok": True,
+            "dismissed": count,
+            "sprintCancel": bool(state.SPRINT_CANCEL),
+            "pending": list_pending_tools(),
+        }
+
+
+@router.post("/api/tools/pending/{request_id}/dismiss")
+def dismiss_pending(request_id: str):
+    with state.STATE_LOCK:
+        result = dismiss_pending_tool(request_id)
+        if not result:
+            raise HTTPException(status_code=404, detail="Pending tool request not found")
+        return {"ok": True, "pending": list_pending_tools()}
 
 
 @router.get("/api/tools/aliases")

@@ -1,5 +1,9 @@
 import { useEffect, useState } from 'react'
-import { resolvePendingTool } from '../api/client'
+import {
+  dismissAllPendingTools,
+  dismissPendingTool,
+  resolvePendingTool,
+} from '../api/client'
 import type { PendingToolRequest } from '../types'
 
 const TARGET_TOOLS = [
@@ -38,7 +42,7 @@ const CANONICAL_TOOL_NAMES = new Set([
 interface ToolResolutionModalProps {
   pending: PendingToolRequest | null
   onClose: () => void
-  onResolved: () => void
+  onResolved: () => void | Promise<void>
 }
 
 export default function ToolResolutionModal({
@@ -98,6 +102,11 @@ export default function ToolResolutionModal({
     return {}
   }
 
+  const finish = async () => {
+    await onResolved()
+    onClose()
+  }
+
   const handleSave = async () => {
     setLoading(true)
     setError(null)
@@ -112,10 +121,35 @@ export default function ToolResolutionModal({
         defaultArgs,
         saveMapping: true,
       })
-      onResolved()
-      onClose()
+      await finish()
     } catch (e) {
       setError(e instanceof Error ? e.message : 'Failed to save mapping')
+    } finally {
+      setLoading(false)
+    }
+  }
+
+  const handleDismiss = async () => {
+    setLoading(true)
+    setError(null)
+    try {
+      await dismissPendingTool(pending.id)
+      await finish()
+    } catch (e) {
+      setError(e instanceof Error ? e.message : 'Failed to dismiss')
+    } finally {
+      setLoading(false)
+    }
+  }
+
+  const handleStopSprint = async () => {
+    setLoading(true)
+    setError(null)
+    try {
+      await dismissAllPendingTools({ cancelSprint: true })
+      await finish()
+    } catch (e) {
+      setError(e instanceof Error ? e.message : 'Failed to stop sprint')
     } finally {
       setLoading(false)
     }
@@ -126,13 +160,19 @@ export default function ToolResolutionModal({
       <div className="bg-cat-surface0 rounded-2xl max-w-lg w-full p-6 border border-amber-500/40 shadow-2xl space-y-4">
         <div className="flex items-center justify-between">
           <h3 className="text-base font-bold text-amber-200">Unknown Tool Request</h3>
-          <button type="button" onClick={onClose} className="text-cat-subtext hover:text-white">
+          <button
+            type="button"
+            onClick={() => void handleDismiss()}
+            disabled={loading}
+            className="text-cat-subtext hover:text-white"
+          >
             <i className="fa-solid fa-xmark" />
           </button>
         </div>
         <p className="text-xs text-cat-subtext">
           The agent called <span className="font-mono text-amber-300">{pending.alias}</span> which
-          is not registered. Map it to a real action (saved for this project).
+          is not registered. Map it to a real action (saved for this project), dismiss it, or stop
+          the sprint.
         </p>
         {pending.agentRole && (
           <p className="text-[11px] text-cat-overlay">
@@ -191,22 +231,33 @@ export default function ToolResolutionModal({
           </div>
         )}
         {error && <p className="text-xs text-rose-400">{error}</p>}
-        <div className="flex gap-2 justify-end">
-          <button
-            type="button"
-            onClick={onClose}
-            className="text-xs text-cat-subtext hover:text-white px-3 py-1.5"
-          >
-            Dismiss
-          </button>
+        <div className="flex flex-wrap gap-2 justify-between items-center">
           <button
             type="button"
             disabled={loading}
-            onClick={() => void handleSave()}
-            className="bg-amber-600 hover:bg-amber-500 disabled:opacity-50 text-white text-xs px-4 py-1.5 rounded-lg"
+            onClick={() => void handleStopSprint()}
+            className="text-xs text-rose-300 hover:text-rose-200 border border-rose-500/40 px-3 py-1.5 rounded-lg disabled:opacity-50"
           >
-            Save mapping
+            Stop sprint
           </button>
+          <div className="flex gap-2">
+            <button
+              type="button"
+              disabled={loading}
+              onClick={() => void handleDismiss()}
+              className="text-xs text-cat-subtext hover:text-white px-3 py-1.5 disabled:opacity-50"
+            >
+              Dismiss
+            </button>
+            <button
+              type="button"
+              disabled={loading}
+              onClick={() => void handleSave()}
+              className="bg-amber-600 hover:bg-amber-500 disabled:opacity-50 text-white text-xs px-4 py-1.5 rounded-lg"
+            >
+              Save mapping
+            </button>
+          </div>
         </div>
       </div>
     </div>

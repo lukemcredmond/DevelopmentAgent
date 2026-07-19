@@ -7,6 +7,9 @@ from typing import Any, Dict, List, Optional, Set, Tuple
 from backend import state
 from backend.services.events import publish_event
 
+# Aliases dismissed this process (per project) — suppress re-queue until project reload.
+_DISMISSED_ALIASES: Dict[str, set] = {}
+
 # Real app tools — missing from an agent means role/mode gating, not "unknown invent".
 CANONICAL_TOOL_NAMES: Set[str] = {
     "write_file",
@@ -166,9 +169,35 @@ def queue_pending_tool(
     task_id: Optional[str] = None,
     agent_role: Optional[str] = None,
 ) -> Dict[str, Any]:
+    # Do not spam invents while sprint is cancelling or alias was dismissed this session.
+    if getattr(state, "SPRINT_CANCEL", False):
+        return {
+            "id": "",
+            "projectId": state.CURRENT_PROJECT_ID,
+            "taskId": task_id,
+            "agentRole": agent_role,
+            "alias": alias,
+            "arguments": arguments,
+            "status": "suppressed",
+            "timestamp": _now(),
+        }
+    pid = state.CURRENT_PROJECT_ID
+    dismissed = _DISMISSED_ALIASES.get(pid) or set()
+    if alias in dismissed:
+        return {
+            "id": "",
+            "projectId": pid,
+            "taskId": task_id,
+            "agentRole": agent_role,
+            "alias": alias,
+            "arguments": arguments,
+            "status": "suppressed",
+            "timestamp": _now(),
+        }
+
     request = {
         "id": str(uuid.uuid4())[:12],
-        "projectId": state.CURRENT_PROJECT_ID,
+        "projectId": pid,
         "taskId": task_id,
         "agentRole": agent_role,
         "alias": alias,
@@ -207,6 +236,57 @@ def list_pending_tools(project_id: Optional[str] = None) -> List[Dict[str, Any]]
     return memory
 
 
+def _find_pending(request_id: str) -> Optional[Dict[str, Any]]:
+    for req in state.PENDING_TOOL_REQUESTS:
+        if req.get("id") == request_id:
+            return req
+    return state.storage.get_pending_tool_request(request_id)
+
+
+def dismiss_pending_tool(request_id: str) -> Optional[Dict[str, Any]]:
+    """Mark a pending unknown-tool request dismissed (no alias saved)."""
+    pending = _find_pending(request_id)
+    if not pending:
+        return None
+    alias = str(pending.get("alias") or "")
+    pid = str(pending.get("projectId") or state.CURRENT_PROJECT_ID)
+    pending["status"] = "dismissed"
+    state.storage.update_pending_tool_status(request_id, "dismissed")
+    if alias:
+        _DISMISSED_ALIASES.setdefault(pid, set()).add(alias)
+    publish_event(
+        "activity",
+        {
+            "taskId": pending.get("taskId") or "system",
+            "taskTitle": alias or "Unknown tool",
+            "kind": "pending_tool_dismissed",
+            "role": "user",
+            "agent": "User",
+            "content": f"Dismissed unknown tool '{alias}'",
+            "timestamp": _now(),
+        },
+    )
+    return pending
+
+
+def dismiss_all_pending_tools(
+    project_id: Optional[str] = None,
+    *,
+    cancel_sprint: bool = False,
+) -> int:
+    """Dismiss all pending invents for the project. Optionally cancel the sprint."""
+    pid = project_id or state.CURRENT_PROJECT_ID
+    if cancel_sprint:
+        state.SPRINT_CANCEL = True
+    pending = list_pending_tools(pid)
+    count = 0
+    for req in pending:
+        rid = req.get("id")
+        if rid and dismiss_pending_tool(str(rid)):
+            count += 1
+    return count
+
+
 def resolve_pending_tool(
     request_id: str,
     target_tool: str,
@@ -214,13 +294,7 @@ def resolve_pending_tool(
     *,
     save_mapping: bool = True,
 ) -> Optional[Dict[str, Any]]:
-    pending = None
-    for req in state.PENDING_TOOL_REQUESTS:
-        if req.get("id") == request_id:
-            pending = req
-            break
-    if not pending:
-        pending = state.storage.get_pending_tool_request(request_id)
+    pending = _find_pending(request_id)
     if not pending:
         return None
 
@@ -259,3 +333,5 @@ def load_pending_tools_for_project(project_id: str) -> None:
     state.PENDING_TOOL_REQUESTS = state.storage.list_pending_tool_requests(
         project_id, status="pending"
     )
+    # Fresh project load: clear session suppress set for this project
+    _DISMISSED_ALIASES.pop(project_id, None)

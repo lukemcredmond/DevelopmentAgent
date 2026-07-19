@@ -1651,7 +1651,10 @@ export default function App() {
       <ToolResolutionModal
         pending={pendingToolModal}
         onClose={() => setPendingToolModal(null)}
-        onResolved={() => void refreshPendingTools()}
+        onResolved={async () => {
+          await refreshPendingTools()
+          setPendingToolModal(null)
+        }}
       />
 
       <ToolApprovalModal

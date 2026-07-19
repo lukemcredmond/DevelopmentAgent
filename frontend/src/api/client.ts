@@ -579,6 +579,29 @@ export async function resolvePendingTool(
   })
 }
 
+export async function dismissPendingTool(
+  requestId: string,
+): Promise<{ ok: boolean; pending: import('../types').PendingToolRequest[] }> {
+  return request<{ ok: boolean; pending: import('../types').PendingToolRequest[] }>(
+    `/api/tools/pending/${encodeURIComponent(requestId)}/dismiss`,
+    { method: 'POST' },
+  )
+}
+
+export async function dismissAllPendingTools(options?: {
+  cancelSprint?: boolean
+}): Promise<{
+  ok: boolean
+  dismissed: number
+  sprintCancel: boolean
+  pending: import('../types').PendingToolRequest[]
+}> {
+  return request('/api/tools/pending/dismiss-all', {
+    method: 'POST',
+    body: JSON.stringify({ cancelSprint: options?.cancelSprint ?? false }),
+  })
+}
+
 export async function fetchPendingApprovals(): Promise<{
   pending: import('../types').PendingToolApproval[]
 }> {
