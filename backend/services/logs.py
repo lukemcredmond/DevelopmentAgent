@@ -6,7 +6,7 @@ from backend.services.events import publish_event
 
 
 def add_system_log(source: str, log_type: str, text: str) -> None:
-    timestamp = datetime.datetime.now().strftime("%H:%M:%S")
+    timestamp = datetime.datetime.now().strftime("%Y-%m-%d %H:%M:%S")
     entry = {
         "timestamp": timestamp,
         "source": source,

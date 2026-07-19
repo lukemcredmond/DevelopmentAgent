@@ -21,7 +21,8 @@ export function mergeToolHistory(
       byId.set(event.id, { ...existing, ...event })
     }
   }
+  // Chronological (oldest last) so VirtualScrollList newestFirst shows newest on top.
   return Array.from(byId.values())
-    .sort((a, b) => String(b.timestamp).localeCompare(String(a.timestamp)))
-    .slice(0, 200)
+    .sort((a, b) => String(a.timestamp).localeCompare(String(b.timestamp)))
+    .slice(-200)
 }

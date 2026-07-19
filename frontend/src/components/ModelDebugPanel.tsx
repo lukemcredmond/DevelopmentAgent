@@ -130,10 +130,8 @@ export default function ModelDebugPanel({ taskIdFilter }: ModelDebugPanelProps) 
     }
   }, [refresh])
 
-  const displayEntries = useMemo(
-    () => [...entries].reverse(),
-    [entries],
-  )
+  // API returns newest-first; keep that for list view (newest at top).
+  const displayEntries = useMemo(() => entries, [entries])
 
   const displayThreads = useMemo(
     () => [...threads],

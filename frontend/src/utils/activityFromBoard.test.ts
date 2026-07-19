@@ -1,10 +1,16 @@
 import { describe, expect, it } from 'vitest'
 import {
   hydrateActivityFromBoard,
+  mergeActivityEvents,
   MAX_DECISION_TAIL,
   MAX_TRANSCRIPT_TAIL,
 } from './activityFromBoard'
-import type { Board, TaskTranscriptEntry } from '../types'
+import type { ActivityEvent, Board, TaskTranscriptEntry } from '../types'
+
+/** Mirror VirtualScrollList newestFirst: chronological input → newest at index 0. */
+function displayNewestFirst<T>(chronological: T[]): T[] {
+  return [...chronological].reverse()
+}
 
 function makeTranscript(n: number): TaskTranscriptEntry[] {
   return Array.from({ length: n }, (_, i) => ({
@@ -43,5 +49,77 @@ describe('hydrateActivityFromBoard', () => {
       true,
     )
     expect(transcriptEvents.some((e) => e.content.includes('entry-0'))).toBe(false)
+  })
+
+  it('returns chronological order (oldest last) so newestFirst UI puts latest on top', () => {
+    const board: Board = {
+      Backlog: [
+        {
+          id: 'T-1',
+          title: 'Task',
+          description: '',
+          status: 'Backlog',
+          transcript: [
+            {
+              role: 'assistant',
+              agent: 'Developer',
+              content: 'older',
+              timestamp: '2026-01-01 10:00:00',
+            },
+            {
+              role: 'assistant',
+              agent: 'Developer',
+              content: 'newer',
+              timestamp: '2026-01-01 11:00:00',
+            },
+          ],
+          decisions: [],
+        },
+      ],
+    }
+    const events = hydrateActivityFromBoard(board)
+    expect(events[0].content).toBe('older')
+    expect(events[events.length - 1].content).toBe('newer')
+    const displayed = displayNewestFirst(events)
+    expect(displayed[0].content).toBe('newer')
+  })
+})
+
+describe('mergeActivityEvents', () => {
+  it('keeps chronological feed and newest on top after newestFirst reverse', () => {
+    const hydrated: ActivityEvent[] = [
+      {
+        taskId: 'T-1',
+        taskTitle: 'A',
+        kind: 'transcript',
+        role: 'assistant',
+        agent: 'Developer',
+        content: 'mid',
+        timestamp: '2026-01-01 10:30:00',
+      },
+    ]
+    const live: ActivityEvent[] = [
+      {
+        taskId: 'T-1',
+        taskTitle: 'A',
+        kind: 'transcript',
+        role: 'assistant',
+        agent: 'Developer',
+        content: 'late',
+        timestamp: '2026-01-01 11:00:00',
+      },
+      {
+        taskId: 'T-1',
+        taskTitle: 'A',
+        kind: 'transcript',
+        role: 'assistant',
+        agent: 'Developer',
+        content: 'early',
+        timestamp: '2026-01-01 10:00:00',
+      },
+    ]
+    const merged = mergeActivityEvents(hydrated, live)
+    expect(merged.map((e) => e.content)).toEqual(['early', 'mid', 'late'])
+    expect(displayNewestFirst(merged)[0].content).toBe('late')
   })
 })
