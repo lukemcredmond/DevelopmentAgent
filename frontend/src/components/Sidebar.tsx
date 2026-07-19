@@ -4,7 +4,6 @@ import type { AppState } from '../types'
 interface SidebarProps {
   state: AppState
   brief: string
-  loading: boolean
   ollamaOk: boolean | null
   autoSprint: boolean
   autoSprintPaused?: boolean
@@ -33,7 +32,6 @@ interface SidebarProps {
 export default memo(function Sidebar({
   state,
   brief,
-  loading,
   ollamaOk,
   autoSprint,
   autoSprintPaused = false,
@@ -157,7 +155,7 @@ export default memo(function Sidebar({
             <button
               type="button"
               onClick={onPlan}
-              disabled={loading || !brief.trim()}
+              disabled={sprintRunning || !brief.trim()}
               className="w-full bg-indigo-600 hover:bg-indigo-500 disabled:opacity-50 text-white font-medium py-1.5 rounded-lg text-[11px] transition-colors flex items-center justify-center gap-1.5"
             >
               <i className="fa-solid fa-map" />
@@ -167,7 +165,7 @@ export default memo(function Sidebar({
               <button
                 type="button"
                 onClick={onGenerateBacklog}
-                disabled={loading || !brief.trim() || !planOutlineReady}
+                disabled={sprintRunning || !brief.trim() || !planOutlineReady}
                 className="w-full bg-violet-700 hover:bg-violet-600 disabled:opacity-50 text-white font-medium py-1.5 rounded-lg text-[11px] transition-colors flex items-center justify-center gap-1.5"
               >
                 <i className="fa-solid fa-layer-group" />
@@ -177,10 +175,10 @@ export default memo(function Sidebar({
             <button
               type="button"
               onClick={onPlanAndRun}
-              disabled={loading || !brief.trim()}
+              disabled={sprintRunning || !brief.trim()}
               className="w-full bg-violet-600 hover:bg-violet-500 disabled:opacity-50 text-white font-medium py-1.5 rounded-lg text-[11px] transition-colors flex items-center justify-center gap-1.5"
             >
-              {loading ? (
+              {sprintRunning ? (
                 <i className="fa-solid fa-spinner animate-spin" />
               ) : (
                 <i className="fa-solid fa-rocket" />
@@ -190,10 +188,10 @@ export default memo(function Sidebar({
             <button
               type="button"
               onClick={onStep}
-              disabled={loading || boardEmpty}
+              disabled={sprintRunning || boardEmpty}
               className="w-full bg-emerald-600 hover:bg-emerald-500 disabled:opacity-50 text-white font-medium py-1.5 rounded-lg text-[11px] transition-colors flex items-center justify-center gap-1.5"
             >
-              {loading ? (
+              {sprintRunning ? (
                 <i className="fa-solid fa-spinner animate-spin" />
               ) : (
                 <i className="fa-solid fa-play" />
@@ -204,7 +202,7 @@ export default memo(function Sidebar({
               <button
                 type="button"
                 onClick={onRunInProgress}
-                disabled={loading || sprintRunning}
+                disabled={sprintRunning}
                 className="w-full bg-teal-600 hover:bg-teal-500 disabled:opacity-50 text-white font-medium py-1.5 rounded-lg text-[11px] transition-colors flex items-center justify-center gap-1.5"
               >
                 <i className="fa-solid fa-forward" />
@@ -215,7 +213,7 @@ export default memo(function Sidebar({
               <button
                 type="button"
                 onClick={onClaimReadyCards}
-                disabled={loading || sprintRunning}
+                disabled={sprintRunning}
                 className="w-full bg-teal-700 hover:bg-teal-600 disabled:opacity-50 text-white font-medium py-1.5 rounded-lg text-[11px] transition-colors flex items-center justify-center gap-1.5"
               >
                 <i className="fa-solid fa-hand-pointer" />
@@ -252,7 +250,7 @@ export default memo(function Sidebar({
               <button
                 type="button"
                 onClick={onEscalateNeedsUserToPo}
-                disabled={loading || sprintRunning}
+                disabled={sprintRunning}
                 className="w-full bg-amber-950/30 hover:bg-amber-950/50 disabled:opacity-50 text-amber-200 text-[11px] py-1.5 px-2 rounded-lg border border-amber-500/30"
               >
                 Send {notifications.needsUser} Needs User → PO

@@ -181,6 +181,8 @@ export default function App() {
   } = useAppState()
 
   const [planRunActive, setPlanRunActive] = useState(false)
+  /** Long agent HTTP (Plan / Step / Plan & Run) — progress chrome only; does not set global loading. */
+  const [sprintBusy, setSprintBusy] = useState(false)
 
   const [ollamaUrl, setOllamaUrl] = useState('http://localhost:11434')
   const [brief, setBrief] = useState('')
@@ -299,7 +301,7 @@ export default function App() {
   }
 
   const handleSplitTask = async (taskId: string) => {
-    await withLoading(async () => {
+    await withSprintBusy(async () => {
       setActionError(null)
       try {
         const data = await splitTask(taskId, { ollamaUrl })
@@ -370,7 +372,7 @@ export default function App() {
   const { autoSprint, setAutoSprint, autoSprintPaused, sprintRunning, stopAutoSprint } =
     useAutoSprint(brief, ollamaUrl, state.board, state.workflowSettings, handleState)
 
-  const orchestratedActive = sprintRunning || planRunActive
+  const orchestratedActive = sprintRunning || planRunActive || sprintBusy
 
   const activeTaskRunInfo = useMemo(
     () =>
@@ -461,6 +463,16 @@ export default function App() {
       await fn()
     } finally {
       setLoading(false)
+    }
+  }
+
+  /** Long sprint/agent HTTP — keeps Settings/board/tabs interactive (no global loading). */
+  const withSprintBusy = async (fn: () => Promise<void>) => {
+    setSprintBusy(true)
+    try {
+      await fn()
+    } finally {
+      setSprintBusy(false)
     }
   }
 
@@ -893,12 +905,12 @@ export default function App() {
           <>
             <button
               type="button"
-              onClick={() =>
-                void withLoading(async () => {
-                  if (orchestratedActive) {
-                    setActionError('Wait for the current sprint step to finish before resuming.')
-                    return
-                  }
+              onClick={() => {
+                if (orchestratedActive) {
+                  setActionError('Wait for the current sprint step to finish before resuming.')
+                  return
+                }
+                void withSprintBusy(async () => {
                   setActionError(null)
                   try {
                     const data = await runInProgressStep({
@@ -918,7 +930,7 @@ export default function App() {
                     setActionError(message)
                   }
                 })
-              }
+              }}
               className="px-2 py-0.5 rounded bg-amber-600/50 text-[10px] font-semibold"
             >
               Resume
@@ -987,7 +999,6 @@ export default function App() {
       <Sidebar
         state={state}
         brief={brief}
-        loading={loading}
         ollamaOk={ollamaOk}
         autoSprint={autoSprint}
         autoSprintPaused={autoSprintPaused}
@@ -999,12 +1010,12 @@ export default function App() {
         }
         onOpenNewProject={() => setShowNewProject(true)}
         onPlan={() =>
-          void withLoading(async () =>
+          void withSprintBusy(async () =>
             handleState(await triggerPlanOutline({ brief, ollama_url: ollamaUrl })),
           )
         }
         onGenerateBacklog={() =>
-          void withLoading(async () =>
+          void withSprintBusy(async () =>
             handleState(
               await triggerPlanBacklog({
                 brief,
@@ -1016,7 +1027,7 @@ export default function App() {
         }
         planOutlineReady={planOutline.trim().length > 0}
         onPlanAndRun={() =>
-          void withLoading(async () => {
+          void withSprintBusy(async () => {
             setPlanRunActive(true)
             setSprintProgress(null)
             setBottomTab('console')
@@ -1037,7 +1048,7 @@ export default function App() {
           })
         }
         onStep={() =>
-          void withLoading(async () => {
+          void withSprintBusy(async () => {
             const data = await triggerStep({ brief, ollama_url: ollamaUrl })
             handleState(data)
             applyStepOutcome(data)
@@ -1047,12 +1058,12 @@ export default function App() {
             }
           })
         }
-        onRunInProgress={() =>
-          void withLoading(async () => {
-            if (orchestratedActive) {
-              setActionError('Wait for the current sprint step to finish before running in progress.')
-              return
-            }
+        onRunInProgress={() => {
+          if (orchestratedActive) {
+            setActionError('Wait for the current sprint step to finish before running in progress.')
+            return
+          }
+          void withSprintBusy(async () => {
             setActionError(null)
             try {
               const data = await runInProgressStep({ brief, ollama_url: ollamaUrl })
@@ -1072,7 +1083,7 @@ export default function App() {
               setActionError(message)
             }
           })
-        }
+        }}
         inProgressCount={state.board['In Progress']?.length ?? 0}
         onClaimReadyCards={() =>
           void withLoading(async () => {
@@ -1203,7 +1214,7 @@ export default function App() {
               ),
             )
           }
-          generateBacklogDisabled={loading || !brief.trim()}
+          generateBacklogDisabled={orchestratedActive || !brief.trim()}
         />
 
         <KanbanToggleBar
@@ -1609,7 +1620,7 @@ export default function App() {
         taskExistsOnBoard={(taskId) => !!findTaskOnBoard(state.board, taskId)}
         ollamaUrl={ollamaUrl}
         onDiagnose={(taskId) =>
-          void withLoading(async () => {
+          void withSprintBusy(async () => {
             const data = await diagnoseTask(taskId, ollamaUrl)
             if (data.state) handleState(data.state)
             const updated = Object.values(data.state?.board ?? {})
@@ -1625,7 +1636,7 @@ export default function App() {
           })
         }
         onRetryStep={(taskId, mode) =>
-          void withLoading(async () => {
+          void withSprintBusy(async () => {
             const lane = selectedTaskLane
             const agentId =
               lane === 'Refinement'
@@ -1653,12 +1664,12 @@ export default function App() {
         onMoveToInProgress={(taskId, fromLane, skipRefinement) =>
           void handleMoveTask(taskId, fromLane, 'In Progress', skipRefinement)
         }
-        onRunInProgressStep={(taskId) =>
-          void withLoading(async () => {
-            if (orchestratedActive) {
-              setActionError('Wait for the current sprint step to finish before running dev on this card.')
-              return
-            }
+        onRunInProgressStep={(taskId) => {
+          if (orchestratedActive) {
+            setActionError('Wait for the current sprint step to finish before running dev on this card.')
+            return
+          }
+          void withSprintBusy(async () => {
             setActionError(null)
             try {
               const data = await runInProgressStep({ brief, ollama_url: ollamaUrl, taskId })
@@ -1678,7 +1689,7 @@ export default function App() {
               setActionError(message)
             }
           })
-        }
+        }}
         onEscapeSubtasks={(taskId) =>
           void withLoading(async () => {
             handleState(await escapeSubtaskLoop(taskId, 'needs_po'))

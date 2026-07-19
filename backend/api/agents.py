@@ -28,18 +28,19 @@ class ExtendStepPayload(BaseModel):
 
 @router.post("/api/agents/retry-step")
 def post_retry_step(payload: RetryStepPayload):
-    with state.STATE_LOCK:
-        result = retry_agent_step(
-            payload.taskId,
-            payload.agentId,
-            payload.ollamaUrl,
-            mode=payload.mode,
-            brief=state.PROJECT_BRIEF,
-            reason=payload.reason,
-            allow_done_retry=payload.allowDoneRetry,
-        )
-        if not result.get("ok") and result.get("error"):
-            raise HTTPException(status_code=400, detail=result["error"])
+    # Ollama may run for minutes — never hold STATE_LOCK across the step.
+    brief = state.PROJECT_BRIEF
+    result = retry_agent_step(
+        payload.taskId,
+        payload.agentId,
+        payload.ollamaUrl,
+        mode=payload.mode,
+        brief=brief,
+        reason=payload.reason,
+        allow_done_retry=payload.allowDoneRetry,
+    )
+    if not result.get("ok") and result.get("error"):
+        raise HTTPException(status_code=400, detail=result["error"])
     return {**result, "state": build_state_response()}
 
 
@@ -48,16 +49,16 @@ def post_extend_step(payload: ExtendStepPayload):
     action = (payload.action or "extend").strip().lower()
     if action not in ("extend", "reset"):
         raise HTTPException(status_code=400, detail="action must be 'extend' or 'reset'")
-    with state.STATE_LOCK:
-        result = extend_agent_step(
-            payload.taskId,
-            payload.agentId,
-            payload.ollamaUrl,
-            action=action,
-            extra_iterations=payload.extraIterations,
-            brief=state.PROJECT_BRIEF,
-            allow_done_retry=payload.allowDoneRetry,
-        )
-        if not result.get("ok") and result.get("error"):
-            raise HTTPException(status_code=400, detail=result["error"])
+    brief = state.PROJECT_BRIEF
+    result = extend_agent_step(
+        payload.taskId,
+        payload.agentId,
+        payload.ollamaUrl,
+        action=action,
+        extra_iterations=payload.extraIterations,
+        brief=brief,
+        allow_done_retry=payload.allowDoneRetry,
+    )
+    if not result.get("ok") and result.get("error"):
+        raise HTTPException(status_code=400, detail=result["error"])
     return {**result, "state": build_state_response()}

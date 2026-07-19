@@ -2642,8 +2642,7 @@ def run_plan_and_run(brief: str, ollama_url: str, max_steps: int | None = None) 
     )
     add_system_log("System", "info", "Plan & Run started — PO planning, then sprint steps…")
 
-    with state.STATE_LOCK:
-        run_po_plan(brief, ollama_url)
+    run_po_plan(brief, ollama_url)
 
     if state.SPRINT_CANCEL:
         summary = _build_sprint_summary(0, "cancelled")

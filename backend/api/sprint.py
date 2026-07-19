@@ -20,15 +20,14 @@ router = APIRouter()
 
 @router.post("/api/plan")
 def trigger_po_plan(payload: BriefPayload):
-    with state.STATE_LOCK:
-        run_po_plan(payload.brief, payload.ollama_url)
+    # Do not hold STATE_LOCK across Ollama — keeps board/settings/SSE responsive.
+    run_po_plan(payload.brief, payload.ollama_url)
     return build_state_response()
 
 
 @router.post("/api/plan/outline")
 def trigger_po_plan_outline(payload: BriefPayload):
-    with state.STATE_LOCK:
-        outline = run_po_plan_outline(payload.brief, payload.ollama_url)
+    outline = run_po_plan_outline(payload.brief, payload.ollama_url)
     response = build_state_response()
     response["projectPlanOutline"] = outline
     return response
@@ -36,8 +35,7 @@ def trigger_po_plan_outline(payload: BriefPayload):
 
 @router.post("/api/plan/backlog")
 def trigger_po_plan_backlog(payload: PlanBacklogPayload):
-    with state.STATE_LOCK:
-        run_po_plan_backlog(payload.brief, payload.ollama_url, outline=payload.outline)
+    run_po_plan_backlog(payload.brief, payload.ollama_url, outline=payload.outline)
     return build_state_response()
 
 
