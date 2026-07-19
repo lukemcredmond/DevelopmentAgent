@@ -4,6 +4,7 @@ import {
   fetchIndexStatus,
   reindexCodebase,
 } from '../api/client'
+import AgentToolsPanel from './AgentToolsPanel'
 import NumberSettingInput from './NumberSettingInput'
 import type {
   BriefChangelogEntry,
@@ -346,6 +347,8 @@ export default function WorkflowPanel({
         Per-server <span className="font-mono">enabledTools</span> /{' '}
         <span className="font-mono">disabledTools</span> filter which tools register.
       </p>
+
+      <AgentToolsPanel settings={settings} onSettingsChange={onSettingsChange} />
 
       <label className="flex items-center gap-2 text-[11px] text-cat-subtext cursor-pointer">
         <input

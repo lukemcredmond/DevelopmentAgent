@@ -251,6 +251,43 @@ export interface StackCatalogResponse {
 
 export type Board = Partial<Record<BoardLane, Task[]>>
 
+export interface McpServerConfig {
+  name: string
+  transport?: string
+  command?: string
+  args?: string[]
+  url?: string
+  headers?: Record<string, string>
+  enabled?: boolean
+  enabledTools?: string[]
+  disabledTools?: string[]
+}
+
+export interface CustomToolDef {
+  id?: string
+  name: string
+  description: string
+  parameters: Record<string, unknown>
+  agents: string[]
+  executor: 'shell' | 'http' | 'sql'
+  shell?: { command?: string }
+  http?: { url?: string; method?: string; headers?: Record<string, string>; timeoutSec?: number }
+  sql?: {
+    connections?: Record<string, string>
+    readOnly?: boolean
+    maxRows?: number
+  }
+}
+
+export interface ToolsCatalogResponse {
+  builtins: Array<{ name: string; description: string; parameters: Record<string, unknown>; kind: string }>
+  customTools: CustomToolDef[]
+  agents: Record<string, { agentId: string; tools: string[] }>
+  presets: { query_sql?: CustomToolDef }
+  agentTools: Record<string, string[]>
+  agentToolsAllowWritesInRefinement: boolean
+}
+
 export interface WorkflowSettings {
   requireBacklogApproval: boolean
   requireCodeReview: boolean
@@ -272,6 +309,10 @@ export interface WorkflowSettings {
   allowChainedCommands?: boolean
   maxMcpTools?: number
   mcpServers?: McpServerConfig[]
+  /** Per-agent tool allowlists; empty/missing role → built-in defaults */
+  agentTools?: Record<string, string[]>
+  agentToolsAllowWritesInRefinement?: boolean
+  customTools?: CustomToolDef[]
   definitionOfDone: string[]
   maxSprintSteps: number
   maxLlmIterationsPerStep: number
@@ -301,18 +342,6 @@ export interface WorkflowSettings {
   enableSemanticSprintContext?: boolean
   pauseSprintOnNeedsUser?: boolean
   autoFormatAfterEdit?: boolean
-}
-
-export interface McpServerConfig {
-  name: string
-  transport?: string
-  command?: string
-  args?: string[]
-  url?: string
-  headers?: Record<string, string>
-  enabled?: boolean
-  enabledTools?: string[]
-  disabledTools?: string[]
 }
 
 export interface RecentToolEntry {
@@ -698,6 +727,9 @@ export interface WorkflowSettingsPayload {
   allowChainedCommands?: boolean
   maxMcpTools?: number
   mcpServers?: McpServerConfig[]
+  agentTools?: Record<string, string[]>
+  agentToolsAllowWritesInRefinement?: boolean
+  customTools?: CustomToolDef[]
   definitionOfDone?: string[]
   maxSprintSteps?: number
   maxLlmIterationsPerStep?: number
@@ -908,6 +940,9 @@ export const DEFAULT_WORKFLOW_SETTINGS: WorkflowSettings = {
   allowChainedCommands: false,
   maxMcpTools: 40,
   mcpServers: [],
+  agentTools: {},
+  agentToolsAllowWritesInRefinement: false,
+  customTools: [],
   definitionOfDone: [],
   maxSprintSteps: 20,
   maxLlmIterationsPerStep: 8,

@@ -221,13 +221,33 @@ def clear_mcp_tools() -> None:
         _MCP_CLIENTS.clear()
 
 
-def reregister_mcp_tools_on_agents() -> int:
-    """Re-attach cached MCP tools after configure_agent_tools clears registries."""
+def reregister_mcp_tools_on_agents(agent_tools_cfg: Optional[Dict[str, Any]] = None) -> int:
+    """Re-attach cached MCP tools after configure_agent_tools clears registries.
+
+    If agent_tools_cfg has a non-empty allowlist for an agent, only attach MCP tools
+    whose names appear on that list (or if the list contains a bare 'mcp_*' / 'mcp' token,
+    attach all MCP tools for that agent).
+    """
+    role_by_agent = {
+        agent_po: "Product Owner",
+        agent_dev: "Developer",
+        agent_cr: "Code Reviewer",
+        agent_qa: "QA Tester",
+    }
+    cfg = agent_tools_cfg if isinstance(agent_tools_cfg, dict) else {}
+
     with _LOCK:
         if not _MCP_TOOL_INSTANCES:
             return 0
         for tool in _MCP_TOOL_INSTANCES:
             for agent in ALL_AGENTS:
+                role = role_by_agent.get(agent, "")
+                override = cfg.get(role)
+                if isinstance(override, list) and override:
+                    names = {str(n) for n in override}
+                    allow_all_mcp = "mcp" in names or "mcp_*" in names or "*" in names
+                    if not allow_all_mcp and tool.name not in names:
+                        continue
                 agent.registry.register(tool)
         return len(_MCP_TOOL_INSTANCES)
 

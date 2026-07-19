@@ -47,7 +47,16 @@ def tool_requires_approval(tool_name: str, arguments: Optional[Dict[str, Any]] =
         from backend.services.command_policy import run_command_requires_approval
 
         return run_command_requires_approval(str(arguments.get("command") or ""))
-    return tool_name in _approval_tools()
+    approval_tools = _approval_tools()
+    if tool_name in approval_tools:
+        return True
+    # Custom tools: approve when listed by name, or "customTools" / "*" wildcard
+    if "customTools" in approval_tools or "*" in approval_tools:
+        from backend.services.custom_tools import get_custom_canonical_names
+
+        if tool_name in get_custom_canonical_names():
+            return True
+    return False
 
 
 def non_blocking_approval_enabled() -> bool:

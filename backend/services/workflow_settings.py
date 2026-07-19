@@ -27,6 +27,11 @@ DEFAULT_WORKFLOW_SETTINGS: Dict[str, Any] = {
     "allowChainedCommands": False,
     "maxMcpTools": 40,
     "mcpServers": [],
+    # Opt-in per-agent tool allowlists (empty/missing → built-in defaults).
+    "agentTools": {},
+    "agentToolsAllowWritesInRefinement": False,
+    # User-defined tools: name/schema + shell|http|sql executor.
+    "customTools": [],
     "definitionOfDone": [],
     "maxSprintSteps": MAX_SPRINT_STEPS,
     "maxLlmIterationsPerStep": 8,

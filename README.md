@@ -143,12 +143,13 @@ Follow these steps for your first project:
 3. **Configure Ollama** — sidebar **Project Config**: Ollama URL (default `http://localhost:11434`), model names for PO / Dev / CR / QA.
 4. **Write a Project Brief** — panel above the Kanban. Be specific about stack, constraints, and success criteria.
 5. **Plan work** — choose one path:
-   - **Fast:** **Plan outline** → **Generate backlog from plan** → **Execute Sprint Step**
-   - **Automated:** **Plan & Run (Brief → PO → Sprint)**
-6. **Watch agents work** — open bottom tabs **Console**, **Tools**, and **Model** during sprint steps. The **Agent Run bar** above the bottom panel shows live tool activity via SSE.
+   - **Fast:** **Plan outline** → **Generate Features from plan** → **Execute Sprint Step**
+   - **Automated:** **Plan & Run (Brief → Features → Sprint)**
+6. **Watch agents work** — open bottom tabs **Console**, **Tools**, and **Model** during sprint steps. The **Agent Run bar** above the bottom panel shows live tool activity via SSE. If the app was interrupted mid-sprint, a **recovery banner** offers resume/dismiss (no auto-sprint).
 7. **Unblock cards** — click Kanban cards for the task detail modal. Resolve **Needs User** answers; approve **Pending Approval** cards. Use **Claim ready cards** or **Run In Progress (N)** when Dev should run while PO cards wait.
 8. **Pin project facts** — bottom **Memory** tab: save conventions (API keys location, auth patterns) so all agents see them in prompts.
 9. **Optional: semantic search** — start Qdrant, enable **Enable semantic search** in Workflow, then **Reindex codebase**.
+10. **Optional: agent tools** — Workflow → **Agent tools**: per-agent allowlists and custom tools (e.g. `query_sql`).
 
 ### Example brief (minimal REST API)
 
@@ -226,23 +227,34 @@ All settings live in sidebar **Workflow** and persist per project in SQLite. Def
 
 ## Agent workflow
 
-The core loop is **Brief → PO → Dev → QA → Done**, with escalation lanes when agents need help.
+The core loop is **Brief → Features (epics) → Dev → QA → Done**, with escalation lanes when agents need help.
 
 ### Typical paths
 
 | Goal | Action |
 |------|--------|
-| Fully automated | Enter brief → **Plan & Run** |
-| Fast planning | **Plan outline** → **Generate backlog from plan** → sprint manually |
+| Fully automated | Enter brief → **Plan & Run** (creates Features epics + children, then sprint) |
+| Fast planning | **Plan outline** → **Generate Features from plan** → sprint manually |
 | Manual control | **Send Brief to PO Only** → **Execute Sprint Step** |
 | Dev on active cards | **Run In Progress (N)** — Dev only; skips Needs PO / Backlog / Refinement |
 | Pull ready work | **Claim ready cards** — unblocked Backlog → In Progress |
 | Continuous delivery | **Auto Sprint** checkbox |
 | Add scope | **Add Feature** → brief + PO |
 
+### Features lane (epics)
+
+**Plan outline** and **Generate Features from plan** (also **Plan & Run**) create **Features-lane** parent epics with child cards under each epic.
+
+- PO guidance prefers **6–12 focused product epics** for a non-trivial brief (one capability or bounded slice each), each with **≥2 small children** (prefer 3–6).
+- Anti-patterns avoided: mega “audit everything”, standalone pubspec/dependency bumps, vague tracking-only epics.
+- Soft validation: few epics + a long brief/outline logs an **under-decomposition** warning in Console (cards are still created — re-run Generate Features after expanding the outline).
+- Task detail on an epic shows an **epic hub**: child status, rolled-up files, and recent decisions.
+
+Children enter the normal Backlog / refinement / implementation lanes; Features parents stay in the Features lane for rollup.
+
 ### Refinement lane and spikes
 
-When **Require backlog refinement** is ON, Backlog cards can enter **Refinement** before implementation. Dev and PO iterate on `refinementNotes`; spike cards (`workType: spike`) produce a `spikeReport`.
+When **Require backlog refinement** is ON, Backlog cards can enter **Refinement** before implementation. Dev and PO iterate on `refinementNotes`; spike cards (`workType: spike`) produce a `spikeReport`. During refinement, Dev intentionally has **no** `write_file` / `apply_patch` / `run_command` (unless `agentToolsAllowWritesInRefinement` is ON).
 
 **Prioritize implementation over refinement** (default ON) makes sprint steps pick **Backlog → In Progress** before more Refinement when both lanes have work.
 
@@ -260,11 +272,12 @@ Needs PO → Needs User (if pause setting ON) → In Progress → Backlog/Refine
 
 ### Step-by-step
 
-1. **Product Owner** decomposes the brief into backlog features with acceptance criteria, priority, and optional `blockedBy`.
-2. **Developer** implements in the workspace; moves to QA or Code Review when complete.
+1. **Product Owner** decomposes the brief into **Features (epics)** with smallest child cards (acceptance criteria, priority, optional `blockedBy`).
+2. **Developer** implements child cards in the workspace; moves to QA or Code Review when complete.
 3. **Needs PO** — PO clarifies requirements and returns the card to In Progress.
 4. **Needs User** — human decision required; resolve in task detail.
 5. **QA** validates against AC and DoD. Pass → **Done** (auto git commit). Fail → **In Progress** with `qaFailure`.
+6. Child **Done** rolls files/decisions up to the parent Feature epic.
 
 ### Workflow settings (full reference)
 
@@ -313,8 +326,8 @@ Persisted per project. Update via sidebar **Workflow** or `POST /api/workflow/se
 
 | Setting | Default | Purpose |
 |---------|---------|---------|
-| requireToolApproval | Off | Approve/deny write_file, run_command, delete_file |
-| toolApprovalTools | write_file, run_command, delete_file | Tools requiring approval |
+| requireToolApproval | Off | Approve/deny listed tools before execute |
+| toolApprovalTools | write_file, run_command, delete_file | Tools requiring approval (`apply_patch` implied with write_file; use `customTools` or `*` for customs) |
 | nonBlockingToolApproval | On | Other tools continue while awaiting approval |
 | commandAutoRunMode | off | off / allowlist / denylist for run_command |
 | commandAllowlist | flutter analyze, pytest, … | Allowed commands when mode is allowlist |
@@ -322,6 +335,9 @@ Persisted per project. Update via sidebar **Workflow** or `POST /api/workflow/se
 | allowChainedCommands | Off | Allow `&&` chained shell commands |
 | enableFixVerifyLoop | Off | Auto retry lint/fix loop after Dev step |
 | maxFixVerifyRounds | 3 | Max fix-verify iterations |
+| agentTools | `{}` | Opt-in per-agent tool allowlists; empty role → built-in defaults |
+| agentToolsAllowWritesInRefinement | Off | Keep write/run/git_commit available during refinement |
+| customTools | `[]` | User-defined tools (shell / http / sql) registered into LLM tool schemas |
 
 #### Search and context
 
@@ -335,30 +351,77 @@ Persisted per project. Update via sidebar **Workflow** or `POST /api/workflow/se
 | enableWebSearch | Off | Web search tool for agents |
 | ollamaNumCtx | 32768 | Context window hint for Ollama |
 | ollamaKeepAlive | 30m | Ollama model keep-alive duration |
+| ollamaRequestTimeoutSec | 300 | Per-request timeout for Ollama calls |
+| ollamaMaxRetries | 4 | Retries on transient Ollama failures |
+| ollamaRetryDelaySec | [0, 2, 5, 10] | Delay schedule between retries |
+| ollamaCooldownRetryEnabled | On | Extra cooldown retries when Ollama is busy |
+| ollamaCooldownRetrySec | 15 | Cooldown wait between busy retries |
+| ollamaCooldownRetryAttempts | 2 | Max cooldown retry attempts |
 
 #### MCP and other
 
 | Setting | Default | Purpose |
 |---------|---------|---------|
-| mcpServers | [] | Stdio MCP server configs (tools as `mcp_{server}_{tool}`) |
+| mcpServers | [] | MCP server configs (stdio, http, or sse; tools as `mcp_{server}_{tool}`) |
 | maxMcpTools | 40 | Max MCP tools registered |
 | definitionOfDone | [] | Checklist injected into PO/Dev/QA prompts |
 | autoFormatAfterEdit | On | Format files after agent edits when supported |
 | maxToolOutputCharsForLlm | 6000 | Truncate tool output in LLM context |
 | messagePruneThresholdPct | 60 | Prune message history when context fills |
 
+### Custom tools (Workflow → Agent tools)
+
+Add tools without code changes. Each entry has `name`, `description`, JSON Schema `parameters`, `agents` (roles), and an `executor`:
+
+| Executor | Config | Behavior |
+|----------|--------|----------|
+| `sql` | `sql.connections`, `readOnly`, `maxRows` | In-process **SQLite** only (`sqlite:///…` relative to workspace). Read-only allows `SELECT` / `WITH`. |
+| `shell` | `shell.command` | Template with `{param}` placeholders (shell-quoted); runs via `run_command` policy |
+| `http` | `http.url`, `http.method` | JSON body (POST) or query string (GET) |
+
+Example `query_sql` (also available as a **+ query_sql template** button in Workflow):
+
+```json
+{
+  "name": "query_sql",
+  "description": "Run a read-only SQL query against a named database connection.",
+  "parameters": {
+    "type": "object",
+    "properties": {
+      "db_name": { "type": "string" },
+      "query": { "type": "string" }
+    },
+    "required": ["db_name", "query"]
+  },
+  "agents": ["Developer", "QA Tester"],
+  "executor": "sql",
+  "sql": {
+    "connections": { "local": "sqlite:///data/app.db" },
+    "readOnly": true,
+    "maxRows": 200
+  }
+}
+```
+
+Custom tools appear in the agent’s Ollama `tools` list. If an allowlist is set for that agent, the custom name must be included on the list.
+
 ### Kanban lanes
 
-**Always visible:** Backlog → In Progress → Needs PO → Needs User → QA → Done
+**Always visible:** Features (Epics) → Backlog → In Progress → Needs PO → Needs User → QA → Done
 
 **Conditional:** Pending Approval, Code Review, Refinement
 
 ```mermaid
 flowchart TB
-    Brief[Project Brief] --> PlanRun[Plan and Run]
+    Brief[Project Brief] --> PlanOutline[Plan outline]
+    PlanOutline --> GenFeat[Generate Features]
+    Brief --> PlanRun[Plan and Run]
     PlanRun --> PO[Product Owner]
-    PO -->|auto default| Backlog[Backlog]
-    PO -->|approval ON| Pending[Pending Approval]
+    GenFeat --> PO
+    PO --> Features[Features epics]
+    Features --> Children[Child cards]
+    Children -->|auto default| Backlog[Backlog]
+    Children -->|approval ON| Pending[Pending Approval]
     Pending -->|user approves| Backlog
     Backlog -->|priority + deps met| Dev[In Progress]
     Dev -->|complete| CRgate{Code Review ON?}
@@ -372,26 +435,29 @@ flowchart TB
     NeedsUser -->|user resolves| Dev
     QA -->|pass + git commit| Done[Done]
     QA -->|fail + qaFailure| Dev
+    Done -->|rollup| Features
 ```
 
 ### Agent tools
 
-Registered per role in [backend/agents/registry.py](backend/agents/registry.py):
+Default registration is in [backend/agents/registry.py](backend/agents/registry.py) via `configure_agent_tools`. Override per role in Workflow → **Agent tools** (`agentTools`).
 
 | Tool | Typical agents | Purpose |
 |------|----------------|---------|
 | read_file, list_dir | All | Read workspace |
-| write_file, apply_patch, delete_file | Dev, CR | Edit code |
+| write_file, apply_patch, delete_file | Dev, CR | Edit code (Dev only outside refinement by default) |
 | run_command | Dev, QA | Shell in workspace |
 | update_board, add_backlog_tasks, add_subtasks | PO, Dev | Kanban updates |
 | grep, glob_file_search, search_code | PO, Dev, CR | Find code |
-| semantic search | PO, Dev | Qdrant-backed search |
-| graph_query | PO, Dev | Graphify structural graph |
-| git_status, git_diff, git_commit | Dev, QA | Git operations |
-| web_search | PO, Dev | Optional web lookup |
-| MCP tools | Configurable | External MCP servers |
+| semantic_search, graph_query | When enabled | Qdrant / Graphify |
+| git_status, git_diff, git_commit | Dev | Git operations |
+| web_search | When enabled | Optional web lookup |
+| Custom tools | Per `customTools.agents` | shell / http / sql |
+| MCP tools | Configurable | External MCP servers (filtered by allowlist when set) |
 
 Prefer **apply_patch** for edits to existing files; **write_file** for new files or full rewrites.
+
+**Unknown tools:** If the model invents a name (e.g. `flutter_analyze`), the **Unknown Tool Request** modal maps it to a real tool and can save a per-project alias. If it calls a **real** tool that is not on that agent/mode (e.g. `write_file` during refinement), the call fails with a Console warning — **do not** map `write_file` → `write_file`; that does not enable the tool. Built-in aliases (`create_file` → `write_file`, `Write` → `write_file`, `Bash` → `run_command`, …) live in [backend/services/tool_aliases.py](backend/services/tool_aliases.py).
 
 ---
 
@@ -404,19 +470,22 @@ During sprint steps, the **Agent Run bar** above the bottom panel shows live too
 - **Load Workspace** — create, load, export, import, delete projects
 - **Project Config** — workspace dir, skills dir, Ollama URL, per-agent models
 - **Agent Team & Skills** — assign markdown skills from `global_skills/`
-- **Workflow** — all workflow toggles, DoD editor, Qdrant/reindex, brief changelog; link to **Memory** tab
-- **Sprint** — Plan outline, Generate backlog, Plan & Run, Execute Sprint Step, **Run In Progress**, **Claim ready cards**, Auto Sprint, Cancel run
+- **Workflow** — gates, DoD, Qdrant/reindex, brief changelog, **Agent tools** (per-agent allowlists + custom tools), Memory link
+- **Sprint** — Plan outline, **Generate Features from plan**, Plan & Run, Execute Sprint Step, **Run In Progress**, **Claim ready cards**, Auto Sprint, Cancel run
 - **Escalate Needs User → PO** — when cards are clarification, not true user decisions
 
 ### Kanban board
 
-- Drag cards between lanes; drag within **Backlog** to reorder priority
+- **Features (Epics)** lane — parent epics from Generate Features / Plan & Run (not drag targets for implementation cards)
+- Drag other cards between lanes; drag within **Backlog** to reorder priority
 - Click a card for task detail
 - Badges: priority, blocked, QA failure, file count, decision count
+- Live run info on cards while a sprint step is active
 
 ### Task detail modal
 
 - View/edit title, description, acceptance criteria
+- **Feature epic hub** — children, rolled-up files, recent decisions (`featureRollup`)
 - **Approve** (Pending Approval)
 - **Resolve & Return to Dev** (Needs User)
 - **Move to In Progress** / **Skip remaining refinement** (Backlog or Refinement)
@@ -435,9 +504,9 @@ During sprint steps, the **Agent Run bar** above the bottom panel shows live too
 
 | Tab | Purpose |
 |-----|---------|
-| Console | Persisted agent system logs |
+| Console | Persisted agent system logs (includes under-decomposition and gated-tool warnings) |
 | Model | LLM debug timeline — prompts, tool calls, `memoriesUsed`, `decisionsIncluded` (filters by selected task) |
-| Tools | Tool execution log, manual runs, replay, pending approvals, stack catalog, terminal sessions |
+| Tools | Tool execution log, manual runs, replay, pending approvals / unknown-tool mapping, stack catalog, terminal sessions |
 | Activity | Board / sprint activity stream (debounced SSE) |
 | Memory | View, filter, add, edit, delete project memories |
 | Chat | Streaming composer, agent selector, @file context |
@@ -475,6 +544,8 @@ Memories auto-save on **fix_pattern** (file writes) and **failure** (failed tool
 
 After **Plan & Run** or **Auto Sprint**, a sprint summary modal shows steps run, completed tasks, QA failures, and blocked items.
 
+After a crash or power loss mid-sprint, a **recovery banner** shows the interrupted task; choose resume or dismiss (`GET /api/sprint/recovery`).
+
 ---
 
 ## Features
@@ -482,18 +553,19 @@ After **Plan & Run** or **Auto Sprint**, a sprint summary modal shows steps run,
 | Area | Capabilities |
 |------|----------------|
 | **Agents** | PO, Developer, Code Reviewer (optional), QA — Ollama LLM + tools |
-| **Workflow** | Plan outline → backlog, Plan & Run, refinement/spikes, gates, DoD, brief changelog |
-| **Kanban** | Dynamic lanes, drag-drop, priority, dependencies, subtasks, claim-ready, Run In Progress |
+| **Workflow** | Plan outline → **Generate Features** (epics + children), Plan & Run, refinement/spikes, gates, DoD, brief changelog |
+| **Features / epics** | Features lane, 6–12 product-epic guidance, under-decomposition warnings, epic rollup hub |
+| **Kanban** | Features + dynamic lanes, drag-drop, priority, dependencies, subtasks, claim-ready, Run In Progress |
 | **IDE** | Monaco editor, file tree, diff view, workspace search |
 | **Chat** | Streaming SSE, @file context, per-agent selection |
-| **Sprint** | Manual step, dev-only in-progress, auto-sprint with cancel |
+| **Sprint** | Manual step, dev-only in-progress, auto-sprint with cancel, crash recovery banner |
 | **Git** | Status panel, agent git tools, auto-commit on Done |
 | **Terminal** | Sandboxed command runner (localhost-only) |
 | **Skills** | Global library, per-agent assignment, suggestions API |
 | **Memory** | Cross-agent project notes, semantic search, dedupe, filters |
 | **Search** | Qdrant semantic search, Graphify graph, reindex |
-| **Debug** | Model panel, Ollama LLM logs, per-task timeline |
-| **Tools** | Manual execute, replay, approvals, aliases, stack catalog |
+| **Debug** | Model panel, Ollama LLM logs, per-task timeline, Ollama server log fallback |
+| **Tools** | Configurable per-agent tools, custom shell/http/sql tools, catalog API, approvals, aliases, invent mapping |
 | **Projects** | Multi-project SQLite, export/import zip |
 | **Live updates** | SSE board deltas, files, logs, sprint events |
 
@@ -509,6 +581,9 @@ After **Plan & Run** or **Auto Sprint**, a sprint summary modal shows steps run,
 | `blockedBy` | string[] | Task IDs that must reach Done first |
 | `dependencyOutcomes` | array | Summaries from completed blockers |
 | `parentTaskId`, `subtaskIds` | string | Subtask hierarchy |
+| `featureId`, `childTaskIds` | string / string[] | Epic ↔ child links (Features lane) |
+| `featureRollup` | object | Epic hub: children, files, recent decisions |
+| `workType` | string | e.g. `feature`, `implementation`, `planning`, `spike` |
 | `refinementNotes` | string | PO/Dev refinement thread |
 | `spikeReport` | string | Spike output (`workType: spike`) |
 | `qaEvidence` | object | Playbook run results |
@@ -531,6 +606,7 @@ Returns the full workspace snapshot:
 - `projectsList`, `sprintCancel`
 - `workflowSettings`, `activeLanes`
 - `briefChangelog`, `lastSprintSummary`, `notifications`
+- `recovery` — interrupted sprint context when present
 
 Live updates: `GET /api/events` (SSE).
 
@@ -550,16 +626,18 @@ Live updates: `GET /api/events` (SSE).
 
 | Method | Path | Description |
 |--------|------|-------------|
-| POST | `/api/plan` | Send brief to PO |
+| POST | `/api/plan` | Send brief to PO (Plan & Run path creates Features epics) |
 | POST | `/api/plan/outline` | Fast PO plan outline only |
-| POST | `/api/plan/backlog` | Generate backlog from outline |
+| POST | `/api/plan/backlog` | **Generate Features** from outline — Features-lane epics + child cards |
 | POST | `/api/step` | Execute one sprint tick |
 | POST | `/api/sprint/run-in-progress` | Dev on In Progress only (`taskId` optional; 409 if empty) |
-| POST | `/api/sprint/plan-and-run` | PO plan + auto-sprint |
+| POST | `/api/sprint/plan-and-run` | PO plan (epics) + auto-sprint |
 | POST | `/api/sprint/run` | Auto-sprint until blocked |
 | POST | `/api/sprint/cancel` | Cancel auto-sprint |
+| GET | `/api/sprint/recovery` | Interrupted-sprint recovery context (banner) |
+| POST | `/api/sprint/recovery/dismiss` | Dismiss recovery banner |
 | GET | `/api/workflow/settings` | Read workflow settings |
-| POST | `/api/workflow/settings` | Update workflow settings |
+| POST | `/api/workflow/settings` | Update workflow settings (reloads agent tool registries) |
 
 ### Tasks and board
 
@@ -623,16 +701,17 @@ Live updates: `GET /api/events` (SSE).
 |--------|------|-------------|
 | GET | `/api/tools/history` | Tool execution history |
 | POST | `/api/tools/history/clear` | Clear tool history |
-| GET | `/api/tools/registry` | Registered tools |
+| GET | `/api/tools/registry` | Registered tools for an agent |
+| GET | `/api/tools/catalog` | Builtin + custom tools, per-agent effective lists, presets |
 | GET | `/api/tools/stack-catalog` | Detected project stack |
 | POST | `/api/tools/execute` | Manual tool execution |
 | GET | `/api/tools/transcript/{task_id}` | Tool entries from task transcript |
 | POST | `/api/tools/replay` | Replay tool call |
-| GET | `/api/tools/pending` | Pending tool requests |
+| GET | `/api/tools/pending` | Pending unknown-tool invent requests |
 | GET | `/api/tools/pending-approvals` | Pending approval queue |
-| POST | `/api/tools/pending/{id}/resolve` | Resolve pending tool |
+| POST | `/api/tools/pending/{id}/resolve` | Map invent → real tool (optional save alias) |
 | POST | `/api/tools/approvals/{id}` | Approve/deny tool |
-| GET | `/api/tools/aliases` | Command aliases |
+| GET | `/api/tools/aliases` | Per-project tool aliases |
 | POST | `/api/tools/aliases` | Create alias |
 | DELETE | `/api/tools/aliases/{alias}` | Delete alias |
 
@@ -666,6 +745,8 @@ Live updates: `GET /api/events` (SSE).
 | GET | `/api/ollama/health` | Ollama connectivity and models |
 | GET | `/api/ollama/logs` | LLM call log |
 | POST | `/api/ollama/logs/clear` | Clear LLM log |
+| GET | `/api/ollama/service-logs` | Ollama server log (file fallback on Windows) |
+| GET | `/api/ollama/service-logs/stream` | Stream Ollama server log |
 | GET | `/api/llm-logs/timeline` | Per-task model debug timeline |
 | GET | `/api/ollama/qdrant-health` | Qdrant connectivity |
 | GET | `/api/ollama/system-capacity` | RAM/CPU probe |
@@ -693,18 +774,20 @@ Persisted in SQLite (`settings` table, key `workflow:{project_id}`). See [Recomm
 
 ### MCP servers (optional)
 
-Add stdio MCP servers to `workflowSettings.mcpServers`:
+Add MCP servers to `workflowSettings.mcpServers` (stdio, http, or sse):
 
 ```json
 { "name": "myserver", "command": "npx", "args": ["-y", "my-mcp-package"] }
 ```
 
-Tools register as `mcp_{server}_{tool}` on project load (up to `maxMcpTools`).
+Tools register as `mcp_{server}_{tool}` on project load (up to `maxMcpTools`). Per-server `enabledTools` / `disabledTools` filter registration. When an agent has an `agentTools` allowlist, MCP tools must be listed by name (or use `mcp` / `mcp_*` / `*` to allow all MCP tools for that agent).
 
 ### Cursor-like tool runtime
 
 - **Structured transcripts:** tool rows include `toolName`, `toolSuccess`, `toolArgs`, truncated output
 - **Optional approval:** `requireToolApproval` pauses until Approve/Deny (120s timeout)
+- **Aliases:** built-in invent names (e.g. `create_file` → `write_file`); per-project mappings in SQLite tables `tool_aliases` and `pending_tool_requests` (`~/.allhands/scrum_memory.db`)
+- **Gated tools:** calling a real tool unavailable for the current agent/mode returns a Console warning — no Unknown Tool modal
 - **Security:** localhost bind; terminal and subprocess constrained to workspace cwd
 
 ---
@@ -741,8 +824,11 @@ Tools register as `mcp_{server}_{tool}` on project load (up to `maxMcpTools`).
 | Sprint not advancing | Check `blockedBy` dependencies, **pauseSprintOnNeedsUser**, empty In Progress lane, max sprint steps. |
 | Flutter analyze fails | Workspace must contain `pubspec.yaml`; Flutter SDK on PATH. |
 | Tool approval timeout | Approve or deny in modal within 120s; or disable `requireToolApproval`. |
+| Unknown Tool for `write_file` | Usually refinement or wrong agent — **Dismiss**, do not map to itself. Wait for implementation mode. |
+| Too few / coarse epics | Expand outline **Proposed epics**; re-run **Generate Features**. Check Console for under-decomposition warnings. |
 | Context overflow / slow | Lower `ollamaNumCtx` or use smaller models; reduce `maxLlmIterationsPerStep`. |
 | Patch failures | Dev must `read_file` before `apply_patch`; check Console for "old_text not found". |
+| Custom SQL tool fails | Use `sqlite:///…` under the workspace; only read-only `SELECT`/`WITH` when `readOnly` is true. |
 
 ---
 

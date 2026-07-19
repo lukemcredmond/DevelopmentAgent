@@ -798,6 +798,10 @@ export async function fetchToolRegistry(agent: string): Promise<ToolRegistryResp
   return request<ToolRegistryResponse>(`/api/tools/registry?agent=${encodeURIComponent(agent)}`)
 }
 
+export async function fetchToolsCatalog(): Promise<import('../types').ToolsCatalogResponse> {
+  return request<import('../types').ToolsCatalogResponse>('/api/tools/catalog')
+}
+
 export async function executeTool(
   payload: ToolExecutePayload,
 ): Promise<{ ok: boolean; result: ToolExecuteResult }> {

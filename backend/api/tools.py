@@ -101,6 +101,49 @@ def get_tool_registry(agent: str = Query(default="dev")):
         return {"agent": agent, "tools": list_agent_tools(agent)}
 
 
+@router.get("/api/tools/catalog")
+def get_tools_catalog():
+    """Builtin + custom tool definitions and per-agent effective tool lists."""
+    from backend.agents.registry import (
+        AGENT_LABELS,
+        AGENT_MAP,
+        BUILTIN_TOOL_CATALOG,
+        configure_agent_tools,
+    )
+    from backend.services.custom_tools import QUERY_SQL_PRESET, list_custom_tool_defs
+    from backend.services.workflow_settings import get_workflow_settings
+
+    with state.STATE_LOCK:
+        ws = get_workflow_settings()
+        builtins = [
+            {
+                "name": name,
+                "description": tool.description,
+                "parameters": tool.parameters,
+                "kind": "builtin",
+            }
+            for name, tool in sorted(BUILTIN_TOOL_CATALOG.items())
+        ]
+        customs = [{**d, "kind": "custom"} for d in list_custom_tool_defs(ws)]
+        # Ensure registries reflect current settings
+        configure_agent_tools(ws)
+        agents_out = {}
+        for key, agent in AGENT_MAP.items():
+            role = AGENT_LABELS.get(key, agent.role)
+            agents_out[role] = {
+                "agentId": key,
+                "tools": sorted(agent.registry.tool_names()),
+            }
+        return {
+            "builtins": builtins,
+            "customTools": customs,
+            "agents": agents_out,
+            "presets": {"query_sql": QUERY_SQL_PRESET},
+            "agentTools": ws.get("agentTools") or {},
+            "agentToolsAllowWritesInRefinement": bool(ws.get("agentToolsAllowWritesInRefinement")),
+        }
+
+
 @router.get("/api/tools/stack-catalog")
 def get_stack_catalog(brief: int = Query(default=1, ge=0, le=1)):
     from backend.services.stack_catalog import build_stack_catalog

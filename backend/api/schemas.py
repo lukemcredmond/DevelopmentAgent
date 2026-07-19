@@ -137,6 +137,10 @@ class WorkflowSettingsPayload(BaseModel):
     commandDenylist: Optional[List[str]] = None
     allowChainedCommands: Optional[bool] = None
     maxMcpTools: Optional[int] = None
+    mcpServers: Optional[List[Dict[str, Any]]] = None
+    agentTools: Optional[Dict[str, List[str]]] = None
+    agentToolsAllowWritesInRefinement: Optional[bool] = None
+    customTools: Optional[List[Dict[str, Any]]] = None
     definitionOfDone: Optional[List[str]] = None
     maxSprintSteps: Optional[int] = None
     maxLlmIterationsPerStep: Optional[int] = None

@@ -566,94 +566,141 @@ tool_run_command = Tool(
 
 def configure_agent_tools(ws: dict | None = None) -> None:
     """Register agent tools based on workflow settings (reduces schema bloat)."""
+    from backend.services.custom_tools import custom_tools_for_agent
+    from backend.services.logs import add_system_log
+    from backend.services.mcp_tools import reregister_mcp_tools_on_agents
     from backend.services.workflow_settings import get_workflow_settings
 
     settings = ws or get_workflow_settings()
     enable_web = bool(settings.get("enableWebSearch"))
     enable_semantic = bool(settings.get("enableSemanticSearch", True))
     refinement_mode = bool(state.REFINEMENT_MODE)
+    allow_writes_in_refinement = bool(settings.get("agentToolsAllowWritesInRefinement"))
+    agent_tools_cfg = settings.get("agentTools") if isinstance(settings.get("agentTools"), dict) else {}
+
+    refinement_blocked = {"write_file", "apply_patch", "delete_file", "run_command", "git_commit"}
+
+    def default_names(role: str) -> list[str]:
+        if role == "Product Owner":
+            names = [
+                "read_file",
+                "list_dir",
+                "update_board",
+                "add_backlog_tasks",
+                "add_subtasks",
+                "grep",
+                "glob_file_search",
+            ]
+            if enable_semantic:
+                names.extend(["semantic_search", "graph_query"])
+            if enable_web:
+                names.append("web_search")
+            return names
+        if role == "Developer":
+            if refinement_mode and not allow_writes_in_refinement:
+                names = [
+                    "read_file",
+                    "list_dir",
+                    "update_board",
+                    "add_subtasks",
+                    "grep",
+                    "glob_file_search",
+                    "search_code",
+                    "git_status",
+                    "git_diff",
+                ]
+            else:
+                names = [
+                    "read_file",
+                    "list_dir",
+                    "write_file",
+                    "apply_patch",
+                    "delete_file",
+                    "update_board",
+                    "add_subtasks",
+                    "run_command",
+                    "grep",
+                    "glob_file_search",
+                    "search_code",
+                    "git_status",
+                    "git_diff",
+                    "git_commit",
+                ]
+            if enable_semantic:
+                names.extend(["semantic_search", "graph_query"])
+            if enable_web:
+                names.append("web_search")
+            return names
+        if role == "Code Reviewer":
+            names = [
+                "read_file",
+                "list_dir",
+                "apply_patch",
+                "update_board",
+                "grep",
+                "glob_file_search",
+                "search_code",
+            ]
+            if enable_semantic:
+                names.extend(["semantic_search", "graph_query"])
+            if enable_web:
+                names.append("web_search")
+            return names
+        # QA Tester
+        names = [
+            "read_file",
+            "list_dir",
+            "run_test",
+            "run_command",
+            "grep",
+            "glob_file_search",
+            "search_code",
+            "update_board",
+        ]
+        if enable_semantic:
+            names.extend(["semantic_search", "graph_query"])
+        if enable_web:
+            names.append("web_search")
+        return names
+
+    def resolve_names(role: str) -> list[str]:
+        override = agent_tools_cfg.get(role)
+        if isinstance(override, list) and override:
+            names = [str(n) for n in override if n]
+        else:
+            names = default_names(role)
+        if refinement_mode and role == "Developer" and not allow_writes_in_refinement:
+            names = [n for n in names if n not in refinement_blocked]
+        # Drop feature-flagged tools when disabled even if listed in override
+        if not enable_semantic:
+            names = [n for n in names if n not in ("semantic_search", "graph_query")]
+        if not enable_web:
+            names = [n for n in names if n != "web_search"]
+        return names
 
     for agent in (agent_po, agent_dev, agent_cr, agent_qa):
         agent.registry.clear()
 
-    agent_po.registry.register(tool_read)
-    agent_po.registry.register(tool_list_dir)
-    agent_po.registry.register(tool_board)
-    agent_po.registry.register(tool_add_backlog_tasks)
-    agent_po.registry.register(tool_add_subtasks)
-    agent_po.registry.register(tool_grep)
-    agent_po.registry.register(tool_glob)
-    if enable_semantic:
-        agent_po.registry.register(tool_semantic)
-        agent_po.registry.register(tool_graph_query)
-    if enable_web:
-        agent_po.registry.register(tool_web_search)
+    role_agents = [
+        ("Product Owner", agent_po),
+        ("Developer", agent_dev),
+        ("Code Reviewer", agent_cr),
+        ("QA Tester", agent_qa),
+    ]
 
-    agent_dev.registry.register(tool_read)
-    agent_dev.registry.register(tool_list_dir)
-    if refinement_mode:
-        agent_dev.registry.register(tool_board)
-        agent_dev.registry.register(tool_add_subtasks)
-        agent_dev.registry.register(tool_grep)
-        agent_dev.registry.register(tool_glob)
-        agent_dev.registry.register(tool_search)
-        agent_dev.registry.register(tool_git_status)
-        agent_dev.registry.register(tool_git_diff)
-        if enable_semantic:
-            agent_dev.registry.register(tool_semantic)
-            agent_dev.registry.register(tool_graph_query)
-        if enable_web:
-            agent_dev.registry.register(tool_web_search)
-    else:
-        agent_dev.registry.register(tool_write)
-        agent_dev.registry.register(tool_apply_patch)
-        agent_dev.registry.register(tool_delete)
-        agent_dev.registry.register(tool_board)
-        agent_dev.registry.register(tool_add_subtasks)
-        agent_dev.registry.register(tool_run_command)
-        agent_dev.registry.register(tool_grep)
-        agent_dev.registry.register(tool_glob)
-        agent_dev.registry.register(tool_search)
-        agent_dev.registry.register(tool_git_status)
-        agent_dev.registry.register(tool_git_diff)
-        agent_dev.registry.register(tool_git_commit)
-        if enable_semantic:
-            agent_dev.registry.register(tool_semantic)
-            agent_dev.registry.register(tool_graph_query)
-        if enable_web:
-            agent_dev.registry.register(tool_web_search)
+    for role, agent in role_agents:
+        for name in resolve_names(role):
+            tool = BUILTIN_TOOL_CATALOG.get(name)
+            if tool:
+                agent.registry.register(tool)
+        for custom in custom_tools_for_agent(role, settings):
+            override = agent_tools_cfg.get(role)
+            if isinstance(override, list) and override:
+                if custom.name not in {str(n) for n in override}:
+                    continue
+            agent.registry.register(custom)
 
-    agent_cr.registry.register(tool_read)
-    agent_cr.registry.register(tool_list_dir)
-    agent_cr.registry.register(tool_apply_patch)
-    agent_cr.registry.register(tool_board)
-    agent_cr.registry.register(tool_grep)
-    agent_cr.registry.register(tool_glob)
-    agent_cr.registry.register(tool_search)
-    if enable_semantic:
-        agent_cr.registry.register(tool_semantic)
-        agent_cr.registry.register(tool_graph_query)
-    if enable_web:
-        agent_cr.registry.register(tool_web_search)
-
-    agent_qa.registry.register(tool_read)
-    agent_qa.registry.register(tool_list_dir)
-    agent_qa.registry.register(tool_test)
-    agent_qa.registry.register(tool_run_command)
-    agent_qa.registry.register(tool_grep)
-    agent_qa.registry.register(tool_glob)
-    agent_qa.registry.register(tool_search)
-    agent_qa.registry.register(tool_board)
-    if enable_semantic:
-        agent_qa.registry.register(tool_semantic)
-        agent_qa.registry.register(tool_graph_query)
-    if enable_web:
-        agent_qa.registry.register(tool_web_search)
-
-    from backend.services.mcp_tools import reregister_mcp_tools_on_agents
-    from backend.services.logs import add_system_log
-
-    mcp_count = reregister_mcp_tools_on_agents()
+    mcp_count = reregister_mcp_tools_on_agents(agent_tools_cfg=agent_tools_cfg)
     for agent in (agent_po, agent_dev, agent_cr, agent_qa):
         if not agent.registry.tool_names():
             add_system_log(
@@ -664,6 +711,30 @@ def configure_agent_tools(ws: dict | None = None) -> None:
     if mcp_count:
         add_system_log("System", "info", f"Re-attached {mcp_count} MCP tool(s) to agents")
 
+
+# Catalog of built-in tools (name → Tool). Populated after tool_* defs above.
+BUILTIN_TOOL_CATALOG: dict[str, Tool] = {
+    "write_file": tool_write,
+    "apply_patch": tool_apply_patch,
+    "read_file": tool_read,
+    "list_dir": tool_list_dir,
+    "run_test": tool_test,
+    "search_code": tool_search,
+    "grep": tool_grep,
+    "glob_file_search": tool_glob,
+    "semantic_search": tool_semantic,
+    "graph_query": tool_graph_query,
+    "delete_file": tool_delete,
+    "web_search": tool_web_search,
+    "update_board": tool_board,
+    "add_backlog_tasks": tool_add_backlog_tasks,
+    "add_subtasks": tool_add_subtasks,
+    "git_status": tool_git_status,
+    "git_diff": tool_git_diff,
+    "git_commit": tool_git_commit,
+    "git_init": tool_git_init,
+    "run_command": tool_run_command,
+}
 
 configure_agent_tools()
 

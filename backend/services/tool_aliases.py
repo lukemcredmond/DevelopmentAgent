@@ -67,7 +67,16 @@ def _now() -> str:
 
 
 def is_canonical_tool(name: str) -> bool:
-    return bool(name) and name in CANONICAL_TOOL_NAMES
+    if not name:
+        return False
+    if name in CANONICAL_TOOL_NAMES:
+        return True
+    try:
+        from backend.services.custom_tools import get_custom_canonical_names
+
+        return name in get_custom_canonical_names()
+    except Exception:
+        return False
 
 
 def gated_tool_unavailable_message(
