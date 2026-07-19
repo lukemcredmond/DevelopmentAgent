@@ -6,9 +6,34 @@ const TARGET_TOOLS = [
   'run_command',
   'read_file',
   'write_file',
+  'apply_patch',
   'run_test',
   'update_board',
 ] as const
+
+/** Real app tools — if the alias matches, this is likely role/mode gating, not an invent. */
+const CANONICAL_TOOL_NAMES = new Set([
+  'write_file',
+  'apply_patch',
+  'delete_file',
+  'read_file',
+  'list_dir',
+  'run_test',
+  'run_command',
+  'update_board',
+  'add_backlog_tasks',
+  'add_subtasks',
+  'grep',
+  'glob_file_search',
+  'search_code',
+  'semantic_search',
+  'graph_query',
+  'web_search',
+  'git_status',
+  'git_diff',
+  'git_commit',
+  'git_init',
+])
 
 interface ToolResolutionModalProps {
   pending: PendingToolRequest | null
@@ -30,8 +55,9 @@ export default function ToolResolutionModal({
   useEffect(() => {
     if (!pending) return
     setError(null)
-    setTargetTool('run_command')
     const aliasLower = pending.alias.toLowerCase()
+    const matchedTarget = TARGET_TOOLS.find((t) => t === pending.alias || t === aliasLower)
+    setTargetTool(matchedTarget ?? 'run_command')
     if (aliasLower.includes('flutter') || aliasLower.includes('dart')) {
       setCommand('flutter analyze')
     } else if (typeof pending.arguments.command === 'string') {
@@ -49,11 +75,18 @@ export default function ToolResolutionModal({
 
   if (!pending) return null
 
+  const isCanonicalAlias = CANONICAL_TOOL_NAMES.has(pending.alias)
+
   const buildDefaultArgs = (): Record<string, string> => {
     if (targetTool === 'run_command') {
       return { command: command.trim() }
     }
-    if (targetTool === 'read_file' || targetTool === 'write_file' || targetTool === 'run_test') {
+    if (
+      targetTool === 'read_file' ||
+      targetTool === 'write_file' ||
+      targetTool === 'apply_patch' ||
+      targetTool === 'run_test'
+    ) {
       return { [targetTool === 'run_test' ? 'test_script_path' : 'path']: path.trim() }
     }
     if (targetTool === 'update_board') {
@@ -101,6 +134,18 @@ export default function ToolResolutionModal({
           The agent called <span className="font-mono text-amber-300">{pending.alias}</span> which
           is not registered. Map it to a real action (saved for this project).
         </p>
+        {pending.agentRole && (
+          <p className="text-[11px] text-cat-overlay">
+            Agent: <span className="font-mono text-cat-subtext">{pending.agentRole}</span>
+          </p>
+        )}
+        {isCanonicalAlias && (
+          <p className="text-[11px] text-amber-200/90 bg-amber-950/40 border border-amber-500/30 rounded px-2 py-1.5">
+            This is a real app tool but unavailable for this agent or mode (e.g. refinement strips
+            write tools). Prefer Dismiss — mapping will not enable it for the wrong role. Wait for
+            implementation, or use an agent that has this tool.
+          </p>
+        )}
         <pre className="text-[10px] font-mono bg-cat-base border border-cat-surface1 rounded p-2 max-h-24 overflow-auto text-cat-subtext">
           {JSON.stringify(pending.arguments, null, 2)}
         </pre>
@@ -132,6 +177,7 @@ export default function ToolResolutionModal({
         )}
         {(targetTool === 'read_file' ||
           targetTool === 'write_file' ||
+          targetTool === 'apply_patch' ||
           targetTool === 'run_test') && (
           <div>
             <label className="text-[10px] uppercase text-cat-overlay font-bold">Path</label>

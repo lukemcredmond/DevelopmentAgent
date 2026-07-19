@@ -63,14 +63,34 @@ class ToolRegistry:
         ]
 
     def invoke(self, name: str, arguments: Dict[str, Any]) -> str:
-        from backend.services.tool_aliases import queue_pending_tool, resolve_tool_call
+        from backend.services.logs import add_system_log
+        from backend.services.tool_aliases import (
+            gated_tool_unavailable_message,
+            is_canonical_tool,
+            queue_pending_tool,
+            resolve_tool_call,
+        )
 
         original_name = name
-        resolved_name, resolved_args, was_alias = resolve_tool_call(name, arguments)
+        resolved_name, resolved_args, _was_alias = resolve_tool_call(name, arguments)
         name = resolved_name
         arguments = resolved_args
 
         if name not in self._tools:
+            # Real app tools missing for this agent/mode → clear error, no Unknown Tool modal.
+            if is_canonical_tool(name) or is_canonical_tool(original_name):
+                msg = gated_tool_unavailable_message(
+                    name if is_canonical_tool(name) else original_name,
+                    original_name=original_name,
+                    agent_role=state.ACTIVE_SPRINT_AGENT,
+                )
+                add_system_log(
+                    state.ACTIVE_SPRINT_AGENT or "System",
+                    "warning",
+                    msg.replace("Error: ", "", 1),
+                )
+                return msg
+
             queue_pending_tool(
                 original_name,
                 arguments,

@@ -1,16 +1,93 @@
 """Persistent per-project tool aliases and pending unknown-tool requests."""
 
-import json
 import uuid
 from datetime import datetime
-from typing import Any, Dict, List, Optional, Tuple
+from typing import Any, Dict, List, Optional, Set, Tuple
 
 from backend import state
 from backend.services.events import publish_event
 
+# Real app tools — missing from an agent means role/mode gating, not "unknown invent".
+CANONICAL_TOOL_NAMES: Set[str] = {
+    "write_file",
+    "apply_patch",
+    "delete_file",
+    "read_file",
+    "list_dir",
+    "run_test",
+    "run_command",
+    "update_board",
+    "add_backlog_tasks",
+    "add_subtasks",
+    "grep",
+    "glob_file_search",
+    "search_code",
+    "semantic_search",
+    "graph_query",
+    "web_search",
+    "git_status",
+    "git_diff",
+    "git_commit",
+    "git_init",
+}
+
+BUILTIN_TOOL_ALIASES: Dict[str, str] = {
+    # Grep / glob
+    "Grep": "grep",
+    "grep_search": "grep",
+    "Glob": "glob_file_search",
+    "glob": "glob_file_search",
+    "glob_search": "glob_file_search",
+    # Write / create
+    "Write": "write_file",
+    "write": "write_file",
+    "WriteFile": "write_file",
+    "create_file": "write_file",
+    "CreateFile": "write_file",
+    # Edit / patch
+    "Edit": "apply_patch",
+    "StrReplace": "apply_patch",
+    "search_replace": "apply_patch",
+    "SearchReplace": "apply_patch",
+    # Shell
+    "Bash": "run_command",
+    "Shell": "run_command",
+    "run": "run_command",
+    # Read
+    "Read": "read_file",
+    "ReadFile": "read_file",
+}
+
+# Case-insensitive lookup for invents like "WRITE" / "create_File"
+_BUILTIN_ALIASES_LOWER: Dict[str, str] = {k.lower(): v for k, v in BUILTIN_TOOL_ALIASES.items()}
+
 
 def _now() -> str:
     return datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+
+
+def is_canonical_tool(name: str) -> bool:
+    return bool(name) and name in CANONICAL_TOOL_NAMES
+
+
+def gated_tool_unavailable_message(
+    tool_name: str,
+    *,
+    original_name: Optional[str] = None,
+    agent_role: Optional[str] = None,
+) -> str:
+    """Clear error when a real tool is missing from this agent's registry."""
+    role = (agent_role or state.ACTIVE_SPRINT_AGENT or "this agent").strip() or "this agent"
+    shown = original_name or tool_name
+    if state.REFINEMENT_MODE and tool_name in ("write_file", "apply_patch", "delete_file", "run_command"):
+        return (
+            f"Error: Tool '{shown}' is disabled during refinement. "
+            "Use add_subtasks / update_board (and read/grep) instead of write tools."
+        )
+    return (
+        f"Error: Tool '{shown}' is not available to {role}. "
+        "It is a registered app tool but not enabled for this agent or mode."
+    )
 
 
 def get_aliases(project_id: Optional[str] = None) -> Dict[str, Dict[str, Any]]:
@@ -33,13 +110,16 @@ def delete_alias(alias: str, project_id: Optional[str] = None) -> None:
     state.storage.delete_tool_alias(pid, alias)
 
 
-BUILTIN_TOOL_ALIASES: Dict[str, str] = {
-    "Grep": "grep",
-    "grep_search": "grep",
-    "Glob": "glob_file_search",
-    "glob": "glob_file_search",
-    "glob_search": "glob_file_search",
-}
+def _coalesce_run_command_args(alias: str, arguments: Dict[str, Any], merged: Dict[str, Any]) -> Dict[str, Any]:
+    if "command" in merged:
+        return merged
+    if len(arguments) == 1:
+        only_val = next(iter(arguments.values()), "")
+        if isinstance(only_val, str):
+            merged["command"] = only_val
+    elif alias.replace("-", "_").lower().find("flutter") >= 0:
+        merged["command"] = "flutter analyze"
+    return merged
 
 
 def resolve_tool_call(
@@ -48,9 +128,12 @@ def resolve_tool_call(
     project_id: Optional[str] = None,
 ) -> Tuple[str, Dict[str, Any], bool]:
     """Returns (tool_name, merged_args, was_resolved)."""
-    builtin = BUILTIN_TOOL_ALIASES.get(alias)
+    builtin = BUILTIN_TOOL_ALIASES.get(alias) or _BUILTIN_ALIASES_LOWER.get(alias.lower())
     if builtin:
-        return builtin, arguments, True
+        merged = dict(arguments)
+        if builtin == "run_command":
+            merged = _coalesce_run_command_args(alias, arguments, merged)
+        return builtin, merged, True
 
     aliases = get_aliases(project_id)
     mapping = aliases.get(alias)
@@ -61,13 +144,8 @@ def resolve_tool_call(
     default_args = dict(mapping.get("args") or mapping.get("defaultArgs") or {})
     merged = {**default_args, **arguments}
 
-    if target == "run_command" and "command" not in merged:
-        if len(arguments) == 1:
-            only_val = next(iter(arguments.values()), "")
-            if isinstance(only_val, str):
-                merged["command"] = only_val
-        elif alias.replace("-", "_").lower().find("flutter") >= 0:
-            merged["command"] = "flutter analyze"
+    if target == "run_command":
+        merged = _coalesce_run_command_args(alias, arguments, merged)
 
     return target, merged, True
 
