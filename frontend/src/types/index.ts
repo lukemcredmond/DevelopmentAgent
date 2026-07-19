@@ -132,6 +132,29 @@ export interface Task {
   featureId?: string | null
   featureHistory?: FeatureHistoryEntry[]
   childTaskIds?: string[]
+  featureRollup?: FeatureRollup | null
+}
+
+export interface FeatureRollupChild {
+  id: string
+  title: string
+  status: string
+  lane: string
+}
+
+export interface FeatureRollupDecision {
+  agent: string
+  type: string
+  summary: string
+  timestamp?: string
+  childTaskId?: string
+  childTitle?: string
+}
+
+export interface FeatureRollup {
+  children: FeatureRollupChild[]
+  files: string[]
+  recentDecisions: FeatureRollupDecision[]
 }
 
 export interface FeatureHistoryEntry {

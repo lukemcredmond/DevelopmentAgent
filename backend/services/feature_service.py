@@ -358,6 +358,24 @@ def rollup_child_to_feature(child_task_id: str) -> None:
             break
     summary = "; ".join(s for s in summary_parts if s) or f"Child {child_task_id} completed"
 
+    # Merge child files onto the feature (deduped by path)
+    feature_files = list(feature.get("files") or [])
+    seen_paths = set()
+    for entry in feature_files:
+        if isinstance(entry, dict) and entry.get("path"):
+            seen_paths.add(str(entry["path"]))
+        elif isinstance(entry, str):
+            seen_paths.add(entry)
+    for entry in child.get("files") or []:
+        path = entry.get("path") if isinstance(entry, dict) else str(entry)
+        if not path or path in seen_paths:
+            continue
+        seen_paths.add(str(path))
+        feature_files.append(
+            entry if isinstance(entry, dict) else {"path": path, "action": "touched"}
+        )
+    feature["files"] = feature_files[-40:]
+
     append_feature_history(
         feature_id,
         {
@@ -375,8 +393,309 @@ def rollup_child_to_feature(child_task_id: str) -> None:
         f"Child '{child.get('title', child_task_id)}' reached Done",
         summary,
     )
+    feature["featureRollup"] = build_feature_rollup(feature_id)
     save_current_project_state()
     publish_board_update(feature_id, source="feature_rollup")
+
+
+def build_feature_rollup(feature_id: str) -> Dict[str, Any]:
+    """Aggregate child status, files, and recent decisions for an epic hub view."""
+    from backend.agents.task_context import get_task_lane
+
+    feature = find_feature_by_id(feature_id)
+    if not feature:
+        return {"children": [], "files": [], "recentDecisions": []}
+
+    normalize_task(feature)
+    children_out: List[Dict[str, Any]] = []
+    file_paths: List[str] = []
+    seen_files: set[str] = set()
+    decisions_out: List[Dict[str, Any]] = []
+
+    def _add_file(path: str) -> None:
+        if path and path not in seen_files:
+            seen_files.add(path)
+            file_paths.append(path)
+
+    for entry in feature.get("files") or []:
+        path = entry.get("path") if isinstance(entry, dict) else str(entry)
+        _add_file(str(path) if path else "")
+
+    for d in feature.get("decisions") or []:
+        if isinstance(d, dict):
+            decisions_out.append(
+                {
+                    "agent": str(d.get("agent") or ""),
+                    "type": str(d.get("type") or ""),
+                    "summary": str(d.get("summary") or "")[:300],
+                    "timestamp": str(d.get("timestamp") or ""),
+                    "childTaskId": "",
+                    "childTitle": str(feature.get("title") or ""),
+                }
+            )
+
+    for child_id in feature.get("childTaskIds") or []:
+        cid = str(child_id)
+        child = find_task_by_id(cid)
+        if not child:
+            children_out.append(
+                {"id": cid, "title": "(missing)", "status": "?", "lane": "?"}
+            )
+            continue
+        normalize_task(child)
+        lane = get_task_lane(cid) or str(child.get("status") or "?")
+        children_out.append(
+            {
+                "id": cid,
+                "title": str(child.get("title") or cid),
+                "status": str(child.get("status") or lane),
+                "lane": lane,
+            }
+        )
+        for entry in child.get("files") or []:
+            path = entry.get("path") if isinstance(entry, dict) else str(entry)
+            _add_file(str(path) if path else "")
+        for d in (child.get("decisions") or [])[-5:]:
+            if isinstance(d, dict):
+                decisions_out.append(
+                    {
+                        "agent": str(d.get("agent") or ""),
+                        "type": str(d.get("type") or ""),
+                        "summary": str(d.get("summary") or "")[:300],
+                        "timestamp": str(d.get("timestamp") or ""),
+                        "childTaskId": cid,
+                        "childTitle": str(child.get("title") or cid),
+                    }
+                )
+
+    decisions_out.sort(key=lambda x: x.get("timestamp") or "", reverse=True)
+    return {
+        "children": children_out,
+        "files": file_paths[:40],
+        "recentDecisions": decisions_out[:20],
+    }
+
+
+def _normalize_plan_child(raw: Dict[str, Any]) -> Dict[str, Any]:
+    ac = raw.get("acceptanceCriteria")
+    if not isinstance(ac, list):
+        ac = raw.get("acceptance_criteria") if isinstance(raw.get("acceptance_criteria"), list) else []
+    return {
+        "title": str(raw.get("title") or "Untitled task").strip(),
+        "description": str(raw.get("description") or "").strip(),
+        "acceptanceCriteria": [str(c) for c in ac if c],
+        "blockedBy": list(raw.get("blockedBy") or raw.get("blocked_by") or [])
+        if isinstance(raw.get("blockedBy") or raw.get("blocked_by"), list)
+        else [],
+        "priority": raw.get("priority", 100),
+        "workType": raw.get("workType") or raw.get("work_type") or "implementation",
+        "requiresDev": raw.get("requiresDev", raw.get("requires_dev", True)),
+        "requiresQa": raw.get("requiresQa", raw.get("requires_qa", True)),
+    }
+
+
+def _find_matching_feature(title: str, description: str) -> Optional[Dict[str, Any]]:
+    from backend.services.feature_similarity import REUSE_THRESHOLD, score_task_similarity
+
+    probe = {"title": title, "description": description}
+    best: Optional[Tuple[float, Dict[str, Any]]] = None
+    for feat in list_features():
+        score, _ = score_task_similarity(probe, feat)
+        if score >= REUSE_THRESHOLD and (best is None or score > best[0]):
+            best = (score, feat)
+    return best[1] if best else None
+
+
+def apply_plan_epics_from_po_output(po_output: str) -> Dict[str, Any]:
+    """Create Features-lane epics + child cards from PO plan JSON.
+
+    Preferred shape:
+      {"epics":[{"title","description","children":[{title,description,acceptanceCriteria,...}]}]}
+
+    Fallback: flat JSON array → one synthetic epic "Project backlog".
+    """
+    import json
+    import re
+
+    summary: Dict[str, Any] = {
+        "epicIds": [],
+        "childIds": [],
+        "reusedEpicIds": [],
+        "epicCount": 0,
+        "childCount": 0,
+    }
+
+    if not po_output or not str(po_output).strip():
+        return summary
+
+    epics_raw: List[Dict[str, Any]] = []
+
+    if po_output == "SIMULATION_FALLBACK":
+        epics_raw = [
+            {
+                "title": "Core scaffold",
+                "description": "Primary module structure for the project.",
+                "children": [
+                    {
+                        "title": "Create core scaffold",
+                        "description": "Primary module structure.",
+                        "acceptanceCriteria": ["Entry point runs"],
+                    }
+                ],
+            },
+            {
+                "title": "Main feature",
+                "description": "Deliver the brief capability.",
+                "children": [
+                    {
+                        "title": "Implement main feature",
+                        "description": "Deliver brief capability.",
+                        "acceptanceCriteria": ["Feature works end-to-end"],
+                    }
+                ],
+            },
+        ]
+    else:
+        # Prefer object with epics[]
+        obj = None
+        bt = "```"
+        for block in re.findall(rf"{bt}json\s*(.*?)\s*{bt}", po_output, re.DOTALL):
+            try:
+                parsed = json.loads(block.strip())
+                if isinstance(parsed, dict):
+                    obj = parsed
+                    break
+            except json.JSONDecodeError:
+                continue
+        if obj is None:
+            try:
+                parsed = json.loads(po_output.strip())
+                if isinstance(parsed, dict):
+                    obj = parsed
+                elif isinstance(parsed, list):
+                    epics_raw = [
+                        {
+                            "title": "Project backlog",
+                            "description": "Stories from plan (legacy flat array).",
+                            "children": [t for t in parsed if isinstance(t, dict)],
+                        }
+                    ]
+            except json.JSONDecodeError:
+                match = re.search(r"\{.*\}", po_output, re.DOTALL)
+                if match:
+                    try:
+                        parsed = json.loads(match.group())
+                        if isinstance(parsed, dict):
+                            obj = parsed
+                    except json.JSONDecodeError:
+                        pass
+                if not epics_raw and obj is None:
+                    match_arr = re.search(r"\[.*\]", po_output, re.DOTALL)
+                    if match_arr:
+                        try:
+                            parsed = json.loads(match_arr.group())
+                            if isinstance(parsed, list):
+                                epics_raw = [
+                                    {
+                                        "title": "Project backlog",
+                                        "description": "Stories from plan (legacy flat array).",
+                                        "children": [t for t in parsed if isinstance(t, dict)],
+                                    }
+                                ]
+                        except json.JSONDecodeError:
+                            pass
+
+        if obj is not None and not epics_raw:
+            raw_list = obj.get("epics")
+            if isinstance(raw_list, list) and raw_list:
+                epics_raw = [e for e in raw_list if isinstance(e, dict)]
+            elif isinstance(obj.get("children"), list):
+                epics_raw = [
+                    {
+                        "title": str(obj.get("title") or "Project backlog"),
+                        "description": str(obj.get("description") or ""),
+                        "children": [c for c in obj["children"] if isinstance(c, dict)],
+                    }
+                ]
+
+    if not epics_raw:
+        raise ValueError("No epics or task array found in PO plan output")
+
+    for epic_raw in epics_raw:
+        title = str(epic_raw.get("title") or "Untitled epic").strip()
+        description = str(epic_raw.get("description") or title).strip()
+        children_raw = epic_raw.get("children")
+        if not isinstance(children_raw, list) or not children_raw:
+            # Treat epic itself as a single child if children missing
+            children_raw = [
+                {
+                    "title": title,
+                    "description": description,
+                    "acceptanceCriteria": epic_raw.get("acceptanceCriteria") or [description],
+                }
+            ]
+        children = [_normalize_plan_child(c) for c in children_raw if isinstance(c, dict)]
+        children = [c for c in children if c.get("title")]
+        if not children:
+            continue
+
+        existing = _find_matching_feature(title, description)
+        child_ids: List[str] = []
+        if existing:
+            feature_id = str(existing["id"])
+            summary["reusedEpicIds"].append(feature_id)
+            for child_payload in children:
+                child = _spawn_child_task(feature_id, child_payload)
+                cid = _link_child_to_feature(existing, child) if child else ""
+                if cid:
+                    child_ids.append(cid)
+            append_feature_history(
+                feature_id,
+                {
+                    "source": "plan",
+                    "requestTitle": title,
+                    "requestBody": description[:500],
+                    "poSummary": f"Plan linked {len(child_ids)} child card(s) to existing epic",
+                    "childTaskId": child_ids[0] if child_ids else "",
+                },
+            )
+            record_feature_decision(
+                feature_id,
+                "Product Owner",
+                "plan_epic",
+                f"Plan reused epic '{title}'",
+                f"Children: {', '.join(child_ids)}",
+            )
+            existing["featureRollup"] = build_feature_rollup(feature_id)
+            summary["epicIds"].append(feature_id)
+        else:
+            feature, first_child = create_feature(
+                title,
+                description,
+                request_title=title,
+                request_body=description,
+                child_task=children[0],
+                po_summary=f"Created from plan with {len(children)} child card(s)",
+                source="plan",
+            )
+            feature_id = str(feature["id"])
+            if first_child and first_child.get("id"):
+                child_ids.append(str(first_child["id"]))
+            for child_payload in children[1:]:
+                child = _spawn_child_task(feature_id, child_payload)
+                cid = _link_child_to_feature(feature, child) if child else ""
+                if cid:
+                    child_ids.append(cid)
+            feature["featureRollup"] = build_feature_rollup(feature_id)
+            summary["epicIds"].append(feature_id)
+
+        summary["childIds"].extend(child_ids)
+
+    summary["epicCount"] = len(summary["epicIds"])
+    summary["childCount"] = len(summary["childIds"])
+    save_current_project_state()
+    publish_board_update(source="plan_epics")
+    return summary
 
 
 def intake_feature_offline(

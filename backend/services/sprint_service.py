@@ -48,6 +48,7 @@ from backend.services.brief_service import (
 )
 from backend.services.events import publish_event
 from backend.services.feature_service import (
+    apply_plan_epics_from_po_output,
     build_feature_context_for_po,
     create_feature,
     find_feature_by_id,
@@ -1260,26 +1261,23 @@ def _simulate_qa(active_task: Dict[str, Any]) -> None:
 
 
 def _append_po_backlog_from_output(po_output: str, existing: set[str]) -> int:
-    """Parse PO JSON array output and append new backlog tasks."""
-    if po_output == "SIMULATION_FALLBACK":
-        tasks = [
-            {"title": "Create core scaffold", "description": "Primary module structure.", "acceptanceCriteria": ["Entry point runs"]},
-            {"title": "Implement main feature", "description": "Deliver brief capability.", "acceptanceCriteria": ["Feature works end-to-end"]},
-        ]
-        count = _append_tasks(tasks)
-        add_system_log("Product Owner", "success", f"Added {count} feature(s) (offline).")
-        return count
+    """Parse PO epic-grouped (or legacy flat) output and create Features + children."""
+    del existing  # titles checked via same-request reuse on spawn
     if not po_output:
         return 0
     try:
-        parsed = extract_json_array_from_text(po_output)
-        new_tasks = [t for t in parsed if t.get("title") not in existing]
-        count = _append_tasks(new_tasks)
-        add_system_log("Product Owner", "success", f"PO created {count} new feature(s).")
-        return count
-    except (ValueError, json.JSONDecodeError) as e:
-        add_system_log("Product Owner", "error", f"Failed to parse PO output: {e}")
+        result = apply_plan_epics_from_po_output(po_output)
+    except ValueError as e:
+        add_system_log("Product Owner", "error", f"Failed to parse PO plan output: {e}")
         return 0
+    epic_n = int(result.get("epicCount") or 0)
+    child_n = int(result.get("childCount") or 0)
+    reused = result.get("reusedEpicIds") or []
+    msg = f"PO created {epic_n} epic(s) with {child_n} child card(s)."
+    if reused:
+        msg += f" Reused {len(reused)} existing epic(s)."
+    add_system_log("Product Owner", "success", msg)
+    return child_n
 
 
 def run_po_plan_outline(brief: str, ollama_url: str) -> str:
@@ -1340,15 +1338,22 @@ def run_po_plan_backlog(brief: str, ollama_url: str, outline: Optional[str] = No
         add_system_log("Product Owner", "warning", "No plan outline — run Plan outline first.")
         return 0
 
-    add_system_log("Product Owner", "info", "Generating backlog from approved plan outline…")
+    add_system_log("Product Owner", "info", "Generating Features (epics) + child cards from approved plan…")
     po_output = ""
     try:
         set_active_sprint_context(PLANNING_TASK_ID, "Product Owner")
         po_output = agent_po.execute_step(
             f"{PO_SMALLEST_TASKS_GUIDANCE}\n\n"
-            "You are the Product Owner. Convert the approved plan outline into developer-ready backlog cards.\n"
-            "Reply with ONLY a JSON array. Each object must have: title, description, "
-            "acceptanceCriteria (string array), optional blockedBy, optional priority.\n"
+            "You are the Product Owner. Convert the approved plan outline into Features (epics) "
+            "with smallest developer-ready child cards.\n"
+            "Reply with ONLY a JSON object of this shape:\n"
+            '{"epics":[{"title":"...","description":"...","children":['
+            '{"title":"...","description":"...","acceptanceCriteria":["..."],'
+            '"optional blockedBy":[],"optional priority":100,'
+            '"optional workType":"implementation","optional requiresDev":true,"optional requiresQa":true}'
+            "]}]}\n"
+            "Each epic maps to a Features-lane parent; each child is one focused backlog card under that epic.\n"
+            "Prefer many small children over few large ones. Use Proposed epics from the outline as epic titles.\n"
             f"Existing titles (do NOT duplicate): {existing_hint}\n"
             f"{build_dod_block()}\nApproved plan outline:\n{outline_text}\n\n"
             f"Project brief (context):\n{brief}",
@@ -1386,10 +1391,10 @@ def run_po_plan(brief: str, ollama_url: str) -> None:
         max_steps=max_steps,
         agent="Product Owner",
         task_id=PLANNING_TASK_ID,
-        task_title="Decomposing brief into backlog…",
-        lane="Backlog",
+        task_title="Decomposing brief into epics + child cards…",
+        lane="Features",
     )
-    add_system_log("Product Owner", "info", "Decomposing project brief into features…")
+    add_system_log("Product Owner", "info", "Decomposing project brief into Features (epics)…")
 
     po_output = ""
     try:
@@ -1404,15 +1409,18 @@ def run_po_plan(brief: str, ollama_url: str) -> None:
         )
         po_output = agent_po.execute_step(
             f"{PO_SMALLEST_TASKS_GUIDANCE}\n\n"
-            "You are the Product Owner. Decompose the project brief into developer-ready features. "
-            "Reply with ONLY a JSON array. Each object must have: title, description, "
-            "acceptanceCriteria (string array), optional id (hint only — the system assigns TASK-{GUID}), "
-            "optional blockedBy (array of id values from the same JSON array), optional priority (number, lower=higher).\n"
+            "You are the Product Owner. Decompose the project brief into Features (epics) "
+            "with smallest developer-ready child cards.\n"
+            "Reply with ONLY a JSON object of this shape:\n"
+            '{"epics":[{"title":"...","description":"...","children":['
+            '{"title":"...","description":"...","acceptanceCriteria":["..."],'
+            '"optional blockedBy":[],"optional priority":100}]}]}\n'
+            "Each epic is a Features-lane parent; each child is one focused card under that epic.\n"
             f"Existing titles (do NOT duplicate): {existing_hint}\n"
             f"{build_dod_block()}\nProject brief:\n{brief}",
             max_iterations=_llm_iterations(),
         )
-        add_system_log("Product Owner", "info", "PO received response, parsing backlog…")
+        add_system_log("Product Owner", "info", "PO received response, parsing epics…")
     finally:
         clear_active_sprint_context()
 
@@ -1428,21 +1436,8 @@ def run_po_plan(brief: str, ollama_url: str) -> None:
         )
         return
 
-    if po_output == "SIMULATION_FALLBACK":
-        tasks = [
-            {"title": "Create core scaffold", "description": "Primary module structure.", "acceptanceCriteria": ["Entry point runs"]},
-            {"title": "Implement main feature", "description": "Deliver brief capability.", "acceptanceCriteria": ["Feature works end-to-end"]},
-        ]
-        count = _append_tasks(tasks)
-        add_system_log("Product Owner", "success", f"Added {count} feature(s) (offline).")
-    elif po_output:
-        try:
-            parsed = extract_json_array_from_text(po_output)
-            new_tasks = [t for t in parsed if t.get("title") not in existing]
-            count = _append_tasks(new_tasks)
-            add_system_log("Product Owner", "success", f"PO created {count} new feature(s).")
-        except (ValueError, json.JSONDecodeError) as e:
-            add_system_log("Product Owner", "error", f"Failed to parse PO output: {e}")
+    if po_output:
+        _append_po_backlog_from_output(po_output, set(existing))
 
     publish_sprint_progress(
         phase="po_plan",
@@ -1450,8 +1445,8 @@ def run_po_plan(brief: str, ollama_url: str) -> None:
         max_steps=max_steps,
         agent="Product Owner",
         task_id=PLANNING_TASK_ID,
-        task_title="PO plan complete",
-        lane="Backlog",
+        task_title="PO plan complete — epics ready",
+        lane="Features",
     )
 
 

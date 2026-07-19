@@ -15,6 +15,13 @@ from backend.workspace.files import list_workspace_file_paths, sync_virtual_file
 
 def build_state_response(*, include_files: bool = True) -> dict:
     normalize_board_tasks()
+    from backend.services.board_lanes import FEATURES_LANE
+    from backend.services.feature_service import build_feature_rollup, is_feature_task
+
+    for feat in state.SHARED_BOARD.get(FEATURES_LANE, []):
+        if isinstance(feat, dict) and is_feature_task(feat) and feat.get("id"):
+            feat["featureRollup"] = build_feature_rollup(str(feat["id"]))
+
     file_paths = list_workspace_file_paths()
     file_list = sync_virtual_filesystem_from_disk() if include_files else {}
     ws = get_workflow_settings()

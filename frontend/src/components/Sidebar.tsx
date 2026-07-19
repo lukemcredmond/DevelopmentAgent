@@ -405,8 +405,9 @@ export default memo(function Sidebar({
             Sprint
           </h3>
           <p className="text-[10px] text-cat-overlay leading-relaxed">
-            Use the Project Brief panel above the board to describe your project, then run sprint
-            actions here.
+            Plan outline → Generate Features creates epics + child cards. Plan &amp; Run does that
+            then auto-sprints. Enable backlog refinement for Feature → small testable tasks before
+            In Progress.
           </p>
           <div className="space-y-2 pt-1">
             <button
@@ -426,7 +427,7 @@ export default memo(function Sidebar({
                 className="w-full bg-violet-700 hover:bg-violet-600 disabled:opacity-50 text-white font-medium py-2 rounded-lg text-xs transition-colors flex items-center justify-center gap-2"
               >
                 <i className="fa-solid fa-layer-group" />
-                Generate backlog from plan
+                Generate Features from plan
               </button>
             )}
             <button
@@ -440,7 +441,7 @@ export default memo(function Sidebar({
               ) : (
                 <i className="fa-solid fa-rocket" />
               )}
-              Plan & Run (Brief → PO → Sprint)
+              Plan & Run (Brief → Epics → Sprint)
             </button>
             <button
               type="button"

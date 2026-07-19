@@ -341,6 +341,10 @@ export default function TaskDetailModal({
   const relatedTaskIds = safeTask.relatedTaskIds ?? []
   const featureHistory = safeTask.featureHistory ?? []
   const childTaskIds = safeTask.childTaskIds ?? []
+  const featureRollup = safeTask.featureRollup
+  const rollupChildren = featureRollup?.children ?? []
+  const rollupFiles = featureRollup?.files ?? []
+  const rollupDecisions = featureRollup?.recentDecisions ?? []
   const parentFeatureId = safeTask.featureId
   const isFeatureEpic = safeTask.workType === 'feature' || taskLane === 'Features'
   const diagnosis = safeTask.lastDiagnosis
@@ -830,20 +834,86 @@ export default function TaskDetailModal({
           {isFeatureEpic && childTaskIds.length > 0 && (
             <CollapsibleSection title="Implementation Cards" badge={childTaskIds.length} defaultOpen>
               <div className="space-y-1">
-                {childTaskIds.map((childId) => (
-                  <button
-                    key={childId}
-                    type="button"
-                    onClick={() => onRelatedTaskClick?.(childId)}
-                    className="w-full text-left text-[11px] font-mono bg-cat-base border border-cat-surface1 rounded px-2 py-1.5 hover:border-indigo-500/50 text-indigo-300"
-                  >
-                    {childId}
-                    {getTaskTitle?.(childId) && (
-                      <span className="text-cat-subtext font-sans ml-2">
-                        — {getTaskTitle(childId)}
+                {childTaskIds.map((childId) => {
+                  const rolled = rollupChildren.find((c) => c.id === childId)
+                  const lane = rolled?.lane || rolled?.status
+                  const titleText = rolled?.title || getTaskTitle?.(childId)
+                  return (
+                    <button
+                      key={childId}
+                      type="button"
+                      onClick={() => onRelatedTaskClick?.(childId)}
+                      className="w-full text-left text-[11px] bg-cat-base border border-cat-surface1 rounded px-2 py-1.5 hover:border-indigo-500/50 flex items-center justify-between gap-2"
+                    >
+                      <span className="font-mono text-indigo-300 truncate">
+                        {childId}
+                        {titleText && (
+                          <span className="text-cat-subtext font-sans ml-2">— {titleText}</span>
+                        )}
                       </span>
+                      {lane && (
+                        <span className="shrink-0 text-[9px] px-1.5 py-0.5 rounded bg-indigo-950/50 text-indigo-200">
+                          {lane}
+                        </span>
+                      )}
+                    </button>
+                  )
+                })}
+              </div>
+              <p className="text-[10px] text-cat-subtext mt-2">
+                Children move Backlog → Refinement (if enabled) → In Progress → QA → Done. Enable
+                &quot;Require backlog refinement&quot; for smaller testable cards before In Progress.
+              </p>
+            </CollapsibleSection>
+          )}
+
+          {isFeatureEpic && rollupFiles.length > 0 && (
+            <CollapsibleSection title="Rolled-up Files" badge={rollupFiles.length} defaultOpen>
+              <ul className="space-y-1 max-h-40 overflow-y-auto">
+                {rollupFiles.map((path) => (
+                  <li key={path} className="text-[11px] font-mono text-indigo-300 truncate" title={path}>
+                    {path}
+                  </li>
+                ))}
+              </ul>
+              <p className="text-[10px] text-cat-subtext mt-1">
+                Union of files from this epic and its implementation cards.
+              </p>
+            </CollapsibleSection>
+          )}
+
+          {isFeatureEpic && rollupDecisions.length > 0 && (
+            <CollapsibleSection
+              title="Rolled-up Decisions"
+              badge={rollupDecisions.length}
+              defaultOpen={rollupDecisions.length <= 8}
+            >
+              <div className="space-y-1.5 max-h-48 overflow-y-auto">
+                {rollupDecisions.map((d, idx) => (
+                  <div
+                    key={`${d.timestamp}-${d.childTaskId}-${idx}`}
+                    className="text-[11px] bg-cat-base border border-cat-surface1 rounded px-2 py-1.5"
+                  >
+                    <p className="text-cat-subtext">
+                      <span className="text-indigo-300 font-semibold">{d.agent || 'Agent'}</span>
+                      {d.type && <span className="ml-1">({d.type})</span>}
+                      {d.childTitle && (
+                        <span className="ml-1 text-violet-300/90">
+                          · {d.childTaskId ? `${d.childTitle}` : d.childTitle}
+                        </span>
+                      )}
+                    </p>
+                    <p className="text-white mt-0.5">{d.summary}</p>
+                    {d.childTaskId && (
+                      <button
+                        type="button"
+                        onClick={() => onRelatedTaskClick?.(d.childTaskId!)}
+                        className="text-[10px] text-indigo-300 font-mono mt-0.5 hover:underline"
+                      >
+                        {d.childTaskId}
+                      </button>
                     )}
-                  </button>
+                  </div>
                 ))}
               </div>
             </CollapsibleSection>

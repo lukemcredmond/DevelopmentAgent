@@ -150,8 +150,9 @@ export default memo(function BriefPanel({
           ) : (
             <>
               <p className="text-[11px] text-cat-overlay leading-relaxed">
-                Review or edit the PO plan outline. Click Generate backlog in the sidebar when
-                ready to create Kanban cards.
+                Review or edit the PO plan outline. Generate Features creates Features-lane epics
+                with smallest child cards (then Backlog / Refinement → delivery). Enable
+                &quot;Require backlog refinement&quot; for clearer testable cards before In Progress.
               </p>
               <textarea
                 value={planOutline}
@@ -168,7 +169,7 @@ export default memo(function BriefPanel({
                   onClick={onGenerateBacklog}
                   className="text-xs bg-violet-700 hover:bg-violet-600 disabled:opacity-50 text-white font-medium py-2 px-3 rounded-lg transition-colors"
                 >
-                  Generate backlog from plan
+                  Generate Features from plan
                 </button>
               )}
             </>
