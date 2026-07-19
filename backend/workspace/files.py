@@ -306,8 +306,73 @@ def _normalize_for_patch_match(text: str) -> str:
     return text.replace("\r\n", "\n").replace("\r", "\n")
 
 
+_NUMBERED_LINE_RE = re.compile(r"^\d+\|")
+
+
+def _strip_numbered_line_prefixes(text: str) -> str:
+    """Strip read_file line-number prefixes like '12|' from each line."""
+    if not text:
+        return text
+    lines = text.splitlines()
+    stripped = [_NUMBERED_LINE_RE.sub("", ln, count=1) for ln in lines]
+    result = "\n".join(stripped)
+    if text.endswith(("\n", "\r\n", "\r")):
+        result += "\n"
+    return result
+
+
+def _soft_normalize_line(line: str) -> str:
+    """Trailing-whitespace + tab/space soft form for tolerant matching."""
+    return line.rstrip().replace("\t", " ")
+
+
+def _soft_normalize_block(text: str) -> str:
+    return "\n".join(_soft_normalize_line(ln) for ln in _normalize_for_patch_match(text).split("\n"))
+
+
+def _content_body_from_read(stored: str) -> str:
+    """Strip read_file header / numbered lines from STEP_FILE_READS content."""
+    text = stored or ""
+    if text.startswith("File:"):
+        nl = text.find("\n")
+        if nl >= 0:
+            text = text[nl + 1 :]
+    return _strip_numbered_line_prefixes(text)
+
+
+def _soft_line_window_replace(
+    current: str, old_text: str, new_text: str
+) -> tuple[Optional[str], int]:
+    """Match old_text as a unique soft-normalized line window; replace with new_text."""
+    curr_norm = _normalize_for_patch_match(current)
+    old_norm = _normalize_for_patch_match(old_text)
+    new_norm = _normalize_for_patch_match(new_text)
+    curr_lines = curr_norm.split("\n")
+    old_lines = old_norm.split("\n")
+    soft_old = [_soft_normalize_line(ln) for ln in old_lines]
+    n = len(soft_old)
+    if n == 0:
+        return None, 0
+    matches: List[int] = []
+    for i in range(0, len(curr_lines) - n + 1):
+        window = [_soft_normalize_line(ln) for ln in curr_lines[i : i + n]]
+        if window == soft_old:
+            matches.append(i)
+    if len(matches) != 1:
+        return None, len(matches)
+    i = matches[0]
+    new_lines = new_norm.split("\n")
+    updated_norm = "\n".join(curr_lines[:i] + new_lines + curr_lines[i + n :])
+    if "\r\n" in current:
+        return updated_norm.replace("\n", "\r\n"), 1
+    return updated_norm, 1
+
+
 def _patch_match_and_replace(current: str, old_text: str, new_text: str) -> tuple[Optional[str], int]:
     """Return (updated_content, match_count). match_count 0 = not found, >1 = ambiguous."""
+    old_text = _strip_numbered_line_prefixes(old_text)
+    new_text = _strip_numbered_line_prefixes(new_text)
+
     count = current.count(old_text)
     if count == 1:
         return current.replace(old_text, new_text, 1), 1
@@ -325,7 +390,30 @@ def _patch_match_and_replace(current: str, old_text: str, new_text: str) -> tupl
         else:
             updated = updated_norm
         return updated, 1
-    return None, norm_count
+    if norm_count > 1:
+        return None, norm_count
+
+    soft_current = _soft_normalize_block(current)
+    soft_old = _soft_normalize_block(old_text)
+    soft_count = soft_current.count(soft_old) if soft_old else 0
+    if soft_count == 1:
+        # Prefer line-window replace so we keep original indentation/whitespace where possible
+        updated, soft_line_count = _soft_line_window_replace(current, old_text, new_text)
+        if soft_line_count == 1 and updated is not None:
+            return updated, 1
+        # Fallback: replace in soft-normalized full file (loses exact trailing ws)
+        soft_new = _soft_normalize_block(new_text)
+        updated_soft = soft_current.replace(soft_old, soft_new, 1)
+        if "\r\n" in current:
+            return updated_soft.replace("\n", "\r\n"), 1
+        return updated_soft, 1
+    if soft_count > 1:
+        return None, soft_count
+
+    updated, soft_line_count = _soft_line_window_replace(current, old_text, new_text)
+    if soft_line_count == 1 and updated is not None:
+        return updated, 1
+    return None, soft_line_count
 
 
 def _patch_not_found_message(path: str, current: str, old_text: str) -> str:
@@ -362,11 +450,39 @@ def apply_workspace_patch(path: str, old_text: str, new_text: str) -> str:
     if current.startswith("Error:"):
         return f"Error: Cannot patch — {current}"
 
-    updated, count = _patch_match_and_replace(current, old_text, new_text)
+    cleaned_old = _strip_numbered_line_prefixes(old_text)
+    cleaned_new = _strip_numbered_line_prefixes(new_text)
+
+    last_read = state.STEP_FILE_READS.get(safe_path)
+    if last_read is not None and cleaned_old:
+        last_body = _content_body_from_read(last_read)
+        in_last = cleaned_old in last_body or _soft_normalize_block(cleaned_old) in _soft_normalize_block(
+            last_body
+        )
+        in_current = cleaned_old in current or _soft_normalize_block(cleaned_old) in _soft_normalize_block(
+            current
+        )
+        if not in_last and not in_current:
+            state.STEP_PATCH_FAILURES[safe_path] = state.STEP_PATCH_FAILURES.get(safe_path, 0) + 1
+            fails = state.STEP_PATCH_FAILURES[safe_path]
+            base = (
+                f"Error: old_text not in last read_file for '{path}' — re-read, "
+                "don't use preloaded context. Call read_file again, then copy old_text "
+                "from that output (without line-number prefixes)."
+            )
+            if fails >= 2:
+                return (
+                    f"{base}\n\nPatch failed {fails} times on '{path}'. "
+                    "Use read_file for the full file, then write_file with the complete corrected content "
+                    "instead of apply_patch."
+                )
+            return base
+
+    updated, count = _patch_match_and_replace(current, cleaned_old, cleaned_new)
     if count == 0:
         state.STEP_PATCH_FAILURES[safe_path] = state.STEP_PATCH_FAILURES.get(safe_path, 0) + 1
         fails = state.STEP_PATCH_FAILURES[safe_path]
-        base = _patch_not_found_message(path, current, old_text)
+        base = _patch_not_found_message(path, current, cleaned_old)
         if fails >= 2:
             return (
                 f"{base}\n\nPatch failed {fails} times on '{path}'. "

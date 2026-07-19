@@ -19,6 +19,8 @@ LLM_DEBUG_LOG: List[Dict[str, Any]] = []
 STATE_LOCK = threading.RLock()
 ACTIVE_SPRINT_TASK_ID: Optional[str] = None
 ACTIVE_SPRINT_AGENT: Optional[str] = None
+# When True, agent may keep working on a task already in Done (explicit retry/chat override).
+ALLOW_DONE_RETRY: bool = False
 ACTIVE_AGENT_RUN: Optional[Any] = None
 SPRINT_CANCEL = False
 EVENT_SUBSCRIBERS: List[Any] = []

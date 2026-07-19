@@ -145,6 +145,7 @@ def clear_all_board_tasks() -> None:
         state.SHARED_BOARD[lane] = []
     state.ACTIVE_SPRINT_TASK_ID = None
     state.ACTIVE_SPRINT_AGENT = None
+    state.ALLOW_DONE_RETRY = False
     save_current_project_state()
     publish_board_update(source="clear_tasks")
     add_system_log("System", "info", "All board tasks cleared")

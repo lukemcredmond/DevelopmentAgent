@@ -703,6 +703,8 @@ export async function checkQdrantHealth(
 export async function fetchSystemCapacity(): Promise<{
   gpuAvailable: boolean
   vramMb?: number | null
+  vramUsedMb?: number | null
+  gpuUtilPct?: number | null
   ramGb?: number | null
   platform?: string
   tier: string

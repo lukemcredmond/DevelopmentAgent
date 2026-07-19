@@ -62,12 +62,14 @@ def test_apply_patch_escalates_after_two_failures():
     from backend.workspace import files
 
     initialize()
+    state.ACTIVE_SPRINT_TASK_ID = "T-ESCALATE"
     state.STEP_FILE_READS.clear()
     state.STEP_PATCH_FAILURES.clear()
+    files.write_workspace_file("lib/main.dart", "void main() {}\n")
     state.STEP_FILE_READS["lib/main.dart"] = "void main() {}\n"
 
     msg1 = files.apply_workspace_patch("lib/main.dart", "missing text", "new")
-    assert "old_text not found" in msg1
+    assert "old_text not found" in msg1 or "not in last read_file" in msg1
     assert state.STEP_PATCH_FAILURES.get("lib/main.dart") == 1
 
     msg2 = files.apply_workspace_patch("lib/main.dart", "still missing", "new")

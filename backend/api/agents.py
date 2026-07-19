@@ -14,6 +14,7 @@ class RetryStepPayload(BaseModel):
     mode: str = "same"
     ollamaUrl: str = "http://localhost:11434"
     reason: str = "user_requested"
+    allowDoneRetry: bool = False
 
 
 @router.post("/api/agents/retry-step")
@@ -26,6 +27,7 @@ def post_retry_step(payload: RetryStepPayload):
             mode=payload.mode,
             brief=state.PROJECT_BRIEF,
             reason=payload.reason,
+            allow_done_retry=payload.allowDoneRetry,
         )
         if not result.get("ok") and result.get("error"):
             raise HTTPException(status_code=400, detail=result["error"])

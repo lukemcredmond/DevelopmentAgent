@@ -5,7 +5,7 @@ from fastapi.responses import StreamingResponse
 
 from backend import state
 from backend.agents.registry import AGENT_MAP
-from backend.agents.task_context import build_task_prompt, find_task_by_id
+from backend.agents.task_context import build_task_prompt, find_task_by_id, is_task_done
 from backend.api.schemas import ChatPayload
 from backend.services.brief_service import PO_SMALLEST_TASKS_GUIDANCE
 from backend.services.events import publish_event
@@ -50,9 +50,25 @@ def _compose_message(payload: ChatPayload) -> str:
     return "\n\n".join(parts)
 
 
+def _refuse_done_task_if_needed(payload: ChatPayload) -> None:
+    if (
+        payload.task_id
+        and is_task_done(payload.task_id)
+        and not payload.allow_done_retry
+    ):
+        raise HTTPException(
+            status_code=400,
+            detail=(
+                f"Task {payload.task_id} is already Done. "
+                "Pass allowDoneRetry=true for a deliberate re-run."
+            ),
+        )
+
+
 def _apply_chat_task_context(payload: ChatPayload) -> None:
     chat_task_id = payload.task_id or f"chat-{payload.agent}"
     state.ACTIVE_SPRINT_TASK_ID = chat_task_id
+    state.ALLOW_DONE_RETRY = bool(payload.allow_done_retry) if payload.task_id else False
     state.STEP_FILE_READS.clear()
     agent = AGENT_MAP.get(payload.agent)
     if agent:
@@ -64,6 +80,7 @@ def _finalize_chat_task_context(payload: ChatPayload) -> None:
         save_current_project_state()
     state.ACTIVE_SPRINT_TASK_ID = None
     state.ACTIVE_SPRINT_AGENT = None
+    state.ALLOW_DONE_RETRY = False
 
 
 def _split_hint_for_response(message: str, response: str, added: int) -> str | None:
@@ -82,6 +99,7 @@ def _split_hint_for_response(message: str, response: str, added: int) -> str | N
 def chat_with_agent(payload: ChatPayload):
     if payload.agent not in AGENT_MAP:
         raise HTTPException(status_code=400, detail="Invalid agent")
+    _refuse_done_task_if_needed(payload)
 
     with state.STATE_LOCK:
         agent = AGENT_MAP[payload.agent]
@@ -141,6 +159,7 @@ def clear_chat_history():
 def chat_stream(payload: ChatPayload):
     if payload.agent not in AGENT_MAP:
         raise HTTPException(status_code=400, detail="Invalid agent")
+    _refuse_done_task_if_needed(payload)
 
     def generate():
         with state.STATE_LOCK:

@@ -10,6 +10,7 @@ from backend.agents.registry import AGENT_MAP
 from backend.agents.task_context import (
     build_task_prompt,
     find_task_by_id,
+    is_task_done,
     normalize_task,
     record_task_decision,
     record_task_transcript,
@@ -115,10 +116,12 @@ def _optimize_prompt(
     failure_context: str,
     task_id: str,
     max_iterations: int = 1,
+    *,
+    allow_done_retry: bool = False,
 ) -> str:
     from backend.agents.task_context import clear_active_sprint_context, set_active_sprint_context
 
-    set_active_sprint_context(task_id, agent.role)
+    set_active_sprint_context(task_id, agent.role, allow_done_retry=allow_done_retry)
     try:
         optimizer_prompt = (
             "You are a prompt engineer. The following agent prompt failed or produced poor results.\n"
@@ -144,10 +147,20 @@ def retry_agent_step(
     mode: str = "same",
     brief: str = "",
     reason: str = "user_requested",
+    allow_done_retry: bool = False,
 ) -> Dict[str, Any]:
     task = find_task_by_id(task_id)
     if not task:
         return {"ok": False, "error": f"Task {task_id} not found"}
+
+    if is_task_done(task_id) and not allow_done_retry:
+        return {
+            "ok": False,
+            "error": (
+                f"Task {task_id} is already Done. "
+                "Pass allowDoneRetry=true for a deliberate re-run."
+            ),
+        }
 
     agent = AGENT_MAP.get(agent_id)
     if not agent:
@@ -170,7 +183,14 @@ def retry_agent_step(
     failure_context = _last_failure_context(task_id, agent=agent)
 
     if mode == "optimized":
-        optimized = _optimize_prompt(agent, base_prompt, failure_context, task_id, max_iterations=2)
+        optimized = _optimize_prompt(
+            agent,
+            base_prompt,
+            failure_context,
+            task_id,
+            max_iterations=2,
+            allow_done_retry=allow_done_retry,
+        )
         record_task_decision(
             task_id,
             agent.role,
@@ -195,7 +215,10 @@ def retry_agent_step(
         user_prompt = base_prompt
         record_task_decision(task_id, agent.role, "prompt_retry", f"Same prompt retry ({reason})")
 
-    set_active_sprint_context(task_id, agent.role)
+    try:
+        set_active_sprint_context(task_id, agent.role, allow_done_retry=allow_done_retry)
+    except ValueError as exc:
+        return {"ok": False, "error": str(exc)}
     try:
         if mode == "fix_and_verify":
             from backend.services.fix_verify_loop import run_fix_verify_loop

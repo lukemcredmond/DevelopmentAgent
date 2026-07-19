@@ -187,6 +187,7 @@ class ChatPayload(BaseModel):
     ollama_url: str = "http://localhost:11434"
     context_files: List[str] = Field(default_factory=list, alias="contextFiles")
     task_id: Optional[str] = Field(default=None, alias="taskId")
+    allow_done_retry: bool = Field(default=False, alias="allowDoneRetry")
 
 
 class SaveFilePayload(BaseModel):

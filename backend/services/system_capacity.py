@@ -8,24 +8,41 @@ import subprocess
 from typing import Any, Dict, List, Optional
 
 
-def _probe_nvidia_vram_mb() -> Optional[int]:
+def _probe_nvidia_gpu() -> Dict[str, Any]:
+    """Return vramMb, vramUsedMb, gpuUtilPct when nvidia-smi is available."""
+    empty: Dict[str, Any] = {"vramMb": None, "vramUsedMb": None, "gpuUtilPct": None}
     if not shutil.which("nvidia-smi"):
-        return None
+        return empty
     try:
         result = subprocess.run(
-            ["nvidia-smi", "--query-gpu=memory.total", "--format=csv,noheader,nounits"],
+            [
+                "nvidia-smi",
+                "--query-gpu=memory.total,memory.used,utilization.gpu",
+                "--format=csv,noheader,nounits",
+            ],
             capture_output=True,
             text=True,
             timeout=5,
         )
         if result.returncode != 0:
-            return None
+            return empty
         lines = [ln.strip() for ln in result.stdout.splitlines() if ln.strip()]
         if not lines:
-            return None
-        return int(float(lines[0]))
+            return empty
+        parts = [p.strip() for p in lines[0].split(",")]
+        if len(parts) < 3:
+            return empty
+        return {
+            "vramMb": int(float(parts[0])),
+            "vramUsedMb": int(float(parts[1])),
+            "gpuUtilPct": int(float(parts[2])),
+        }
     except Exception:
-        return None
+        return empty
+
+
+def _probe_nvidia_vram_mb() -> Optional[int]:
+    return _probe_nvidia_gpu().get("vramMb")
 
 
 def _probe_system_ram_gb() -> Optional[float]:
@@ -62,7 +79,8 @@ def _probe_system_ram_gb() -> Optional[float]:
 
 
 def probe_system_capacity() -> Dict[str, Any]:
-    vram_mb = _probe_nvidia_vram_mb()
+    gpu = _probe_nvidia_gpu()
+    vram_mb = gpu.get("vramMb")
     ram_gb = _probe_system_ram_gb()
     tier = "cpu_only"
     if vram_mb is not None:
@@ -77,6 +95,8 @@ def probe_system_capacity() -> Dict[str, Any]:
     return {
         "gpuAvailable": vram_mb is not None,
         "vramMb": vram_mb,
+        "vramUsedMb": gpu.get("vramUsedMb"),
+        "gpuUtilPct": gpu.get("gpuUtilPct"),
         "ramGb": ram_gb,
         "platform": platform.system(),
         "tier": tier,

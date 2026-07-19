@@ -470,14 +470,27 @@ def normalize_board_tasks() -> None:
             sync_task_files_from_transcript(task)
 
 
-def set_active_sprint_context(task_id: str, agent_role: str) -> None:
+def set_active_sprint_context(
+    task_id: str,
+    agent_role: str,
+    *,
+    allow_done_retry: bool = False,
+) -> None:
+    """Activate sprint/chat context. Refuses Done tasks unless allow_done_retry=True."""
+    if task_id and is_task_done(task_id) and not allow_done_retry:
+        raise ValueError(
+            f"Task {task_id} is already Done — refuse activation "
+            "(pass allow_done_retry=True for a deliberate re-run)."
+        )
     state.ACTIVE_SPRINT_TASK_ID = task_id
     state.ACTIVE_SPRINT_AGENT = agent_role
+    state.ALLOW_DONE_RETRY = bool(allow_done_retry)
 
 
 def clear_active_sprint_context() -> None:
     state.ACTIVE_SPRINT_TASK_ID = None
     state.ACTIVE_SPRINT_AGENT = None
+    state.ALLOW_DONE_RETRY = False
     state.REFINEMENT_MODE = False
 
 

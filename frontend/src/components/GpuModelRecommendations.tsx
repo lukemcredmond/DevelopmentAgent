@@ -13,6 +13,19 @@ interface GpuModelRecommendationsProps {
   onQaModelChange: (v: string) => void
 }
 
+function formatGpuLiveLine(capacity: Record<string, unknown> | null): string | null {
+  if (!capacity?.gpuAvailable) return null
+  const util = capacity.gpuUtilPct
+  const used = capacity.vramUsedMb
+  const total = capacity.vramMb
+  if (typeof util !== 'number' || typeof used !== 'number' || typeof total !== 'number') {
+    return null
+  }
+  const usedGb = (used / 1024).toFixed(1)
+  const totalGb = (total / 1024).toFixed(1)
+  return `GPU ${util}% · ${usedGb}/${totalGb} GB VRAM`
+}
+
 export default function GpuModelRecommendations({
   ollamaUrl,
   poModel,
@@ -29,9 +42,25 @@ export default function GpuModelRecommendations({
   const [tier, setTier] = useState<string>('')
 
   useEffect(() => {
-    void fetchSystemCapacity()
-      .then((data) => setCapacity(data as Record<string, unknown>))
-      .catch(() => setCapacity(null))
+    let cancelled = false
+    const refreshCapacity = () => {
+      void fetchSystemCapacity()
+        .then((data) => {
+          if (!cancelled) setCapacity(data as Record<string, unknown>)
+        })
+        .catch(() => {
+          if (!cancelled) setCapacity(null)
+        })
+    }
+    refreshCapacity()
+    const id = window.setInterval(refreshCapacity, 4000)
+    return () => {
+      cancelled = true
+      window.clearInterval(id)
+    }
+  }, [])
+
+  useEffect(() => {
     void fetchModelRecommendations(ollamaUrl)
       .then((data) => {
         setRoles(data.roles ?? null)
@@ -50,6 +79,7 @@ export default function GpuModelRecommendations({
     vramMb != null
       ? `${Math.round(vramMb / 1024)} GB VRAM · ${tier} tier`
       : `CPU / RAM tier · ${tier}`
+  const liveLine = formatGpuLiveLine(capacity)
 
   const applyAll = () => {
     if (roles.po?.model) onPoModelChange(roles.po.model)
@@ -70,6 +100,11 @@ export default function GpuModelRecommendations({
     <div className="pt-2 border-t border-cat-surface1/50 space-y-1.5">
       <p className="text-[9px] text-cat-subtext font-bold uppercase">Recommended for your GPU</p>
       <p className="text-[10px] text-cat-overlay">{label}</p>
+      {liveLine ? (
+        <p className="text-[10px] font-mono text-cat-text tabular-nums" title="Live GPU load">
+          {liveLine}
+        </p>
+      ) : null}
       <div className="space-y-1">
         {Object.entries(roles).map(([role, info]) => (
           <div key={role} className="flex items-center justify-between gap-2 text-[10px]">

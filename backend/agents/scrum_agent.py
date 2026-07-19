@@ -19,6 +19,7 @@ from backend.agents.agent_run import (
 from backend.agents.task_context import (
     find_task_by_id,
     get_task_lane,
+    is_task_done,
     record_task_transcript,
     sync_task_files_from_transcript,
 )
@@ -661,6 +662,12 @@ class ScrumAgent:
 
         try:
             for iteration in range(1, max_iterations + 1):
+                if task_id and is_task_done(task_id) and not state.ALLOW_DONE_RETRY:
+                    stop_msg = "Stopped: task already Done"
+                    add_system_log(self.role, "info", stop_msg)
+                    self._log_step_exit(stop_msg, "info")
+                    finish_run(status="completed")
+                    return stop_msg
                 update_run(
                     status="thinking",
                     iteration=iteration,
@@ -757,10 +764,22 @@ class ScrumAgent:
                     )
                     if early_stop:
                         return early_stop
+                    if task_id and is_task_done(task_id) and not state.ALLOW_DONE_RETRY:
+                        stop_msg = "Stopped: task already Done"
+                        add_system_log(self.role, "info", stop_msg)
+                        self._log_step_exit(stop_msg, "info")
+                        finish_run(status="completed")
+                        return stop_msg
                     continue
 
                 content = (message.content or "").strip()
                 if content and _dev_step_needs_more_tools(tools_used, task_id):
+                    if task_id and is_task_done(task_id) and not state.ALLOW_DONE_RETRY:
+                        stop_msg = "Stopped: task already Done"
+                        add_system_log(self.role, "info", stop_msg)
+                        self._log_step_exit(stop_msg, "info")
+                        finish_run(status="completed")
+                        return stop_msg
                     if iteration >= max_iterations:
                         max_msg = "Max tool iterations reached without completing the task."
                         add_system_log(

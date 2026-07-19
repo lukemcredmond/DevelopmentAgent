@@ -7,6 +7,8 @@ def test_probe_system_capacity_shape():
     data = probe_system_capacity()
     assert "tier" in data
     assert "gpuAvailable" in data
+    assert "vramUsedMb" in data
+    assert "gpuUtilPct" in data
 
 
 def test_model_recommendations_for_minimal_vram():

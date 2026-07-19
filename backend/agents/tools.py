@@ -70,11 +70,31 @@ class ToolRegistry:
             queue_pending_tool,
             resolve_tool_call,
         )
+        from backend.agents.task_context import is_task_done
 
         original_name = name
         resolved_name, resolved_args, _was_alias = resolve_tool_call(name, arguments)
         name = resolved_name
         arguments = resolved_args
+
+        mutating = {"write_file", "apply_patch", "run_command", "delete_file"}
+        tid = state.ACTIVE_SPRINT_TASK_ID
+        if (
+            name in mutating
+            and tid
+            and is_task_done(tid)
+            and not state.ALLOW_DONE_RETRY
+        ):
+            msg = (
+                f"Error: Cannot run '{name}' — task {tid} is already Done. "
+                "Re-open the card or pass allowDoneRetry for a deliberate re-run."
+            )
+            add_system_log(
+                state.ACTIVE_SPRINT_AGENT or "System",
+                "warning",
+                msg.replace("Error: ", "", 1),
+            )
+            return msg
 
         if name not in self._tools:
             # Real app tools missing for this agent/mode → clear error, no Unknown Tool modal.
