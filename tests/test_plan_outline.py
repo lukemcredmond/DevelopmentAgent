@@ -15,6 +15,20 @@ def test_run_po_plan_outline_stores_outline(mock_po):
     outline = run_po_plan_outline("Build a todo app", "http://localhost:11434")
     assert "Summary" in outline
     assert state.PROJECT_PLAN_OUTLINE == outline
+    prompt = mock_po.execute_step.call_args[0][0]
+    assert "focused product epics" in prompt.lower() or "6–12" in prompt or "6-12" in prompt
+    assert "Proposed epics" in prompt
+
+
+@patch("backend.services.sprint_service.agent_po")
+def test_run_po_plan_outline_offline_stub_lists_many_epics(mock_po):
+    initialize()
+    from backend.services.sprint_service import run_po_plan_outline
+
+    mock_po.execute_step.return_value = "SIMULATION_FALLBACK"
+    outline = run_po_plan_outline("Build a todo app", "http://localhost:11434")
+    assert "Project setup" in outline
+    assert outline.count("\n- ") >= 5
 
 
 @patch("backend.services.sprint_service.agent_po")
@@ -37,4 +51,24 @@ def test_run_po_plan_backlog_uses_outline(mock_epics, mock_po):
     prompt = mock_po.execute_step.call_args[0][0]
     assert "Approved plan outline" in prompt
     assert "epics" in prompt.lower()
+    assert "focused product epics" in prompt.lower() or "6–12" in prompt or "6-12" in prompt
+    assert "dependency" in prompt.lower() or "split vague" in prompt.lower()
     mock_epics.assert_called_once()
+
+
+@patch("backend.services.sprint_service.agent_po")
+def test_run_po_plan_prompt_includes_epic_guidance(mock_po):
+    initialize()
+    from backend.services.sprint_service import run_po_plan
+
+    mock_po.execute_step.return_value = (
+        '{"epics":[{"title":"A","description":"d","children":[{"title":"T","description":"d","acceptanceCriteria":["a"]}]}]}'
+    )
+    with patch(
+        "backend.services.sprint_service._append_po_backlog_from_output",
+        return_value=1,
+    ):
+        run_po_plan("Build a meal planner app", "http://localhost:11434")
+    prompt = mock_po.execute_step.call_args[0][0]
+    assert "focused product epics" in prompt.lower() or "6–12" in prompt or "6-12" in prompt
+    assert "audit" in prompt.lower() or "mega" in prompt.lower() or "split" in prompt.lower()

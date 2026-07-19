@@ -1,7 +1,9 @@
 """Plan → Features (epics) + child cards and feature rollup."""
 
+import json
+
 from backend import state
-from backend.agents.task_context import find_task_by_id, init_new_task, record_task_decision, record_task_file
+from backend.agents.task_context import find_task_by_id, record_task_decision, record_task_file
 from backend.bootstrap import initialize
 from backend.services.board_lanes import FEATURES_LANE
 from backend.services.feature_service import (
@@ -28,6 +30,10 @@ def _clear_board():
         "Done",
     ):
         state.SHARED_BOARD[lane] = []
+
+
+def _clear_logs():
+    state.SYSTEM_LOGS.clear()
 
 
 def test_apply_plan_epics_json_creates_features_and_children():
@@ -105,6 +111,60 @@ def test_append_po_backlog_uses_epics():
     )
     assert count == 1
     assert len(list_features()) == 1
+
+
+def test_under_decomposition_warns_for_few_epics_long_brief():
+    initialize()
+    _clear_board()
+    _clear_logs()
+    state.PROJECT_BRIEF = "x" * 450
+    state.PROJECT_PLAN_OUTLINE = ""
+    result = apply_plan_epics_from_po_output(
+        '{"epics":[{"title":"Audit","description":"Fix all","children":[{"title":"Fix compile","description":"All errors","acceptanceCriteria":["Builds"]}]}]}'
+    )
+    assert result["epicCount"] == 1
+    warnings = [e for e in state.SYSTEM_LOGS if e.get("type") == "warning"]
+    assert any("Under-decomposed" in (e.get("text") or "") for e in warnings)
+
+
+def test_dependency_only_single_child_warns_but_creates():
+    initialize()
+    _clear_board()
+    _clear_logs()
+    state.PROJECT_BRIEF = "short"
+    state.PROJECT_PLAN_OUTLINE = ""
+    result = apply_plan_epics_from_po_output(
+        '{"epics":[{"title":"Deps","description":"Bump packages","children":[{"title":"Update pubspec dependencies","description":"Bump flutter deps","acceptanceCriteria":["pubspec resolves"]}]}]}'
+    )
+    assert result["epicCount"] == 1
+    assert result["childCount"] == 1
+    warnings = [e for e in state.SYSTEM_LOGS if e.get("type") == "warning"]
+    assert any("dependency-only" in (e.get("text") or "").lower() for e in warnings)
+    assert len(list_features()) == 1
+
+
+def test_multi_epic_payload_accepted_without_under_decomp_warning():
+    initialize()
+    _clear_board()
+    _clear_logs()
+    state.PROJECT_BRIEF = "x" * 450
+    epics = []
+    for i in range(6):
+        epics.append(
+            {
+                "title": f"Epic {i}",
+                "description": f"Capability {i}",
+                "children": [
+                    {"title": f"Child {i}a", "description": "a", "acceptanceCriteria": ["ok"]},
+                    {"title": f"Child {i}b", "description": "b", "acceptanceCriteria": ["ok"]},
+                ],
+            }
+        )
+    result = apply_plan_epics_from_po_output(json.dumps({"epics": epics}))
+    assert result["epicCount"] == 6
+    assert result["childCount"] == 12
+    warnings = [e for e in state.SYSTEM_LOGS if e.get("type") == "warning"]
+    assert not any("Under-decomposed" in (e.get("text") or "") for e in warnings)
 
 
 def test_feature_rollup_includes_child_files_and_decisions():

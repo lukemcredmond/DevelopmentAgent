@@ -4,7 +4,7 @@ from backend import state
 from backend.agents.scrum_agent import ScrumAgent
 from backend.agents.task_context import record_task_git_commit
 from backend.agents.tools import Tool
-from backend.services.brief_service import PO_SMALLEST_TASKS_GUIDANCE
+from backend.services.brief_service import PO_EPIC_DECOMPOSITION_GUIDANCE, PO_SMALLEST_TASKS_GUIDANCE
 from backend.services.board_service import append_backlog_tasks, move_board_stage
 from backend.services.subtask_service import append_subtasks, escape_subtask_loop
 from backend.services.git_service import git_commit, git_diff, git_init, git_status
@@ -41,6 +41,9 @@ agent_po = ScrumAgent(
         "If a card already covers the same request, do not recreate it — reuse that card and its outcomes. "
         "Prefer acting (split, move board) over asking clarifying questions when acceptance criteria exist. "
         "Use grep and glob_file_search to explore the codebase; prefer grep over search_code for patterns. "
+        "When planning Features (epics), prefer many focused product epics with multiple small children — "
+        "not a handful of audit/meta mega-epics. "
+        f"{PO_EPIC_DECOMPOSITION_GUIDANCE} "
         f"{PO_SMALLEST_TASKS_GUIDANCE}"
     ),
 )

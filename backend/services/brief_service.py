@@ -27,6 +27,18 @@ PO_SMALLEST_TASKS_GUIDANCE = (
     "Planning/decomposition cards must have workType=planning and requiresDev=false."
 )
 
+PO_EPIC_DECOMPOSITION_GUIDANCE = (
+    "Decompose into many focused product epics (prefer 6–12 for a non-trivial brief; "
+    "fewer only for tiny briefs). Each epic is one user-facing capability or bounded technical "
+    "slice (e.g. Recipes, Meal plan week view, Shopping list) — not a mega 'audit everything' "
+    "or 'fix all compile errors' epic. Each epic must have ≥2 smallest children (prefer 3–6); "
+    "one-child epics only when truly tiny. "
+    "Do NOT make these standalone epics: single dependency/pubspec/package edits; vague "
+    "'audit / backlog creation / issue tracking'; mega 'fix all code' without product slices. "
+    "Put infra/deps as children under a small 'Project setup' epic or under the epic they enable. "
+    "Expand Proposed epics from the outline — split vague bullets; do not collapse into fewer mega-epics."
+)
+
 
 def append_feature_to_brief(title: str, description: str, source: str = "user") -> str:
     """Appends a user feature request to the persisted project brief."""

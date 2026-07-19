@@ -39,6 +39,7 @@ from backend.agents.task_context import (
 from backend.services.board_lanes import normalize_board_lanes
 from backend.services.board_service import append_backlog_tasks, move_board_stage, publish_board_delta, publish_board_update
 from backend.services.brief_service import (
+    PO_EPIC_DECOMPOSITION_GUIDANCE,
     PO_SMALLEST_TASKS_GUIDANCE,
     append_feature_to_brief,
     append_brief_text,
@@ -1301,6 +1302,10 @@ def run_po_plan_outline(brief: str, ollama_url: str) -> str:
             "You are the Product Owner. Produce a concise markdown project plan ONLY — no JSON, no code.\n"
             "Use these sections:\n"
             "## Summary\n## Approach\n## Risks\n## Open questions\n## Proposed epics\n"
+            f"{PO_EPIC_DECOMPOSITION_GUIDANCE}\n"
+            "Under ## Proposed epics, list many concrete product epics as a bullet list "
+            "(prefer 6–12 for a non-trivial brief). Each bullet: one line with capability + why. "
+            "Do not collapse the brief into a few audit/meta mega-epics.\n"
             f"{build_dod_block()}\nProject brief:\n{brief_text}",
             max_iterations=1,
         )
@@ -1311,7 +1316,13 @@ def run_po_plan_outline(brief: str, ollama_url: str) -> str:
         outline = (
             "## Summary\nOffline plan stub.\n\n## Approach\nScaffold core modules first.\n\n"
             "## Risks\nUnknown integration points.\n\n## Open questions\n(none)\n\n"
-            "## Proposed epics\n- Core scaffold\n- Main feature\n"
+            "## Proposed epics\n"
+            "- Project setup — workspace, tooling, and base deps so other slices can build\n"
+            "- Core data model — entities and persistence for the main domain\n"
+            "- Primary list / browse UI — user can view the main collection\n"
+            "- Create & edit flows — add and update items with validation\n"
+            "- Detail / summary view — inspect a single item or period\n"
+            "- Export or sharing — take work out of the app (list, print, or share)\n"
         )
 
     state.PROJECT_PLAN_OUTLINE = outline
@@ -1343,6 +1354,7 @@ def run_po_plan_backlog(brief: str, ollama_url: str, outline: Optional[str] = No
     try:
         set_active_sprint_context(PLANNING_TASK_ID, "Product Owner")
         po_output = agent_po.execute_step(
+            f"{PO_EPIC_DECOMPOSITION_GUIDANCE}\n\n"
             f"{PO_SMALLEST_TASKS_GUIDANCE}\n\n"
             "You are the Product Owner. Convert the approved plan outline into Features (epics) "
             "with smallest developer-ready child cards.\n"
@@ -1352,8 +1364,11 @@ def run_po_plan_backlog(brief: str, ollama_url: str, outline: Optional[str] = No
             '"optional blockedBy":[],"optional priority":100,'
             '"optional workType":"implementation","optional requiresDev":true,"optional requiresQa":true}'
             "]}]}\n"
-            "Each epic maps to a Features-lane parent; each child is one focused backlog card under that epic.\n"
-            "Prefer many small children over few large ones. Use Proposed epics from the outline as epic titles.\n"
+            "Map each Proposed epic to its own Features parent; split vague outline bullets into "
+            "multiple epics if they span unrelated concerns.\n"
+            "Every epic needs multiple children with testable AC; never emit an epic whose only "
+            "child is a one-line dependency bump.\n"
+            "Prefer many small children over few large ones.\n"
             f"Existing titles (do NOT duplicate): {existing_hint}\n"
             f"{build_dod_block()}\nApproved plan outline:\n{outline_text}\n\n"
             f"Project brief (context):\n{brief}",
@@ -1408,6 +1423,7 @@ def run_po_plan(brief: str, ollama_url: str) -> None:
             "PO calling Ollama (this may take 1–3 min on first run)…",
         )
         po_output = agent_po.execute_step(
+            f"{PO_EPIC_DECOMPOSITION_GUIDANCE}\n\n"
             f"{PO_SMALLEST_TASKS_GUIDANCE}\n\n"
             "You are the Product Owner. Decompose the project brief into Features (epics) "
             "with smallest developer-ready child cards.\n"
@@ -1415,7 +1431,11 @@ def run_po_plan(brief: str, ollama_url: str) -> None:
             '{"epics":[{"title":"...","description":"...","children":['
             '{"title":"...","description":"...","acceptanceCriteria":["..."],'
             '"optional blockedBy":[],"optional priority":100}]}]}\n'
-            "Each epic is a Features-lane parent; each child is one focused card under that epic.\n"
+            "Map each product capability to its own Features parent; split vague themes into "
+            "multiple epics if they span unrelated concerns.\n"
+            "Every epic needs multiple children with testable AC; never emit an epic whose only "
+            "child is a one-line dependency bump.\n"
+            "Prefer many small children over few large ones.\n"
             f"Existing titles (do NOT duplicate): {existing_hint}\n"
             f"{build_dod_block()}\nProject brief:\n{brief}",
             max_iterations=_llm_iterations(),

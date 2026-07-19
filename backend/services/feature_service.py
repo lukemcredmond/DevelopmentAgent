@@ -506,6 +506,53 @@ def _find_matching_feature(title: str, description: str) -> Optional[Dict[str, A
     return best[1] if best else None
 
 
+def _looks_like_dependency_only_child(child: Dict[str, Any]) -> bool:
+    """True when a single child looks like a deps-only bump (pubspec / package.json)."""
+    blob = " ".join(
+        [
+            str(child.get("title") or ""),
+            str(child.get("description") or ""),
+            " ".join(str(c) for c in (child.get("acceptanceCriteria") or [])),
+        ]
+    ).lower()
+    keywords = ("pubspec", "package.json", "dependency", "dependencies")
+    return any(k in blob for k in keywords)
+
+
+def _warn_under_decomposition(epics_raw: List[Dict[str, Any]]) -> None:
+    """Soft warnings when plan looks under-decomposed — still create cards."""
+    epic_count = len(epics_raw)
+    child_total = 0
+    for epic in epics_raw:
+        children = epic.get("children")
+        if isinstance(children, list) and children:
+            child_total += len([c for c in children if isinstance(c, dict)])
+        else:
+            child_total += 1
+
+    brief_len = len(str(getattr(state, "PROJECT_BRIEF", "") or "").strip())
+    outline_len = len(str(getattr(state, "PROJECT_PLAN_OUTLINE", "") or "").strip())
+    context_len = max(brief_len, outline_len)
+
+    # Few epics + non-trivial brief/outline → under-decomposed
+    if epic_count < 4 and context_len > 400:
+        add_system_log(
+            "Product Owner",
+            "warning",
+            f"Under-decomposed plan: {epic_count} epic(s) and {child_total} child card(s) "
+            f"for a long brief/outline ({context_len} chars). Prefer 6–12 focused product "
+            "epics with multiple small children. Re-run Generate Features or expand the "
+            "outline Proposed epics section.",
+        )
+    elif epic_count < 4 and child_total < 6 and context_len > 200:
+        add_system_log(
+            "Product Owner",
+            "warning",
+            f"Plan may be under-decomposed: {epic_count} epic(s), {child_total} children. "
+            "Consider expanding Proposed epics and regenerating Features.",
+        )
+
+
 def apply_plan_epics_from_po_output(po_output: str) -> Dict[str, Any]:
     """Create Features-lane epics + child cards from PO plan JSON.
 
@@ -621,6 +668,8 @@ def apply_plan_epics_from_po_output(po_output: str) -> Dict[str, Any]:
     if not epics_raw:
         raise ValueError("No epics or task array found in PO plan output")
 
+    _warn_under_decomposition(epics_raw)
+
     for epic_raw in epics_raw:
         title = str(epic_raw.get("title") or "Untitled epic").strip()
         description = str(epic_raw.get("description") or title).strip()
@@ -638,6 +687,15 @@ def apply_plan_epics_from_po_output(po_output: str) -> Dict[str, Any]:
         children = [c for c in children if c.get("title")]
         if not children:
             continue
+
+        if len(children) == 1 and _looks_like_dependency_only_child(children[0]):
+            add_system_log(
+                "Product Owner",
+                "warning",
+                f"Epic '{title}' has a single dependency-only child — prefer nesting "
+                "pubspec/package bumps under Project setup or the product epic they enable. "
+                "Re-run Generate Features after expanding the outline if needed.",
+            )
 
         existing = _find_matching_feature(title, description)
         child_ids: List[str] = []
