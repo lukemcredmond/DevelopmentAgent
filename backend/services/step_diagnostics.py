@@ -84,19 +84,22 @@ class StepDiagnosticsTracker:
     def set_llm_iterations_max(self, max_iterations: int) -> None:
         self.llm_iterations_max = max_iterations
 
-    def log_tool(self, name: str, success: bool, summary: str) -> None:
+    def log_tool(
+        self, name: str, success: bool, summary: str, *, duration_ms: Optional[int] = None
+    ) -> None:
         self.tools_used.add(name)
         if not success:
             self.tool_failures += 1
         self.last_event = f"tool:{name}"
-        self.tools_log.append(
-            {
-                "timestamp": _now_str(),
-                "toolName": name,
-                "success": success,
-                "summary": summary[:300],
-            }
-        )
+        entry: Dict[str, Any] = {
+            "timestamp": _now_str(),
+            "toolName": name,
+            "success": success,
+            "summary": summary[:300],
+        }
+        if duration_ms is not None:
+            entry["durationMs"] = int(duration_ms)
+        self.tools_log.append(entry)
         self._flush_checkpoint()
 
     def log_event(self, kind: str, message: str) -> None:
@@ -170,11 +173,22 @@ class StepDiagnosticsTracker:
                 "used": self.llm_iterations_used,
                 "max": self.llm_iterations_max,
             },
+            "ollamaMsTotal": sum(int(c.get("durationMs") or 0) for c in self.ollama_calls),
+            "ollamaCallCount": len(self.ollama_calls),
+            "toolMsTotal": 0,  # filled below from toolsLog if duration present
             "ollamaCalls": self.ollama_calls,
             "toolsLog": self.tools_log,
             "events": self.events,
             "filePath": str(self.file_path),
         }
+        tool_ms = 0
+        for entry in self.tools_log:
+            if isinstance(entry.get("durationMs"), (int, float)):
+                tool_ms += int(entry["durationMs"])
+        payload["toolMsTotal"] = tool_ms
+        if state.LAST_STEP_PROGRESS:
+            payload["stepProgress"] = state.LAST_STEP_PROGRESS
+
         if status == "complete":
             payload.update(
                 {
@@ -395,10 +409,12 @@ def log_ollama_call(
         )
 
 
-def log_tool(name: str, success: bool, summary: str) -> None:
+def log_tool(
+    name: str, success: bool, summary: str, *, duration_ms: Optional[int] = None
+) -> None:
     trace = get_active_trace()
     if trace:
-        trace.log_tool(name, success, summary)
+        trace.log_tool(name, success, summary, duration_ms=duration_ms)
         from backend.services.sprint_session import touch_session
 
         touch_session(
@@ -423,6 +439,91 @@ def set_llm_iterations_max(max_iterations: int) -> None:
     trace = get_active_trace()
     if trace:
         trace.set_llm_iterations_max(max_iterations)
+
+
+def build_step_progress(
+    *,
+    task_id: Optional[str],
+    iterations_used: int,
+    iterations_max: int,
+    tools_used: Optional[Set[str]] = None,
+    failed_tool_keys: Optional[List[Any]] = None,
+    stuck_loop: bool = False,
+) -> Dict[str, Any]:
+    """Snapshot of what the agent did — used for max-iter Extend UX."""
+    trace = get_active_trace()
+    tools_ordered: List[str] = []
+    last_tools: List[Dict[str, Any]] = []
+    plan_rej = 0
+    text_rej = 0
+    duration_ms: Optional[int] = None
+    last_tool_summary = ""
+
+    if trace:
+        plan_rej = trace.plan_rejections
+        text_rej = trace.text_rejections
+        duration_ms = int((datetime.now() - trace.started_monotonic).total_seconds() * 1000)
+        for entry in trace.tools_log:
+            name = str(entry.get("toolName") or "")
+            if name and name not in tools_ordered:
+                tools_ordered.append(name)
+        last_tools = [
+            {
+                "toolName": e.get("toolName"),
+                "success": e.get("success"),
+                "summary": str(e.get("summary") or "")[:120],
+            }
+            for e in trace.tools_log[-5:]
+        ]
+        if trace.tools_log:
+            last = trace.tools_log[-1]
+            last_tool_summary = (
+                f"{last.get('toolName')}: {str(last.get('summary') or '')[:160]}"
+            )
+        # Detect repeated same-args failures from tools_log names if keys not passed
+        if not stuck_loop and failed_tool_keys:
+            from collections import Counter
+
+            counts = Counter(failed_tool_keys)
+            stuck_loop = any(c >= 2 for c in counts.values())
+        elif not stuck_loop and len(trace.tools_log) >= 3:
+            recent = [e.get("toolName") for e in trace.tools_log[-3:] if e.get("success") is False]
+            if len(recent) >= 3 and len(set(recent)) == 1:
+                stuck_loop = True
+
+    if tools_used:
+        for name in sorted(tools_used):
+            if name not in tools_ordered:
+                tools_ordered.append(name)
+
+    progress: Dict[str, Any] = {
+        "taskId": task_id or (trace.task_id if trace else None),
+        "iterationsUsed": iterations_used,
+        "iterationsMax": iterations_max,
+        "toolsUsed": tools_ordered,
+        "lastTools": last_tools,
+        "planRejections": plan_rej,
+        "textRejections": text_rej,
+        "lastToolSummary": last_tool_summary,
+        "stuckLoop": stuck_loop,
+    }
+    if duration_ms is not None:
+        progress["durationMs"] = duration_ms
+    return progress
+
+
+def store_step_progress(progress: Dict[str, Any]) -> None:
+    state.LAST_STEP_PROGRESS = progress
+    task_id = progress.get("taskId")
+    if not task_id:
+        return
+    from backend.agents.task_context import find_task_by_id, normalize_task
+
+    task = find_task_by_id(str(task_id))
+    if task:
+        normalize_task(task)
+        task["lastStepProgress"] = progress
+
 
 
 def derive_exit_reason(

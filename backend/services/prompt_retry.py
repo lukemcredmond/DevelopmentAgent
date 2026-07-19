@@ -252,3 +252,178 @@ def retry_agent_step(
         "optimizedPrompt": user_prompt if mode in ("optimized", "fix_and_verify") else None,
         "verification": verification,
     }
+
+
+def build_continuation_prompt(task: Dict[str, Any], brief: str, progress: Dict[str, Any]) -> str:
+    """Prompt for Extend: continue from prior max-iter progress (no in-memory LLM history)."""
+    base = build_task_prompt(task, brief)
+    tools = progress.get("toolsUsed") or []
+    tools_line = ", ".join(tools) if tools else "(none recorded)"
+    last_tools = progress.get("lastTools") or []
+    last_lines = []
+    for entry in last_tools:
+        ok = "ok" if entry.get("success") is not False else "FAIL"
+        last_lines.append(
+            f"- {entry.get('toolName')} [{ok}]: {str(entry.get('summary') or '')[:100]}"
+        )
+    files = []
+    for f in task.get("files") or []:
+        if isinstance(f, dict) and f.get("path"):
+            files.append(f"{f.get('path')} ({f.get('action') or 'touched'})")
+    files_line = ", ".join(files[:12]) if files else "(none)"
+    iters = f"{progress.get('iterationsUsed', '?')}/{progress.get('iterationsMax', '?')}"
+    stuck = progress.get("stuckLoop")
+    block = (
+        f"=== CONTINUATION (previous step hit max LLM iterations {iters}) ===\n"
+        f"Tools already used: {tools_line}\n"
+        f"Files touched: {files_line}\n"
+        f"Plan rejections: {progress.get('planRejections', 0)}; "
+        f"text rejections: {progress.get('textRejections', 0)}\n"
+    )
+    if last_lines:
+        block += "Recent tool results:\n" + "\n".join(last_lines) + "\n"
+    if progress.get("lastToolSummary"):
+        block += f"Last tool: {progress['lastToolSummary']}\n"
+    if stuck:
+        block += (
+            "WARNING: Prior step showed repeated failing tool args — change approach; "
+            "do not repeat the same failed call.\n"
+        )
+    block += (
+        "Continue from here. Do not redo completed work. "
+        "Call apply_patch or write_file to finish remaining edits. "
+        "This is a new step with context from what already ran (message history was not saved)."
+    )
+    return f"{base}\n\n{block}"
+
+
+def extend_agent_step(
+    task_id: str,
+    agent_id: str,
+    ollama_url: str,
+    *,
+    action: str = "extend",
+    extra_iterations: int = 4,
+    brief: str = "",
+    allow_done_retry: bool = False,
+) -> Dict[str, Any]:
+    """Extend (+N iterations with continuation) or reset (fresh default step)."""
+    if action == "reset":
+        result = retry_agent_step(
+            task_id,
+            agent_id,
+            ollama_url,
+            mode="same",
+            brief=brief,
+            reason="max_iter_reset",
+            allow_done_retry=allow_done_retry,
+        )
+        if result.get("ok") is not False or not result.get("error"):
+            task = find_task_by_id(task_id)
+            if task:
+                record_task_decision(
+                    task_id,
+                    AGENT_MAP[agent_id].role if agent_id in AGENT_MAP else "System",
+                    "max_iter_reset",
+                    "Reset iteration budget — fresh step",
+                )
+        return {**result, "action": "reset"}
+
+    task = find_task_by_id(task_id)
+    if not task:
+        return {"ok": False, "error": f"Task {task_id} not found"}
+
+    if is_task_done(task_id) and not allow_done_retry:
+        return {
+            "ok": False,
+            "error": (
+                f"Task {task_id} is already Done. "
+                "Pass allowDoneRetry=true for a deliberate re-run."
+            ),
+        }
+
+    agent = AGENT_MAP.get(agent_id)
+    if not agent:
+        return {"ok": False, "error": f"Unknown agent: {agent_id}"}
+
+    normalize_task(task)
+    if brief:
+        set_project_brief(brief, source="user")
+    elif state.PROJECT_BRIEF:
+        brief = state.PROJECT_BRIEF
+
+    extra = max(1, min(int(extra_iterations or 4), 16))
+    progress = (
+        state.LAST_STEP_PROGRESS
+        or (task.get("lastStepProgress") if isinstance(task.get("lastStepProgress"), dict) else None)
+        or {}
+    )
+    if state.LAST_STEP_OUTCOME and isinstance(state.LAST_STEP_OUTCOME.get("stepProgress"), dict):
+        progress = state.LAST_STEP_OUTCOME["stepProgress"] or progress
+
+    agent.ollama_url = ollama_url
+    user_prompt = build_continuation_prompt(task, brief, progress)
+    record_task_decision(
+        task_id,
+        agent.role,
+        "max_iter_extend",
+        f"Extended step by +{extra} LLM iterations",
+        detail=json.dumps({"extraIterations": extra, "toolsUsed": progress.get("toolsUsed")}),
+    )
+
+    state.STEP_FILE_READS.clear()
+    state.STEP_PATCH_FAILURES.clear()
+
+    try:
+        set_active_sprint_context(task_id, agent.role, allow_done_retry=allow_done_retry)
+    except ValueError as exc:
+        return {"ok": False, "error": str(exc)}
+
+    from backend.services.sprint_service import (
+        _ensure_dev_step_trace,
+        _record_last_step_outcome,
+        get_task_lane,
+    )
+    from backend.services.step_diagnostics import finalize_active_step_trace
+
+    lane_before = get_task_lane(task_id) or "In Progress"
+    if agent_id == "dev":
+        try:
+            _ensure_dev_step_trace(task_id, task.get("title") or task_id, lane_before)
+        except Exception:
+            pass
+
+    try:
+        output = agent.execute_step(user_prompt, max_iterations=extra)
+        state.LAST_AGENT_STEP_RESULT = output
+        _record_last_step_outcome(
+            task_id, lane_before, agent.role, agent_result=output
+        )
+        try:
+            finalize_active_step_trace(
+                lane_after=get_task_lane(task_id) or lane_before,
+                agent_result=output,
+            )
+        except Exception:
+            pass
+    finally:
+        from backend.agents.task_context import clear_active_sprint_context
+
+        clear_active_sprint_context()
+
+    success = (
+        output not in ("SIMULATION_FALLBACK",)
+        and not str(output).startswith("Stopped:")
+        and not str(output).startswith("Max tool iterations")
+    )
+    if output:
+        record_task_transcript(task_id, "assistant", output[:2000], agent=agent.role)
+
+    save_current_project_state()
+    return {
+        "ok": success,
+        "action": "extend",
+        "extraIterations": extra,
+        "output": output,
+        "continuationPrompt": user_prompt[:500],
+    }

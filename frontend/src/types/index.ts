@@ -480,6 +480,19 @@ export interface SprintProgress {
   status?: string
 }
 
+export interface StepProgress {
+  taskId?: string | null
+  iterationsUsed: number
+  iterationsMax: number
+  toolsUsed: string[]
+  lastTools?: { toolName?: string; success?: boolean; summary?: string }[]
+  planRejections?: number
+  textRejections?: number
+  lastToolSummary?: string
+  stuckLoop?: boolean
+  durationMs?: number
+}
+
 export interface LastStepOutcome {
   taskId: string
   agent: string
@@ -496,6 +509,7 @@ export interface LastStepOutcome {
   textRejections?: number
   toolsUsed?: string[]
   agentResultSnippet?: string
+  stepProgress?: StepProgress
 }
 
 export interface LastStepDiagnostics {
@@ -508,6 +522,9 @@ export interface LastStepDiagnostics {
   startedAt: string
   endedAt?: string
   durationMs: number
+  ollamaMsTotal?: number
+  ollamaCallCount?: number
+  toolMsTotal?: number
   exitReason?: string
   laneBefore: string
   laneAfter?: string
@@ -521,6 +538,7 @@ export interface LastStepDiagnostics {
   filePath: string
   ok?: boolean
   lastEvent?: string
+  stepProgress?: StepProgress
 }
 
 export interface ActiveStepDiagnostics {

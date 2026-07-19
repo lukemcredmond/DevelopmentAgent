@@ -25,6 +25,7 @@ import {
   reorderTasks,
   resetWorkspace,
   retryAgentStep,
+  extendAgentStep,
   claimReadyBacklogCards,
   clearAllTasks,
   escalateNeedsUserToPo,
@@ -203,6 +204,7 @@ export default function App() {
   const [bottomPanelHeight, setBottomPanelHeight] = useState(readBottomPanelHeight)
   const [panelMaximized, setPanelMaximized] = useState(false)
   const [retryingStep, setRetryingStep] = useState(false)
+  const [extendingStep, setExtendingStep] = useState(false)
   const [fileDiffModal, setFileDiffModal] = useState<{
     path: string
     previousContent: string
@@ -801,6 +803,80 @@ export default function App() {
         ),
       })
     }
+    const outcome = state.lastStepOutcome
+    if (outcome?.stopReason === 'max_iterations' && outcome.taskId) {
+      const prog = outcome.stepProgress
+      const iters = prog
+        ? `${prog.iterationsUsed}/${prog.iterationsMax}`
+        : ''
+      items.push({
+        id: 'max-iter',
+        tone: 'warning',
+        summary: `Hit LLM iteration limit${iters ? ` (${iters})` : ''} on ${outcome.taskId}`,
+        detail: prog ? (
+          <span>
+            Used: {(prog.toolsUsed || []).join(', ') || 'none'}
+            {prog.stuckLoop
+              ? ' · repeated tool fails'
+              : ' · not stuck in a loop'}
+            . Extend continues with prior context; Reset starts fresh.
+          </span>
+        ) : (
+          <span>{outcome.message}</span>
+        ),
+        actions: (
+          <>
+            <button
+              type="button"
+              disabled={extendingStep}
+              onClick={() => {
+                setExtendingStep(true)
+                void extendAgentStep({
+                  taskId: outcome.taskId,
+                  agentId: 'dev',
+                  action: 'extend',
+                  extraIterations: 4,
+                  ollamaUrl,
+                })
+                  .then((r) => {
+                    if (r.state) {
+                      handleState(r.state)
+                      applyStepOutcome(r.state)
+                    }
+                  })
+                  .finally(() => setExtendingStep(false))
+              }}
+              className="px-2 py-0.5 rounded bg-emerald-700/50 text-[10px] font-semibold"
+            >
+              Extend +4
+            </button>
+            <button
+              type="button"
+              disabled={extendingStep}
+              onClick={() => {
+                setExtendingStep(true)
+                void extendAgentStep({
+                  taskId: outcome.taskId,
+                  agentId: 'dev',
+                  action: 'reset',
+                  ollamaUrl,
+                })
+                  .then((r) => {
+                    if (r.state) {
+                      handleState(r.state)
+                      applyStepOutcome(r.state)
+                    }
+                  })
+                  .finally(() => setExtendingStep(false))
+              }}
+              className="underline text-xs"
+            >
+              Reset
+            </button>
+          </>
+        ),
+      })
+    }
     if (state.recovery?.interrupted) {
       items.push({
         id: 'recovery',
@@ -894,6 +970,8 @@ export default function App() {
     actionErrorShowModelLink,
     actionNotice,
     state.recovery,
+    state.lastStepOutcome,
+    extendingStep,
     ollamaOk,
     pendingTools,
     orchestratedActive,
@@ -1211,6 +1289,66 @@ export default function App() {
                 planRunActive={planRunActive}
                 onOpenTools={openToolsTab}
                 retrying={retryingStep}
+                lastStepOutcome={state.lastStepOutcome}
+                lastStepDiagnostics={state.lastStepDiagnostics}
+                extending={extendingStep}
+                onExtend={(extra) => {
+                  const taskId =
+                    state.lastStepOutcome?.taskId || activeRun?.taskId
+                  if (!taskId) return
+                  setExtendingStep(true)
+                  void extendAgentStep({
+                    taskId,
+                    agentId: 'dev',
+                    action: 'extend',
+                    extraIterations: extra,
+                    ollamaUrl,
+                  })
+                    .then((r) => {
+                      if (r.state) {
+                        handleState(r.state)
+                        applyStepOutcome(r.state)
+                      }
+                    })
+                    .catch((err) => {
+                      setActionError(
+                        err instanceof ApiError
+                          ? err.detail
+                          : err instanceof Error
+                            ? err.message
+                            : 'Extend step failed',
+                      )
+                    })
+                    .finally(() => setExtendingStep(false))
+                }}
+                onResetStep={() => {
+                  const taskId =
+                    state.lastStepOutcome?.taskId || activeRun?.taskId
+                  if (!taskId) return
+                  setExtendingStep(true)
+                  void extendAgentStep({
+                    taskId,
+                    agentId: 'dev',
+                    action: 'reset',
+                    ollamaUrl,
+                  })
+                    .then((r) => {
+                      if (r.state) {
+                        handleState(r.state)
+                        applyStepOutcome(r.state)
+                      }
+                    })
+                    .catch((err) => {
+                      setActionError(
+                        err instanceof ApiError
+                          ? err.detail
+                          : err instanceof Error
+                            ? err.message
+                            : 'Reset step failed',
+                      )
+                    })
+                    .finally(() => setExtendingStep(false))
+                }}
                 onRetry={
                   activeRun?.taskId
                     ? (mode) => {

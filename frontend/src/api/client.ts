@@ -752,6 +752,32 @@ export async function retryAgentStep(payload: {
   })
 }
 
+export async function extendAgentStep(payload: {
+  taskId: string
+  agentId: string
+  action: 'extend' | 'reset'
+  extraIterations?: number
+  ollamaUrl: string
+}): Promise<{
+  ok: boolean
+  action?: string
+  output?: string
+  extraIterations?: number
+  state?: import('../types').AppState
+  error?: string
+}> {
+  return request('/api/agents/extend-step', {
+    method: 'POST',
+    body: JSON.stringify({
+      taskId: payload.taskId,
+      agentId: payload.agentId,
+      action: payload.action,
+      extraIterations: payload.extraIterations ?? 4,
+      ollamaUrl: payload.ollamaUrl,
+    }),
+  })
+}
+
 export async function fetchFileRevisions(
   path: string,
   limit = 20,

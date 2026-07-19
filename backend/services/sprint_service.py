@@ -365,6 +365,25 @@ def _build_last_step_outcome(
         outcome["agentResultSnippet"] = agent_snippet
     if model_response_type:
         outcome["modelResponseType"] = model_response_type
+    progress = state.LAST_STEP_PROGRESS
+    if not progress and task and isinstance(task.get("lastStepProgress"), dict):
+        progress = task["lastStepProgress"]
+    if not progress and stop_reason == "max_iterations":
+        from backend.services.step_diagnostics import build_step_progress
+
+        progress = build_step_progress(
+            task_id=task_id,
+            iterations_used=(trace.llm_iterations_used if trace else 0),
+            iterations_max=(trace.llm_iterations_max if trace else 0),
+            tools_used=set(tools_used) if tools_used else None,
+        )
+    if progress:
+        outcome["stepProgress"] = progress
+        if stop_reason == "max_iterations":
+            outcome["suggestedAction"] = (
+                "Extend the step (+4/+8 iterations) to continue with context from what already ran, "
+                "or Reset & retry for a fresh step."
+            )
     return outcome
 
 

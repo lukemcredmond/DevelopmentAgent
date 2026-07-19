@@ -803,6 +803,20 @@ class ScrumAgent:
                             f"Step exit: max_iterations tools=[{', '.join(sorted(tools_used)) or 'none'}]",
                         )
                         log_event("max_iterations", max_msg)
+                        from backend.services.step_diagnostics import (
+                            build_step_progress,
+                            store_step_progress,
+                        )
+
+                        store_step_progress(
+                            build_step_progress(
+                                task_id=task_id,
+                                iterations_used=iteration,
+                                iterations_max=max_iterations,
+                                tools_used=tools_used,
+                                failed_tool_keys=failed_tool_keys,
+                            )
+                        )
                         self._log_step_exit(max_msg, "warning")
                         finish_run(status="failed", error=max_msg)
                         return max_msg
@@ -896,6 +910,17 @@ class ScrumAgent:
                 f"Step exit: max_iterations tools=[{', '.join(sorted(tools_used)) or 'none'}]",
             )
             log_event("max_iterations", max_msg)
+            from backend.services.step_diagnostics import build_step_progress, store_step_progress
+
+            store_step_progress(
+                build_step_progress(
+                    task_id=task_id,
+                    iterations_used=max_iterations,
+                    iterations_max=max_iterations,
+                    tools_used=tools_used,
+                    failed_tool_keys=failed_tool_keys,
+                )
+            )
             self._log_step_exit(max_msg, "warning")
             finish_run(status="failed", error=max_msg)
             return max_msg

@@ -38,6 +38,8 @@ SPRINT_NEEDS_USER_COUNT: int = 0
 # Outcome of the most recent manual sprint step (API + UI notification).
 LAST_STEP_OUTCOME: Optional[Dict[str, Any]] = None
 LAST_AGENT_STEP_RESULT: Optional[str] = None
+# Progress snapshot when a step hits max LLM iterations (for Extend UX).
+LAST_STEP_PROGRESS: Optional[Dict[str, Any]] = None
 DEV_STEP_READ_ONLY_NO_EDITS: bool = False
 DEV_STEP_INTERRUPTED: bool = False
 
