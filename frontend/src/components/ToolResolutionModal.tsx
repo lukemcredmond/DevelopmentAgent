@@ -44,12 +44,16 @@ interface ToolResolutionModalProps {
   pending: PendingToolRequest | null
   onClose: () => void
   onResolved: () => void | Promise<void>
+  recommendedLintCommand?: string | null
+  commandAllowlist?: string[]
 }
 
 export default function ToolResolutionModal({
   pending,
   onClose,
   onResolved,
+  recommendedLintCommand = null,
+  commandAllowlist = [],
 }: ToolResolutionModalProps) {
   const [targetTool, setTargetTool] = useState('run_command')
   const [command, setCommand] = useState('')
@@ -63,20 +67,37 @@ export default function ToolResolutionModal({
     const aliasLower = pending.alias.toLowerCase()
     const matchedTarget = TARGET_TOOLS.find((t) => t === pending.alias || t === aliasLower)
     setTargetTool(matchedTarget ?? 'run_command')
+    const pathArg =
+      typeof pending.arguments.path === 'string' ? pending.arguments.path : ''
+    setPath(pathArg)
+
     if (aliasLower.includes('flutter') || aliasLower.includes('dart')) {
       setCommand('flutter analyze')
     } else if (typeof pending.arguments.command === 'string') {
       setCommand(pending.arguments.command)
+    } else if (
+      pathArg &&
+      (aliasLower.includes('list') ||
+        aliasLower.includes('dir') ||
+        aliasLower.includes('ls') ||
+        aliasLower.includes('glob'))
+    ) {
+      // Directory/list invents often pass only {path}; prefer a real shell list, not the path as command.
+      setCommand(`ls -la ${pathArg}`)
+    } else if (recommendedLintCommand) {
+      setCommand(recommendedLintCommand)
+    } else if (commandAllowlist[0]) {
+      setCommand(commandAllowlist[0])
     } else {
       const first = Object.values(pending.arguments).find((v) => typeof v === 'string')
-      setCommand(typeof first === 'string' ? first : pending.alias.replace(/_/g, ' '))
+      // Avoid treating a bare path as a shell command.
+      if (typeof first === 'string' && first !== pathArg) {
+        setCommand(first)
+      } else {
+        setCommand(pending.alias.replace(/_/g, ' '))
+      }
     }
-    if (typeof pending.arguments.path === 'string') {
-      setPath(pending.arguments.path)
-    } else {
-      setPath('')
-    }
-  }, [pending])
+  }, [pending, recommendedLintCommand, commandAllowlist])
 
   if (!pending) return null
 

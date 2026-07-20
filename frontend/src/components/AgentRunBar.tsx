@@ -5,6 +5,7 @@ interface AgentRunBarProps {
   currentTool?: string | null
   planRunActive?: boolean
   onOpenTools?: () => void
+  onOpenTask?: (taskId: string) => void
   onRetry?: (mode: 'same' | 'optimized') => void | Promise<void>
   retrying?: boolean
   lastStepOutcome?: LastStepOutcome | null
@@ -37,6 +38,7 @@ export default function AgentRunBar({
   currentTool,
   planRunActive = false,
   onOpenTools,
+  onOpenTask,
   onRetry,
   retrying = false,
   lastStepOutcome = null,
@@ -146,7 +148,18 @@ export default function AgentRunBar({
           {toolLabel && isRunning && (
             <span className="text-indigo-300 truncate max-w-[200px]">{toolLabel}</span>
           )}
-          <span className="text-cat-overlay ml-auto text-[10px]">{activeRun.taskId}</span>
+          {activeRun.taskId && onOpenTask ? (
+            <button
+              type="button"
+              onClick={() => onOpenTask(activeRun.taskId)}
+              className="text-cat-overlay ml-auto text-[10px] underline decoration-indigo-400/40 hover:text-indigo-200 hover:decoration-indigo-300"
+              title="Open card"
+            >
+              {activeRun.taskId}
+            </button>
+          ) : (
+            <span className="text-cat-overlay ml-auto text-[10px]">{activeRun.taskId}</span>
+          )}
           {onOpenTools && (
             <button
               type="button"

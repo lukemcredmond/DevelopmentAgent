@@ -532,6 +532,38 @@ export async function injectToolEvidence(
   )
 }
 
+export async function injectProjectToolEvidence(payload: {
+  toolName?: string
+  toolArgs?: Record<string, unknown>
+  toolOutput: string
+  note?: string
+}): Promise<AppState & { injectResult?: Record<string, unknown> }> {
+  return request<AppState & { injectResult?: Record<string, unknown> }>(
+    '/api/project/inject-tool-evidence',
+    {
+      method: 'POST',
+      body: JSON.stringify({
+        toolName: payload.toolName ?? 'run_command',
+        toolArgs: payload.toolArgs ?? {},
+        toolOutput: payload.toolOutput,
+        note: payload.note ?? '',
+      }),
+    },
+  )
+}
+
+export async function deleteProjectToolEvidence(entryId: string): Promise<AppState> {
+  return request<AppState>(`/api/project/tool-evidence/${encodeURIComponent(entryId)}`, {
+    method: 'DELETE',
+  })
+}
+
+export async function clearProjectToolEvidence(): Promise<AppState & { cleared?: number }> {
+  return request<AppState & { cleared?: number }>('/api/project/tool-evidence', {
+    method: 'DELETE',
+  })
+}
+
 export async function reorderTasks(
   lane: string,
   taskIds: string[],

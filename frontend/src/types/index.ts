@@ -643,6 +643,18 @@ export interface ProjectSummary {
   name: string
 }
 
+export interface ProjectToolEvidence {
+  id: string
+  toolName: string
+  command?: string
+  toolArgs?: Record<string, unknown>
+  toolOutput: string
+  note?: string
+  outcome?: string
+  success?: boolean
+  timestamp: string
+}
+
 export interface AppState {
   projectId: string
   projectName: string
@@ -653,6 +665,8 @@ export interface AppState {
   board: Board
   filePaths?: string[]
   files: Record<string, string>
+  recommendedLintCommand?: string | null
+  projectToolEvidence?: ProjectToolEvidence[]
   logs: SystemLog[]
   availableSkills: Skill[]
   assignedSkills: Record<AgentId, string[]>

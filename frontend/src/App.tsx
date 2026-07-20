@@ -33,6 +33,9 @@ import {
   runInProgressStep,
   resolveUserQuestion,
   injectToolEvidence,
+  injectProjectToolEvidence,
+  deleteProjectToolEvidence,
+  clearProjectToolEvidence,
   splitTask,
   triggerPlanOutline,
   triggerPlanBacklog,
@@ -46,6 +49,7 @@ import AgentConsole from './components/AgentConsole'
 import BriefPanel, { readBriefOpen } from './components/BriefPanel'
 import ChatPanel, { type ChatUiMessage } from './components/ChatPanel'
 import EditorPanel from './components/EditorPanel'
+import EvidencePanel from './components/EvidencePanel'
 import GitPanel from './components/GitPanel'
 import KanbanBoard from './components/KanbanBoard'
 import ManualTaskModal from './components/ManualTaskModal'
@@ -66,9 +70,17 @@ import OllamaServiceLogPanel from './components/OllamaServiceLogPanel'
 import FileDiffModal from './components/FileDiffModal'
 import SprintProgressBar from './components/SprintProgressBar'
 import BottomPanelResize, {
+  BOTTOM_PANEL_MIN,
+  readBottomPanelCollapsed,
   readBottomPanelHeight,
+  writeBottomPanelCollapsed,
   writeBottomPanelHeight,
 } from './components/BottomPanelResize'
+import CommandPalette, {
+  cardPaletteItems,
+  collectBoardTasks,
+  type CommandPaletteItem,
+} from './components/CommandPalette'
 import KanbanToggleBar, { readKanbanOpen, writeKanbanOpen } from './components/KanbanToggleBar'
 import ToolsPanel from './components/ToolsPanel'
 import MemoryPanel from './components/MemoryPanel'
@@ -83,6 +95,7 @@ type BottomTab =
   | 'console'
   | 'activity'
   | 'tools'
+  | 'evidence'
   | 'model'
   | 'ollamaServer'
   | 'editor'
@@ -205,6 +218,8 @@ export default function App() {
   const [settingsOpen, setSettingsOpen] = useState(false)
   const [bottomPanelHeight, setBottomPanelHeight] = useState(readBottomPanelHeight)
   const [panelMaximized, setPanelMaximized] = useState(false)
+  const [bottomPanelCollapsed, setBottomPanelCollapsed] = useState(readBottomPanelCollapsed)
+  const [commandPaletteOpen, setCommandPaletteOpen] = useState(false)
   const [retryingStep, setRetryingStep] = useState(false)
   const [extendingStep, setExtendingStep] = useState(false)
   const [fileDiffModal, setFileDiffModal] = useState<{
@@ -217,6 +232,9 @@ export default function App() {
   >(undefined)
   const workspaceColumnRef = useRef<HTMLDivElement>(null)
   const preMaximizeHeightRef = useRef(bottomPanelHeight)
+  const preCollapseHeightRef = useRef(
+    Math.max(BOTTOM_PANEL_MIN, readBottomPanelHeight()),
+  )
   const [fileTreeKey, setFileTreeKey] = useState(0)
 
   const [selectedTask, setSelectedTask] = useState<Task | null>(null)
@@ -570,7 +588,36 @@ export default function App() {
   )
 
   useEffect(() => {
-    writeBottomPanelHeight(bottomPanelHeight)
+    if (!bottomPanelCollapsed) {
+      writeBottomPanelHeight(bottomPanelHeight)
+    }
+  }, [bottomPanelHeight, bottomPanelCollapsed])
+
+  useEffect(() => {
+    writeBottomPanelCollapsed(bottomPanelCollapsed)
+  }, [bottomPanelCollapsed])
+
+  const expandBottomPanel = useCallback(() => {
+    if (!bottomPanelCollapsed) return
+    setBottomPanelCollapsed(false)
+    setBottomPanelHeight((h) =>
+      Math.max(BOTTOM_PANEL_MIN, preCollapseHeightRef.current || h || BOTTOM_PANEL_MIN),
+    )
+  }, [bottomPanelCollapsed])
+
+  const toggleBottomPanelCollapse = useCallback(() => {
+    setBottomPanelCollapsed((collapsed) => {
+      if (collapsed) {
+        setPanelMaximized(false)
+        setBottomPanelHeight(
+          Math.max(BOTTOM_PANEL_MIN, preCollapseHeightRef.current || BOTTOM_PANEL_MIN),
+        )
+        return false
+      }
+      preCollapseHeightRef.current = Math.max(BOTTOM_PANEL_MIN, bottomPanelHeight)
+      setPanelMaximized(false)
+      return true
+    })
   }, [bottomPanelHeight])
 
   const handleToggleKanban = () => {
@@ -579,8 +626,10 @@ export default function App() {
       writeKanbanOpen(next)
       if (next) {
         setBriefOpen(false)
-        setBottomPanelHeight((h) => Math.min(h, 260))
-      } else {
+        if (!bottomPanelCollapsed) {
+          setBottomPanelHeight((h) => Math.min(h, 260))
+        }
+      } else if (!bottomPanelCollapsed) {
         setBottomPanelHeight((h) => Math.max(h, 320))
       }
       return next
@@ -593,22 +642,33 @@ export default function App() {
         e.preventDefault()
         setSettingsOpen(true)
       }
+      if ((e.ctrlKey || e.metaKey) && e.key.toLowerCase() === 'j') {
+        e.preventDefault()
+        toggleBottomPanelCollapse()
+      }
+      if ((e.ctrlKey || e.metaKey) && e.key.toLowerCase() === 'k') {
+        e.preventDefault()
+        setCommandPaletteOpen((o) => !o)
+      }
     }
     window.addEventListener('keydown', onKey)
     return () => window.removeEventListener('keydown', onKey)
-  }, [])
+  }, [toggleBottomPanelCollapse])
 
   const handleBottomPanelResize = (height: number) => {
     setPanelMaximized(false)
+    setBottomPanelCollapsed(false)
     setBottomPanelHeight(height)
   }
 
   const openToolsTab = () => {
+    expandBottomPanel()
     setToolsPreferredSubTab('log')
     setBottomTab('tools')
   }
 
   const openModelTab = () => {
+    expandBottomPanel()
     setBottomTab('model')
   }
 
@@ -665,14 +725,18 @@ export default function App() {
   const togglePanelMaximize = () => {
     const col = workspaceColumnRef.current
     if (!col) return
+    if (bottomPanelCollapsed) {
+      expandBottomPanel()
+    }
     if (panelMaximized) {
       setBottomPanelHeight(preMaximizeHeightRef.current)
       setPanelMaximized(false)
     } else {
-      preMaximizeHeightRef.current = bottomPanelHeight
+      preMaximizeHeightRef.current = Math.max(BOTTOM_PANEL_MIN, bottomPanelHeight)
       const maxH = Math.max(220, col.clientHeight * 0.65)
       setBottomPanelHeight(maxH)
       setPanelMaximized(true)
+      setBottomPanelCollapsed(false)
     }
   }
 
@@ -682,6 +746,13 @@ export default function App() {
     (): { id: BottomTab; label: string; icon: string; badge?: number; group?: string }[] => [
       { id: 'console', label: 'Console', icon: 'fa-terminal', group: 'Work' },
       { id: 'tools', label: 'Tools', icon: 'fa-wrench', group: 'Work', badge: toolRunningCount > 0 ? toolRunningCount : toolFailureCount || undefined },
+      {
+        id: 'evidence',
+        label: 'Evidence',
+        icon: 'fa-flask',
+        group: 'Work',
+        badge: (state.projectToolEvidence?.length ?? 0) || undefined,
+      },
       { id: 'activity', label: 'Activity', icon: 'fa-wave-square', group: 'Work', badge: activityEvents.length || undefined },
       { id: 'chat', label: 'Chat', icon: 'fa-comments', group: 'Work' },
       { id: 'editor', label: 'Editor', icon: 'fa-file-code', group: 'Code', badge: selectedFile ? 1 : undefined },
@@ -692,8 +763,64 @@ export default function App() {
       { id: 'ollamaServer', label: 'Ollama Server', icon: 'fa-server', group: 'Debug' },
       { id: 'memory', label: 'Memory', icon: 'fa-brain-circuit', group: 'Debug', badge: memoryCount > 0 ? memoryCount : undefined },
     ],
-    [toolRunningCount, toolFailureCount, activityEvents.length, memoryCount, selectedFile],
+    [toolRunningCount, toolFailureCount, activityEvents.length, memoryCount, selectedFile, state.projectToolEvidence?.length],
   )
+
+  const commandPaletteItems = useMemo((): CommandPaletteItem[] => {
+    const tabItems: CommandPaletteItem[] = bottomTabs.map((tab) => ({
+      id: `tab:${tab.id}`,
+      label: `Open ${tab.label}`,
+      hint: tab.group,
+      group: 'Tab',
+      run: () => {
+        expandBottomPanel()
+        setBottomTab(tab.id)
+      },
+    }))
+    const nav: CommandPaletteItem[] = [
+      {
+        id: 'settings',
+        label: 'Open Settings',
+        hint: 'Ctrl+,',
+        group: 'Nav',
+        run: () => setSettingsOpen(true),
+      },
+      {
+        id: 'toggle-board',
+        label: kanbanOpen ? 'Hide board' : 'Show board',
+        group: 'Nav',
+        run: () => handleToggleKanban(),
+      },
+      {
+        id: 'toggle-bottom',
+        label: bottomPanelCollapsed ? 'Expand bottom panel' : 'Collapse bottom panel',
+        hint: 'Ctrl+J',
+        group: 'Nav',
+        run: () => toggleBottomPanelCollapse(),
+      },
+      {
+        id: 'maximize-bottom',
+        label: panelMaximized ? 'Restore bottom panel' : 'Maximize bottom panel',
+        group: 'Nav',
+        run: () => togglePanelMaximize(),
+      },
+    ]
+    const lanes = getDisplayLanes(state.activeLanes, state.workflowSettings)
+    const cards = cardPaletteItems(collectBoardTasks(state.board, lanes), (task) =>
+      setSelectedTask(task),
+    )
+    return [...nav, ...tabItems, ...cards]
+  }, [
+    bottomTabs,
+    expandBottomPanel,
+    kanbanOpen,
+    bottomPanelCollapsed,
+    panelMaximized,
+    state.activeLanes,
+    state.workflowSettings,
+    state.board,
+    toggleBottomPanelCollapse,
+  ])
 
   const pendingWorkflowRef = useRef<Partial<WorkflowSettings>>({})
   const workflowSaveTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null)
@@ -752,18 +879,36 @@ export default function App() {
     void refresh()
   }, [refresh])
 
-  const handleOpenMemoryTab = useCallback(() => {
-    setBottomTab('memory')
-  }, [])
-
   const handleOpenConsoleTab = useCallback(() => {
+    expandBottomPanel()
     setBottomTab('console')
-  }, [])
+  }, [expandBottomPanel])
+
+  const handleOpenMemoryTab = useCallback(() => {
+    expandBottomPanel()
+    setBottomTab('memory')
+  }, [expandBottomPanel])
 
   const handleActivityTaskClick = useCallback(
     (taskId: string) => {
       const task = findTaskOnBoard(state.board, taskId)
       if (task) setSelectedTask(task)
+    },
+    [state.board],
+  )
+
+  const openTaskFromRunBar = useCallback(
+    (taskId: string) => {
+      const task = findTaskOnBoard(state.board, taskId)
+      if (task) {
+        setSelectedTask(task)
+        setActionError(null)
+        return
+      }
+      setActionError(
+        `Card ${taskId} is not on the board (moved, deleted, or stale sprint session).`,
+      )
+      setActionErrorShowModelLink(false)
     },
     [state.board],
   )
@@ -1028,6 +1173,7 @@ export default function App() {
         planOutlineReady={planOutline.trim().length > 0}
         onPlanAndRun={() =>
           void withSprintBusy(async () => {
+            expandBottomPanel()
             setPlanRunActive(true)
             setSprintProgress(null)
             setBottomTab('console')
@@ -1281,24 +1427,34 @@ export default function App() {
             <BottomPanelResize
               containerRef={workspaceColumnRef}
               onResize={handleBottomPanelResize}
+              disabled={bottomPanelCollapsed}
             />
 
             <div
               data-bottom-panel
-              style={{ height: bottomPanelHeight, maxHeight: '100%' }}
-              className="flex flex-col shrink-0 border-t border-cat-surface1 min-h-0"
+              style={{
+                height: bottomPanelCollapsed ? undefined : bottomPanelHeight,
+                maxHeight: '100%',
+              }}
+              className={`flex flex-col shrink-0 border-t border-cat-surface1 min-h-0 ${
+                bottomPanelCollapsed ? 'h-auto' : ''
+              }`}
             >
+              {!bottomPanelCollapsed && (
+                <>
               <SprintProgressBar
                 progress={sprintProgress}
                 planRunActive={planRunActive}
                 sprintRunning={sprintRunning}
                 currentTool={currentTool}
+                onOpenTask={openTaskFromRunBar}
               />
               <AgentRunBar
                 activeRun={activeRun}
                 currentTool={currentTool}
                 planRunActive={planRunActive}
                 onOpenTools={openToolsTab}
+                onOpenTask={openTaskFromRunBar}
                 retrying={retryingStep}
                 lastStepOutcome={state.lastStepOutcome}
                 lastStepDiagnostics={state.lastStepDiagnostics}
@@ -1386,6 +1542,8 @@ export default function App() {
                     : undefined
                 }
               />
+                </>
+              )}
               <div className="flex bg-cat-mantle border-b border-cat-surface1 shrink-0 items-stretch">
                 <div className="flex-1 min-w-0 overflow-x-auto">
                   <div className="flex whitespace-nowrap items-stretch">
@@ -1403,7 +1561,10 @@ export default function App() {
                           )}
                           <button
                             type="button"
-                            onClick={() => setBottomTab(tab.id)}
+                            onClick={() => {
+                              expandBottomPanel()
+                              setBottomTab(tab.id)
+                            }}
                             title={tab.group ? `${tab.group}: ${tab.label}` : tab.label}
                             className={`px-3 md:px-4 py-2 text-[11px] font-semibold uppercase tracking-wider border-r border-cat-surface1 transition-colors ${
                               bottomTab === tab.id
@@ -1426,6 +1587,24 @@ export default function App() {
                 </div>
                 <button
                   type="button"
+                  onClick={toggleBottomPanelCollapse}
+                  title={
+                    bottomPanelCollapsed
+                      ? 'Expand panel (Ctrl+J)'
+                      : 'Collapse panel (Ctrl+J)'
+                  }
+                  className={`shrink-0 px-3 py-2 border-l border-cat-surface1 text-cat-subtext hover:text-white hover:bg-cat-surface0 transition-colors ${
+                    bottomPanelCollapsed ? 'text-indigo-400' : ''
+                  }`}
+                >
+                  <i
+                    className={`fa-solid ${
+                      bottomPanelCollapsed ? 'fa-chevron-up' : 'fa-chevron-down'
+                    } text-xs`}
+                  />
+                </button>
+                <button
+                  type="button"
                   onClick={togglePanelMaximize}
                   title={panelMaximized ? 'Restore panel size' : 'Maximize panel'}
                   className={`shrink-0 px-3 py-2 border-l border-cat-surface1 text-cat-subtext hover:text-white hover:bg-cat-surface0 transition-colors ${
@@ -1435,6 +1614,7 @@ export default function App() {
                   <i className="fa-solid fa-up-right-and-down-left-from-center text-xs" />
                 </button>
               </div>
+              {!bottomPanelCollapsed && (
               <div className="flex-1 min-h-0 flex flex-col relative overflow-hidden">
                 {bottomTab === 'console' && (
                   <div className="absolute inset-0 flex flex-col min-h-0">
@@ -1508,6 +1688,24 @@ export default function App() {
                     />
                   </div>
                 )}
+                {bottomTab === 'evidence' && (
+                  <div className="absolute inset-0 flex flex-col min-h-0">
+                    <EvidencePanel
+                      entries={state.projectToolEvidence ?? []}
+                      defaultCommand={state.recommendedLintCommand ?? ''}
+                      onInject={async (payload) => {
+                        handleState(await injectProjectToolEvidence(payload))
+                        void refreshToolHistory()
+                      }}
+                      onDelete={async (entryId) => {
+                        handleState(await deleteProjectToolEvidence(entryId))
+                      }}
+                      onClearAll={async () => {
+                        handleState(await clearProjectToolEvidence())
+                      }}
+                    />
+                  </div>
+                )}
                 {bottomTab === 'chat' && (
                   <div className="absolute inset-0 flex flex-col min-h-0">
                     <ChatPanel
@@ -1547,6 +1745,7 @@ export default function App() {
                   </div>
                 )}
               </div>
+              )}
             </div>
           </div>
         </div>
@@ -1616,6 +1815,7 @@ export default function App() {
         onDiscussWithAgent={(task, lane) => handleDiscussWithAgent(task, lane)}
         onSplit={(taskId) => handleSplitTask(taskId)}
         onInjectToolEvidence={(taskId, payload) => handleInjectToolEvidence(taskId, payload)}
+        defaultInjectCommand={state.recommendedLintCommand ?? ''}
         getTaskTitle={(taskId) => findTaskOnBoard(state.board, taskId)?.title}
         taskExistsOnBoard={(taskId) => !!findTaskOnBoard(state.board, taskId)}
         ollamaUrl={ollamaUrl}
@@ -1832,9 +2032,17 @@ export default function App() {
         </SlideOver>
       )}
 
+      <CommandPalette
+        open={commandPaletteOpen}
+        onClose={() => setCommandPaletteOpen(false)}
+        items={commandPaletteItems}
+      />
+
       <ToolResolutionModal
         pending={pendingToolModal}
         onClose={() => setPendingToolModal(null)}
+        recommendedLintCommand={state.recommendedLintCommand}
+        commandAllowlist={state.workflowSettings?.commandAllowlist ?? []}
         onResolved={async () => {
           await refreshPendingTools()
           setPendingToolModal(null)

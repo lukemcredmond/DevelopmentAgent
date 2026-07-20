@@ -1,8 +1,11 @@
 import { useCallback, useEffect, useRef, type RefObject } from 'react'
 
 export const BOTTOM_PANEL_STORAGE_KEY = 'allhands-bottom-panel-h'
+export const BOTTOM_PANEL_COLLAPSED_KEY = 'allhands-bottom-panel-collapsed'
 export const BOTTOM_PANEL_MIN = 220
 export const BOTTOM_PANEL_DEFAULT = 320
+/** Height when only the tab strip (+ run bars) should stay visible. */
+export const BOTTOM_PANEL_COLLAPSED_HEIGHT = 40
 
 export function readBottomPanelHeight(): number {
   try {
@@ -25,16 +28,38 @@ export function writeBottomPanelHeight(height: number): void {
   }
 }
 
+export function readBottomPanelCollapsed(): boolean {
+  try {
+    return localStorage.getItem(BOTTOM_PANEL_COLLAPSED_KEY) === 'true'
+  } catch {
+    return false
+  }
+}
+
+export function writeBottomPanelCollapsed(collapsed: boolean): void {
+  try {
+    localStorage.setItem(BOTTOM_PANEL_COLLAPSED_KEY, String(collapsed))
+  } catch {
+    /* ignore */
+  }
+}
+
 interface BottomPanelResizeProps {
   onResize: (height: number) => void
   containerRef: RefObject<HTMLElement | null>
+  disabled?: boolean
 }
 
-export default function BottomPanelResize({ onResize, containerRef }: BottomPanelResizeProps) {
+export default function BottomPanelResize({
+  onResize,
+  containerRef,
+  disabled = false,
+}: BottomPanelResizeProps) {
   const draggingRef = useRef(false)
 
   const handlePointerDown = useCallback(
     (e: React.PointerEvent) => {
+      if (disabled) return
       e.preventDefault()
       draggingRef.current = true
       const container = containerRef.current
@@ -61,7 +86,7 @@ export default function BottomPanelResize({ onResize, containerRef }: BottomPane
       window.addEventListener('pointermove', onMove)
       window.addEventListener('pointerup', onUp)
     },
-    [containerRef, onResize],
+    [containerRef, onResize, disabled],
   )
 
   useEffect(() => {
@@ -69,6 +94,10 @@ export default function BottomPanelResize({ onResize, containerRef }: BottomPane
       draggingRef.current = false
     }
   }, [])
+
+  if (disabled) {
+    return <div className="shrink-0 h-px bg-cat-surface1" aria-hidden />
+  }
 
   return (
     <div

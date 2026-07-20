@@ -10,13 +10,18 @@ from backend.services.workflow_settings import (
     get_last_sprint_summary,
     get_workflow_settings,
 )
-from backend.workspace.files import list_workspace_file_paths, sync_virtual_filesystem_from_disk
+from backend.workspace.files import (
+    derive_project_lint_command,
+    list_workspace_file_paths,
+    sync_virtual_filesystem_from_disk,
+)
 
 
 def build_state_response(*, include_files: bool = True) -> dict:
     normalize_board_tasks()
     from backend.services.board_lanes import FEATURES_LANE
     from backend.services.feature_service import build_feature_rollup, is_feature_task
+    from backend.services.project_evidence import list_project_evidence
 
     for feat in state.SHARED_BOARD.get(FEATURES_LANE, []):
         if isinstance(feat, dict) and is_feature_task(feat) and feat.get("id"):
@@ -37,6 +42,8 @@ def build_state_response(*, include_files: bool = True) -> dict:
         "board": state.SHARED_BOARD,
         "filePaths": file_paths,
         "files": file_list,
+        "recommendedLintCommand": derive_project_lint_command(),
+        "projectToolEvidence": list_project_evidence(),
         "logs": state.SYSTEM_LOGS,
         "availableSkills": scan_skills_directory(),
         "assignedSkills": {

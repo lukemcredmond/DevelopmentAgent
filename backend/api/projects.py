@@ -29,6 +29,8 @@ def create_new_project(payload: CreateProjectPayload):
 
         state.SHARED_BOARD = {k: list(v) for k, v in DEFAULT_BOARD.items()}
         state.VIRTUAL_FILESYSTEM = dict(DEFAULT_VIRTUAL_FS)
+        state.PROJECT_TOOL_EVIDENCE = []
+        state.PROJECT_PLAN_OUTLINE = ""
 
         os.makedirs(state.WORKSPACE_DIR, exist_ok=True)
 

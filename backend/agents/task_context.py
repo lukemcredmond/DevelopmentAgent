@@ -1059,6 +1059,15 @@ def build_task_prompt(task: Dict[str, Any], brief: str) -> str:
         f"{subtask_extra}"
     )
 
+    try:
+        from backend.services.project_evidence import format_project_evidence_for_prompt
+
+        shared = format_project_evidence_for_prompt()
+        if shared:
+            prompt += "\n" + shared
+    except Exception:
+        pass
+
     qa_fail = task.get("qaFailure")
     if qa_fail:
         prompt += (

@@ -146,6 +146,8 @@ interface TaskDetailModalProps {
       note?: string
     },
   ) => void | Promise<void>
+  /** Workspace-detected analyze/lint command; empty if unknown. */
+  defaultInjectCommand?: string
   onRelatedTaskClick?: (taskId: string) => void
   getTaskTitle?: (taskId: string) => string | undefined
   taskExistsOnBoard?: (taskId: string) => boolean
@@ -252,6 +254,7 @@ export default function TaskDetailModal({
   onDiscussWithAgent,
   onSplit,
   onInjectToolEvidence,
+  defaultInjectCommand = '',
   onRelatedTaskClick,
   getTaskTitle,
   taskExistsOnBoard,
@@ -270,7 +273,7 @@ export default function TaskDetailModal({
   const [acceptanceCriteria, setAcceptanceCriteria] = useState('')
   const [editing, setEditing] = useState(false)
   const [userAnswer, setUserAnswer] = useState('')
-  const [injectCommand, setInjectCommand] = useState('flutter analyze')
+  const [injectCommand, setInjectCommand] = useState(defaultInjectCommand)
   const [injectOutput, setInjectOutput] = useState('')
   const [injectNote, setInjectNote] = useState('')
   const [injecting, setInjecting] = useState(false)
@@ -292,13 +295,16 @@ export default function TaskDetailModal({
     setEditing(false)
     setShowAllTranscript(false)
     setShowFailuresOnly(false)
+    setInjectCommand(defaultInjectCommand)
+    setInjectOutput('')
+    setInjectNote('')
     try {
       const draft = sessionStorage.getItem(`needs-user-draft-${task.id}`)
       setUserAnswer(draft ?? '')
     } catch {
       setUserAnswer('')
     }
-  }, [task?.id])
+  }, [task?.id, defaultInjectCommand])
 
   useEffect(() => {
     if (!task?.id) return
@@ -1050,7 +1056,8 @@ export default function TaskDetailModal({
               <div className="bg-indigo-950/20 border border-indigo-500/30 rounded-lg p-3 space-y-2">
                 <h4 className="text-xs font-bold text-indigo-200">Provide command output</h4>
                 <p className="text-[10px] text-cat-subtext">
-                  Paste analyze or test output so the agent can continue on the next sprint step.
+                  Paste analyze or test output for <em>this card</em> (QA gate / continue next step).
+                  Workspace-wide results belong in the bottom <strong>Evidence</strong> tab.
                 </p>
                 <label className="flex flex-col gap-1">
                   <span className="text-[10px] uppercase text-cat-overlay">Command</span>
@@ -1058,6 +1065,7 @@ export default function TaskDetailModal({
                     type="text"
                     value={injectCommand}
                     onChange={(e) => setInjectCommand(e.target.value)}
+                    placeholder={defaultInjectCommand || 'e.g. npm run lint'}
                     className="bg-cat-base border border-cat-surface1 rounded px-2 py-1 text-[11px] text-white"
                   />
                 </label>
@@ -1088,7 +1096,9 @@ export default function TaskDetailModal({
                     void Promise.resolve(
                       onInjectToolEvidence(task.id, {
                         toolName: 'run_command',
-                        toolArgs: { command: injectCommand.trim() || 'flutter analyze' },
+                        toolArgs: {
+                          command: injectCommand.trim() || defaultInjectCommand || 'analyze',
+                        },
                         toolOutput: injectOutput.trim(),
                         note: injectNote.trim() || undefined,
                       }),

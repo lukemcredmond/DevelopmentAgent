@@ -91,7 +91,7 @@ def _run_command_event_fields(
 def _build_history_event(
     *,
     run_id: str,
-    task_id: str,
+    task_id: Optional[str],
     agent: str,
     tool_name: str,
     tool_args: Dict[str, Any],
@@ -1050,6 +1050,71 @@ def record_user_tool_evidence(
         "toolSuccess": success,
         "outcome": outcome,
         "runCommandStatus": run_cmd_status,
+    }
+
+
+def append_user_tool_log_event(
+    *,
+    tool_name: str,
+    tool_args: Dict[str, Any],
+    tool_output: str,
+    task_id: Optional[str] = None,
+    run_id_prefix: str = "user-inject",
+) -> Dict[str, Any]:
+    """Append a user-sourced tool event to the global Tools log (optional task id)."""
+    from backend.agents.tool_outcomes import (
+        classify_run_command,
+        normalize_run_command_output,
+        run_command_status_label,
+    )
+
+    command = str(tool_args.get("command") or "") if tool_name == "run_command" else ""
+    normalized = (
+        normalize_run_command_output(command, tool_output)
+        if tool_name == "run_command"
+        else (tool_output or "").strip()
+    )
+    if tool_name == "run_command":
+        outcome = classify_run_command(command, normalized)
+        success = outcome != "execution_failed"
+    else:
+        outcome = "ok"
+        success = True
+
+    ts = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+    run_id = f"{run_id_prefix}-{int(time.time() * 1000)}"
+    event_id = str(uuid.uuid4())
+    rc_fields = _run_command_event_fields(tool_name, tool_args, normalized)
+    exit_code = rc_fields.get("exitCode")
+    run_cmd_status = None
+    if tool_name == "run_command":
+        run_cmd_status = run_command_status_label(normalized, success, command)
+
+    append_global_tool_event(
+        _build_history_event(
+            run_id=run_id,
+            task_id=task_id,
+            agent="User",
+            tool_name=tool_name,
+            tool_args=tool_args,
+            tool_output=normalized,
+            success=success,
+            duration_ms=0,
+            timestamp=ts,
+            source="user",
+            exit_code=exit_code,
+            run_cmd_status=run_cmd_status,
+            event_id=event_id,
+            diagnostics=rc_fields.get("diagnostics"),
+            command=rc_fields.get("command"),
+        )
+    )
+    return {
+        "toolOutput": normalized,
+        "toolSuccess": success,
+        "outcome": outcome,
+        "runCommandStatus": run_cmd_status,
+        "timestamp": ts,
     }
 
 

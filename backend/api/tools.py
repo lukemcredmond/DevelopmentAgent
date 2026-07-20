@@ -291,3 +291,46 @@ def post_tool_approval(approval_id: str, payload: ToolApprovalPayload):
             raise HTTPException(status_code=404, detail="Approval request not found or already resolved")
         pending = list_pending_approvals()
     return {**build_state_response(), "ok": True, "pending": pending}
+
+
+class ProjectEvidencePayload(BaseModel):
+    model_config = ConfigDict(populate_by_name=True)
+
+    tool_name: str = Field(default="run_command", alias="toolName")
+    tool_args: Dict[str, Any] = Field(default_factory=dict, alias="toolArgs")
+    tool_output: str = Field(alias="toolOutput")
+    note: str = ""
+
+
+@router.post("/api/project/inject-tool-evidence")
+def post_project_inject_evidence(payload: ProjectEvidencePayload):
+    from backend.services.project_evidence import inject_project_tool_evidence
+
+    with state.STATE_LOCK:
+        entry = inject_project_tool_evidence(
+            payload.tool_name,
+            payload.tool_args or {},
+            payload.tool_output,
+            note=payload.note or "",
+        )
+    return {**build_state_response(), "injectResult": entry}
+
+
+@router.delete("/api/project/tool-evidence/{entry_id}")
+def delete_project_evidence_entry(entry_id: str):
+    from backend.services.project_evidence import delete_project_evidence
+
+    with state.STATE_LOCK:
+        ok = delete_project_evidence(entry_id)
+        if not ok:
+            raise HTTPException(status_code=404, detail="Evidence entry not found")
+    return build_state_response()
+
+
+@router.delete("/api/project/tool-evidence")
+def clear_all_project_evidence():
+    from backend.services.project_evidence import clear_project_evidence
+
+    with state.STATE_LOCK:
+        cleared = clear_project_evidence()
+    return {**build_state_response(), "cleared": cleared}

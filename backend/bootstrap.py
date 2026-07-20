@@ -46,6 +46,10 @@ def load_project_into_state(project_id: str) -> bool:
 
     load_llm_log_for_project(project_id)
 
+    from backend.services.project_evidence import load_project_evidence
+
+    load_project_evidence(project_id)
+
     state.storage.set_active_project_id(state.CURRENT_PROJECT_ID)
     from backend.services.tool_aliases import load_pending_tools_for_project
 

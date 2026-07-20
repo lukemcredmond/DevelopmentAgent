@@ -5,6 +5,7 @@ interface SprintProgressBarProps {
   planRunActive: boolean
   sprintRunning?: boolean
   currentTool?: string | null
+  onOpenTask?: (taskId: string) => void
 }
 
 function phaseLabel(phase: SprintProgress['phase']): string {
@@ -27,6 +28,7 @@ export default function SprintProgressBar({
   planRunActive,
   sprintRunning = false,
   currentTool,
+  onOpenTask,
 }: SprintProgressBarProps) {
   const active =
     planRunActive ||
@@ -67,13 +69,34 @@ export default function SprintProgressBar({
           {currentTool && (
             <span className="text-amber-300/90 font-mono text-[10px]">{currentTool}</span>
           )}
-          {progress?.taskTitle && (
-            <span className="text-white truncate max-w-[min(100%,28rem)]">
-              {progress.taskTitle}
-            </span>
-          )}
+          {progress?.taskTitle &&
+            (progress.taskId && progress.taskId !== 'PLANNING' && onOpenTask ? (
+              <button
+                type="button"
+                onClick={() => onOpenTask(progress.taskId!)}
+                className="text-white truncate max-w-[min(100%,28rem)] text-left underline decoration-violet-400/50 hover:decoration-violet-300 hover:text-violet-100"
+                title="Open card"
+              >
+                {progress.taskTitle}
+              </button>
+            ) : (
+              <span className="text-white truncate max-w-[min(100%,28rem)]">
+                {progress.taskTitle}
+              </span>
+            ))}
           {progress?.taskId && progress.taskId !== 'PLANNING' && (
-            <span className="text-cat-overlay font-mono text-[10px]">{progress.taskId}</span>
+            onOpenTask ? (
+              <button
+                type="button"
+                onClick={() => onOpenTask(progress.taskId!)}
+                className="text-cat-overlay font-mono text-[10px] underline decoration-violet-400/40 hover:text-violet-200 hover:decoration-violet-300"
+                title="Open card"
+              >
+                {progress.taskId}
+              </button>
+            ) : (
+              <span className="text-cat-overlay font-mono text-[10px]">{progress.taskId}</span>
+            )
           )}
           {!progress && (planRunActive || sprintRunning) && (
             <span className="text-cat-overlay italic">

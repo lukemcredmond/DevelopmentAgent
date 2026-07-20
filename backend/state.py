@@ -51,6 +51,9 @@ REFINEMENT_MODE: bool = False
 
 PROJECT_PLAN_OUTLINE: str = ""
 
+# User-injected workspace-wide command/test output (shared across agents; not tied to one card).
+PROJECT_TOOL_EVIDENCE: List[Dict[str, Any]] = []
+
 # Interrupted sprint session context surfaced on startup (crash recovery banner).
 RECOVERY_CONTEXT: Optional[Dict[str, Any]] = None
 
