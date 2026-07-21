@@ -332,6 +332,8 @@ export function useAppState() {
   const sprintRefreshDebounceRef = useRef<number | null>(null)
   const activitySyncDebounceRef = useRef<number | null>(null)
   const toolHistoryDebounceRef = useRef<number | null>(null)
+  const logBatchRef = useRef<SystemLog[]>([])
+  const logFlushTimerRef = useRef<number | null>(null)
   const [sseLive, setSseLive] = useState(true)
   const [lastToolEventAt, setLastToolEventAt] = useState<string | null>(null)
 
@@ -513,7 +515,21 @@ export function useAppState() {
   )
 
   const appendLog = useCallback((log: SystemLog) => {
-    setState((prev) => ({ ...prev, logs: capLogs(prev.logs, log) }))
+    logBatchRef.current.push(log)
+    if (logFlushTimerRef.current != null) return
+    logFlushTimerRef.current = window.setTimeout(() => {
+      logFlushTimerRef.current = null
+      const batch = logBatchRef.current
+      logBatchRef.current = []
+      if (batch.length === 0) return
+      setState((prev) => {
+        let logs = prev.logs
+        for (const entry of batch) {
+          logs = capLogs(logs, entry)
+        }
+        return { ...prev, logs }
+      })
+    }, 100)
   }, [])
 
   const debouncedRefreshAfterSprint = useCallback(() => {
@@ -774,6 +790,10 @@ export function useAppState() {
       }
       if (toolHistoryDebounceRef.current) {
         window.clearTimeout(toolHistoryDebounceRef.current)
+      }
+      if (logFlushTimerRef.current) {
+        window.clearTimeout(logFlushTimerRef.current)
+        logFlushTimerRef.current = null
       }
     }
   }, [])

@@ -143,6 +143,106 @@ def task_dependencies_met(task: Dict[str, Any]) -> bool:
     return all(is_task_done(dep_id) for dep_id in blocked_by)
 
 
+def detect_blocked_by_issues(task: Dict[str, Any]) -> Dict[str, Any]:
+    """Detect missing blockers and cycles in the blockedBy graph.
+
+    Returns {missing: [...], cycle: bool, cyclePath: [...]} .
+    """
+    normalize_task(task)
+    root_id = str(task.get("id") or "")
+    missing = validate_blocked_by(task)
+    cycle = False
+    cycle_path: List[str] = []
+
+    # DFS from this task through blockedBy edges for a cycle involving root or any loop.
+    visiting: set[str] = set()
+    visited: set[str] = set()
+    stack: List[str] = []
+
+    def dfs(tid: str) -> bool:
+        nonlocal cycle, cycle_path
+        if tid in visiting:
+            # Found a back-edge — record path from first occurrence of tid.
+            if tid in stack:
+                idx = stack.index(tid)
+                cycle_path = stack[idx:] + [tid]
+            else:
+                cycle_path = [tid]
+            cycle = True
+            return True
+        if tid in visited:
+            return False
+        visiting.add(tid)
+        stack.append(tid)
+        node = find_task_by_id(tid)
+        if node:
+            for dep in node.get("blockedBy") or []:
+                dep_id = str(dep)
+                if not dep_id:
+                    continue
+                if dfs(dep_id):
+                    return True
+        stack.pop()
+        visiting.remove(tid)
+        visited.add(tid)
+        return False
+
+    if root_id:
+        dfs(root_id)
+
+    return {"missing": missing, "cycle": cycle, "cyclePath": cycle_path}
+
+
+def is_backlog_claimable(task: Dict[str, Any]) -> bool:
+    """Same eligibility rules as next_claimable_backlog_task for a single card."""
+    normalize_task(task)
+    ws = get_workflow_settings()
+    if not task.get("requiresDev", True):
+        return False
+    if task.get("workType") == "planning":
+        return False
+    if ws.get("requireBacklogRefinement") and task.get("refinementComplete") is False:
+        return False
+    return task_dependencies_met(task)
+
+
+def is_refinement_claimable(task: Dict[str, Any]) -> bool:
+    """Same eligibility as next_refinement_task for a single non-spike card."""
+    ws = get_workflow_settings()
+    if not ws.get("requireBacklogRefinement"):
+        return False
+    normalize_task(task)
+    if task.get("workType") == "spike":
+        return False
+    if task.get("refinementStatus") == "spike_pending":
+        return False
+    if not task.get("requiresDev", True):
+        return False
+    if task.get("workType") == "planning":
+        return False
+    if task.get("refinementComplete"):
+        return False
+    return task_dependencies_met(task)
+
+
+def format_dependency_block_status(task: Dict[str, Any]) -> str:
+    """Human-readable status of each blockedBy id for logs."""
+    parts: List[str] = []
+    for dep in task.get("blockedBy") or []:
+        dep_id = str(dep)
+        if not dep_id:
+            continue
+        if is_task_done(dep_id):
+            parts.append(f"{dep_id}=Done")
+            continue
+        lane = get_task_lane(dep_id)
+        if lane:
+            parts.append(f"{dep_id}={lane}")
+        else:
+            parts.append(f"{dep_id}=missing")
+    return ", ".join(parts) if parts else "(none)"
+
+
 def coerce_task_text(value: Any) -> str:
     """Coerce PO/LLM field values to plain strings for storage and UI."""
     if value is None:
@@ -781,16 +881,8 @@ def next_spike_task() -> Optional[Dict[str, Any]]:
 
 def next_claimable_backlog_task() -> Optional[Dict[str, Any]]:
     sort_backlog()
-    ws = get_workflow_settings()
     for task in state.SHARED_BOARD.get("Backlog", []):
-        normalize_task(task)
-        if not task.get("requiresDev", True):
-            continue
-        if task.get("workType") == "planning":
-            continue
-        if ws.get("requireBacklogRefinement") and task.get("refinementComplete") is False:
-            continue
-        if task_dependencies_met(task):
+        if is_backlog_claimable(task):
             return task
     return None
 
@@ -798,19 +890,7 @@ def next_claimable_backlog_task() -> Optional[Dict[str, Any]]:
 def count_claimable_backlog_tasks() -> int:
     """Count backlog cards eligible for claim (same rules as next_claimable_backlog_task)."""
     sort_backlog()
-    ws = get_workflow_settings()
-    count = 0
-    for task in state.SHARED_BOARD.get("Backlog", []):
-        normalize_task(task)
-        if not task.get("requiresDev", True):
-            continue
-        if task.get("workType") == "planning":
-            continue
-        if ws.get("requireBacklogRefinement") and task.get("refinementComplete") is False:
-            continue
-        if task_dependencies_met(task):
-            count += 1
-    return count
+    return sum(1 for task in state.SHARED_BOARD.get("Backlog", []) if is_backlog_claimable(task))
 
 
 def next_refinement_task() -> Optional[Dict[str, Any]]:
@@ -819,18 +899,7 @@ def next_refinement_task() -> Optional[Dict[str, Any]]:
     if not ws.get("requireBacklogRefinement"):
         return None
     for task in state.SHARED_BOARD.get("Refinement", []):
-        normalize_task(task)
-        if task.get("workType") == "spike":
-            continue
-        if task.get("refinementStatus") == "spike_pending":
-            continue
-        if not task.get("requiresDev", True):
-            continue
-        if task.get("workType") == "planning":
-            continue
-        if task.get("refinementComplete"):
-            continue
-        if task_dependencies_met(task):
+        if is_refinement_claimable(task):
             return task
     return None
 

@@ -16,11 +16,16 @@ from backend.agents.task_context import (
     clear_active_sprint_context,
     clear_qa_failure,
     coerce_task_text,
+    detect_blocked_by_issues,
     find_task_by_id,
+    format_dependency_block_status,
     get_task_lane,
     increment_po_round_trips,
     init_new_task,
     create_spike_task,
+    is_backlog_claimable,
+    is_refinement_claimable,
+    is_task_done,
     next_claimable_backlog_task,
     next_po_planning_backlog_task,
     next_refinement_task,
@@ -2310,11 +2315,91 @@ def _try_refinement_handler() -> tuple[Optional[str], Optional[Dict[str, Any]]]:
         status = str(task.get("refinementStatus") or "pending")
         handler = "refinement_po" if status == "dev_reviewed" else "refinement_dev"
         return handler, dict(task)
-    return "idle", None
+    # Non-empty Refinement but nothing claimable — do not return "idle" (would starve other lanes).
+    return None, None
+
+
+def _escalate_dependency_deadlock(task: Dict[str, Any], issues: Dict[str, Any]) -> None:
+    """Move a permanently blocked card to Needs User with a clear question."""
+    tid = str(task.get("id") or "")
+    if not tid:
+        return
+    if issues.get("cycle"):
+        path = " → ".join(str(p) for p in (issues.get("cyclePath") or []))
+        reason = f"Circular dependency detected ({path or tid}). Untangle blockedBy links."
+    else:
+        missing = issues.get("missing") or []
+        reason = (
+            f"Blocked by missing cards: {', '.join(missing)}. "
+            "Remove invalid blockedBy ids or create the dependency cards."
+        )
+    task["userQuestion"] = reason[:500]
+    move_board_stage(tid, "Needs User")
+    record_task_decision(tid, "System", "escalation", reason[:300])
+    add_system_log("System", "warning", f"{tid}: {reason}")
+    publish_activity(
+        tid,
+        "dependency_deadlock",
+        reason,
+        role="system",
+        agent="System",
+        lane="Needs User",
+    )
+
+
+def _try_claim_dependency_unblocker() -> tuple[Optional[str], Optional[Dict[str, Any]]]:
+    """Prefer working a dependency of a blocked Backlog parent (unblockers first)."""
+    sort_backlog()
+    blocked_parents = [
+        t for t in state.SHARED_BOARD.get("Backlog", []) if not task_dependencies_met(t)
+    ]
+    for parent in blocked_parents:
+        normalize_task(parent)
+        issues = detect_blocked_by_issues(parent)
+        if issues.get("cycle") or (
+            issues.get("missing") and not any(
+                find_task_by_id(str(d)) for d in (parent.get("blockedBy") or [])
+            )
+        ):
+            # All deps missing, or a cycle — escalate instead of waiting forever.
+            if issues.get("cycle") or issues.get("missing"):
+                _escalate_dependency_deadlock(parent, issues)
+            continue
+
+        for dep in parent.get("blockedBy") or []:
+            dep_id = str(dep)
+            if not dep_id or is_task_done(dep_id):
+                continue
+            dep_task = find_task_by_id(dep_id)
+            if not dep_task:
+                continue
+            lane = get_task_lane(dep_id) or ""
+            if lane == "Backlog" and is_backlog_claimable(dep_task):
+                move_board_stage(dep_id, "In Progress")
+                record_task_decision(
+                    dep_id,
+                    "Developer",
+                    "claim",
+                    f"Claimed as dependency unblocker for {parent.get('id')}",
+                )
+                claimed = find_task_by_id(dep_id) or dep_task
+                return "dev", dict(claimed)
+            if lane == "Refinement" and is_refinement_claimable(dep_task):
+                status = str(dep_task.get("refinementStatus") or "pending")
+                handler = "refinement_po" if status == "dev_reviewed" else "refinement_dev"
+                return handler, dict(dep_task)
+            if lane == "Refinement" and dep_task.get("workType") == "spike":
+                spike = next_spike_task()
+                if spike and str(spike.get("id")) == dep_id:
+                    return "spike_dev", dict(spike)
+    return None, None
 
 
 def _try_backlog_handler() -> tuple[Optional[str], Optional[Dict[str, Any]]]:
-    """Return (handler, active_task) for Backlog lane work, or (None, None)."""
+    """Return (handler, active_task) for Backlog lane work, or (None, None).
+
+    Never returns handler \"blocked\" — that used to short-circuit other lanes.
+    """
     if not state.SHARED_BOARD.get("Backlog"):
         return None, None
     task = next_claimable_backlog_task()
@@ -2333,16 +2418,73 @@ def _try_backlog_handler() -> tuple[Optional[str], Optional[Dict[str, Any]]]:
             "Planning card routed to PO",
         )
         return "po", dict(find_task_by_id(po_plan["id"]) or po_plan)
-    blocked = [t for t in state.SHARED_BOARD["Backlog"] if not task_dependencies_met(t)]
-    if blocked:
-        return "blocked", None
-    return "idle", None
+
+    unblocker = _try_claim_dependency_unblocker()
+    if unblocker[0] is not None:
+        return unblocker
+
+    # Escalate any remaining cycle / all-missing parents.
+    for parent in list(state.SHARED_BOARD.get("Backlog", [])):
+        if task_dependencies_met(parent):
+            continue
+        issues = detect_blocked_by_issues(parent)
+        if issues.get("cycle") or (
+            issues.get("missing")
+            and not any(find_task_by_id(str(d)) for d in (parent.get("blockedBy") or []))
+        ):
+            _escalate_dependency_deadlock(parent, issues)
+
+    return None, None
+
+
+def _log_idle_dependency_status() -> None:
+    """Richer diagnostic when sprint is idle but Backlog still has blocked cards."""
+    blocked = [t for t in state.SHARED_BOARD.get("Backlog", []) if not task_dependencies_met(t)]
+    if not blocked:
+        return
+    t = blocked[0]
+    normalize_task(t)
+    status = format_dependency_block_status(t)
+    add_system_log(
+        "System",
+        "info",
+        f"Backlog blocked — waiting on dependencies for {t.get('id')}: {status}",
+    )
 
 
 def has_sprint_work() -> bool:
-    """True when auto-sprint has actionable work in active lanes."""
-    lanes = _sprint_lanes_active()
-    return any(len(state.SHARED_BOARD.get(l, [])) > 0 for l in lanes)
+    """True when auto-sprint has actionable (not merely blocked) work."""
+    board = state.SHARED_BOARD
+    if board.get("Needs PO") or board.get("In Progress"):
+        return True
+    ws = get_workflow_settings()
+    if ws.get("requireCodeReview") and board.get("Code Review"):
+        return True
+    if board.get("QA"):
+        return True
+    if next_claimable_backlog_task() or next_po_planning_backlog_task():
+        return True
+    if ws.get("requireBacklogRefinement"):
+        if next_spike_task() or next_refinement_task():
+            return True
+    # A blocked parent with a claimable dependency is still actionable.
+    sort_backlog()
+    for parent in board.get("Backlog", []):
+        if task_dependencies_met(parent):
+            continue
+        for dep in parent.get("blockedBy") or []:
+            dep_id = str(dep)
+            dep_task = find_task_by_id(dep_id)
+            if not dep_task:
+                continue
+            lane = get_task_lane(dep_id) or ""
+            if lane == "Backlog" and is_backlog_claimable(dep_task):
+                return True
+            if lane == "Refinement" and (
+                is_refinement_claimable(dep_task) or dep_task.get("workType") == "spike"
+            ):
+                return True
+    return False
 
 
 def run_sprint_step(brief: str, ollama_url: str) -> None:
@@ -2456,15 +2598,13 @@ def run_sprint_step(brief: str, ollama_url: str) -> None:
         elif handler == "refinement_po" and active_task:
             _run_refinement_po_update(active_task, brief)
         elif handler == "blocked":
-            with state.STATE_LOCK:
-                blocked = [t for t in state.SHARED_BOARD["Backlog"] if not task_dependencies_met(t)]
-            if blocked:
-                add_system_log("System", "info", f"Backlog blocked — waiting on dependencies for {blocked[0]['id']}")
+            _log_idle_dependency_status()
         elif handler == "cr" and active_task:
             _run_code_review_step(active_task, brief)
         elif handler == "qa" and active_task:
             _run_qa_step(active_task, brief)
         elif handler == "idle":
+            _log_idle_dependency_status()
             add_system_log("System", "warning", "No active features. Send brief to PO or add a feature.")
     finally:
         _finish_sprint_session(handler)

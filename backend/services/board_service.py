@@ -27,12 +27,13 @@ def publish_board_update(
     lane: Optional[str] = None,
     source: str = "move",
 ) -> None:
-    """Push live board snapshot to SSE subscribers."""
+    """Push live board snapshot to SSE subscribers (slimmed + coalesced)."""
+    from backend.services.events import publish_board_event_coalesced, slim_board_for_sse
+
     task = find_task_by_id(task_id) if task_id else None
-    publish_event(
-        "board",
+    publish_board_event_coalesced(
         {
-            "board": state.SHARED_BOARD,
+            "board": slim_board_for_sse(state.SHARED_BOARD),
             "taskId": task_id,
             "lane": lane,
             "source": source,
@@ -47,6 +48,8 @@ def publish_board_delta(
     source: str = "sprint_step",
 ) -> None:
     """Push a single-task delta for sprint steps to avoid full board payloads."""
+    from backend.services.events import _slim_task_for_sse, publish_event
+
     if not task_id:
         publish_board_update(source=source)
         return
@@ -61,7 +64,7 @@ def publish_board_delta(
             "delta": True,
             "taskId": task_id,
             "lane": target_lane,
-            "task": dict(task),
+            "task": _slim_task_for_sse(dict(task)),
             "source": source,
             "taskTitle": task.get("title"),
         },
