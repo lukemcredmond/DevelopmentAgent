@@ -120,6 +120,8 @@ def publish_sprint_progress(
     task_title: str = "",
     lane: str = "",
     status: Optional[str] = None,
+    intent: Optional[str] = None,
+    card_progress: Optional[Dict[str, Any]] = None,
 ) -> None:
     """Broadcast live Plan & Run / sprint step progress to SSE clients."""
     payload: Dict[str, Any] = {
@@ -133,6 +135,10 @@ def publish_sprint_progress(
     }
     if status:
         payload["status"] = status
+    if intent:
+        payload["intent"] = intent
+    if card_progress:
+        payload["cardProgress"] = card_progress
     publish_event("sprint_progress", payload)
 
 
@@ -383,12 +389,22 @@ def _build_last_step_outcome(
             tools_used=set(tools_used) if tools_used else None,
         )
     if progress:
-        outcome["stepProgress"] = progress
+        from backend.services.step_diagnostics import store_step_progress
+
+        progress = dict(progress)
+        if why_card_stayed:
+            progress["whyCardStayed"] = why_card_stayed
+        if suggested_action:
+            progress["suggestedAction"] = suggested_action
         if stop_reason == "max_iterations":
-            outcome["suggestedAction"] = (
+            suggested_action = (
                 "Extend the step (+4/+8 iterations) to continue with context from what already ran, "
                 "or Reset & retry for a fresh step."
             )
+            progress["suggestedAction"] = suggested_action
+            outcome["suggestedAction"] = suggested_action
+        store_step_progress(progress)
+        outcome["stepProgress"] = progress
     return outcome
 
 

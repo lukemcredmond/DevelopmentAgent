@@ -408,6 +408,67 @@ class ScrumAgent:
     def _log_step_exit(self, message: str, log_type: str = "warning") -> None:
         add_system_log(self.role, log_type, message)
 
+    def _publish_work_progress(
+        self,
+        *,
+        task_id: Optional[str],
+        intent: str,
+        status: Optional[str] = None,
+        iteration: Optional[int] = None,
+        max_iterations: Optional[int] = None,
+        run_status: Optional[str] = None,
+        current_tool: Optional[str] = None,
+        clear_tool: bool = False,
+        publish_activity_event: bool = False,
+    ) -> None:
+        """Emit intent + cardProgress on agent_run and sprint_progress."""
+        from backend.services.step_diagnostics import build_card_work_snapshot
+
+        card = build_card_work_snapshot(task_id=task_id) if task_id else None
+        update_kwargs: Dict[str, Any] = {
+            "intent": intent,
+            "card_progress": card,
+        }
+        if run_status is not None:
+            update_kwargs["status"] = run_status
+        if iteration is not None:
+            update_kwargs["iteration"] = iteration
+        if max_iterations is not None:
+            update_kwargs["max_iterations"] = max_iterations
+        if clear_tool:
+            update_kwargs["clear_tool"] = True
+        elif current_tool is not None:
+            update_kwargs["current_tool"] = current_tool
+        update_run(**update_kwargs)
+
+        if task_id and state.SPRINT_PROGRESS_MAX:
+            from backend.agents.task_context import find_task_by_id, get_task_lane
+            from backend.services.sprint_service import publish_sprint_progress
+
+            active = find_task_by_id(task_id) or {}
+            publish_sprint_progress(
+                phase="sprint_step",
+                step=state.SPRINT_PROGRESS_STEP or (iteration or 0),
+                max_steps=state.SPRINT_PROGRESS_MAX,
+                agent=self.role,
+                task_id=task_id,
+                task_title=str(active.get("title") or task_id),
+                lane=get_task_lane(task_id) or "",
+                status=status or intent,
+                intent=intent,
+                card_progress=card,
+            )
+        if publish_activity_event and task_id and intent:
+            from backend.agents.task_context import publish_activity
+
+            publish_activity(
+                task_id,
+                "progress",
+                intent,
+                role=self.role,
+                agent=self.role,
+            )
+
     def _execute_single_tool_call(
         self,
         call: Any,
@@ -421,8 +482,29 @@ class ScrumAgent:
         max_tool_failures: int,
     ) -> Tuple[str, Dict[str, Any], ToolExecutionResult, Optional[str]]:
         """Returns (tool_name, arguments, result, early_stop_message)."""
+        from backend.services.step_diagnostics import build_live_intent
+
         tool_name = call.function.name
         arguments = _normalize_tool_arguments(call.function.arguments)
+
+        def _on_awaiting(name: str) -> None:
+            self._publish_work_progress(
+                task_id=task_id,
+                intent=build_live_intent(phase="tool", tool_name=name),
+                status=f"Awaiting approval: {name}",
+                run_status="awaiting_approval",
+                current_tool=name,
+            )
+
+        def _on_executing(name: str) -> None:
+            self._publish_work_progress(
+                task_id=task_id,
+                intent=build_live_intent(phase="tool", tool_name=name),
+                status=f"Running {name}",
+                run_status="tool_executing",
+                current_tool=name,
+            )
+
         result = execute_tool(
             agent_id,
             tool_name,
@@ -432,8 +514,8 @@ class ScrumAgent:
             skip_approval=False,
             run_id=run_id,
             user_prompt=user_prompt,
-            on_awaiting_approval=lambda name: update_run(status="awaiting_approval", current_tool=name),
-            on_tool_executing=lambda name: update_run(status="tool_executing", current_tool=name),
+            on_awaiting_approval=_on_awaiting,
+            on_tool_executing=_on_executing,
         )
         update_run(status="thinking", clear_tool=True)
 
@@ -656,7 +738,11 @@ class ScrumAgent:
                 self._decisions_in_prompt = min(len(active_task.get("decisions") or []), 8)
             start_run(task_id, self.role, max_iterations=max_iterations)
 
-        from backend.services.step_diagnostics import log_event, set_llm_iterations_max
+        from backend.services.step_diagnostics import (
+            build_live_intent,
+            log_event,
+            set_llm_iterations_max,
+        )
 
         set_llm_iterations_max(max_iterations)
 
@@ -668,24 +754,21 @@ class ScrumAgent:
                     self._log_step_exit(stop_msg, "info")
                     finish_run(status="completed")
                     return stop_msg
-                update_run(
-                    status="thinking",
+                intent = build_live_intent(
+                    phase="thinking",
                     iteration=iteration,
                     max_iterations=max_iterations,
                 )
-                if task_id and state.SPRINT_PROGRESS_MAX:
-                    from backend.services.sprint_service import publish_sprint_progress
-
-                    active = find_task_by_id(task_id) or {}
-                    publish_sprint_progress(
-                        phase="sprint_step",
-                        step=state.SPRINT_PROGRESS_STEP or iteration,
-                        max_steps=state.SPRINT_PROGRESS_MAX,
-                        agent=self.role,
-                        task_id=task_id,
-                        task_title=str(active.get("title") or task_id),
-                        status=f"LLM iter {iteration}/{max_iterations}",
-                    )
+                self._publish_work_progress(
+                    task_id=task_id,
+                    intent=intent,
+                    status=f"LLM iter {iteration}/{max_iterations}",
+                    iteration=iteration,
+                    max_iterations=max_iterations,
+                    run_status="thinking",
+                    clear_tool=True,
+                    publish_activity_event=True,
+                )
                 add_system_log(
                     self.role,
                     "info",
@@ -694,6 +777,19 @@ class ScrumAgent:
                 from backend.services.llm_context import prune_messages_if_needed
 
                 prune_messages_if_needed(messages)
+                await_intent = build_live_intent(
+                    phase="awaiting_ollama",
+                    iteration=iteration,
+                    max_iterations=max_iterations,
+                )
+                self._publish_work_progress(
+                    task_id=task_id,
+                    intent=await_intent,
+                    status=await_intent,
+                    iteration=iteration,
+                    max_iterations=max_iterations,
+                    run_status="thinking",
+                )
                 add_system_log(
                     self.role,
                     "info",
@@ -852,22 +948,21 @@ class ScrumAgent:
                         )
                         log_event("text_rejected", content[:200])
                         reject_label = "text-only"
-                    if task_id and state.SPRINT_PROGRESS_MAX:
-                        from backend.services.sprint_service import publish_sprint_progress
-
-                        active = find_task_by_id(task_id) or {}
-                        publish_sprint_progress(
-                            phase="sprint_step",
-                            step=state.SPRINT_PROGRESS_STEP or iteration,
-                            max_steps=state.SPRINT_PROGRESS_MAX,
-                            agent=self.role,
-                            task_id=task_id,
-                            task_title=str(active.get("title") or task_id),
-                            status=(
-                                f"Retrying after {reject_label} text "
-                                f"(iter {next_iter}/{max_iterations} — need apply_patch)"
-                            ),
-                        )
+                    reject_intent = build_live_intent(
+                        phase="plan_reject" if reject_label == "plan-only" else "text_reject",
+                        iteration=next_iter,
+                        max_iterations=max_iterations,
+                        reject_label=reject_label,
+                    )
+                    self._publish_work_progress(
+                        task_id=task_id,
+                        intent=reject_intent,
+                        status=reject_intent,
+                        iteration=iteration,
+                        max_iterations=max_iterations,
+                        run_status="thinking",
+                        publish_activity_event=True,
+                    )
                     messages.append({"role": "system", "content": _PLAN_REJECTION_MESSAGE})
                     continue
 

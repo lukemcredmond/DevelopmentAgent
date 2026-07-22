@@ -20,6 +20,7 @@ import type {
   BackgroundTerminalSession,
   Board,
   BoardLane,
+  CardWorkProgress,
   CommandDiagnostic,
   IndexProgress,
   PendingToolApproval,
@@ -111,6 +112,34 @@ function mapSprintProgress(data: Record<string, unknown>): SprintProgress {
     taskTitle: String(data.taskTitle ?? data.task_title ?? ''),
     lane: String(data.lane ?? ''),
     status: data.status != null ? String(data.status) : undefined,
+    intent: data.intent != null ? String(data.intent) : undefined,
+    cardProgress: mapCardProgress(data.cardProgress ?? data.card_progress),
+  }
+}
+
+function mapCardProgress(raw: unknown): CardWorkProgress | undefined {
+  if (!raw || typeof raw !== 'object') return undefined
+  const d = raw as Record<string, unknown>
+  const gates = Array.isArray(d.gatesRemaining)
+    ? d.gatesRemaining.map((g) => String(g))
+    : Array.isArray(d.gates_remaining)
+      ? (d.gates_remaining as unknown[]).map((g) => String(g))
+      : undefined
+  const files = Array.isArray(d.filesThisStep)
+    ? d.filesThisStep.map((f) => String(f))
+    : Array.isArray(d.files_this_step)
+      ? (d.files_this_step as unknown[]).map((f) => String(f))
+      : undefined
+  return {
+    subtasksDone: Number(d.subtasksDone ?? d.subtasks_done ?? 0) || 0,
+    subtasksTotal: Number(d.subtasksTotal ?? d.subtasks_total ?? 0) || 0,
+    stepsOnCard: Number(d.stepsOnCard ?? d.steps_on_card ?? 0) || 0,
+    stuckLoops: Number(d.stuckLoops ?? d.stuck_loops ?? 0) || 0,
+    poRoundTrips: Number(d.poRoundTrips ?? d.po_round_trips ?? 0) || 0,
+    gatesRemaining: gates,
+    filesThisStep: files,
+    acCount: Number(d.acCount ?? d.ac_count ?? 0) || 0,
+    lane: d.lane != null ? String(d.lane) : undefined,
   }
 }
 
@@ -139,6 +168,8 @@ function mapAgentRun(raw: Record<string, unknown>): AgentRunState {
     iteration: Number(raw.iteration ?? 0) || undefined,
     maxIterations: Number(raw.max_iterations ?? raw.maxIterations ?? 0) || undefined,
     recentTools,
+    intent: raw.intent != null ? String(raw.intent) : null,
+    cardProgress: mapCardProgress(raw.cardProgress ?? raw.card_progress) ?? null,
   }
 }
 

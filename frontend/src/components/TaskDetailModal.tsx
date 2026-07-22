@@ -480,6 +480,69 @@ export default function TaskDetailModal({
             )}
           </CollapsibleSection>
 
+          {(() => {
+            const lsp = safeTask.lastStepProgress
+            const cp = lsp?.cardProgress
+            const subtasksTotal = cp?.subtasksTotal ?? (safeTask.subtaskIds ?? []).length
+            const subtasksDone = cp?.subtasksDone
+            const gates = cp?.gatesRemaining
+            const filesStep = lsp?.filesThisStep ?? cp?.filesThisStep ?? []
+            const acCount = cp?.acCount ?? (safeTask.acceptanceCriteria ?? []).length
+            const stuck = safeTask.stuckLoops ?? cp?.stuckLoops ?? 0
+            const showStrip =
+              subtasksTotal > 0 ||
+              (gates && gates.length > 0) ||
+              stuck > 0 ||
+              Boolean(lsp?.whyCardStayed) ||
+              Boolean(lsp?.intent) ||
+              filesStep.length > 0 ||
+              acCount > 0
+            if (!showStrip) return null
+            return (
+              <div className="bg-sky-950/20 border border-sky-500/30 rounded-lg p-3 space-y-1.5">
+                <h4 className="text-xs font-bold text-sky-200">Work progress</h4>
+                {lsp?.intent && (
+                  <p className="text-[11px] text-violet-200">Last intent: {lsp.intent}</p>
+                )}
+                {subtasksTotal > 0 && (
+                  <p className="text-[11px] text-cat-subtext">
+                    Subtasks Done: {subtasksDone != null ? subtasksDone : '—'}/{subtasksTotal}
+                  </p>
+                )}
+                {acCount > 0 && (
+                  <p className="text-[11px] text-cat-subtext">
+                    Acceptance criteria: {acCount} defined (not auto-scored)
+                  </p>
+                )}
+                {gates && gates.length > 0 && (
+                  <p className="text-[11px] text-cat-subtext">
+                    Gates remaining: {gates.join(' → ')}
+                  </p>
+                )}
+                {stuck > 0 && (
+                  <p className="text-[11px] text-amber-300">
+                    Steps without lane move: {stuck}
+                  </p>
+                )}
+                {filesStep.length > 0 && (
+                  <p className="text-[11px] text-cat-subtext truncate" title={filesStep.join(', ')}>
+                    Files this step: {filesStep.join(', ')}
+                  </p>
+                )}
+                {lsp?.whyCardStayed && (
+                  <p className="text-[11px] text-amber-200">
+                    Why stayed: {lsp.whyCardStayed}
+                  </p>
+                )}
+                {lsp?.suggestedAction && (
+                  <p className="text-[11px] text-cat-subtext">
+                    Suggested: {lsp.suggestedAction}
+                  </p>
+                )}
+              </div>
+            )
+          })()}
+
           {canMoveToInProgress && onMoveToInProgress && taskLane && (
             <div className="bg-emerald-950/20 border border-emerald-500/30 rounded-lg p-3 space-y-2">
               <h4 className="text-xs font-bold text-emerald-200">Run implementation now</h4>

@@ -441,6 +441,122 @@ def set_llm_iterations_max(max_iterations: int) -> None:
         trace.set_llm_iterations_max(max_iterations)
 
 
+_WRITE_TOOLS = frozenset({"write_file", "apply_patch"})
+_FILE_SUMMARY_RE = re.compile(r"^([^\s(]+)")
+
+
+def gates_remaining_for_lane(lane: Optional[str]) -> List[str]:
+    """Lanes still ahead before Done (honest pipeline remaining)."""
+    from backend.services.workflow_settings import get_workflow_settings
+
+    settings = get_workflow_settings()
+    order = ["In Progress"]
+    if settings.get("requireCodeReview"):
+        order.append("Code Review")
+    order.extend(["QA", "Done"])
+    current = (lane or "").strip()
+    if current == "Done":
+        return []
+    if current not in order:
+        # Needs PO / Needs User / Backlog etc. — full remaining implementation gates
+        return [g for g in order if g != "In Progress"]
+    idx = order.index(current)
+    return order[idx + 1 :]
+
+
+def files_written_this_step(tools_log: Optional[List[Dict[str, Any]]] = None) -> List[str]:
+    """Paths written via write_file / apply_patch in this step's tools_log."""
+    trace = get_active_trace()
+    entries = tools_log if tools_log is not None else (trace.tools_log if trace else [])
+    paths: List[str] = []
+    seen: set[str] = set()
+    for entry in entries:
+        name = str(entry.get("toolName") or "")
+        if name not in _WRITE_TOOLS:
+            continue
+        if entry.get("success") is False:
+            continue
+        summary = str(entry.get("summary") or "").strip()
+        match = _FILE_SUMMARY_RE.match(summary)
+        path = match.group(1) if match else ""
+        if path and path != "?" and path not in seen:
+            seen.add(path)
+            paths.append(path)
+    return paths[:12]
+
+
+def build_card_work_snapshot(
+    task: Optional[Dict[str, Any]] = None,
+    *,
+    task_id: Optional[str] = None,
+    lane: Optional[str] = None,
+    files_this_step: Optional[List[str]] = None,
+) -> Dict[str, Any]:
+    """Honest card-level remaining-work signals (no invented AC %)."""
+    from backend.agents.task_context import find_task_by_id, get_task_lane, is_task_done, normalize_task
+
+    if task is None and task_id:
+        task = find_task_by_id(str(task_id))
+    if task:
+        normalize_task(task)
+        task_id = str(task.get("id") or task_id or "")
+    else:
+        task = {}
+
+    resolved_lane = lane or (get_task_lane(task_id) if task_id else None) or str(task.get("status") or "")
+    subtask_ids = [str(s) for s in (task.get("subtaskIds") or [])]
+    subtasks_done = sum(1 for sid in subtask_ids if is_task_done(sid))
+    ac = task.get("acceptanceCriteria") or []
+    ac_count = len(ac) if isinstance(ac, list) else 0
+    stuck = int(task.get("stuckLoops") or 0)
+    files = files_this_step if files_this_step is not None else files_written_this_step()
+
+    return {
+        "subtasksDone": subtasks_done,
+        "subtasksTotal": len(subtask_ids),
+        "stepsOnCard": stuck,
+        "stuckLoops": stuck,
+        "poRoundTrips": int(task.get("poRoundTrips") or 0),
+        "gatesRemaining": gates_remaining_for_lane(resolved_lane),
+        "filesThisStep": files,
+        "acCount": ac_count,
+        "lane": resolved_lane,
+    }
+
+
+def build_live_intent(
+    *,
+    phase: str,
+    iteration: int = 0,
+    max_iterations: int = 0,
+    tool_name: Optional[str] = None,
+    tool_summary: Optional[str] = None,
+    reject_label: Optional[str] = None,
+) -> str:
+    """One-line what-the-agent-is-doing-now for UI."""
+    iter_bit = f" (iter {iteration}/{max_iterations})" if max_iterations else ""
+    if phase == "awaiting_ollama":
+        return f"Awaiting Ollama{iter_bit}"
+    if phase == "thinking":
+        return f"Thinking{iter_bit}"
+    if phase in ("plan_reject", "text_reject") or reject_label:
+        label = reject_label or ("plan-only" if phase == "plan_reject" else "text-only")
+        return f"Retrying after {label} — need apply_patch{iter_bit}"
+    if phase == "tool" or tool_name:
+        name = tool_name or "tool"
+        detail = (tool_summary or "").strip()
+        if detail and not detail.startswith(name):
+            return f"Running {name}: {detail[:120]}"
+        if detail:
+            return f"Running {detail[:140]}"
+        return f"Running {name}{iter_bit}"
+    if phase == "completed":
+        return "Step completed"
+    if phase == "failed":
+        return "Step failed"
+    return (phase or "Working")[:160]
+
+
 def build_step_progress(
     *,
     task_id: Optional[str],
@@ -449,8 +565,12 @@ def build_step_progress(
     tools_used: Optional[Set[str]] = None,
     failed_tool_keys: Optional[List[Any]] = None,
     stuck_loop: bool = False,
+    intent: Optional[str] = None,
+    why_card_stayed: Optional[str] = None,
+    suggested_action: Optional[str] = None,
+    card_progress: Optional[Dict[str, Any]] = None,
 ) -> Dict[str, Any]:
-    """Snapshot of what the agent did — used for max-iter Extend UX."""
+    """Snapshot of what the agent did — used for max-iter Extend UX + card observability."""
     trace = get_active_trace()
     tools_ordered: List[str] = []
     last_tools: List[Dict[str, Any]] = []
@@ -496,8 +616,24 @@ def build_step_progress(
             if name not in tools_ordered:
                 tools_ordered.append(name)
 
+    files_this_step = files_written_this_step()
+    resolved_task_id = task_id or (trace.task_id if trace else None)
+    snapshot = card_progress or build_card_work_snapshot(
+        task_id=str(resolved_task_id) if resolved_task_id else None,
+        files_this_step=files_this_step,
+    )
+
+    if not intent and last_tool_summary:
+        intent = build_live_intent(phase="tool", tool_summary=last_tool_summary)
+    elif not intent:
+        intent = build_live_intent(
+            phase="thinking",
+            iteration=iterations_used,
+            max_iterations=iterations_max,
+        )
+
     progress: Dict[str, Any] = {
-        "taskId": task_id or (trace.task_id if trace else None),
+        "taskId": resolved_task_id,
         "iterationsUsed": iterations_used,
         "iterationsMax": iterations_max,
         "toolsUsed": tools_ordered,
@@ -506,9 +642,16 @@ def build_step_progress(
         "textRejections": text_rej,
         "lastToolSummary": last_tool_summary,
         "stuckLoop": stuck_loop,
+        "intent": intent,
+        "cardProgress": snapshot,
+        "filesThisStep": files_this_step,
     }
     if duration_ms is not None:
         progress["durationMs"] = duration_ms
+    if why_card_stayed:
+        progress["whyCardStayed"] = why_card_stayed
+    if suggested_action:
+        progress["suggestedAction"] = suggested_action
     return progress
 
 

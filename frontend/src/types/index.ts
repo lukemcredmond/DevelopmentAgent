@@ -133,6 +133,8 @@ export interface Task {
   featureHistory?: FeatureHistoryEntry[]
   childTaskIds?: string[]
   featureRollup?: FeatureRollup | null
+  stuckLoops?: number
+  lastStepProgress?: StepProgress | null
 }
 
 export interface FeatureRollupChild {
@@ -439,6 +441,8 @@ export interface AgentRunState {
   iteration?: number
   maxIterations?: number
   recentTools?: RecentToolEntry[]
+  intent?: string | null
+  cardProgress?: CardWorkProgress | null
 }
 
 export interface PendingToolApproval {
@@ -469,6 +473,18 @@ export interface SprintSummary {
   status?: 'completed' | 'idle' | 'cancelled' | 'max_steps'
 }
 
+export interface CardWorkProgress {
+  subtasksDone?: number
+  subtasksTotal?: number
+  stepsOnCard?: number
+  stuckLoops?: number
+  poRoundTrips?: number
+  gatesRemaining?: string[]
+  filesThisStep?: string[]
+  acCount?: number
+  lane?: string
+}
+
 export interface SprintProgress {
   phase: 'po_plan' | 'sprint_step' | 'done' | 'cancelled'
   step: number
@@ -478,6 +494,8 @@ export interface SprintProgress {
   taskTitle: string
   lane: string
   status?: string
+  intent?: string
+  cardProgress?: CardWorkProgress
 }
 
 export interface StepProgress {
@@ -491,6 +509,11 @@ export interface StepProgress {
   lastToolSummary?: string
   stuckLoop?: boolean
   durationMs?: number
+  intent?: string
+  cardProgress?: CardWorkProgress
+  filesThisStep?: string[]
+  whyCardStayed?: string
+  suggestedAction?: string
 }
 
 export interface LastStepOutcome {

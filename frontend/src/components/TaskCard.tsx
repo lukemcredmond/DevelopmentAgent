@@ -2,7 +2,7 @@ import { useSortable } from '@dnd-kit/sortable'
 import { CSS } from '@dnd-kit/utilities'
 import type { BoardLane, Task } from '../types'
 import type { TaskRunInfo } from '../utils/taskRunInfo'
-import { formatRunStatus } from '../utils/taskRunInfo'
+import { formatCardProgressBrief, formatRunStatus } from '../utils/taskRunInfo'
 import { deriveTaskFiles, formatTaskText } from '../utils/taskFormat'
 
 interface TaskCardProps {
@@ -55,6 +55,7 @@ export default function TaskCard({
 
   const isActiveRun = runInfo != null && runInfo.taskId === task.id
   const statusLabel = isActiveRun ? formatRunStatus(runInfo) : ''
+  const progressBrief = isActiveRun ? formatCardProgressBrief(runInfo) : null
 
   return (
     <button
@@ -82,9 +83,19 @@ export default function TaskCard({
             <span className="text-indigo-300/80">·</span>
             <span className="text-indigo-100">{statusLabel}</span>
           </div>
+          {runInfo.intent && (
+            <p className="text-[9px] text-violet-100/90 truncate" title={runInfo.intent}>
+              {runInfo.intent}
+            </p>
+          )}
           {runInfo.iteration != null && runInfo.maxIterations != null && (
             <p className="text-[9px] text-cat-subtext font-mono">
               LLM iteration {runInfo.iteration}/{runInfo.maxIterations}
+            </p>
+          )}
+          {progressBrief && (
+            <p className="text-[9px] text-sky-200/90 truncate" title={progressBrief}>
+              {progressBrief}
             </p>
           )}
           {runInfo.currentTool && (
@@ -102,6 +113,29 @@ export default function TaskCard({
           )}
         </div>
       )}
+      {!isActiveRun && runInfo == null && task.lastStepProgress?.whyCardStayed && (
+        <div className="mb-2 rounded-md bg-amber-950/40 border border-amber-500/30 px-2 py-1.5 space-y-0.5">
+          <p className="text-[9px] text-amber-200/90 truncate" title={task.lastStepProgress.whyCardStayed}>
+            Stayed: {task.lastStepProgress.whyCardStayed}
+          </p>
+          {task.lastStepProgress.suggestedAction && (
+            <p
+              className="text-[9px] text-cat-subtext truncate"
+              title={task.lastStepProgress.suggestedAction}
+            >
+              Next: {task.lastStepProgress.suggestedAction}
+            </p>
+          )}
+        </div>
+      )}
+      {!isActiveRun &&
+        runInfo == null &&
+        !task.lastStepProgress?.whyCardStayed &&
+        (task.stuckLoops ?? 0) > 0 && (
+          <p className="mb-1.5 text-[9px] text-amber-300/80">
+            No lane move ×{task.stuckLoops}
+          </p>
+        )}
       <div className="flex items-center justify-between mb-1.5">
         <span className="text-[10px] bg-indigo-950 text-indigo-300 px-1.5 py-0.5 rounded font-mono font-bold">
           {task.id}

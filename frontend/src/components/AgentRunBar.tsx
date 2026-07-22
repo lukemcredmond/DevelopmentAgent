@@ -1,4 +1,10 @@
-import type { AgentRunState, LastStepDiagnostics, LastStepOutcome, StepProgress } from '../types'
+import type {
+  AgentRunState,
+  CardWorkProgress,
+  LastStepDiagnostics,
+  LastStepOutcome,
+  StepProgress,
+} from '../types'
 
 interface AgentRunBarProps {
   activeRun: AgentRunState | null
@@ -13,6 +19,7 @@ interface AgentRunBarProps {
   onExtend?: (extraIterations: number) => void | Promise<void>
   onResetStep?: () => void | Promise<void>
   extending?: boolean
+  sprintProgress?: { intent?: string; cardProgress?: CardWorkProgress } | null
 }
 
 function formatMs(ms: number | undefined): string {
@@ -33,6 +40,27 @@ function progressLine(progress: StepProgress): string {
   return `Used: ${tools} · ${plan} plan / ${text} text rejects · ${loop}`
 }
 
+function cardProgressLine(cp: CardWorkProgress | null | undefined): string | null {
+  if (!cp) return null
+  const parts: string[] = []
+  if ((cp.subtasksTotal ?? 0) > 0) {
+    parts.push(`todos ${cp.subtasksDone ?? 0}/${cp.subtasksTotal}`)
+  }
+  if ((cp.gatesRemaining?.length ?? 0) > 0) {
+    parts.push(`next: ${cp.gatesRemaining!.join(' → ')}`)
+  }
+  if ((cp.stuckLoops ?? 0) > 0) {
+    parts.push(`no lane move ×${cp.stuckLoops}`)
+  }
+  if ((cp.acCount ?? 0) > 0) {
+    parts.push(`${cp.acCount} ACs`)
+  }
+  if ((cp.filesThisStep?.length ?? 0) > 0) {
+    parts.push(`wrote ${cp.filesThisStep!.length} file(s)`)
+  }
+  return parts.length ? parts.join(' · ') : null
+}
+
 export default function AgentRunBar({
   activeRun,
   currentTool,
@@ -46,6 +74,7 @@ export default function AgentRunBar({
   onExtend,
   onResetStep,
   extending = false,
+  sprintProgress = null,
 }: AgentRunBarProps) {
   const hasActiveRun = activeRun != null
   const toolLabel = currentTool || activeRun?.currentTool
@@ -61,6 +90,16 @@ export default function AgentRunBar({
     lastStepOutcome?.stepProgress ??
     lastStepDiagnostics?.stepProgress ??
     null
+  const intent =
+    activeRun?.intent ||
+    sprintProgress?.intent ||
+    progress?.intent ||
+    null
+  const cardLine = cardProgressLine(
+    activeRun?.cardProgress ?? sprintProgress?.cardProgress ?? progress?.cardProgress,
+  )
+  const whyStayed = lastStepOutcome?.whyCardStayed ?? progress?.whyCardStayed
+  const suggested = lastStepOutcome?.suggestedAction ?? progress?.suggestedAction
   const isMaxIter =
     lastStepOutcome?.stopReason === 'max_iterations' ||
     (activeRun?.error ?? '').startsWith('Max tool iterations') ||
@@ -77,7 +116,9 @@ export default function AgentRunBar({
     typeof timing.durationMs === 'number' &&
     (timing.durationMs > 0 || (timing.ollamaMsTotal ?? 0) > 0)
 
-  if (!hasActiveRun && !showMaxIterPanel && !showTiming) {
+  const showIdleWhy = !hasActiveRun && !showMaxIterPanel && (whyStayed || suggested)
+
+  if (!hasActiveRun && !showMaxIterPanel && !showTiming && !showIdleWhy) {
     return (
       <div className="shrink-0 border-b border-cat-surface1 bg-cat-mantle/60 text-[11px]">
         <div className="px-4 py-1.5 flex items-center gap-3 flex-wrap">
@@ -109,7 +150,7 @@ export default function AgentRunBar({
     )
   }
 
-  if (hasActiveRun && isDone && !activeRun.error && !showMaxIterPanel && !showTiming) {
+  if (hasActiveRun && isDone && !activeRun.error && !showMaxIterPanel && !showTiming && !whyStayed) {
     return null
   }
 
@@ -168,6 +209,27 @@ export default function AgentRunBar({
             >
               Tools →
             </button>
+          )}
+        </div>
+      )}
+
+      {intent && (isRunning || showIdleWhy) && (
+        <p className="mx-4 mb-1 text-[10px] text-violet-200 truncate" title={intent}>
+          {intent}
+        </p>
+      )}
+      {cardLine && (isRunning || showIdleWhy || showMaxIterPanel) && (
+        <p className="mx-4 mb-1 text-[10px] text-sky-200/90 truncate" title={cardLine}>
+          {cardLine}
+        </p>
+      )}
+      {showIdleWhy && (whyStayed || suggested) && (
+        <div className="mx-4 mb-2 space-y-0.5 border border-amber-500/30 bg-amber-950/20 rounded px-2.5 py-1.5">
+          {whyStayed && (
+            <p className="text-[10px] text-amber-200">Stayed In Progress: {whyStayed}</p>
+          )}
+          {suggested && (
+            <p className="text-[10px] text-cat-subtext">Suggested: {suggested}</p>
           )}
         </div>
       )}

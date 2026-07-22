@@ -60,9 +60,30 @@ export default function SprintProgressBar({
               step {step}/{maxSteps}
             </span>
           )}
-          {progress?.status && (
+          {progress?.status && !progress?.intent && (
             <span className="text-cat-overlay italic">{progress.status}</span>
           )}
+          {progress?.intent && (
+            <span className="text-violet-200 truncate max-w-[min(100%,36rem)]" title={progress.intent}>
+              {progress.intent}
+            </span>
+          )}
+          {progress?.cardProgress &&
+            ((progress.cardProgress.subtasksTotal ?? 0) > 0 ||
+              (progress.cardProgress.stuckLoops ?? 0) > 0 ||
+              (progress.cardProgress.gatesRemaining?.length ?? 0) > 0) && (
+              <span className="text-sky-300/90 text-[10px]">
+                {(progress.cardProgress.subtasksTotal ?? 0) > 0
+                  ? `todos ${progress.cardProgress.subtasksDone ?? 0}/${progress.cardProgress.subtasksTotal}`
+                  : null}
+                {(progress.cardProgress.stuckLoops ?? 0) > 0
+                  ? `${(progress.cardProgress.subtasksTotal ?? 0) > 0 ? ' · ' : ''}stuck ×${progress.cardProgress.stuckLoops}`
+                  : null}
+                {(progress.cardProgress.gatesRemaining?.length ?? 0) > 0
+                  ? `${(progress.cardProgress.subtasksTotal ?? 0) > 0 || (progress.cardProgress.stuckLoops ?? 0) > 0 ? ' · ' : ''}→ ${progress.cardProgress.gatesRemaining!.join(' → ')}`
+                  : null}
+              </span>
+            )}
           {progress?.agent && (
             <span className="text-cat-subtext">{progress.agent}</span>
           )}

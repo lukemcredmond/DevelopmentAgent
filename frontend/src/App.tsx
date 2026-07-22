@@ -392,16 +392,23 @@ export default function App() {
 
   const orchestratedActive = sprintRunning || planRunActive || sprintBusy
 
-  const activeTaskRunInfo = useMemo(
-    () =>
-      buildTaskRunInfo({
-        activeRun,
-        sprintProgress,
-        activeStepDiagnostics: state.activeStepDiagnostics,
-        currentTool,
-      }),
-    [activeRun, sprintProgress, state.activeStepDiagnostics, currentTool],
-  )
+  const activeTaskRunInfo = useMemo(() => {
+    const taskId =
+      activeRun?.taskId ||
+      (sprintProgress?.taskId && sprintProgress.taskId !== 'PLANNING'
+        ? sprintProgress.taskId
+        : '') ||
+      state.activeStepDiagnostics?.taskId ||
+      ''
+    const task = taskId ? findTaskOnBoard(state.board, taskId) : null
+    return buildTaskRunInfo({
+      activeRun,
+      sprintProgress,
+      activeStepDiagnostics: state.activeStepDiagnostics,
+      currentTool,
+      task,
+    })
+  }, [activeRun, sprintProgress, state.activeStepDiagnostics, currentTool, state.board])
 
   useEffect(() => {
     if (!planRunActive) return
@@ -1453,6 +1460,7 @@ export default function App() {
                 activeRun={activeRun}
                 currentTool={currentTool}
                 planRunActive={planRunActive}
+                sprintProgress={sprintProgress}
                 onOpenTools={openToolsTab}
                 onOpenTask={openTaskFromRunBar}
                 retrying={retryingStep}
