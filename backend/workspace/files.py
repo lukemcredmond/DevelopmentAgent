@@ -684,9 +684,20 @@ def run_agent_command(command: str, background: bool = False) -> str:
             "Output streams to Tools panel; use read_background_output or wait for completion."
         )
 
-    from backend.services.command_result import format_command_result_for_agent, run_workspace_command
+    from backend.services.command_result import (
+        format_command_result_for_agent,
+        resolve_command_timeout,
+        run_workspace_command,
+    )
+    from backend.services.logs import add_system_log
 
-    result = run_workspace_command(command)
+    timeout = resolve_command_timeout(command)
+    add_system_log(
+        "System",
+        "info",
+        f"run_command timeout={timeout}s: {command[:200]}",
+    )
+    result = run_workspace_command(command, timeout=timeout)
     return format_command_result_for_agent(result)
 
 

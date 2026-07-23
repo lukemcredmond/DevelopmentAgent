@@ -71,7 +71,7 @@ def summarize_tool_args(name: str, args: Dict[str, Any]) -> str:
         return str(args.get("test_script_path", args.get("path", "?")))
     if name == "run_command":
         cmd = args.get("command", "")
-        return cmd[:120] if isinstance(cmd, str) else str(cmd)[:120]
+        return cmd[:200] if isinstance(cmd, str) else str(cmd)[:200]
     if name == "update_board":
         return f"{args.get('task_id', '?')} → {args.get('target_lane', '?')}"
     if not args:

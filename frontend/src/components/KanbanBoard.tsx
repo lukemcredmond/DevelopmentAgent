@@ -183,7 +183,7 @@ export default memo(function KanbanBoard({
 
   return (
     <div
-      className="p-4 overflow-y-auto bg-cat-surface0/30 flex flex-col border-b border-cat-surface1 min-h-0 flex-1"
+      className="p-4 overflow-hidden bg-cat-surface0/30 flex flex-col border-b border-cat-surface1 min-h-0 flex-1 h-full"
       onKeyDown={(e) => {
         if (e.key === 'Escape' && filterQuery) {
           e.stopPropagation()
@@ -242,43 +242,45 @@ export default memo(function KanbanBoard({
         </div>
       )}
 
-      <DndContext
-        sensors={sensors}
-        collisionDetection={closestCorners}
-        onDragStart={handleDragStart}
-        onDragEnd={handleDragEnd}
-      >
-        <div
-          className="grid gap-3 flex-1 min-h-[160px]"
-          style={{
-            gridTemplateColumns: `repeat(${Math.min(lanes.length, 4)}, minmax(140px, 1fr))`,
-          }}
+      <div className="flex-1 min-h-0 flex flex-col">
+        <DndContext
+          sensors={sensors}
+          collisionDetection={closestCorners}
+          onDragStart={handleDragStart}
+          onDragEnd={handleDragEnd}
         >
-          {lanes.map((lane) => (
-            <KanbanColumn
-              key={lane}
-              lane={lane}
-              tasks={filteredBoard[lane] ?? []}
-              onTaskClick={onTaskClick}
-              getTaskFileCount={getTaskFileCount}
-              getTaskDecisionCount={getTaskDecisionCount}
-              dragDisabled={sprintRunning || lane === 'Features'}
-              activeRunInfo={activeRunInfo}
-            />
-          ))}
-        </div>
+          <div
+            className="grid gap-3 flex-1 min-h-0 overflow-x-auto"
+            style={{
+              gridTemplateColumns: `repeat(${Math.min(lanes.length, 4)}, minmax(140px, 1fr))`,
+            }}
+          >
+            {lanes.map((lane) => (
+              <KanbanColumn
+                key={lane}
+                lane={lane}
+                tasks={filteredBoard[lane] ?? []}
+                onTaskClick={onTaskClick}
+                getTaskFileCount={getTaskFileCount}
+                getTaskDecisionCount={getTaskDecisionCount}
+                dragDisabled={sprintRunning || lane === 'Features'}
+                activeRunInfo={activeRunInfo}
+              />
+            ))}
+          </div>
 
-        <DragOverlay>
-          {activeTask ? (
-            <div className="bg-cat-surface0 p-2.5 rounded-lg border border-indigo-500/50 text-xs shadow-xl opacity-90">
-              <span className="text-[10px] bg-indigo-950 text-indigo-300 px-1.5 py-0.5 rounded font-mono font-bold">
-                {activeTask.id}
-              </span>
-              <h4 className="font-bold text-white mt-1">{activeTask.title}</h4>
-            </div>
-          ) : null}
-        </DragOverlay>
-      </DndContext>
+          <DragOverlay>
+            {activeTask ? (
+              <div className="bg-cat-surface0 p-2.5 rounded-lg border border-indigo-500/50 text-xs shadow-xl opacity-90">
+                <span className="text-[10px] bg-indigo-950 text-indigo-300 px-1.5 py-0.5 rounded font-mono font-bold">
+                  {activeTask.id}
+                </span>
+                <h4 className="font-bold text-white mt-1">{activeTask.title}</h4>
+              </div>
+            ) : null}
+          </DragOverlay>
+        </DndContext>
+      </div>
     </div>
   )
 })

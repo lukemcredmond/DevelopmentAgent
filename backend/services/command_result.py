@@ -6,8 +6,48 @@ import time
 from dataclasses import dataclass, field
 from typing import Any, Dict, List, Optional
 
+from backend.config import LONG_COMMAND_TIMEOUT_SEC, TERMINAL_TIMEOUT_SEC
 from backend.services.diagnostics_parser import parse_command_diagnostics, summarize_diagnostics
 from backend.services.terminal_service import run_command
+
+# Slow finite builds — use LONG_COMMAND_TIMEOUT_SEC (not background).
+_LONG_COMMAND_MARKERS = (
+    "build_runner",
+    "flutter build",
+    "flutter pub run build_runner",
+    "dart run build_runner",
+    "dotnet build",
+    "dotnet publish",
+    "gradle",
+    "npm run build",
+    "yarn build",
+    "pnpm build",
+    "cargo build",
+    "cargo release",
+    "mvn ",
+    "maven ",
+)
+
+
+def is_long_running_command(command: str) -> bool:
+    lower = (command or "").lower()
+    return any(marker in lower for marker in _LONG_COMMAND_MARKERS)
+
+
+def resolve_command_timeout(command: str, *, explicit: Optional[int] = None) -> int:
+    """Pick shell timeout: explicit > long-command heuristic > workflow/default."""
+    if explicit is not None and explicit > 0:
+        return int(explicit)
+    try:
+        from backend.services.workflow_settings import get_workflow_settings
+
+        base = int(get_workflow_settings().get("terminalTimeoutSec") or TERMINAL_TIMEOUT_SEC)
+    except Exception:
+        base = TERMINAL_TIMEOUT_SEC
+    base = max(30, base)
+    if is_long_running_command(command):
+        return max(base, LONG_COMMAND_TIMEOUT_SEC)
+    return base
 
 
 @dataclass
@@ -59,11 +99,9 @@ def build_command_result(
 
 def run_workspace_command(command: str, timeout: Optional[int] = None) -> CommandResult:
     """Run a shell command in the workspace and return structured results."""
+    effective = resolve_command_timeout(command, explicit=timeout)
     started = time.time()
-    if timeout is not None:
-        result = run_command(command, timeout=timeout)
-    else:
-        result = run_command(command)
+    result = run_command(command, timeout=effective)
     duration_ms = int((time.time() - started) * 1000)
     return build_command_result(
         command,

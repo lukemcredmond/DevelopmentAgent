@@ -187,7 +187,17 @@ export default function AgentRunBar({
             {statusLabel}
           </span>
           {toolLabel && isRunning && (
-            <span className="text-indigo-300 truncate max-w-[200px]">{toolLabel}</span>
+            <span className="text-indigo-300 truncate max-w-[200px]" title={toolLabel}>
+              {toolLabel}
+            </span>
+          )}
+          {activeRun?.currentToolDetail && isRunning && (
+            <span
+              className="text-amber-200/90 font-mono truncate max-w-[min(100%,28rem)]"
+              title={activeRun.currentToolDetail}
+            >
+              {activeRun.currentToolDetail}
+            </span>
           )}
           {activeRun.taskId && onOpenTask ? (
             <button

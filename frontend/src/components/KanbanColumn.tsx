@@ -30,7 +30,7 @@ export default function KanbanColumn({
   return (
     <div
       ref={setNodeRef}
-      className={`bg-cat-base p-2.5 rounded-xl border flex flex-col min-h-[160px] transition-colors ${
+      className={`bg-cat-base p-2.5 rounded-xl border flex flex-col h-full min-h-0 transition-colors ${
         isOver
           ? 'border-indigo-500/60'
           : highlightNeedsUser
@@ -40,7 +40,7 @@ export default function KanbanColumn({
               : 'border-cat-surface1'
       }`}
     >
-      <div className="flex items-center justify-between pb-1.5 border-b border-cat-surface1 mb-2.5">
+      <div className="flex items-center justify-between pb-1.5 border-b border-cat-surface1 mb-2.5 shrink-0">
         <span
           className={`text-xs font-bold uppercase tracking-wider ${
             isFeaturesLane ? 'text-violet-300' : 'text-cat-text'
@@ -53,7 +53,7 @@ export default function KanbanColumn({
         </span>
       </div>
       <SortableContext items={tasks.map((t) => t.id)} strategy={verticalListSortingStrategy}>
-        <div className="space-y-2 overflow-y-auto flex-1">
+        <div className="space-y-2 overflow-y-auto flex-1 min-h-0">
           {tasks.map((task, i) => (
             <TaskCard
               key={`${lane}-${task.id}-${i}`}

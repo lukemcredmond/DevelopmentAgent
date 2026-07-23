@@ -72,7 +72,7 @@ export default function BottomPanelResize({
       const onMove = (ev: PointerEvent) => {
         if (!draggingRef.current) return
         const delta = startY - ev.clientY
-        const maxH = parentHeight * 0.7
+        const maxH = parentHeight * 0.92
         const next = Math.min(maxH, Math.max(BOTTOM_PANEL_MIN, startHeight + delta))
         onResize(next)
       }

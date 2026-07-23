@@ -634,7 +634,7 @@ export default function App() {
       if (next) {
         setBriefOpen(false)
         if (!bottomPanelCollapsed) {
-          setBottomPanelHeight((h) => Math.min(h, 260))
+          setBottomPanelHeight((h) => Math.min(h, 420))
         }
       } else if (!bottomPanelCollapsed) {
         setBottomPanelHeight((h) => Math.max(h, 320))
@@ -740,7 +740,7 @@ export default function App() {
       setPanelMaximized(false)
     } else {
       preMaximizeHeightRef.current = Math.max(BOTTOM_PANEL_MIN, bottomPanelHeight)
-      const maxH = Math.max(220, col.clientHeight * 0.65)
+      const maxH = Math.max(220, col.clientHeight * 0.92)
       setBottomPanelHeight(maxH)
       setPanelMaximized(true)
       setBottomPanelCollapsed(false)
@@ -1379,23 +1379,25 @@ export default function App() {
           workflowSettings={state.workflowSettings}
         />
         {kanbanOpen && (
-          <KanbanBoard
-            board={state.board}
-            projectName={state.projectName}
-            workspaceDir={state.workspaceDir}
-            activeLanes={state.activeLanes}
-            workflowSettings={state.workflowSettings}
-            sprintRunning={orchestratedActive}
-            activeRunInfo={activeTaskRunInfo}
-            onTaskClick={(task) => setSelectedTask(findTaskOnBoard(state.board, task.id) ?? task)}
-            onMoveTask={(taskId, from, to) => void handleMoveTask(taskId, from, to)}
-            onReorderBacklog={(taskIds) =>
-              void withLoading(async () => handleState(await reorderTasks('Backlog', taskIds)))
-            }
-            onReorderLane={(lane, taskIds) =>
-              void withLoading(async () => handleState(await reorderTasks(lane, taskIds)))
-            }
-          />
+          <div className="flex-[1.4] min-h-[32vh] flex flex-col overflow-hidden">
+            <KanbanBoard
+              board={state.board}
+              projectName={state.projectName}
+              workspaceDir={state.workspaceDir}
+              activeLanes={state.activeLanes}
+              workflowSettings={state.workflowSettings}
+              sprintRunning={orchestratedActive}
+              activeRunInfo={activeTaskRunInfo}
+              onTaskClick={(task) => setSelectedTask(findTaskOnBoard(state.board, task.id) ?? task)}
+              onMoveTask={(taskId, from, to) => void handleMoveTask(taskId, from, to)}
+              onReorderBacklog={(taskIds) =>
+                void withLoading(async () => handleState(await reorderTasks('Backlog', taskIds)))
+              }
+              onReorderLane={(lane, taskIds) =>
+                void withLoading(async () => handleState(await reorderTasks(lane, taskIds)))
+              }
+            />
+          </div>
         )}
 
         <div ref={workspaceColumnRef} className="flex-1 flex flex-col min-h-0 overflow-hidden">

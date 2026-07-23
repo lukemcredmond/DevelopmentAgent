@@ -98,10 +98,24 @@ def test_build_card_work_snapshot_subtasks_and_acs():
 
 
 def test_build_live_intent_phases():
-    assert "Awaiting Ollama" in build_live_intent(phase="awaiting_ollama", iteration=2, max_iterations=8)
+    assert "Waiting for model (Ollama)" in build_live_intent(
+        phase="awaiting_ollama", iteration=2, max_iterations=8
+    )
+    assert "LLM call in flight" in build_live_intent(
+        phase="awaiting_ollama", iteration=2, max_iterations=8, model="llama"
+    )
     assert "Thinking" in build_live_intent(phase="thinking", iteration=1, max_iterations=8)
-    assert "apply_patch" in build_live_intent(phase="plan_reject", reject_label="plan-only", iteration=3, max_iterations=8)
-    assert "read_file" in build_live_intent(phase="tool", tool_name="read_file", tool_summary="src/a.py")
+    assert "apply_patch" in build_live_intent(
+        phase="plan_reject", reject_label="plan-only", iteration=3, max_iterations=8
+    )
+    assert "read_file" in build_live_intent(
+        phase="tool", tool_name="read_file", tool_summary="src/a.py"
+    )
+    assert "build_runner" in build_live_intent(
+        phase="tool",
+        tool_name="run_command",
+        tool_summary="flutter pub run build_runner build",
+    )
 
 
 def test_files_written_this_step_from_log():

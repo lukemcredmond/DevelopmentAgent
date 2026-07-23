@@ -334,6 +334,7 @@ export interface WorkflowSettings {
   ollamaNumCtx?: number
   ollamaKeepAlive?: string
   ollamaRequestTimeoutSec?: number
+  terminalTimeoutSec?: number
   ollamaMaxRetries?: number
   ollamaRetryDelaySec?: number[]
   ollamaCooldownRetryEnabled?: boolean
@@ -443,6 +444,7 @@ export interface AgentRunState {
   recentTools?: RecentToolEntry[]
   intent?: string | null
   cardProgress?: CardWorkProgress | null
+  currentToolDetail?: string | null
 }
 
 export interface PendingToolApproval {
@@ -804,6 +806,7 @@ export interface WorkflowSettingsPayload {
   ollamaNumCtx?: number
   ollamaKeepAlive?: string
   ollamaRequestTimeoutSec?: number
+  terminalTimeoutSec?: number
   ollamaMaxRetries?: number
   ollamaRetryDelaySec?: number[]
   ollamaCooldownRetryEnabled?: boolean
@@ -1016,6 +1019,7 @@ export const DEFAULT_WORKFLOW_SETTINGS: WorkflowSettings = {
   ollamaNumCtx: 32768,
   ollamaKeepAlive: '30m',
   ollamaRequestTimeoutSec: 300,
+  terminalTimeoutSec: 120,
   ollamaMaxRetries: 4,
   ollamaRetryDelaySec: [0, 2, 5, 10],
   ollamaCooldownRetryEnabled: true,

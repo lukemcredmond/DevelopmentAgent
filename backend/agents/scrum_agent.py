@@ -418,6 +418,7 @@ class ScrumAgent:
         max_iterations: Optional[int] = None,
         run_status: Optional[str] = None,
         current_tool: Optional[str] = None,
+        current_tool_detail: Optional[str] = None,
         clear_tool: bool = False,
         publish_activity_event: bool = False,
     ) -> None:
@@ -439,6 +440,10 @@ class ScrumAgent:
             update_kwargs["clear_tool"] = True
         elif current_tool is not None:
             update_kwargs["current_tool"] = current_tool
+        if current_tool_detail is not None:
+            update_kwargs["current_tool_detail"] = current_tool_detail
+        elif clear_tool:
+            update_kwargs["clear_tool_detail"] = True
         update_run(**update_kwargs)
 
         if task_id and state.SPRINT_PROGRESS_MAX:
@@ -482,27 +487,39 @@ class ScrumAgent:
         max_tool_failures: int,
     ) -> Tuple[str, Dict[str, Any], ToolExecutionResult, Optional[str]]:
         """Returns (tool_name, arguments, result, early_stop_message)."""
+        from backend.agents.tool_outcomes import summarize_tool_args
         from backend.services.step_diagnostics import build_live_intent
 
         tool_name = call.function.name
         arguments = _normalize_tool_arguments(call.function.arguments)
+        tool_summary = summarize_tool_args(tool_name, arguments)
 
         def _on_awaiting(name: str) -> None:
             self._publish_work_progress(
                 task_id=task_id,
-                intent=build_live_intent(phase="tool", tool_name=name),
+                intent=build_live_intent(
+                    phase="tool",
+                    tool_name=name,
+                    tool_summary=tool_summary,
+                ),
                 status=f"Awaiting approval: {name}",
                 run_status="awaiting_approval",
                 current_tool=name,
+                current_tool_detail=tool_summary,
             )
 
         def _on_executing(name: str) -> None:
             self._publish_work_progress(
                 task_id=task_id,
-                intent=build_live_intent(phase="tool", tool_name=name),
-                status=f"Running {name}",
+                intent=build_live_intent(
+                    phase="tool",
+                    tool_name=name,
+                    tool_summary=tool_summary,
+                ),
+                status=f"Running {name}: {tool_summary}"[:200],
                 run_status="tool_executing",
                 current_tool=name,
+                current_tool_detail=tool_summary,
             )
 
         result = execute_tool(
@@ -781,6 +798,7 @@ class ScrumAgent:
                     phase="awaiting_ollama",
                     iteration=iteration,
                     max_iterations=max_iterations,
+                    model=str(self.model or ""),
                 )
                 self._publish_work_progress(
                     task_id=task_id,
@@ -793,19 +811,50 @@ class ScrumAgent:
                 add_system_log(
                     self.role,
                     "info",
-                    f"Awaiting Ollama (iter {iteration}/{max_iterations}, model={self.model})",
+                    f"Waiting for model (Ollama) — iter {iteration}/{max_iterations}, "
+                    f"model={self.model} (LLM call in flight)",
                 )
                 log_event(
                     "ollama_wait",
                     f"iter {iteration}/{max_iterations} model={self.model}",
                 )
                 ollama_started = time.time()
-                response = self._chat(
-                    messages,
-                    tools=tools or None,
-                    iteration=iteration,
-                    task_id=task_id,
+                ollama_wait_done = threading.Event()
+
+                def _tick_ollama_wait() -> None:
+                    while not ollama_wait_done.wait(15):
+                        elapsed = int(time.time() - ollama_started)
+                        tick_intent = build_live_intent(
+                            phase="awaiting_ollama",
+                            iteration=iteration,
+                            max_iterations=max_iterations,
+                            model=str(self.model or ""),
+                            elapsed_sec=elapsed,
+                        )
+                        self._publish_work_progress(
+                            task_id=task_id,
+                            intent=tick_intent,
+                            status=tick_intent,
+                            iteration=iteration,
+                            max_iterations=max_iterations,
+                            run_status="thinking",
+                        )
+
+                ticker = threading.Thread(
+                    target=_tick_ollama_wait,
+                    name="ollama-wait-ticker",
+                    daemon=True,
                 )
+                ticker.start()
+                try:
+                    response = self._chat(
+                        messages,
+                        tools=tools or None,
+                        iteration=iteration,
+                        task_id=task_id,
+                    )
+                finally:
+                    ollama_wait_done.set()
                 ollama_duration_ms = int((time.time() - ollama_started) * 1000)
                 from backend.services.step_diagnostics import log_ollama_call
 

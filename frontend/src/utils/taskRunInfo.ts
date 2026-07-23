@@ -12,6 +12,7 @@ export interface TaskRunInfo {
   agent: string
   status?: AgentRunState['status']
   currentTool?: string | null
+  currentToolDetail?: string | null
   iteration?: number
   maxIterations?: number
   lastEvent?: string
@@ -69,6 +70,7 @@ export function buildTaskRunInfo(args: {
     agent: activeRun?.agent || sprintProgress?.agent || 'Developer',
     status: activeRun?.status,
     currentTool: currentTool || activeRun?.currentTool,
+    currentToolDetail: activeRun?.currentToolDetail ?? null,
     iteration: activeRun?.iteration,
     maxIterations: activeRun?.maxIterations,
     lastEvent: activeStepDiagnostics?.lastEvent,

@@ -50,6 +50,7 @@ DEFAULT_WORKFLOW_SETTINGS: Dict[str, Any] = {
     "ollamaNumCtx": 32768,
     "ollamaKeepAlive": "30m",
     "ollamaRequestTimeoutSec": 300,
+    "terminalTimeoutSec": 120,
     "ollamaMaxRetries": 4,
     "ollamaRetryDelaySec": [0, 2, 5, 10],
     "ollamaCooldownRetryEnabled": True,

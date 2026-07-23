@@ -34,10 +34,12 @@ class AgentRunState:
     recent_tools: List[Dict[str, Any]] = field(default_factory=list)
     intent: Optional[str] = None
     card_progress: Optional[Dict[str, Any]] = None
+    current_tool_detail: Optional[str] = None
 
     def to_dict(self) -> Dict[str, Any]:
         data = asdict(self)
         data["cardProgress"] = data.pop("card_progress", None)
+        data["currentToolDetail"] = data.pop("current_tool_detail", None)
         return data
 
 
@@ -73,6 +75,8 @@ def update_run(
     max_iterations: Optional[int] = None,
     intent: Optional[str] = None,
     card_progress: Optional[Dict[str, Any]] = None,
+    current_tool_detail: Optional[str] = None,
+    clear_tool_detail: bool = False,
 ) -> None:
     run = state.ACTIVE_AGENT_RUN
     if not run:
@@ -81,8 +85,13 @@ def update_run(
         run.status = status
     if clear_tool:
         run.current_tool = None
+        run.current_tool_detail = None
     elif current_tool is not None:
         run.current_tool = current_tool
+    if clear_tool_detail:
+        run.current_tool_detail = None
+    elif current_tool_detail is not None:
+        run.current_tool_detail = current_tool_detail
     if error is not None:
         run.error = error
     if iteration is not None:
@@ -110,6 +119,7 @@ def finish_run(*, status: RunStatus = "completed", error: Optional[str] = None) 
         return
     run.status = status
     run.current_tool = None
+    run.current_tool_detail = None
     if error:
         run.error = error
     _publish_run(run)

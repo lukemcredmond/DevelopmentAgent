@@ -170,6 +170,10 @@ function mapAgentRun(raw: Record<string, unknown>): AgentRunState {
     recentTools,
     intent: raw.intent != null ? String(raw.intent) : null,
     cardProgress: mapCardProgress(raw.cardProgress ?? raw.card_progress) ?? null,
+    currentToolDetail:
+      raw.currentToolDetail != null || raw.current_tool_detail != null
+        ? String(raw.currentToolDetail ?? raw.current_tool_detail)
+        : null,
   }
 }
 

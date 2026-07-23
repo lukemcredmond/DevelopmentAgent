@@ -648,6 +648,21 @@ export default function WorkflowPanel({
       </p>
 
       <label className="text-[11px] text-cat-subtext block">
+        <span className="text-[10px] text-cat-overlay block">Shell command timeout (seconds)</span>
+        <NumberSettingInput
+          value={settings.terminalTimeoutSec ?? 120}
+          min={30}
+          max={1800}
+          onCommit={(terminalTimeoutSec) => onSettingsChange({ terminalTimeoutSec })}
+          className="w-full bg-cat-base border border-cat-surface1 rounded p-1 text-white"
+        />
+      </label>
+      <p className="text-[10px] text-cat-overlay leading-relaxed -mt-1">
+        Default for agent <code className="text-cat-subtext">run_command</code>. Long builds
+        (build_runner, flutter build, dotnet build, npm run build, …) use at least 600s.
+      </p>
+
+      <label className="text-[11px] text-cat-subtext block">
         <span className="text-[10px] text-cat-overlay block">Ollama max retries per call</span>
         <NumberSettingInput
           value={settings.ollamaMaxRetries ?? 4}

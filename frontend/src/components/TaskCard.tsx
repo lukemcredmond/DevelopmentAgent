@@ -88,6 +88,14 @@ export default function TaskCard({
               {runInfo.intent}
             </p>
           )}
+          {runInfo.currentToolDetail && (
+            <p
+              className="text-[9px] text-amber-100/90 font-mono truncate"
+              title={runInfo.currentToolDetail}
+            >
+              {runInfo.currentToolDetail}
+            </p>
+          )}
           {runInfo.iteration != null && runInfo.maxIterations != null && (
             <p className="text-[9px] text-cat-subtext font-mono">
               LLM iteration {runInfo.iteration}/{runInfo.maxIterations}

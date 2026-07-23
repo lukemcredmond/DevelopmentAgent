@@ -532,13 +532,22 @@ def build_live_intent(
     tool_name: Optional[str] = None,
     tool_summary: Optional[str] = None,
     reject_label: Optional[str] = None,
+    elapsed_sec: Optional[int] = None,
+    model: Optional[str] = None,
 ) -> str:
     """One-line what-the-agent-is-doing-now for UI."""
-    iter_bit = f" (iter {iteration}/{max_iterations})" if max_iterations else ""
+    iter_bit = f" — iter {iteration}/{max_iterations}" if max_iterations else ""
     if phase == "awaiting_ollama":
-        return f"Awaiting Ollama{iter_bit}"
+        model_bit = f" ({model})" if model else ""
+        elapsed_bit = f" · {elapsed_sec}s" if elapsed_sec is not None and elapsed_sec > 0 else ""
+        return (
+            f"Waiting for model (Ollama){model_bit}{iter_bit}{elapsed_bit} "
+            "— LLM call in flight, no tool running"
+        )[:220]
     if phase == "thinking":
-        return f"Thinking{iter_bit}"
+        if max_iterations:
+            return f"Thinking (iter {iteration}/{max_iterations})"
+        return "Thinking"
     if phase in ("plan_reject", "text_reject") or reject_label:
         label = reject_label or ("plan-only" if phase == "plan_reject" else "text-only")
         return f"Retrying after {label} — need apply_patch{iter_bit}"
@@ -546,9 +555,9 @@ def build_live_intent(
         name = tool_name or "tool"
         detail = (tool_summary or "").strip()
         if detail and not detail.startswith(name):
-            return f"Running {name}: {detail[:120]}"
+            return f"Running {name}: {detail[:200]}"
         if detail:
-            return f"Running {detail[:140]}"
+            return f"Running {detail[:200]}"
         return f"Running {name}{iter_bit}"
     if phase == "completed":
         return "Step completed"
