@@ -40,6 +40,7 @@ export default function GpuModelRecommendations({
   const [capacity, setCapacity] = useState<Record<string, unknown> | null>(null)
   const [roles, setRoles] = useState<Record<string, { model: string; status: string }> | null>(null)
   const [tier, setTier] = useState<string>('')
+  const [installedError, setInstalledError] = useState<string | null>(null)
 
   useEffect(() => {
     let cancelled = false
@@ -65,14 +66,20 @@ export default function GpuModelRecommendations({
       .then((data) => {
         setRoles(data.roles ?? null)
         setTier(data.tier ?? '')
+        setInstalledError(
+          data.installedOk === false
+            ? data.installedError || 'Could not reach Ollama /api/tags'
+            : null,
+        )
       })
       .catch(() => {
         setRoles(null)
         setTier('')
+        setInstalledError('Failed to load model recommendations')
       })
   }, [ollamaUrl])
 
-  if (!roles) return null
+  if (!roles && !installedError) return null
 
   const vramMb = capacity?.vramMb as number | null | undefined
   const label =
@@ -80,8 +87,10 @@ export default function GpuModelRecommendations({
       ? `${Math.round(vramMb / 1024)} GB VRAM · ${tier} tier`
       : `CPU / RAM tier · ${tier}`
   const liveLine = formatGpuLiveLine(capacity)
+  const lowVram = typeof vramMb === 'number' && vramMb > 0 && vramMb < 12000
 
   const applyAll = () => {
+    if (!roles) return
     if (roles.po?.model) onPoModelChange(roles.po.model)
     if (roles.dev?.model) onDevModelChange(roles.dev.model)
     if (roles.cr?.model) onCrModelChange(roles.cr.model)
@@ -99,46 +108,64 @@ export default function GpuModelRecommendations({
   return (
     <div className="pt-2 border-t border-cat-surface1/50 space-y-1.5">
       <p className="text-[9px] text-cat-subtext font-bold uppercase">Recommended for your GPU</p>
+      {installedError && (
+        <p className="text-[10px] text-rose-300 leading-relaxed">
+          Installed tags unavailable: {installedError}. Recommendations may all show “pull”.
+        </p>
+      )}
       <p className="text-[10px] text-cat-overlay">{label}</p>
+      {lowVram && (
+        <p className="text-[10px] text-amber-300 leading-relaxed">
+          Low VRAM — prefer 7B/8B models and keep context (num_ctx) ≤ 16k for faster steps.
+        </p>
+      )}
       {liveLine ? (
         <p className="text-[10px] font-mono text-cat-text tabular-nums" title="Live GPU load">
           {liveLine}
         </p>
       ) : null}
-      <div className="space-y-1">
-        {Object.entries(roles).map(([role, info]) => (
-          <div key={role} className="flex items-center justify-between gap-2 text-[10px]">
-            <span className="text-cat-subtext uppercase font-bold w-8">{role}</span>
-            <span className="font-mono text-cat-text truncate flex-1">{info.model}</span>
-            <span
-              className={`text-[9px] px-1 rounded ${
-                info.status === 'installed'
-                  ? 'text-emerald-300 bg-emerald-950/40'
-                  : info.status === 'partial'
-                    ? 'text-amber-300 bg-amber-950/40'
-                    : 'text-cat-overlay bg-cat-surface1'
-              }`}
-            >
-              {info.status === 'installed' ? 'pulled' : info.status === 'partial' ? 'similar' : 'pull'}
-            </span>
-            <button
-              type="button"
-              onClick={() => roleSetters[role]?.(info.model)}
-              disabled={roleModels[role] === info.model}
-              className="text-indigo-400 hover:text-indigo-300 disabled:opacity-40 shrink-0"
-            >
-              Apply
-            </button>
+      {roles && (
+        <>
+          <div className="space-y-1">
+            {Object.entries(roles).map(([role, info]) => (
+              <div key={role} className="flex items-center justify-between gap-2 text-[10px]">
+                <span className="text-cat-subtext uppercase font-bold w-8">{role}</span>
+                <span className="font-mono text-cat-text truncate flex-1">{info.model}</span>
+                <span
+                  className={`text-[9px] px-1 rounded ${
+                    info.status === 'installed'
+                      ? 'text-emerald-300 bg-emerald-950/40'
+                      : info.status === 'partial'
+                        ? 'text-amber-300 bg-amber-950/40'
+                        : 'text-cat-overlay bg-cat-surface1'
+                  }`}
+                >
+                  {info.status === 'installed'
+                    ? 'pulled'
+                    : info.status === 'partial'
+                      ? 'similar'
+                      : 'pull'}
+                </span>
+                <button
+                  type="button"
+                  onClick={() => roleSetters[role]?.(info.model)}
+                  disabled={roleModels[role] === info.model}
+                  className="text-indigo-400 hover:text-indigo-300 disabled:opacity-40 shrink-0"
+                >
+                  Apply
+                </button>
+              </div>
+            ))}
           </div>
-        ))}
-      </div>
-      <button
-        type="button"
-        onClick={applyAll}
-        className="w-full text-[10px] py-1 rounded border border-indigo-500/30 text-indigo-300 hover:bg-indigo-950/30"
-      >
-        Apply all recommendations
-      </button>
+          <button
+            type="button"
+            onClick={applyAll}
+            className="w-full text-[10px] py-1 rounded border border-indigo-500/30 text-indigo-300 hover:bg-indigo-950/30"
+          >
+            Apply all recommendations
+          </button>
+        </>
+      )}
     </div>
   )
 }

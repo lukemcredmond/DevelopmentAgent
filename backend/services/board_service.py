@@ -26,20 +26,24 @@ def publish_board_update(
     task_id: Optional[str] = None,
     lane: Optional[str] = None,
     source: str = "move",
+    *,
+    cleared: bool = False,
 ) -> None:
     """Push live board snapshot to SSE subscribers (slimmed + coalesced)."""
     from backend.services.events import publish_board_event_coalesced, slim_board_for_sse
 
     task = find_task_by_id(task_id) if task_id else None
-    publish_board_event_coalesced(
-        {
-            "board": slim_board_for_sse(state.SHARED_BOARD),
-            "taskId": task_id,
-            "lane": lane,
-            "source": source,
-            "taskTitle": task.get("title") if task else None,
-        },
-    )
+    payload: Dict[str, Any] = {
+        "board": slim_board_for_sse(state.SHARED_BOARD),
+        "taskId": task_id,
+        "lane": lane,
+        "source": source,
+        "taskTitle": task.get("title") if task else None,
+        "projectId": state.CURRENT_PROJECT_ID,
+    }
+    if cleared:
+        payload["cleared"] = True
+    publish_board_event_coalesced(payload)
 
 
 def publish_board_delta(
@@ -67,6 +71,7 @@ def publish_board_delta(
             "task": _slim_task_for_sse(dict(task)),
             "source": source,
             "taskTitle": task.get("title"),
+            "projectId": state.CURRENT_PROJECT_ID,
         },
     )
 
@@ -150,7 +155,7 @@ def clear_all_board_tasks() -> None:
     state.ACTIVE_SPRINT_AGENT = None
     state.ALLOW_DONE_RETRY = False
     save_current_project_state()
-    publish_board_update(source="clear_tasks")
+    publish_board_update(source="clear_tasks", cleared=True)
     add_system_log("System", "info", "All board tasks cleared")
 
 

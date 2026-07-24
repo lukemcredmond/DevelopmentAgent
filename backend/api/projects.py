@@ -22,6 +22,11 @@ router = APIRouter()
 @router.post("/api/projects/create")
 def create_new_project(payload: CreateProjectPayload):
     with state.STATE_LOCK:
+        if state.CURRENT_PROJECT_ID and state.storage.load_project(state.CURRENT_PROJECT_ID):
+            try:
+                save_current_project_state()
+            except Exception:
+                pass
         state.CURRENT_PROJECT_ID = str(uuid.uuid4())
         state.PROJECT_NAME = payload.projectName
         state.PROJECT_BRIEF = ""
@@ -178,4 +183,83 @@ def reset_workspace():
 
         save_current_project_state()
         add_system_log("System", "info", "Workspace state cleared. Backlog lanes and directory files cleaned successfully.")
+    return build_state_response()
+
+
+@router.get("/api/projects/{project_id}/board-snapshots")
+def get_board_snapshots(project_id: str):
+    from backend.services.board_snapshots import list_board_snapshots
+
+    return {"projectId": project_id, "snapshots": list_board_snapshots(project_id)}
+
+
+@router.post("/api/projects/{project_id}/restore-snapshot")
+def restore_board_snapshot(project_id: str, payload: dict):
+    """Restore board_state from a rolling snapshot. Skills/models untouched except via full save."""
+    from backend.services.board_lanes import normalize_board_lanes
+    from backend.services.board_service import publish_board_update
+    from backend.services.board_snapshots import load_board_snapshot
+    from backend.agents.task_context import dedupe_board_tasks, normalize_board_tasks
+
+    snapshot_id = str(payload.get("snapshotId") or payload.get("id") or "")
+    if not snapshot_id:
+        raise HTTPException(status_code=400, detail="snapshotId required")
+    data = load_board_snapshot(project_id, snapshot_id)
+    if not data or not isinstance(data.get("board_state"), dict):
+        raise HTTPException(status_code=404, detail="Snapshot not found")
+    with state.STATE_LOCK:
+        if project_id != state.CURRENT_PROJECT_ID:
+            if not load_project_into_state(project_id):
+                raise HTTPException(status_code=404, detail="Project not found")
+        state.SHARED_BOARD = normalize_board_lanes(data["board_state"])
+        normalize_board_tasks()
+        dedupe_board_tasks()
+        save_current_project_state()
+        publish_board_update(source="restore_snapshot")
+        add_system_log(
+            "System",
+            "success",
+            f"Restored board from snapshot {snapshot_id} "
+            f"({sum(len(v) for v in state.SHARED_BOARD.values() if isinstance(v, list))} cards)",
+        )
+    return build_state_response()
+
+
+@router.get("/api/projects/{project_id}/board-recovery")
+def get_board_recovery_options(project_id: str):
+    from backend.services.board_recovery import scan_board_recovery_options
+
+    proj = state.storage.load_project(project_id)
+    name = (proj or {}).get("name") or state.PROJECT_NAME
+    return scan_board_recovery_options(project_id, name)
+
+
+@router.post("/api/projects/{project_id}/board-recovery/restore")
+def restore_board_from_recovery(project_id: str, payload: dict):
+    from backend.agents.task_context import dedupe_board_tasks, normalize_board_tasks
+    from backend.services.board_lanes import normalize_board_lanes
+    from backend.services.board_recovery import load_recovery_board
+    from backend.services.board_service import publish_board_update
+
+    kind = str(payload.get("kind") or "")
+    source_id = str(payload.get("id") or payload.get("sourceId") or "")
+    if not kind or not source_id:
+        raise HTTPException(status_code=400, detail="kind and id required")
+    proj = state.storage.load_project(project_id)
+    name = (proj or {}).get("name") or state.PROJECT_NAME
+    board, message = load_recovery_board(
+        project_id, kind=kind, source_id=source_id, project_name=name
+    )
+    if board is None:
+        raise HTTPException(status_code=404, detail=message)
+    with state.STATE_LOCK:
+        if project_id != state.CURRENT_PROJECT_ID:
+            if not load_project_into_state(project_id):
+                raise HTTPException(status_code=404, detail="Project not found")
+        state.SHARED_BOARD = normalize_board_lanes(board)
+        normalize_board_tasks()
+        dedupe_board_tasks()
+        save_current_project_state()
+        publish_board_update(source="board_recovery")
+        add_system_log("System", "success", message)
     return build_state_response()

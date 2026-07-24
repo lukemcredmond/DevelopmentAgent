@@ -1330,6 +1330,10 @@ export default function App() {
         onImportProject={(file) =>
           void withLoading(async () => handleState(await importProject(file)))
         }
+        onBoardRestored={(st) => {
+          handleState(st)
+          applyStateFields(st, setters)
+        }}
         onDeleteProject={() => {
           const other = state.projectsList.find((p) => p.id !== state.projectId)
           if (!other) return

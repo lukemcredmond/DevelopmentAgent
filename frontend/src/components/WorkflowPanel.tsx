@@ -630,8 +630,15 @@ export default function WorkflowPanel({
         />
       </label>
       <p className="text-[10px] text-cat-overlay leading-relaxed -mt-1">
-        Increase if you see exceed_context_size_error. Higher values use more RAM.
+        Increase if you see exceed_context_size_error. Higher values use more RAM/VRAM and slow each
+        call. On ≤12 GB VRAM, prefer ≤16384.
       </p>
+      {(settings.ollamaNumCtx ?? 32768) > 16384 && (
+        <p className="text-[10px] text-amber-300 leading-relaxed -mt-1">
+          Warning: num_ctx is high ({settings.ollamaNumCtx}). Large context is a common cause of
+          multi-minute Ollama waits.
+        </p>
+      )}
 
       <label className="text-[11px] text-cat-subtext block">
         <span className="text-[10px] text-cat-overlay block">Ollama request timeout (seconds)</span>

@@ -1,7 +1,9 @@
-import { useState } from 'react'
+import { useEffect, useState } from 'react'
 import type { AgentId, AppState, ConfigPayload, WorkflowSettings } from '../types'
 import { AGENT_LABELS, DEFAULT_WORKFLOW_SETTINGS } from '../types'
+import BoardRecoveryPanel from './BoardRecoveryPanel'
 import GpuModelRecommendations from './GpuModelRecommendations'
+import InstalledModelsPanel from './InstalledModelsPanel'
 import SlideOver from './SlideOver'
 import WorkflowPanel from './WorkflowPanel'
 
@@ -37,6 +39,7 @@ interface SettingsSlideOverProps {
   onImportProject: (file: File) => void
   onDeleteProject: () => void
   onOpenMemoryTab?: () => void
+  onBoardRestored?: (state: AppState) => void
   indexProgress?: import('../types').IndexProgress | null
   skillSuggestionCounts?: Record<AgentId, number>
   initialTab?: SettingsTab
@@ -86,11 +89,23 @@ export default function SettingsSlideOver({
   onImportProject,
   onDeleteProject,
   onOpenMemoryTab,
+  onBoardRestored,
   indexProgress = null,
   skillSuggestionCounts = { po: 0, dev: 0, cr: 0, qa: 0 },
   initialTab = 'project',
 }: SettingsSlideOverProps) {
   const [tab, setTab] = useState<SettingsTab>(initialTab)
+  const [modelFocus, setModelFocus] = useState<'PO' | 'DEV' | 'CR' | 'QA'>('DEV')
+
+  // Re-hydrate role model fields from server state when Settings opens / project changes.
+  useEffect(() => {
+    if (!open) return
+    if (state.models?.po) onPoModelChange(state.models.po)
+    if (state.models?.dev) onDevModelChange(state.models.dev)
+    if (state.models?.cr) onCrModelChange(state.models.cr)
+    if (state.models?.qa) onQaModelChange(state.models.qa)
+    // eslint-disable-next-line react-hooks/exhaustive-deps -- sync once when open/projectId/models change
+  }, [open, state.projectId, state.models?.po, state.models?.dev, state.models?.cr, state.models?.qa])
 
   const agents: { id: AgentId; model: string }[] = [
     { id: 'po', model: poModel },
@@ -250,6 +265,12 @@ export default function SettingsSlideOver({
                   Save Custom Configurations
                 </button>
               </div>
+              <BoardRecoveryPanel
+                projectId={state.projectId}
+                onRestored={(st) => {
+                  onBoardRestored?.(st)
+                }}
+              />
             </div>
           )}
 
@@ -266,22 +287,49 @@ export default function SettingsSlideOver({
               </label>
               <div className="space-y-2">
                 {[
-                  { label: 'PO MODEL', value: poModel, onChange: onPoModelChange },
-                  { label: 'DEV MODEL', value: devModel, onChange: onDevModelChange },
-                  { label: 'CR MODEL', value: crModel, onChange: onCrModelChange },
-                  { label: 'QA MODEL', value: qaModel, onChange: onQaModelChange },
-                ].map(({ label, value, onChange }) => (
+                  { label: 'PO MODEL', value: poModel, onChange: onPoModelChange, focus: 'PO' as const },
+                  { label: 'DEV MODEL', value: devModel, onChange: onDevModelChange, focus: 'DEV' as const },
+                  { label: 'CR MODEL', value: crModel, onChange: onCrModelChange, focus: 'CR' as const },
+                  { label: 'QA MODEL', value: qaModel, onChange: onQaModelChange, focus: 'QA' as const },
+                ].map(({ label, value, onChange, focus }) => (
                   <div key={label} className="flex items-center justify-between gap-2">
                     <span className="text-[9px] text-cat-subtext font-bold shrink-0">{label}</span>
                     <input
                       type="text"
                       value={value}
+                      onFocus={() => setModelFocus(focus)}
                       onChange={(e) => onChange(e.target.value)}
                       className="bg-cat-base border border-cat-surface1 rounded p-1.5 font-mono text-[11px] text-right flex-1 focus:outline-none"
                     />
                   </div>
                 ))}
               </div>
+              <InstalledModelsPanel
+                ollamaUrl={ollamaUrl}
+                focusedRole={modelFocus}
+                onPickModel={(name) => {
+                  if (modelFocus === 'PO') onPoModelChange(name)
+                  else if (modelFocus === 'DEV') onDevModelChange(name)
+                  else if (modelFocus === 'CR') onCrModelChange(name)
+                  else onQaModelChange(name)
+                }}
+              />
+              <label className="block text-[11px] text-cat-subtext">
+                <span className="text-[10px] text-cat-overlay block mb-0.5">
+                  Ollama keep_alive (keeps weights loaded between sprint steps)
+                </span>
+                <input
+                  type="text"
+                  value={state.workflowSettings?.ollamaKeepAlive ?? '30m'}
+                  onChange={(e) => onWorkflowSettingsChange({ ollamaKeepAlive: e.target.value })}
+                  className="w-full bg-cat-base border border-cat-surface1 rounded p-1.5 font-mono text-[11px] text-white focus:outline-none"
+                  placeholder="30m"
+                />
+              </label>
+              <p className="text-[10px] text-cat-overlay leading-relaxed -mt-1">
+                Use <code className="text-cat-subtext">30m</code> or <code className="text-cat-subtext">-1</code>{' '}
+                to avoid cold-reloading the model every iteration.
+              </p>
               <GpuModelRecommendations
                 ollamaUrl={ollamaUrl}
                 poModel={poModel}

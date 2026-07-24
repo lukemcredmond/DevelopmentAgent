@@ -812,7 +812,9 @@ class ScrumAgent:
                     self.role,
                     "info",
                     f"Waiting for model (Ollama) — iter {iteration}/{max_iterations}, "
-                    f"model={self.model} (LLM call in flight)",
+                    f"model={self.model} num_ctx={get_workflow_settings().get('ollamaNumCtx', 32768)} "
+                    f"keep_alive={get_workflow_settings().get('ollamaKeepAlive', '30m')} "
+                    f"(LLM call in flight)",
                 )
                 log_event(
                     "ollama_wait",

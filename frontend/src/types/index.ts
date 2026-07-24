@@ -84,7 +84,9 @@ export interface Task {
   status: BoardLane | string
   files?: (TaskFile | string)[]
   decisions?: TaskDecision[]
+  decisionsTruncated?: boolean
   transcript?: TaskTranscriptEntry[]
+  transcriptTruncated?: boolean
   acceptanceCriteria?: string[]
   priority?: number
   blockedBy?: string[]

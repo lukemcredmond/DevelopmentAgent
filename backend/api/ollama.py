@@ -101,10 +101,20 @@ def system_capacity():
 def model_recommendations(ollamaUrl: str = "http://localhost:11434"):
     capacity = probe_system_capacity()
     installed: List[str] = []
+    installed_ok = False
+    tags_error: Optional[str] = None
     try:
         resp = requests.get(f"{ollamaUrl.rstrip('/')}/api/tags", timeout=5)
         if resp.status_code == 200:
             installed = [m.get("name") for m in resp.json().get("models", []) if m.get("name")]
-    except requests.RequestException:
-        pass
-    return get_model_recommendations(capacity, installed_models=installed)
+            installed_ok = True
+        else:
+            tags_error = f"HTTP {resp.status_code}"
+    except requests.RequestException as e:
+        tags_error = str(e)
+    result = get_model_recommendations(capacity, installed_models=installed)
+    result["installedOk"] = installed_ok
+    result["installedModels"] = installed
+    if tags_error:
+        result["installedError"] = tags_error
+    return result

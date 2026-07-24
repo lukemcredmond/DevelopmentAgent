@@ -14,6 +14,17 @@ def load_project_into_state(project_id: str) -> bool:
     if not proj:
         return False
 
+    # Persist the currently open project before replacing memory (avoid losing unsaved board).
+    if (
+        state.CURRENT_PROJECT_ID
+        and state.CURRENT_PROJECT_ID != project_id
+        and state.storage.load_project(state.CURRENT_PROJECT_ID)
+    ):
+        try:
+            save_current_project_state()
+        except Exception:
+            pass
+
     state.CURRENT_PROJECT_ID = proj["id"]
     state.PROJECT_NAME = proj["name"]
     state.PROJECT_BRIEF = proj.get("brief") or ""

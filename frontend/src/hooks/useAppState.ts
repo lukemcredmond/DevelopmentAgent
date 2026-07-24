@@ -53,8 +53,59 @@ const defaultState: AppState = {
   projectsList: [],
 }
 
+function countBoardTasks(board: Board | undefined | null): number {
+  if (!board) return 0
+  return Object.values(board).reduce((sum, tasks) => sum + (tasks?.length ?? 0), 0)
+}
+
+function mergePreserveHistory(incoming: Task, existing: Task | undefined): Task {
+  if (!existing) return incoming
+  const next = { ...incoming }
+  if (
+    incoming.transcriptTruncated &&
+    Array.isArray(existing.transcript) &&
+    Array.isArray(incoming.transcript) &&
+    existing.transcript.length > incoming.transcript.length
+  ) {
+    next.transcript = existing.transcript
+    next.transcriptTruncated = true
+  }
+  if (
+    incoming.decisionsTruncated &&
+    Array.isArray(existing.decisions) &&
+    Array.isArray(incoming.decisions) &&
+    existing.decisions.length > incoming.decisions.length
+  ) {
+    next.decisions = existing.decisions
+    next.decisionsTruncated = true
+  }
+  return next
+}
+
+function findTaskOnBoardLocal(board: Board, taskId: string): Task | undefined {
+  const needle = String(taskId)
+  for (const lane of Object.keys(board) as BoardLane[]) {
+    const hit = (board[lane] ?? []).find((t) => String(t.id) === needle)
+    if (hit) return hit
+  }
+  return undefined
+}
+
+function mergeBoardPreservingHistory(prev: Board, incoming: Board): Board {
+  const next: Board = { ...incoming }
+  for (const lane of Object.keys(next) as BoardLane[]) {
+    next[lane] = (next[lane] ?? []).map((task) => {
+      const existing = findTaskOnBoardLocal(prev, String(task.id))
+      return mergePreserveHistory(task, existing)
+    })
+  }
+  return next
+}
+
 function mergeBoardDelta(board: Board, payload: { taskId: string; lane: string; task: Task }): Board {
   const next: Board = { ...board }
+  const existing = findTaskOnBoardLocal(board, payload.taskId)
+  const mergedTask = mergePreserveHistory(payload.task, existing)
   for (const lane of Object.keys(next) as BoardLane[]) {
     next[lane] = (next[lane] ?? []).filter((t: Task) => String(t.id) !== String(payload.taskId))
   }
@@ -66,10 +117,10 @@ function mergeBoardDelta(board: Board, payload: { taskId: string; lane: string; 
   const existingIdx = laneTasks.findIndex((t: Task) => String(t.id) === String(payload.taskId))
   if (existingIdx >= 0) {
     const updated = [...laneTasks]
-    updated[existingIdx] = payload.task
+    updated[existingIdx] = mergedTask
     next[targetLane] = updated
   } else {
-    next[targetLane] = [...laneTasks, payload.task]
+    next[targetLane] = [...laneTasks, mergedTask]
   }
   return next
 }
@@ -82,6 +133,12 @@ function patchBoardFromEvent(data: unknown, prev: AppState): AppState | null {
     task?: Task
     taskId?: string
     lane?: string
+    projectId?: string
+    cleared?: boolean
+  }
+  const eventProjectId = payload.projectId != null ? String(payload.projectId) : ''
+  if (eventProjectId && prev.projectId && eventProjectId !== prev.projectId) {
+    return null
   }
   if (payload.delta && payload.task && payload.taskId && payload.lane) {
     return {
@@ -94,7 +151,12 @@ function patchBoardFromEvent(data: unknown, prev: AppState): AppState | null {
     }
   }
   if (!payload.board) return null
-  return { ...prev, board: payload.board }
+  const incomingCount = countBoardTasks(payload.board)
+  const prevCount = countBoardTasks(prev.board)
+  if (incomingCount === 0 && prevCount > 0 && !payload.cleared) {
+    return null
+  }
+  return { ...prev, board: mergeBoardPreservingHistory(prev.board, payload.board) }
 }
 
 function mapSprintProgress(data: Record<string, unknown>): SprintProgress {

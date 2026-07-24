@@ -100,6 +100,40 @@ export async function loadProject(projectId: string): Promise<AppState> {
   })
 }
 
+export async function listBoardSnapshots(
+  projectId: string,
+): Promise<{ projectId: string; snapshots: Array<{ id: string; savedAt?: string; taskCount?: number; filename?: string }> }> {
+  return request(`/api/projects/${encodeURIComponent(projectId)}/board-snapshots`)
+}
+
+export async function restoreBoardSnapshot(
+  projectId: string,
+  snapshotId: string,
+): Promise<AppState> {
+  return request(`/api/projects/${encodeURIComponent(projectId)}/restore-snapshot`, {
+    method: 'POST',
+    body: JSON.stringify({ snapshotId }),
+  })
+}
+
+export async function fetchBoardRecoveryOptions(projectId: string): Promise<{
+  projectId: string
+  liveTaskCount: number
+  candidates: Array<{ kind: string; id: string; label: string; taskCount?: number }>
+}> {
+  return request(`/api/projects/${encodeURIComponent(projectId)}/board-recovery`)
+}
+
+export async function restoreBoardFromRecovery(
+  projectId: string,
+  payload: { kind: string; id: string },
+): Promise<AppState> {
+  return request(`/api/projects/${encodeURIComponent(projectId)}/board-recovery/restore`, {
+    method: 'POST',
+    body: JSON.stringify(payload),
+  })
+}
+
 export async function deleteProject(
   projectId: string,
 ): Promise<{ ok: boolean; projectsList: ProjectSummary[] }> {
@@ -751,6 +785,9 @@ export async function fetchModelRecommendations(
   tier: string
   roles: Record<string, { model: string; status: string }>
   note?: string
+  installedOk?: boolean
+  installedModels?: string[]
+  installedError?: string
 }> {
   return request(
     `/api/ollama/model-recommendations?ollamaUrl=${encodeURIComponent(ollamaUrl)}`,
