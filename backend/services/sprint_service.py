@@ -211,7 +211,8 @@ def _dev_step_read_only_no_edits(
     lane_after = get_task_lane(str(task.get("id", ""))) or lane_before
     if lane_before != lane_after or lane_after != "In Progress":
         return False
-    if _task_has_work_files(task):
+    # Writes (not reads) prove real edits — reads alone must still count as read-only.
+    if _task_has_write_files(task):
         return False
     has_read, has_write = _step_transcript_tools_since(task, step_started)
     return has_read and not has_write
@@ -854,6 +855,10 @@ def _mark_sprint_step_start() -> str:
     return ts
 
 
+# Actions that prove the Developer wrote/edited code (not reads or context preload).
+_WRITE_FILE_ACTIONS = frozenset({"written", "write", "edited"})
+
+
 def _task_has_work_files(task: Dict[str, Any]) -> bool:
     """True when the task has agent-touched files beyond sprint context preload."""
     for f in task.get("files") or []:
@@ -863,6 +868,17 @@ def _task_has_work_files(task: Dict[str, Any]) -> bool:
             action = str(f.get("action") or "touched")
             if action not in ("context", "touched"):
                 return True
+    return False
+
+
+def _task_has_write_files(task: Dict[str, Any]) -> bool:
+    """True when the task has at least one successful write/edit file action."""
+    for f in task.get("files") or []:
+        if not isinstance(f, dict) or not f.get("path"):
+            continue
+        action = str(f.get("action") or "").lower()
+        if action in _WRITE_FILE_ACTIONS:
+            return True
     return False
 
 
@@ -1154,12 +1170,17 @@ def _dev_has_verification(task: Dict[str, Any], step_started: str) -> bool:
 
 
 def dev_gate_blocks_advance(task: Dict[str, Any]) -> tuple[bool, str]:
-    """Block dev board advance when subtasks pending or lint unresolved."""
+    """Block dev board advance when no writes, subtasks pending, or lint unresolved."""
     from backend.services.subtask_service import subtask_gate_blocks_advance
 
     blocked, reason = subtask_gate_blocks_advance(task)
     if blocked:
         return blocked, reason
+    if not _task_has_write_files(task):
+        return (
+            True,
+            "No files written — stay In Progress until apply_patch/write_file.",
+        )
     if not get_workflow_settings().get("requireCleanLint"):
         return False, ""
     diagnostics = task.get("lastCommandDiagnostics") or []
@@ -1257,8 +1278,7 @@ def _audit_dev_files_written(task: Dict[str, Any], lane_before: str, task_id: st
         return
     if lane_after in ("Needs PO", "Needs User"):
         return
-    files = task.get("files") or []
-    if _task_has_work_files(task):
+    if _task_has_write_files(task):
         return
     failures = _count_task_tool_failures(task)
     title = task.get("title", task_id)
@@ -1266,16 +1286,18 @@ def _audit_dev_files_written(task: Dict[str, Any], lane_before: str, task_id: st
         add_system_log(
             "Developer",
             "warning",
-            f"Developer advanced '{title}' with no files recorded — "
-            f"{failures} failed tool(s) in transcript (open task → Transcript, red entries)",
+            f"Developer advanced '{title}' with no files written — "
+            f"{failures} failed tool(s) in transcript; moving back to In Progress "
+            "(open task → Transcript, red entries)",
         )
     else:
         add_system_log(
             "Developer",
             "warning",
-            f"Developer advanced '{title}' with no files recorded — "
-            "no write/read tools logged; open task → Transcript and Agent Decisions",
+            f"Developer advanced '{title}' with no files written — "
+            "moving back to In Progress (open task → Transcript and Agent Decisions)",
         )
+    move_board_stage(task_id, "In Progress")
 
 
 def _llm_iterations() -> int:
@@ -2228,7 +2250,7 @@ def _run_developer_step(active_task: Dict[str, Any], brief: str) -> None:
                             )
                     else:
                         fresh = find_task_by_id(task_id)
-                        if fresh and _task_has_work_files(fresh):
+                        if fresh and _task_has_write_files(fresh):
                             blocked, reason = dev_gate_blocks_advance(fresh)
                             if blocked:
                                 add_system_log("Developer", "warning", f"{task_id}: {reason}")
@@ -2239,7 +2261,8 @@ def _run_developer_step(active_task: Dict[str, Any], brief: str) -> None:
                             add_system_log(
                                 "Developer",
                                 "warning",
-                                f"'{fresh.get('title', task_id)}' finished with no files — staying In Progress",
+                                f"'{fresh.get('title', task_id)}' finished with no files written — "
+                                "staying In Progress",
                             )
             _log_sprint_step_outcome("Developer", task_id, task.get("title", task_id), lane_before, result)
             _audit_dev_files_written(find_task_by_id(task_id) or task, lane_before, task_id)

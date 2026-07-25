@@ -762,7 +762,7 @@ def test_record_tool_usage_failure_metadata():
 
 def test_audit_dev_files_written_warning():
     from backend import state
-    from backend.agents.task_context import init_new_task
+    from backend.agents.task_context import init_new_task, get_task_lane
     from backend.services.sprint_service import _audit_dev_files_written
 
     initialize()
@@ -779,9 +779,10 @@ def test_audit_dev_files_written_warning():
     before = len(state.SYSTEM_LOGS)
     _audit_dev_files_written(task, "In Progress", "T-NO-FILES")
     assert any(
-        "no files recorded" in log["text"].lower()
+        "no files written" in log["text"].lower()
         for log in state.SYSTEM_LOGS[before:]
     )
+    assert get_task_lane("T-NO-FILES") == "In Progress"
 
 
 def test_tool_requires_approval_settings():
@@ -2401,6 +2402,7 @@ def test_dev_gate_blocks_advance_with_diagnostics(monkeypatch):
 
     initialize()
     task = init_new_task({"id": "T-LINT", "title": "Lint gate", "description": "d"})
+    task["files"] = [{"path": "lib/a.dart", "action": "written"}]
     task["lastCommandDiagnostics"] = [
         {"file": "lib/a.dart", "line": 1, "column": 1, "severity": "error", "message": "x"}
     ]
