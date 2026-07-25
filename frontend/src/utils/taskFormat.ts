@@ -1,14 +1,47 @@
 /** Safely format task fields that may be objects from LLM JSON. */
 export function formatTaskText(value: unknown): string {
   if (value == null) return ''
-  if (typeof value === 'string') return value
   if (typeof value === 'number' || typeof value === 'boolean') return String(value)
+  if (typeof value === 'string') {
+    const trimmed = value.trim()
+    if (
+      (trimmed.startsWith('{') && trimmed.endsWith('}')) ||
+      (trimmed.startsWith('[') && trimmed.endsWith(']'))
+    ) {
+      try {
+        return formatTaskText(JSON.parse(trimmed) as unknown)
+      } catch {
+        return value
+      }
+    }
+    return value
+  }
   if (typeof value === 'object') {
     const obj = value as Record<string, unknown>
-    for (const key of ['description', 'text', 'criteria', 'title', 'summary']) {
+    for (const key of [
+      'question',
+      'user_question',
+      'userQuestion',
+      'answer',
+      'message',
+      'text',
+      'reason',
+      'summary',
+      'description',
+      'content',
+      'criteria',
+      'title',
+    ]) {
       const nested = obj[key]
       if (nested != null && nested !== '') return formatTaskText(nested)
     }
+    // Prefer readable key: value pairs over raw JSON dump
+    const bits: string[] = []
+    for (const [k, v] of Object.entries(obj).slice(0, 6)) {
+      const hv = formatTaskText(v)
+      if (hv) bits.push(`${k}: ${hv}`)
+    }
+    if (bits.length) return bits.join(' · ')
     try {
       return JSON.stringify(value)
     } catch {
@@ -16,6 +49,16 @@ export function formatTaskText(value: unknown): string {
     }
   }
   return String(value)
+}
+
+/** Extract plain Q + A from a resolution that may nest JSON. */
+export function formatQaPair(resolution: {
+  question?: unknown
+  answer?: unknown
+}): { question: string; answer: string } {
+  const q = formatTaskText(resolution.question)
+  const a = formatTaskText(resolution.answer)
+  return { question: q || '(no question text)', answer: a || '(no answer yet)' }
 }
 
 export function formatAcceptanceCriteria(items: unknown[] | undefined): string[] {

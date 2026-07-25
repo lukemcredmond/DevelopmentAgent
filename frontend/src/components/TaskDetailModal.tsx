@@ -1,6 +1,6 @@
 import { useEffect, useMemo, useState, type ReactNode } from 'react'
 import type { BoardLane, CommandDiagnostic, Task, TaskFile, TaskGitCommit, TaskTranscriptEntry } from '../types'
-import { formatAcceptanceCriteria, formatTaskText, deriveTaskFiles, sanitizeTaskForUi } from '../utils/taskFormat'
+import { formatAcceptanceCriteria, formatTaskText, deriveTaskFiles, sanitizeTaskForUi, formatQaPair } from '../utils/taskFormat'
 import SlideOver from './SlideOver'
 
 function getCommandDiagnostics(task: Task): CommandDiagnostic[] {
@@ -1370,27 +1370,45 @@ export default function TaskDetailModal({
             const recentTools = (safeTask.transcript ?? [])
               .filter((e) => e.toolName)
               .slice(-8)
+            const pendingQ = formatTaskText(
+              safeTask.userQuestion || safeTask.needsUserReason || '',
+            )
             const hasNotes =
-              resolutions.length > 0 || decisions.length > 0 || recentTools.length > 0
+              resolutions.length > 0 ||
+              decisions.length > 0 ||
+              recentTools.length > 0 ||
+              !!pendingQ
             return (
               <CollapsibleSection
                 title="Working notes (Q&A)"
                 badge={hasNotes ? 'summary' : undefined}
-                defaultOpen={resolutions.length > 0}
+                defaultOpen={resolutions.length > 0 || !!pendingQ}
               >
                 <div className="space-y-3 text-[11px]">
                   <div>
                     <p className="text-[10px] font-bold uppercase text-cat-overlay mb-1">Q&A</p>
-                    {resolutions.length === 0 ? (
+                    {resolutions.length === 0 && !pendingQ ? (
                       <p className="text-cat-overlay italic">No user Q&A yet.</p>
                     ) : (
-                      <div className="space-y-2 max-h-32 overflow-y-auto pr-1">
-                        {resolutions.slice(-8).map((r, i) => (
-                          <div key={i} className="bg-cat-base border border-cat-surface1 rounded p-2">
-                            <p className="text-white font-medium">Q: {r.question}</p>
-                            <p className="text-cat-subtext mt-1">A: {r.answer}</p>
+                      <div className="space-y-2 max-h-40 overflow-y-auto pr-1">
+                        {resolutions.slice(-8).map((r, i) => {
+                          const { question, answer } = formatQaPair(r)
+                          return (
+                            <div
+                              key={i}
+                              className="bg-cat-base border border-cat-surface1 rounded p-2"
+                            >
+                              <p className="text-white font-medium">Q: {question}</p>
+                              <p className="text-cat-subtext mt-1">A: {answer}</p>
+                            </div>
+                          )
+                        })}
+                        {pendingQ ? (
+                          <div className="bg-amber-950/30 border border-amber-500/30 rounded p-2">
+                            <p className="text-white font-medium">Q: {pendingQ}</p>
+                            <p className="text-amber-200/80 mt-1 italic">A: Awaiting your answer.</p>
                           </div>
-                        ))}
+                        ) : null}
                       </div>
                     )}
                   </div>
@@ -1404,7 +1422,8 @@ export default function TaskDetailModal({
                       <ul className="space-y-1 max-h-28 overflow-y-auto pr-1 text-cat-subtext">
                         {decisions.slice(-12).map((d, i) => (
                           <li key={i}>
-                            [{d.agent}/{d.type}] {d.summary}
+                            [{formatTaskText(d.agent)}/{formatTaskText(d.type)}]{' '}
+                            {formatTaskText(d.summary)}
                           </li>
                         ))}
                       </ul>
@@ -1418,7 +1437,9 @@ export default function TaskDetailModal({
                       <ul className="space-y-1 max-h-24 overflow-y-auto pr-1 font-mono text-cat-subtext">
                         {recentTools.map((e, i) => {
                           const args = (e.toolArgs || {}) as Record<string, unknown>
-                          const detail = String(args.command || args.path || '').slice(0, 80)
+                          const detail = formatTaskText(
+                            args.command || args.path || args.question || '',
+                          ).slice(0, 80)
                           const status =
                             e.toolSuccess === true
                               ? 'ok'

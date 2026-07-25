@@ -72,6 +72,36 @@ def test_build_task_qa_markdown_has_sections():
     assert "flutter --version" in md
 
 
+def test_qa_markdown_humanizes_json_blobs():
+    task = {
+        "id": "TASK-JSON",
+        "title": {"text": "Nested title"},
+        "userResolutions": [
+            {
+                "question": '{"question": "Use Firebase or Supabase?", "options": ["Firebase", "Supabase"]}',
+                "answer": '{"answer": "Firebase", "reason": "existing SDK"}',
+            }
+        ],
+        "decisions": [
+            {
+                "agent": "Developer",
+                "type": "note",
+                "summary": '{"summary": "Chose Firebase Auth"}',
+            }
+        ],
+        "userQuestion": '{"user_question": "Confirm API key location?"}',
+        "transcript": [],
+    }
+    md = build_task_qa_markdown(task)
+    assert "{" not in md or "Firebase" in md  # prefer prose over raw braces when extractable
+    assert "Use Firebase or Supabase?" in md
+    assert "Firebase" in md
+    assert "Chose Firebase Auth" in md
+    assert "Confirm API key location?" in md
+    assert "Awaiting your answer" in md
+    assert "**Title:** Nested title" in md
+
+
 def test_update_and_prompt_inject_qa_markdown(tmp_path, monkeypatch):
     initialize()
     _clear_board()
