@@ -122,5 +122,10 @@ def test_prompt_includes_reuse_tool_tip():
         "ok",
     )
     prompt = build_task_prompt(task, "brief")
-    assert "Reuse prior tool results" in prompt
     assert "PRIOR AGENT DECISIONS" in prompt
+    assert "Tool reuse guidance" in prompt
+    assert "re-read after any write_file or apply_patch" in prompt
+    assert "read_file / list_dir" in prompt
+    assert "identical run_command" in prompt
+    # Must not claim all prior tool results are forever reusable
+    assert "Reuse prior tool results; do not re-run identical commands when the result" not in prompt

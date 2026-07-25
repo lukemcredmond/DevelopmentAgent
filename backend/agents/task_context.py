@@ -1245,8 +1245,12 @@ def build_task_prompt(task: Dict[str, Any], brief: str) -> str:
     if decisions:
         prompt += "\n=== PRIOR AGENT DECISIONS ON THIS CARD ===\n"
         prompt += (
-            "Reuse prior tool results; do not re-run identical commands when the result "
-            "is already recorded below.\n"
+            "Tool reuse guidance: For identical run_command results (lint/test/--version/--help), "
+            "prefer the summaries below — do not re-run the same command with the same args unless "
+            "you edited related code or are fixing a prior failure. "
+            "For read_file / list_dir / grep / glob_file_search, treat prior notes as hints only; "
+            "re-read after any write_file or apply_patch (or if unsure the workspace changed). "
+            "Do not invent paths from old directory listings alone.\n"
         )
         for d in decisions[-8:]:
             prompt += (
