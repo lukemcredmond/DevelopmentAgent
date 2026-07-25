@@ -1,5 +1,11 @@
 import { useCallback, useEffect, useMemo, useState } from 'react'
-import { fetchToolRegistry, probeAllTools, probeTool } from '../api/client'
+import { fetchToolRegistry, probeAllTools, probeAllToolsLlm, probeTool, probeToolLlm } from '../api/client'
+import {
+  AUTO_LLM_ON_PICK_KEY,
+  isAutoLlmToolHealthOnPick,
+  setAutoLlmToolHealthOnPick,
+  toolHealthStorageKey,
+} from '../lib/toolHealthLlm'
 import type { AgentId, ToolDefinition, ToolProbeResult, ToolProbeStatus } from '../types'
 
 const AGENT_OPTIONS: { id: AgentId; label: string }[] = [
@@ -8,8 +14,6 @@ const AGENT_OPTIONS: { id: AgentId; label: string }[] = [
   { id: 'cr', label: 'Code Reviewer' },
   { id: 'qa', label: 'QA Tester' },
 ]
-
-const STORAGE_PREFIX = 'allhands-tool-health:'
 
 function statusIcon(status: ToolProbeStatus | 'untested' | 'running'): {
   label: string
@@ -46,11 +50,13 @@ export default function ToolHealthPanel({ projectId = '' }: ToolHealthPanelProps
   const [results, setResults] = useState<Record<string, ToolProbeResult>>({})
   const [running, setRunning] = useState<Record<string, boolean>>({})
   const [batchRunning, setBatchRunning] = useState(false)
+  const [batchMode, setBatchMode] = useState<'smoke' | 'llm' | null>(null)
   const [expanded, setExpanded] = useState<string | null>(null)
   const [error, setError] = useState<string | null>(null)
   const [registryError, setRegistryError] = useState<string | null>(null)
+  const [autoOnPick, setAutoOnPick] = useState(() => isAutoLlmToolHealthOnPick())
 
-  const storageKey = `${STORAGE_PREFIX}${projectId || 'default'}:${agentId}`
+  const storageKey = toolHealthStorageKey(projectId, agentId)
 
   const loadRegistry = useCallback(async () => {
     setRegistryError(null)
@@ -90,6 +96,23 @@ export default function ToolHealthPanel({ projectId = '' }: ToolHealthPanelProps
     }
   }, [results, storageKey])
 
+  useEffect(() => {
+    const onStorage = (e: StorageEvent) => {
+      if (e.key === AUTO_LLM_ON_PICK_KEY) {
+        setAutoOnPick(isAutoLlmToolHealthOnPick())
+      }
+      if (e.key === storageKey && e.newValue) {
+        try {
+          setResults(JSON.parse(e.newValue) as Record<string, ToolProbeResult>)
+        } catch {
+          /* ignore */
+        }
+      }
+    }
+    window.addEventListener('storage', onStorage)
+    return () => window.removeEventListener('storage', onStorage)
+  }, [storageKey])
+
   const summary = useMemo(() => {
     let pass = 0
     let fail = 0
@@ -123,9 +146,28 @@ export default function ToolHealthPanel({ projectId = '' }: ToolHealthPanelProps
     }
   }
 
+  const runOneLlm = async (toolName: string) => {
+    setError(null)
+    setRunning((m) => ({ ...m, [toolName]: true }))
+    try {
+      const { result } = await probeToolLlm({ agent: agentId, toolName })
+      setResults((prev) => ({ ...prev, [toolName]: result }))
+      setExpanded(toolName)
+    } catch (e) {
+      setError(e instanceof Error ? e.message : 'LLM probe failed')
+    } finally {
+      setRunning((m) => {
+        const next = { ...m }
+        delete next[toolName]
+        return next
+      })
+    }
+  }
+
   const runAllSafe = async () => {
     setError(null)
     setBatchRunning(true)
+    setBatchMode('smoke')
     try {
       const data = await probeAllTools({ agent: agentId, includeDestructive: false })
       const next: Record<string, ToolProbeResult> = { ...results }
@@ -137,7 +179,32 @@ export default function ToolHealthPanel({ projectId = '' }: ToolHealthPanelProps
       setError(e instanceof Error ? e.message : 'Probe-all failed')
     } finally {
       setBatchRunning(false)
+      setBatchMode(null)
     }
+  }
+
+  const runAllLlm = async () => {
+    setError(null)
+    setBatchRunning(true)
+    setBatchMode('llm')
+    try {
+      const data = await probeAllToolsLlm({ agent: agentId, includeDestructive: false })
+      const next: Record<string, ToolProbeResult> = { ...results }
+      for (const r of data.results) {
+        next[r.toolName] = r
+      }
+      setResults(next)
+    } catch (e) {
+      setError(e instanceof Error ? e.message : 'LLM probe-all failed')
+    } finally {
+      setBatchRunning(false)
+      setBatchMode(null)
+    }
+  }
+
+  const onAutoToggle = (on: boolean) => {
+    setAutoOnPick(on)
+    setAutoLlmToolHealthOnPick(on)
   }
 
   return (
@@ -147,9 +214,8 @@ export default function ToolHealthPanel({ projectId = '' }: ToolHealthPanelProps
           Tool Health
         </h4>
         <p className="text-[10px] text-cat-overlay leading-relaxed mt-0.5">
-          Smoke-test each tool registered for this agent (no LLM). Green = pass, red = fail, amber =
-          skipped (destructive/slow), gray = not tested yet. Expand a row for output and hints the
-          model can use.
+          Smoke-test each tool (no LLM) or ask the agent&apos;s model to call it once. Green = pass,
+          red = fail, amber = skipped, gray = untested. Expand for output and model hints.
         </p>
       </div>
 
@@ -174,7 +240,15 @@ export default function ToolHealthPanel({ projectId = '' }: ToolHealthPanelProps
           onClick={() => void runAllSafe()}
           className="px-3 py-1.5 rounded bg-indigo-600/50 hover:bg-indigo-600/80 border border-indigo-500/40 text-indigo-100 text-[11px] font-semibold disabled:opacity-40"
         >
-          {batchRunning ? 'Testing…' : 'Test all safe'}
+          {batchRunning && batchMode === 'smoke' ? 'Testing…' : 'Test all safe'}
+        </button>
+        <button
+          type="button"
+          disabled={batchRunning || tools.length === 0}
+          onClick={() => void runAllLlm()}
+          className="px-3 py-1.5 rounded bg-violet-600/40 hover:bg-violet-600/70 border border-violet-500/40 text-violet-100 text-[11px] font-semibold disabled:opacity-40"
+        >
+          {batchRunning && batchMode === 'llm' ? 'Asking model…' : 'Ask model (all safe)'}
         </button>
         <button
           type="button"
@@ -188,6 +262,16 @@ export default function ToolHealthPanel({ projectId = '' }: ToolHealthPanelProps
           untested / {summary.total}
         </span>
       </div>
+
+      <label className="flex items-center gap-2 text-[10px] text-cat-subtext cursor-pointer select-none">
+        <input
+          type="checkbox"
+          checked={autoOnPick}
+          onChange={(e) => onAutoToggle(e.target.checked)}
+          className="rounded border-cat-surface1"
+        />
+        Auto LLM-test on model pick (Settings → Models)
+      </label>
 
       {error && <p className="text-[11px] text-rose-400">{error}</p>}
       {registryError && <p className="text-[11px] text-amber-300">{registryError}</p>}
@@ -237,6 +321,15 @@ export default function ToolHealthPanel({ projectId = '' }: ToolHealthPanelProps
                 </button>
                 <button
                   type="button"
+                  disabled={isRunning}
+                  onClick={() => void runOneLlm(tool.name)}
+                  className="shrink-0 text-[10px] px-2.5 py-1 rounded border border-violet-500/40 text-violet-200 hover:bg-violet-950/40 disabled:opacity-40"
+                  title="Ask the agent's model to call this tool"
+                >
+                  {running[tool.name] ? '…' : 'Ask model'}
+                </button>
+                <button
+                  type="button"
                   className="text-cat-overlay text-[10px] w-5"
                   onClick={() => setExpanded(open ? null : tool.name)}
                   aria-label="Toggle details"
@@ -261,6 +354,8 @@ export default function ToolHealthPanel({ projectId = '' }: ToolHealthPanelProps
                         >
                           {result.status}
                         </span>
+                        {result.mode ? ` · ${result.mode}` : ''}
+                        {result.model ? ` · model ${result.model}` : ''}
                         {result.durationMs != null && result.durationMs > 0
                           ? ` · ${result.durationMs}ms`
                           : ''}
@@ -271,6 +366,11 @@ export default function ToolHealthPanel({ projectId = '' }: ToolHealthPanelProps
                           {JSON.stringify(result.probeArgs, null, 2)}
                         </pre>
                       )}
+                      {result.llmContent ? (
+                        <pre className="text-[10px] font-mono text-cat-overlay whitespace-pre-wrap max-h-24 overflow-y-auto bg-cat-base/50 rounded p-2">
+                          LLM text: {result.llmContent}
+                        </pre>
+                      ) : null}
                       <pre className="text-[10px] font-mono text-cat-subtext whitespace-pre-wrap max-h-40 overflow-y-auto bg-cat-base/50 rounded p-2">
                         {result.output || '(no output)'}
                       </pre>
@@ -289,7 +389,7 @@ export default function ToolHealthPanel({ projectId = '' }: ToolHealthPanelProps
                     </>
                   ) : (
                     <p className="text-[10px] text-cat-overlay italic py-2">
-                      Not tested yet. Click Test to run a safe smoke probe.
+                      Not tested yet. Click Test (smoke) or Ask model (LLM).
                     </p>
                   )}
                   {tool.description && (

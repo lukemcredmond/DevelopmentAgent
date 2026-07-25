@@ -1,5 +1,6 @@
 import { useEffect, useState } from 'react'
 import { fetchModelRecommendations, fetchSystemCapacity } from '../api/client'
+import type { AgentId } from '../types'
 
 interface GpuModelRecommendationsProps {
   ollamaUrl: string
@@ -11,6 +12,8 @@ interface GpuModelRecommendationsProps {
   onDevModelChange: (v: string) => void
   onCrModelChange: (v: string) => void
   onQaModelChange: (v: string) => void
+  /** When set, Apply / Apply all use this (e.g. LLM tool health on pick). */
+  onPickModelForRole?: (role: AgentId, model: string) => void
 }
 
 function formatGpuLiveLine(capacity: Record<string, unknown> | null): string | null {
@@ -36,6 +39,7 @@ export default function GpuModelRecommendations({
   onDevModelChange,
   onCrModelChange,
   onQaModelChange,
+  onPickModelForRole,
 }: GpuModelRecommendationsProps) {
   const [capacity, setCapacity] = useState<Record<string, unknown> | null>(null)
   const [roles, setRoles] = useState<Record<string, { model: string; status: string }> | null>(null)
@@ -91,10 +95,14 @@ export default function GpuModelRecommendations({
 
   const applyAll = () => {
     if (!roles) return
-    if (roles.po?.model) onPoModelChange(roles.po.model)
-    if (roles.dev?.model) onDevModelChange(roles.dev.model)
-    if (roles.cr?.model) onCrModelChange(roles.cr.model)
-    if (roles.qa?.model) onQaModelChange(roles.qa.model)
+    const apply = (role: AgentId, model: string) => {
+      if (onPickModelForRole) onPickModelForRole(role, model)
+      else roleSetters[role]?.(model)
+    }
+    if (roles.po?.model) apply('po', roles.po.model)
+    if (roles.dev?.model) apply('dev', roles.dev.model)
+    if (roles.cr?.model) apply('cr', roles.cr.model)
+    if (roles.qa?.model) apply('qa', roles.qa.model)
   }
 
   const roleSetters: Record<string, (v: string) => void> = {
@@ -148,7 +156,11 @@ export default function GpuModelRecommendations({
                 </span>
                 <button
                   type="button"
-                  onClick={() => roleSetters[role]?.(info.model)}
+                  onClick={() => {
+                    const model = info.model
+                    if (onPickModelForRole) onPickModelForRole(role as AgentId, model)
+                    else roleSetters[role]?.(model)
+                  }}
                   disabled={roleModels[role] === info.model}
                   className="text-indigo-400 hover:text-indigo-300 disabled:opacity-40 shrink-0"
                 >

@@ -1,6 +1,7 @@
-import { useEffect, useState } from 'react'
+import { useCallback, useEffect, useState } from 'react'
 import type { AgentId, AppState, ConfigPayload, WorkflowSettings } from '../types'
 import { AGENT_LABELS, DEFAULT_WORKFLOW_SETTINGS } from '../types'
+import { isAutoLlmToolHealthOnPick, runAndPersistLlmProbeAll } from '../lib/toolHealthLlm'
 import BoardRecoveryPanel from './BoardRecoveryPanel'
 import GpuModelRecommendations from './GpuModelRecommendations'
 import InstalledModelsPanel from './InstalledModelsPanel'
@@ -98,6 +99,7 @@ export default function SettingsSlideOver({
 }: SettingsSlideOverProps) {
   const [tab, setTab] = useState<SettingsTab>(initialTab)
   const [modelFocus, setModelFocus] = useState<'PO' | 'DEV' | 'CR' | 'QA'>('DEV')
+  const [llmHealthStatus, setLlmHealthStatus] = useState<string | null>(null)
 
   // Re-hydrate role model fields from server state when Settings opens / project changes.
   useEffect(() => {
@@ -108,6 +110,31 @@ export default function SettingsSlideOver({
     if (state.models?.qa) onQaModelChange(state.models.qa)
     // eslint-disable-next-line react-hooks/exhaustive-deps -- sync once when open/projectId/models change
   }, [open, state.projectId, state.models?.po, state.models?.dev, state.models?.cr, state.models?.qa])
+
+  const assignModel = useCallback(
+    (role: AgentId, name: string) => {
+      if (role === 'po') onPoModelChange(name)
+      else if (role === 'dev') onDevModelChange(name)
+      else if (role === 'cr') onCrModelChange(name)
+      else onQaModelChange(name)
+
+      if (!isAutoLlmToolHealthOnPick()) return
+      const projectId = state.projectId || ''
+      setLlmHealthStatus(`LLM tool check running for ${role.toUpperCase()} (${name})…`)
+      void runAndPersistLlmProbeAll(role, name, projectId)
+        .then(({ summary }) => {
+          setLlmHealthStatus(
+            `LLM tool check (${role.toUpperCase()}): ${summary.pass} pass, ${summary.fail} fail, ${summary.skip} skip — see Tools → Health`,
+          )
+        })
+        .catch((err: unknown) => {
+          setLlmHealthStatus(
+            `LLM tool check failed: ${err instanceof Error ? err.message : String(err)}`,
+          )
+        })
+    },
+    [onPoModelChange, onDevModelChange, onCrModelChange, onQaModelChange, state.projectId],
+  )
 
   const agents: { id: AgentId; model: string }[] = [
     { id: 'po', model: poModel },
@@ -310,12 +337,20 @@ export default function SettingsSlideOver({
                 ollamaUrl={ollamaUrl}
                 focusedRole={modelFocus}
                 onPickModel={(name) => {
-                  if (modelFocus === 'PO') onPoModelChange(name)
-                  else if (modelFocus === 'DEV') onDevModelChange(name)
-                  else if (modelFocus === 'CR') onCrModelChange(name)
-                  else onQaModelChange(name)
+                  const role =
+                    modelFocus === 'PO'
+                      ? 'po'
+                      : modelFocus === 'DEV'
+                        ? 'dev'
+                        : modelFocus === 'CR'
+                          ? 'cr'
+                          : 'qa'
+                  assignModel(role, name)
                 }}
               />
+              {llmHealthStatus && (
+                <p className="text-[10px] text-violet-300 leading-relaxed">{llmHealthStatus}</p>
+              )}
               <label className="block text-[11px] text-cat-subtext">
                 <span className="text-[10px] text-cat-overlay block mb-0.5">
                   Ollama keep_alive (keeps weights loaded between sprint steps)
@@ -385,6 +420,7 @@ export default function SettingsSlideOver({
                 onDevModelChange={onDevModelChange}
                 onCrModelChange={onCrModelChange}
                 onQaModelChange={onQaModelChange}
+                onPickModelForRole={(role, model) => assignModel(role, model)}
               />
               <p className="text-[10px] text-cat-overlay leading-relaxed">
                 Model changes apply after{' '}

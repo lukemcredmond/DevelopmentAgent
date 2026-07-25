@@ -331,6 +331,70 @@ def post_tool_probe_all(payload: ToolProbeAllPayload):
     }
 
 
+class ToolLlmProbePayload(BaseModel):
+    model_config = ConfigDict(populate_by_name=True)
+
+    agent: str = "dev"
+    tool_name: str = Field(alias="toolName")
+    model: Optional[str] = None
+    include_destructive: bool = Field(default=False, alias="includeDestructive")
+
+
+class ToolLlmProbeAllPayload(BaseModel):
+    model_config = ConfigDict(populate_by_name=True)
+
+    agent: str = "dev"
+    model: Optional[str] = None
+    include_destructive: bool = Field(default=False, alias="includeDestructive")
+
+
+@router.post("/api/tools/probe-llm")
+def post_tool_probe_llm(payload: ToolLlmProbePayload):
+    """Ask the agent's model to call one tool, then execute that call (Tool Health)."""
+    if payload.agent not in VALID_AGENTS:
+        raise HTTPException(status_code=400, detail=f"Unknown agent: {payload.agent}")
+    from backend.services.tool_llm_probe import run_llm_tool_probe
+
+    with state.STATE_LOCK:
+        try:
+            result = run_llm_tool_probe(
+                payload.agent,
+                payload.tool_name,
+                model=payload.model,
+                include_destructive=payload.include_destructive,
+            )
+        except ValueError as exc:
+            raise HTTPException(status_code=400, detail=str(exc)) from exc
+    return {"ok": True, "result": result}
+
+
+@router.post("/api/tools/probe-llm-all")
+def post_tool_probe_llm_all(payload: ToolLlmProbeAllPayload):
+    """Ask the model to call each safe tool for an agent (sequential)."""
+    if payload.agent not in VALID_AGENTS:
+        raise HTTPException(status_code=400, detail=f"Unknown agent: {payload.agent}")
+    from backend.services.tool_llm_probe import run_llm_probe_all
+
+    with state.STATE_LOCK:
+        try:
+            results = run_llm_probe_all(
+                payload.agent,
+                model=payload.model,
+                include_destructive=payload.include_destructive,
+            )
+        except ValueError as exc:
+            raise HTTPException(status_code=400, detail=str(exc)) from exc
+    passed = sum(1 for r in results if r.get("status") == "pass")
+    failed = sum(1 for r in results if r.get("status") == "fail")
+    skipped = sum(1 for r in results if r.get("status") == "skip")
+    return {
+        "ok": True,
+        "agent": payload.agent,
+        "results": results,
+        "summary": {"pass": passed, "fail": failed, "skip": skipped, "total": len(results)},
+    }
+
+
 @router.get("/api/tools/transcript/{task_id}")
 def get_task_tool_transcript(task_id: str):
     from backend.agents.task_context import find_task_by_id

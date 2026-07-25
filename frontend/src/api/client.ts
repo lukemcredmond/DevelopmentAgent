@@ -981,6 +981,34 @@ export async function probeAllTools(payload: {
   })
 }
 
+export async function probeToolLlm(payload: {
+  agent: string
+  toolName: string
+  model?: string
+  includeDestructive?: boolean
+}): Promise<{ ok: boolean; result: import('../types').ToolProbeResult }> {
+  return request('/api/tools/probe-llm', {
+    method: 'POST',
+    body: JSON.stringify(payload),
+  })
+}
+
+export async function probeAllToolsLlm(payload: {
+  agent: string
+  model?: string
+  includeDestructive?: boolean
+}): Promise<{
+  ok: boolean
+  agent: string
+  results: import('../types').ToolProbeResult[]
+  summary: { pass: number; fail: number; skip: number; total: number }
+}> {
+  return request('/api/tools/probe-llm-all', {
+    method: 'POST',
+    body: JSON.stringify(payload),
+  })
+}
+
 export async function fetchTaskToolCalls(
   taskId: string,
 ): Promise<{ taskId: string; entries: TranscriptToolEntry[] }> {

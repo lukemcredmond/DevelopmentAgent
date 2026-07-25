@@ -520,7 +520,7 @@ During sprint steps, the **Agent Run bar** above the bottom panel shows live too
 |--------|---------|
 | Execution Log | Live/history tool events (filter by source, task, failures) |
 | **Manual Test** | Pick agent + tool, edit JSON args, **Run tool** without a sprint step (`POST /api/tools/execute`) |
-| **Health** | Checklist of tools for an agent with green/red/amber status; **Test** / **Test all safe** smoke probes + model hints (`POST /api/tools/probe`) |
+| **Health** | Checklist of tools for an agent with green/red/amber status; **Test** / **Test all safe** smoke probes; **Ask model** / **Ask model (all safe)** LLM-driven calls; optional auto LLM-test when a model is picked in Settings → Models (`POST /api/tools/probe`, `/api/tools/probe-llm`) |
 | **Custom tools** | Create shell / http / sql tools for **This project** or **Global (all projects)**; Save reconfigures agent registries |
 | Replay | Re-run tool calls from a task transcript |
 | Stack Reference | Detected stack catalog |
@@ -733,6 +733,8 @@ Live updates: `GET /api/events` (SSE).
 | POST | `/api/tools/execute` | Manual tool execution (Tool Lab) |
 | POST | `/api/tools/probe` | Smoke-test one tool (Health UI) |
 | POST | `/api/tools/probe-all` | Smoke-test all tools for an agent (skips destructive by default) |
+| POST | `/api/tools/probe-llm` | Ask the agent model to call one tool, then execute (Health UI) |
+| POST | `/api/tools/probe-llm-all` | Ask the model to call each safe tool for an agent |
 | GET | `/api/tools/transcript/{task_id}` | Tool entries from task transcript |
 | POST | `/api/tools/replay` | Replay tool call |
 | GET | `/api/tools/pending` | Pending unknown-tool invent requests |

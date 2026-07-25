@@ -423,6 +423,10 @@ export interface ToolProbeResult {
   hints: string[]
   probeArgs: Record<string, unknown>
   skipReason?: string | null
+  mode?: 'smoke' | 'llm'
+  model?: string
+  modelCalledTool?: boolean
+  llmContent?: string
 }
 
 export interface ToolRegistryResponse {
