@@ -23,6 +23,7 @@ from backend.agents.task_context import (
 from backend.agents.tool_outcomes import (
     file_action_for_tool,
     file_path_from_tool,
+    format_tool_decision_summary,
     format_tool_transcript_content,
     is_tool_failure,
     parse_run_command_exit,
@@ -398,12 +399,19 @@ def _record_tool_side_effects(
         toolOutput=tool_output[:2000],
         source=source,
     )
+    arg_summary = summarize_tool_args(tool_name, arguments)
+    decision_summary = format_tool_decision_summary(
+        tool_name, arguments, tool_output, success=success
+    )
+    detail = tool_output[:500]
+    if arg_summary and arg_summary not in decision_summary:
+        detail = f"{arg_summary}\n{detail}"[:500]
     record_task_decision(
         task_id,
         agent_role,
         "tool_fail" if not success else "tool",
-        f"{'Failed' if not success else 'Used'} tool '{tool_name}'",
-        tool_output[:500],
+        decision_summary,
+        detail,
     )
     if success:
         action = file_action_for_tool(tool_name)
@@ -416,7 +424,6 @@ def _record_tool_side_effects(
         if action and path:
             record_task_file(task_id, path, f"{action}-failed", persist=True)
 
-    arg_summary = summarize_tool_args(tool_name, arguments)
     if success:
         if tool_name == "write_file":
             path = safe_args.get("path", "?")

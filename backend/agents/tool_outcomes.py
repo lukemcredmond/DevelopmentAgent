@@ -85,6 +85,49 @@ def summarize_tool_args(name: str, args: Dict[str, Any]) -> str:
     return ", ".join(parts)
 
 
+DECISION_SUMMARY_MAX_CHARS = 220
+
+
+def _short_result_hint(tool_name: str, output: str, *, success: bool) -> str:
+    """Compact result fragment for decision summaries (exit code or first line)."""
+    text = (output or "").strip()
+    if not text:
+        return "ok" if success else "error"
+    if tool_name == "run_command":
+        exit_code, body = parse_run_command_exit(text)
+        if exit_code is not None:
+            first = ""
+            if body:
+                first = body.splitlines()[0].strip()[:80]
+            if first:
+                return f"exit {exit_code}: {first}"
+            return f"exit {exit_code}"
+    # Prefer first non-empty line
+    for line in text.splitlines():
+        line = line.strip()
+        if line:
+            return line[:100]
+    return text[:100]
+
+
+def format_tool_decision_summary(
+    tool_name: str,
+    args: Dict[str, Any],
+    output: str,
+    *,
+    success: bool,
+    max_len: int = DECISION_SUMMARY_MAX_CHARS,
+) -> str:
+    """Working-notes summary: tool + args + short result (capped)."""
+    status = "OK" if success else "FAILED"
+    arg_bit = summarize_tool_args(tool_name, args) or "(no args)"
+    hint = _short_result_hint(tool_name, output, success=success)
+    summary = f"{tool_name} {status}: {arg_bit} → {hint}"
+    if len(summary) > max_len:
+        summary = summary[: max_len - 1] + "…"
+    return summary
+
+
 _RUN_COMMAND_HEADER = re.compile(
     r"^\[(success|failed|findings) exit (-?\d+)\]",
     re.IGNORECASE | re.MULTILINE,

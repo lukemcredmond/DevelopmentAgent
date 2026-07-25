@@ -1244,6 +1244,10 @@ def build_task_prompt(task: Dict[str, Any], brief: str) -> str:
 
     if decisions:
         prompt += "\n=== PRIOR AGENT DECISIONS ON THIS CARD ===\n"
+        prompt += (
+            "Reuse prior tool results; do not re-run identical commands when the result "
+            "is already recorded below.\n"
+        )
         for d in decisions[-8:]:
             prompt += (
                 f"[{d.get('timestamp', '?')}] {d.get('agent', 'Agent')} "
