@@ -1362,6 +1362,96 @@ export default function TaskDetailModal({
             </div>
           )}
 
+          {(() => {
+            const resolutions = safeTask.userResolutions ?? []
+            const qaPath =
+              safeTask.qaMarkdownPath ||
+              (safeTask.id ? `docs/tasks/${safeTask.id}-qa.md` : '')
+            const recentTools = (safeTask.transcript ?? [])
+              .filter((e) => e.toolName)
+              .slice(-8)
+            const hasNotes =
+              resolutions.length > 0 || decisions.length > 0 || recentTools.length > 0
+            return (
+              <CollapsibleSection
+                title="Working notes (Q&A)"
+                badge={hasNotes ? 'summary' : undefined}
+                defaultOpen={resolutions.length > 0}
+              >
+                <div className="space-y-3 text-[11px]">
+                  <div>
+                    <p className="text-[10px] font-bold uppercase text-cat-overlay mb-1">Q&A</p>
+                    {resolutions.length === 0 ? (
+                      <p className="text-cat-overlay italic">No user Q&A yet.</p>
+                    ) : (
+                      <div className="space-y-2 max-h-32 overflow-y-auto pr-1">
+                        {resolutions.slice(-8).map((r, i) => (
+                          <div key={i} className="bg-cat-base border border-cat-surface1 rounded p-2">
+                            <p className="text-white font-medium">Q: {r.question}</p>
+                            <p className="text-cat-subtext mt-1">A: {r.answer}</p>
+                          </div>
+                        ))}
+                      </div>
+                    )}
+                  </div>
+                  <div>
+                    <p className="text-[10px] font-bold uppercase text-cat-overlay mb-1">
+                      Decisions (summarized)
+                    </p>
+                    {decisions.length === 0 ? (
+                      <p className="text-cat-overlay italic">None yet</p>
+                    ) : (
+                      <ul className="space-y-1 max-h-28 overflow-y-auto pr-1 text-cat-subtext">
+                        {decisions.slice(-12).map((d, i) => (
+                          <li key={i}>
+                            [{d.agent}/{d.type}] {d.summary}
+                          </li>
+                        ))}
+                      </ul>
+                    )}
+                  </div>
+                  {recentTools.length > 0 && (
+                    <div>
+                      <p className="text-[10px] font-bold uppercase text-cat-overlay mb-1">
+                        Recent actions
+                      </p>
+                      <ul className="space-y-1 max-h-24 overflow-y-auto pr-1 font-mono text-cat-subtext">
+                        {recentTools.map((e, i) => {
+                          const args = (e.toolArgs || {}) as Record<string, unknown>
+                          const detail = String(args.command || args.path || '').slice(0, 80)
+                          const status =
+                            e.toolSuccess === true
+                              ? 'ok'
+                              : e.toolSuccess === false
+                                ? 'fail'
+                                : '?'
+                          return (
+                            <li key={i}>
+                              {e.toolName} ({status})
+                              {detail ? `: ${detail}` : ''}
+                            </li>
+                          )
+                        })}
+                      </ul>
+                    </div>
+                  )}
+                  {qaPath && (
+                    <button
+                      type="button"
+                      onClick={() => {
+                        onOpenFile(qaPath)
+                        onClose()
+                      }}
+                      className="text-[10px] text-indigo-300 hover:text-indigo-200 underline"
+                    >
+                      Open {qaPath}
+                    </button>
+                  )}
+                </div>
+              </CollapsibleSection>
+            )
+          })()}
+
           <CollapsibleSection title="Agent Decisions" badge={decisions.length} defaultOpen={decisions.length <= 10}>
             <div className="overflow-y-auto space-y-2 max-h-40 pr-1">
               {decisions.length === 0 ? (

@@ -35,6 +35,7 @@ from backend.storage.memory_engine import create_memory_engine
 ChatMessage = Union[Mapping[str, Any], Message]
 
 SAME_ARGS_FAILURE_LIMIT = 3
+SAME_ARGS_SUCCESS_LIMIT = 3  # early-stop after repeated identical successes
 _FAILURE_LOCK = threading.Lock()
 
 
@@ -483,16 +484,105 @@ class ScrumAgent:
         run_id: str,
         user_prompt: str,
         failed_tool_keys: List[Tuple[str, str]],
+        successful_tool_keys: List[Tuple[str, str]],
         total_failures: List[int],
         max_tool_failures: int,
     ) -> Tuple[str, Dict[str, Any], ToolExecutionResult, Optional[str]]:
         """Returns (tool_name, arguments, result, early_stop_message)."""
-        from backend.agents.tool_outcomes import summarize_tool_args
+        from backend.agents.tool_outcomes import sanitize_tool_args_for_log, summarize_tool_args
         from backend.services.step_diagnostics import build_live_intent
 
         tool_name = call.function.name
         arguments = _normalize_tool_arguments(call.function.arguments)
         tool_summary = summarize_tool_args(tool_name, arguments)
+        key = (tool_name, json.dumps(arguments, sort_keys=True, default=str))
+
+        with _FAILURE_LOCK:
+            same_success = successful_tool_keys.count(key)
+
+        if same_success >= SAME_ARGS_SUCCESS_LIMIT - 1:
+            # Already succeeded once and skipped once (count >= 2) → stop like failure stuck-loop
+            cmd_hint = ""
+            if tool_name == "run_command" and isinstance(arguments, dict):
+                cmd_hint = str(arguments.get("command") or "")[:80]
+            stop_msg = (
+                f"Stopped: tool '{tool_name}' succeeded repeatedly with identical arguments"
+                + (f" ({cmd_hint})" if cmd_hint else "")
+                + ". Change approach or edit files before retrying."
+            )
+            self._log_step_exit(stop_msg, "warning")
+            self._publish_work_progress(
+                task_id=task_id,
+                intent=f"Stopped duplicate {tool_name}"
+                + (f": {cmd_hint}" if cmd_hint else ""),
+                status=stop_msg[:200],
+                run_status="failed",
+                clear_tool=True,
+            )
+            finish_run(status="failed", error=stop_msg)
+            safe_args = sanitize_tool_args_for_log(tool_name, arguments)
+            result = ToolExecutionResult(
+                tool_name=tool_name,
+                arguments=arguments,
+                safe_args=safe_args,
+                tool_output=stop_msg,
+                success=False,
+                duration_ms=0,
+                timestamp="",
+                agent=self.role,
+                agent_id=agent_id,
+                task_id=task_id,
+                source="agent",
+                run_id=run_id,
+            )
+            return tool_name, arguments, result, stop_msg
+
+        if same_success >= 1:
+            from backend.services.tool_cache import get_cached_result
+
+            cached = get_cached_result(tool_name, arguments)
+            if cached:
+                tool_output, success = cached
+            else:
+                cmd = str((arguments or {}).get("command") or tool_summary)[:120]
+                tool_output = (
+                    f"[skipped duplicate] Already ran '{tool_name}' with identical args"
+                    + (f" ({cmd})" if cmd else "")
+                    + ". Use prior output; change approach or edit files."
+                )
+                success = True
+            skip_intent = f"Skipped duplicate {tool_name}"
+            if tool_name == "run_command":
+                skip_intent = f"Skipped duplicate run_command: {str(arguments.get('command') or '')[:100]}"
+            self._publish_work_progress(
+                task_id=task_id,
+                intent=skip_intent,
+                status=skip_intent,
+                run_status="thinking",
+                clear_tool=True,
+                publish_activity_event=True,
+            )
+            add_system_log(self.role, "info", skip_intent)
+            with _FAILURE_LOCK:
+                successful_tool_keys.append(key)
+            safe_args = sanitize_tool_args_for_log(tool_name, arguments)
+            result = ToolExecutionResult(
+                tool_name=tool_name,
+                arguments=arguments,
+                safe_args=safe_args,
+                tool_output=tool_output,
+                success=success,
+                duration_ms=0,
+                timestamp="",
+                agent=self.role,
+                agent_id=agent_id,
+                task_id=task_id,
+                source="agent",
+                run_id=run_id,
+            )
+            # Marker consumed by _process_tool_calls
+            setattr(result, "duplicate_skip", True)
+            return tool_name, arguments, result, None
 
         def _on_awaiting(name: str) -> None:
             self._publish_work_progress(
@@ -541,10 +631,13 @@ class ScrumAgent:
             finish_run(status="awaiting_approval", error=stop_msg)
             return tool_name, arguments, result, stop_msg
 
+        if result.success and not result.pending_approval:
+            with _FAILURE_LOCK:
+                successful_tool_keys.append(key)
+
         if not result.success and not result.pending_approval:
             with _FAILURE_LOCK:
                 total_failures[0] += 1
-                key = (tool_name, json.dumps(arguments, sort_keys=True))
                 failed_tool_keys.append(key)
                 same_count = failed_tool_keys.count(key)
                 fail_total = total_failures[0]
@@ -573,6 +666,8 @@ class ScrumAgent:
         arguments: Dict[str, Any],
         tool_output: str,
         success: bool,
+        *,
+        duplicate_skip: bool = False,
     ) -> None:
         from backend.services.llm_context import truncate_tool_output_for_llm
 
@@ -584,6 +679,17 @@ class ScrumAgent:
                 "content": llm_output,
             }
         )
+        if duplicate_skip:
+            messages.append(
+                {
+                    "role": "system",
+                    "content": (
+                        f"Already ran '{tool_name}' with identical args — use prior output; "
+                        "change approach or edit files. Do not repeat the same command."
+                    ),
+                }
+            )
+            return
         if not success:
             messages.append(
                 {
@@ -654,6 +760,7 @@ class ScrumAgent:
         messages: List[ChatMessage],
         user_prompt: str,
         failed_tool_keys: List[Tuple[str, str]],
+        successful_tool_keys: List[Tuple[str, str]],
         total_failures: List[int],
         max_tool_failures: int,
         *,
@@ -684,6 +791,7 @@ class ScrumAgent:
                         run_id=run_id,
                         user_prompt=user_prompt,
                         failed_tool_keys=failed_tool_keys,
+                        successful_tool_keys=successful_tool_keys,
                         total_failures=total_failures,
                         max_tool_failures=max_tool_failures,
                     ): call
@@ -700,6 +808,7 @@ class ScrumAgent:
                 run_id=run_id,
                 user_prompt=user_prompt,
                 failed_tool_keys=failed_tool_keys,
+                successful_tool_keys=successful_tool_keys,
                 total_failures=total_failures,
                 max_tool_failures=max_tool_failures,
             )
@@ -709,7 +818,14 @@ class ScrumAgent:
             if early_stop:
                 return early_stop
             tools_used.add(tool_name)
-            self._append_tool_messages(messages, tool_name, arguments, result.tool_output, result.success)
+            self._append_tool_messages(
+                messages,
+                tool_name,
+                arguments,
+                result.tool_output,
+                result.success,
+                duplicate_skip=bool(getattr(result, "duplicate_skip", False)),
+            )
 
         tool_summary = ", ".join(
             call.function.name for call in all_calls if hasattr(call, "function")
@@ -744,6 +860,7 @@ class ScrumAgent:
         ]
 
         failed_tool_keys: List[Tuple[str, str]] = []
+        successful_tool_keys: List[Tuple[str, str]] = []
         total_failures: List[int] = [0]
         tools_used: set[str] = set()
         ws = get_workflow_settings()
@@ -903,6 +1020,7 @@ class ScrumAgent:
                         messages,
                         user_prompt,
                         failed_tool_keys,
+                        successful_tool_keys,
                         total_failures,
                         max_tool_failures,
                         iteration=iteration,

@@ -614,6 +614,12 @@ def execute_tool(
                         tool_output = cached_cmd
                         success = not is_tool_failure(tool_name, tool_output)
                         from_cache = True
+                    else:
+                        # Identical successful non-lint commands (e.g. flutter --version)
+                        cached = get_cached_result(tool_name, arguments)
+                        if cached:
+                            tool_output, success = cached
+                            from_cache = True
                 else:
                     cached = get_cached_result(tool_name, arguments)
                     if cached:

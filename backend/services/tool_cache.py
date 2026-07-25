@@ -32,6 +32,8 @@ LINT_COMMAND_MARKERS = (
     "mypy",
 )
 
+# Idempotent probes — safe to reuse within a step when fingerprint is unchanged.
+
 _STEP_CACHE: Dict[str, Dict[str, Any]] = {}
 _TOUCHED_PATHS: set[str] = set()
 _FINGERPRINT: Optional[str] = None
@@ -109,6 +111,26 @@ def _is_lint_command(command: str) -> bool:
     return any(marker in lower for marker in LINT_COMMAND_MARKERS)
 
 
+def _is_probe_command(command: str) -> bool:
+    """True for --version / --help style idempotent probes."""
+    cmd = (command or "").strip()
+    if not cmd:
+        return False
+    lower = cmd.lower()
+    if "--version" in lower or "--help" in lower:
+        return True
+    # Trailing short flags: `flutter -v`, `tool -h`
+    tokens = lower.replace("\\", "/").split()
+    if not tokens:
+        return False
+    last = tokens[-1]
+    return last in ("-v", "-V", "-h", "version", "help")
+
+
+def is_probe_command(command: str) -> bool:
+    return _is_probe_command(command)
+
+
 def should_cache_tool(tool_name: str, source: str) -> bool:
     if source != "agent":
         return False
@@ -145,15 +167,20 @@ def store_cached_result(
 
 
 def check_run_command_cache(command: str, arguments: Dict[str, Any]) -> Optional[str]:
-    """Soft block repeated lint commands when workspace fingerprint is unchanged."""
-    if not _is_lint_command(command):
-        return None
+    """Soft block repeated lint/probe commands when workspace fingerprint is unchanged."""
     key = _cache_key("run_command", arguments)
     entry = _STEP_CACHE.get(key)
     if not entry:
         return None
 
     prev_output = str(entry.get("output") or "")
+
+    if _is_probe_command(command):
+        return f"{prev_output}\n[cached — identical probe; workspace unchanged]"
+
+    if not _is_lint_command(command):
+        return None
+
     from backend.services.diagnostics_parser import parse_command_diagnostics
 
     diagnostics = parse_command_diagnostics(command, prev_output)

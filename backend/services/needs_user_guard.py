@@ -132,6 +132,14 @@ def append_user_resolution(
     )
     if len(resolutions) > 20:
         task["userResolutions"] = resolutions[-20:]
+    task_id = str(task.get("id") or "")
+    if task_id:
+        try:
+            from backend.services.task_qa_markdown import update_task_qa_markdown
+
+            update_task_qa_markdown(task_id)
+        except Exception:
+            pass
 
 
 def should_escalate_to_needs_user(

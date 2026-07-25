@@ -299,7 +299,7 @@ export default function SettingsSlideOver({
                       value={value}
                       onFocus={() => setModelFocus(focus)}
                       onChange={(e) => onChange(e.target.value)}
-                      className="bg-cat-base border border-cat-surface1 rounded p-1.5 font-mono text-[11px] text-right flex-1 focus:outline-none"
+                      className="bg-cat-base border border-cat-surface1 rounded p-1.5 font-mono text-[11px] text-white text-right flex-1 focus:outline-none"
                     />
                   </div>
                 ))}
@@ -330,6 +330,49 @@ export default function SettingsSlideOver({
                 Use <code className="text-cat-subtext">30m</code> or <code className="text-cat-subtext">-1</code>{' '}
                 to avoid cold-reloading the model every iteration.
               </p>
+              <div className="border border-cat-surface1 rounded-lg p-2 space-y-2">
+                <p className="text-[10px] font-bold uppercase tracking-wider text-cat-subtext">
+                  Advanced context (LLM speed)
+                </p>
+                <p className="text-[10px] text-cat-overlay leading-relaxed">
+                  Raise tool-output chars if tools look truncated; lower prune % to keep more history.
+                  Same controls live under Workflow.
+                </p>
+                <label className="block text-[11px] text-cat-subtext">
+                  <span className="text-[10px] text-cat-overlay block mb-0.5">
+                    Max tool output chars (to LLM)
+                  </span>
+                  <input
+                    type="number"
+                    min={1000}
+                    max={50000}
+                    value={state.workflowSettings?.maxToolOutputCharsForLlm ?? 6000}
+                    onChange={(e) =>
+                      onWorkflowSettingsChange({
+                        maxToolOutputCharsForLlm: Number(e.target.value) || 6000,
+                      })
+                    }
+                    className="w-full bg-cat-base border border-cat-surface1 rounded p-1.5 font-mono text-[11px] text-white focus:outline-none"
+                  />
+                </label>
+                <label className="block text-[11px] text-cat-subtext">
+                  <span className="text-[10px] text-cat-overlay block mb-0.5">
+                    Message prune threshold (% of num_ctx)
+                  </span>
+                  <input
+                    type="number"
+                    min={30}
+                    max={90}
+                    value={state.workflowSettings?.messagePruneThresholdPct ?? 60}
+                    onChange={(e) =>
+                      onWorkflowSettingsChange({
+                        messagePruneThresholdPct: Number(e.target.value) || 60,
+                      })
+                    }
+                    className="w-full bg-cat-base border border-cat-surface1 rounded p-1.5 font-mono text-[11px] text-white focus:outline-none"
+                  />
+                </label>
+              </div>
               <GpuModelRecommendations
                 ollamaUrl={ollamaUrl}
                 poModel={poModel}

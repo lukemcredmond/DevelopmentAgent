@@ -137,6 +137,7 @@ export interface Task {
   featureRollup?: FeatureRollup | null
   stuckLoops?: number
   lastStepProgress?: StepProgress | null
+  qaMarkdownPath?: string | null
 }
 
 export interface FeatureRollupChild {

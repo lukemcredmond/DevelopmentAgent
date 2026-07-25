@@ -135,6 +135,38 @@ export default function WorkflowPanel({
         </div>
       </div>
 
+      <div className="border border-indigo-500/20 bg-indigo-950/20 rounded-lg p-2 space-y-2">
+        <p className="text-[10px] font-bold uppercase tracking-wider text-indigo-200">
+          LLM context / speed
+        </p>
+        <p className="text-[10px] text-cat-overlay leading-relaxed">
+          Already on. Raise tool-output chars if tools look truncated; lower prune % to keep more
+          history. Also on Settings → Models.
+        </p>
+        <label className="text-[11px] text-cat-subtext block">
+          <span className="text-[10px] text-cat-overlay block">Max tool output chars (to LLM)</span>
+          <NumberSettingInput
+            value={settings.maxToolOutputCharsForLlm ?? 6000}
+            min={1000}
+            max={50000}
+            onCommit={(maxToolOutputCharsForLlm) => onSettingsChange({ maxToolOutputCharsForLlm })}
+            className="w-full bg-cat-base border border-cat-surface1 rounded p-1 text-white"
+          />
+        </label>
+        <label className="text-[11px] text-cat-subtext block">
+          <span className="text-[10px] text-cat-overlay block">
+            Message prune threshold (% of num_ctx)
+          </span>
+          <NumberSettingInput
+            value={settings.messagePruneThresholdPct ?? 60}
+            min={30}
+            max={90}
+            onCommit={(messagePruneThresholdPct) => onSettingsChange({ messagePruneThresholdPct })}
+            className="w-full bg-cat-base border border-cat-surface1 rounded p-1 text-white"
+          />
+        </label>
+      </div>
+
       <label className="flex items-center gap-2 text-[11px] text-cat-subtext cursor-pointer">
         <input
           type="checkbox"
@@ -594,29 +626,9 @@ export default function WorkflowPanel({
         Keeps model loaded between sprint iterations (e.g. 30m). Reduces reload latency.
       </p>
 
-      <label className="text-[11px] text-cat-subtext block">
-        <span className="text-[10px] text-cat-overlay block">Max tool output chars (to LLM)</span>
-        <NumberSettingInput
-          value={settings.maxToolOutputCharsForLlm ?? 6000}
-          min={1000}
-          max={50000}
-          onCommit={(maxToolOutputCharsForLlm) => onSettingsChange({ maxToolOutputCharsForLlm })}
-          className="w-full bg-cat-base border border-cat-surface1 rounded p-1 text-white"
-        />
-      </label>
-
-      <label className="text-[11px] text-cat-subtext block">
-        <span className="text-[10px] text-cat-overlay block">Message prune threshold (% of num_ctx)</span>
-        <NumberSettingInput
-          value={settings.messagePruneThresholdPct ?? 60}
-          min={30}
-          max={90}
-          onCommit={(messagePruneThresholdPct) => onSettingsChange({ messagePruneThresholdPct })}
-          className="w-full bg-cat-base border border-cat-surface1 rounded p-1 text-white"
-        />
-      </label>
-      <p className="text-[10px] text-cat-overlay leading-relaxed -mt-1">
-        When conversation exceeds this budget, oldest tool messages are dropped before each LLM call.
+      <p className="text-[10px] text-cat-overlay leading-relaxed">
+        When conversation exceeds the prune threshold (top of Workflow), oldest tool messages are
+        dropped before each LLM call.
       </p>
 
       <label className="text-[11px] text-cat-subtext block">

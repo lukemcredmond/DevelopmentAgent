@@ -1254,4 +1254,16 @@ def build_task_prompt(task: Dict[str, Any], brief: str) -> str:
         for entry in task["transcript"][-6:]:
             prompt += f"[{entry.get('timestamp', '?')}] {entry.get('agent', entry.get('role', '?'))}: {entry.get('content', '')[:200]}\n"
 
+    try:
+        from backend.services.task_qa_markdown import read_task_qa_markdown_for_prompt
+
+        qa_doc = read_task_qa_markdown_for_prompt(task)
+        if qa_doc:
+            prompt += (
+                "\n=== TASK Q&A DOC (summarized working notes — prefer over re-probing) ===\n"
+                f"{qa_doc}\n"
+            )
+    except Exception:
+        pass
+
     return prompt
