@@ -292,6 +292,7 @@ export interface CustomToolDef {
   parameters: Record<string, unknown>
   agents: string[]
   executor: 'shell' | 'http' | 'sql'
+  scope?: 'project' | 'global'
   shell?: { command?: string }
   http?: { url?: string; method?: string; headers?: Record<string, string>; timeoutSec?: number }
   sql?: {
@@ -407,6 +408,8 @@ export interface ToolDefinition {
   name: string
   description: string
   parameters: Record<string, unknown>
+  kind?: string
+  scope?: 'project' | 'global'
 }
 
 export interface ToolRegistryResponse {

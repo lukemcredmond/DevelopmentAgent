@@ -7,6 +7,7 @@ import {
   fetchToolRegistry,
   replayTools,
 } from '../api/client'
+import CustomToolsEditor from './CustomToolsEditor'
 import type {
   AgentId,
   Board,
@@ -19,7 +20,7 @@ import type {
 } from '../types'
 
 type ToolFilter = 'all' | 'work' | 'this_task' | 'failed' | 'agent' | 'manual' | 'replay' | 'orchestrator' | 'context_inject'
-type ToolsSubTab = 'log' | 'manual' | 'replay' | 'reference'
+type ToolsSubTab = 'log' | 'manual' | 'custom' | 'replay' | 'reference'
 
 const WORK_SOURCES = new Set(['agent', 'orchestrator', 'manual', 'user'])
 
@@ -122,7 +123,14 @@ function sourceDisplayLabel(source: ToolExecutionEvent['source']): string {
 function readToolsSubTab(): ToolsSubTab {
   try {
     const stored = sessionStorage.getItem(TOOLS_SUBTAB_KEY)
-    if (stored === 'log' || stored === 'manual' || stored === 'replay' || stored === 'reference') return stored
+    if (
+      stored === 'log' ||
+      stored === 'manual' ||
+      stored === 'custom' ||
+      stored === 'replay' ||
+      stored === 'reference'
+    )
+      return stored
   } catch {
     /* ignore */
   }
@@ -270,6 +278,7 @@ export default function ToolsPanel({
   }, [subTab])
 
   const [registryError, setRegistryError] = useState<string | null>(null)
+  const [registryTick, setRegistryTick] = useState(0)
 
   useEffect(() => {
     if (selectedTaskId) {
@@ -303,7 +312,7 @@ export default function ToolsPanel({
     return () => {
       cancelled = true
     }
-  }, [agentId])
+  }, [agentId, registryTick])
 
   useEffect(() => {
     const tool = tools.find((t) => t.name === selectedTool)
@@ -461,7 +470,7 @@ export default function ToolsPanel({
   return (
     <div className="flex flex-col h-full min-h-0 overflow-hidden bg-[#0f0f15]">
       <div className="bg-cat-mantle border-b border-cat-surface1 px-4 py-2 flex items-center gap-2 shrink-0">
-        {(['log', 'manual', 'replay', 'reference'] as const).map((tab) => (
+        {(['log', 'manual', 'custom', 'replay', 'reference'] as const).map((tab) => (
           <button
             key={tab}
             type="button"
@@ -476,9 +485,11 @@ export default function ToolsPanel({
               ? `Execution Log${toolEvents.length > 0 ? ` (${toolEvents.length})` : ''}`
               : tab === 'manual'
                 ? 'Manual Test'
-                : tab === 'reference'
-                  ? 'Stack Reference'
-                  : 'Replay'}
+                : tab === 'custom'
+                  ? 'Custom tools'
+                  : tab === 'reference'
+                    ? 'Stack Reference'
+                    : 'Replay'}
           </button>
         ))}
       </div>
@@ -837,6 +848,18 @@ export default function ToolsPanel({
 
       {subTab === 'manual' && (
         <div className="flex-1 min-h-0 overflow-y-auto p-4 text-[11px]">
+          <p className="text-[10px] text-cat-overlay mb-3">
+            Tool Lab — run any registered tool for an agent without waiting for a sprint step.
+            Add or edit custom tools under the{' '}
+            <button
+              type="button"
+              className="text-indigo-300 hover:underline"
+              onClick={() => setSubTab('custom')}
+            >
+              Custom tools
+            </button>{' '}
+            tab.
+          </p>
           {workspaceDir && (
             <p className="text-[10px] text-cat-overlay mb-3 font-mono">
               Workspace root: <span className="text-cat-subtext">{workspaceDir}</span>
@@ -875,10 +898,29 @@ export default function ToolsPanel({
                 {tools.map((t) => (
                   <option key={t.name} value={t.name}>
                     {t.name}
+                    {t.kind === 'custom'
+                      ? t.scope === 'global'
+                        ? ' (custom · global)'
+                        : ' (custom)'
+                      : ''}
                   </option>
                 ))}
               </select>
             </label>
+            {selectedToolDef && (
+              <p className="md:col-span-2 text-[10px] text-cat-overlay -mt-1">
+                {selectedToolDef.kind === 'custom' ? (
+                  <span className="text-violet-300">
+                    Custom · {selectedToolDef.scope === 'global' ? 'global' : 'project'}
+                  </span>
+                ) : (
+                  <span>Builtin</span>
+                )}
+                {selectedToolDef.description
+                  ? ` — ${selectedToolDef.description}`
+                  : ''}
+              </p>
+            )}
             <label className="flex flex-col gap-1 md:col-span-2">
               <span className="text-[10px] uppercase text-cat-overlay">Task ID (optional)</span>
               <input
@@ -948,6 +990,16 @@ export default function ToolsPanel({
               </div>
             )}
           </div>
+        </div>
+      )}
+
+      {subTab === 'custom' && (
+        <div className="flex-1 min-h-0 overflow-y-auto p-4 text-[11px]">
+          <CustomToolsEditor
+            onSaved={() => {
+              setRegistryTick((n) => n + 1)
+            }}
+          />
         </div>
       )}
 

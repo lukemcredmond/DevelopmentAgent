@@ -39,6 +39,7 @@ interface SettingsSlideOverProps {
   onImportProject: (file: File) => void
   onDeleteProject: () => void
   onOpenMemoryTab?: () => void
+  onOpenCustomTools?: () => void
   onBoardRestored?: (state: AppState) => void
   indexProgress?: import('../types').IndexProgress | null
   skillSuggestionCounts?: Record<AgentId, number>
@@ -89,6 +90,7 @@ export default function SettingsSlideOver({
   onImportProject,
   onDeleteProject,
   onOpenMemoryTab,
+  onOpenCustomTools,
   onBoardRestored,
   indexProgress = null,
   skillSuggestionCounts = { po: 0, dev: 0, cr: 0, qa: 0 },
@@ -472,6 +474,7 @@ export default function SettingsSlideOver({
               ollamaUrl={ollamaUrl}
               indexProgress={indexProgress}
               onOpenMemoryTab={onOpenMemoryTab}
+              onOpenCustomTools={onOpenCustomTools}
             />
           )}
         </div>

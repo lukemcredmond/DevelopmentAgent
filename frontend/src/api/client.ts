@@ -922,6 +922,29 @@ export async function fetchToolsCatalog(): Promise<import('../types').ToolsCatal
   return request<import('../types').ToolsCatalogResponse>('/api/tools/catalog')
 }
 
+export async function fetchCustomTools(
+  scope: 'project' | 'global' | 'all' = 'all',
+): Promise<{ scope: string; tools: import('../types').CustomToolDef[] }> {
+  return request<{ scope: string; tools: import('../types').CustomToolDef[] }>(
+    `/api/tools/custom?scope=${encodeURIComponent(scope)}`,
+  )
+}
+
+export async function saveCustomTools(
+  scope: 'project' | 'global',
+  tools: import('../types').CustomToolDef[],
+): Promise<{
+  ok: boolean
+  scope: string
+  tools: import('../types').CustomToolDef[]
+  merged: import('../types').CustomToolDef[]
+}> {
+  return request('/api/tools/custom', {
+    method: 'PUT',
+    body: JSON.stringify({ scope, tools }),
+  })
+}
+
 export async function executeTool(
   payload: ToolExecutePayload,
 ): Promise<{ ok: boolean; result: ToolExecuteResult }> {

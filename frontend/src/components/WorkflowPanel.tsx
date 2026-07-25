@@ -21,6 +21,7 @@ interface WorkflowPanelProps {
   ollamaUrl?: string
   indexProgress?: IndexProgress | null
   onOpenMemoryTab?: () => void
+  onOpenCustomTools?: () => void
 }
 
 export default function WorkflowPanel({
@@ -31,6 +32,7 @@ export default function WorkflowPanel({
   ollamaUrl = 'http://localhost:11434',
   indexProgress = null,
   onOpenMemoryTab,
+  onOpenCustomTools,
 }: WorkflowPanelProps) {
   const [dodInput, setDodInput] = useState('')
   const [showChangelog, setShowChangelog] = useState(false)
@@ -380,7 +382,11 @@ export default function WorkflowPanel({
         <span className="font-mono">disabledTools</span> filter which tools register.
       </p>
 
-      <AgentToolsPanel settings={settings} onSettingsChange={onSettingsChange} />
+      <AgentToolsPanel
+        settings={settings}
+        onSettingsChange={onSettingsChange}
+        onOpenCustomTools={onOpenCustomTools}
+      />
 
       <label className="flex items-center gap-2 text-[11px] text-cat-subtext cursor-pointer">
         <input

@@ -1,6 +1,6 @@
 import { useCallback, useEffect, useMemo, useState } from 'react'
 import { fetchToolsCatalog } from '../api/client'
-import type { CustomToolDef, ToolsCatalogResponse, WorkflowSettings } from '../types'
+import type { ToolsCatalogResponse, WorkflowSettings } from '../types'
 
 const AGENT_ROLES = ['Product Owner', 'Developer', 'Code Reviewer', 'QA Tester'] as const
 
@@ -29,9 +29,14 @@ const CORE_BUILTINS = [
 interface AgentToolsPanelProps {
   settings: WorkflowSettings
   onSettingsChange: (partial: Partial<WorkflowSettings>) => void
+  onOpenCustomTools?: () => void
 }
 
-export default function AgentToolsPanel({ settings, onSettingsChange }: AgentToolsPanelProps) {
+export default function AgentToolsPanel({
+  settings,
+  onSettingsChange,
+  onOpenCustomTools,
+}: AgentToolsPanelProps) {
   const [catalog, setCatalog] = useState<ToolsCatalogResponse | null>(null)
   const [activeRole, setActiveRole] = useState<string>('Developer')
   const [error, setError] = useState<string | null>(null)
@@ -51,7 +56,12 @@ export default function AgentToolsPanel({ settings, onSettingsChange }: AgentToo
     return Array.from(new Set([...CORE_BUILTINS, ...fromApi])).sort()
   }, [catalog])
 
-  const customTools = settings.customTools ?? []
+  const customNames = useMemo(() => {
+    const fromSettings = (settings.customTools ?? []).map((t) => t.name)
+    const fromCatalog = (catalog?.customTools ?? []).map((t) => t.name)
+    return Array.from(new Set([...fromSettings, ...fromCatalog])).sort()
+  }, [settings.customTools, catalog])
+
   const agentTools = settings.agentTools ?? {}
 
   const effectiveForRole = (role: string): string[] => {
@@ -83,47 +93,6 @@ export default function AgentToolsPanel({ settings, onSettingsChange }: AgentToo
     onSettingsChange({ agentTools: next })
   }
 
-  const updateCustom = (next: CustomToolDef[]) => {
-    onSettingsChange({ customTools: next })
-  }
-
-  const addQuerySqlPreset = () => {
-    const preset = catalog?.presets?.query_sql
-    if (!preset) return
-    if (customTools.some((t) => t.name === preset.name)) return
-    updateCustom([...customTools, preset])
-  }
-
-  const addBlankCustom = () => {
-    updateCustom([
-      ...customTools,
-      {
-        id: `custom_${customTools.length + 1}`,
-        name: `custom_tool_${customTools.length + 1}`,
-        description: 'Describe what this tool does for the LLM.',
-        parameters: {
-          type: 'object',
-          properties: {
-            input: { type: 'string' },
-          },
-          required: ['input'],
-        },
-        agents: ['Developer'],
-        executor: 'shell',
-        shell: { command: 'echo {input}' },
-      },
-    ])
-  }
-
-  const patchCustom = (index: number, partial: Partial<CustomToolDef>) => {
-    const next = customTools.map((t, i) => (i === index ? { ...t, ...partial } : t))
-    updateCustom(next)
-  }
-
-  const removeCustom = (index: number) => {
-    updateCustom(customTools.filter((_, i) => i !== index))
-  }
-
   return (
     <div className="space-y-3 border-t border-cat-surface1 pt-3 mt-2">
       <div>
@@ -132,7 +101,7 @@ export default function AgentToolsPanel({ settings, onSettingsChange }: AgentToo
         </h4>
         <p className="text-[10px] text-cat-overlay leading-relaxed mt-0.5">
           Choose which tools each agent may call. Leave a role on defaults, or tick tools to set an
-          allowlist. Custom tools are also sent to the LLM as callable functions.
+          allowlist. Edit custom tool definitions in the Tools panel.
         </p>
       </div>
 
@@ -185,8 +154,9 @@ export default function AgentToolsPanel({ settings, onSettingsChange }: AgentToo
       </div>
 
       <div className="max-h-40 overflow-y-auto grid grid-cols-2 gap-x-2 gap-y-0.5 bg-cat-base/50 rounded border border-cat-surface1 p-2">
-        {[...builtinNames, ...customTools.map((t) => t.name)].map((name) => {
+        {[...builtinNames, ...customNames].map((name) => {
           const checked = effectiveForRole(activeRole).includes(name)
+          const isCustom = customNames.includes(name)
           return (
             <label
               key={name}
@@ -198,164 +168,27 @@ export default function AgentToolsPanel({ settings, onSettingsChange }: AgentToo
                 onChange={() => toggleTool(activeRole, name)}
               />
               {name}
+              {isCustom && <span className="text-[8px] text-violet-400">c</span>}
             </label>
           )
         })}
       </div>
 
-      <div className="flex items-center justify-between pt-1">
-        <h4 className="text-[11px] font-bold uppercase tracking-wide text-cat-overlay">
-          Custom tools
-        </h4>
-        <div className="flex gap-2">
-          <button
-            type="button"
-            onClick={addQuerySqlPreset}
-            className="text-[10px] text-indigo-300 hover:underline"
-          >
-            + query_sql template
-          </button>
-          <button
-            type="button"
-            onClick={addBlankCustom}
-            className="text-[10px] text-indigo-300 hover:underline"
-          >
-            + blank
-          </button>
-        </div>
-      </div>
-
-      {customTools.length === 0 && (
+      <div className="rounded border border-cat-surface1 bg-cat-base/30 px-2 py-2 space-y-1">
         <p className="text-[10px] text-cat-overlay">
-          No custom tools yet. Add <span className="font-mono">query_sql</span> or a shell/HTTP tool
-          the LLM can call.
+          Custom tools ({customNames.length} merged project + global) — create or edit under{' '}
+          <span className="text-cat-subtext font-medium">Tools → Custom tools</span>.
         </p>
-      )}
-
-      {customTools.map((tool, index) => (
-        <div
-          key={tool.id || tool.name || index}
-          className="space-y-1.5 border border-cat-surface1 rounded p-2 bg-cat-base/40"
-        >
-          <div className="flex gap-2">
-            <input
-              className="flex-1 bg-cat-base border border-cat-surface1 rounded px-2 py-0.5 text-[11px] font-mono text-white"
-              value={tool.name}
-              onChange={(e) => patchCustom(index, { name: e.target.value, id: e.target.value })}
-              placeholder="tool_name"
-            />
-            <select
-              className="bg-cat-base border border-cat-surface1 rounded px-1 py-0.5 text-[10px] text-white"
-              value={tool.executor}
-              onChange={(e) =>
-                patchCustom(index, {
-                  executor: e.target.value as CustomToolDef['executor'],
-                })
-              }
-            >
-              <option value="sql">sql</option>
-              <option value="shell">shell</option>
-              <option value="http">http</option>
-            </select>
-            <button
-              type="button"
-              className="text-[10px] text-rose-400 hover:underline"
-              onClick={() => removeCustom(index)}
-            >
-              Remove
-            </button>
-          </div>
-          <input
-            className="w-full bg-cat-base border border-cat-surface1 rounded px-2 py-0.5 text-[11px] text-white"
-            value={tool.description}
-            onChange={(e) => patchCustom(index, { description: e.target.value })}
-            placeholder="Description for the LLM"
-          />
-          <div className="flex flex-wrap gap-2">
-            {AGENT_ROLES.map((role) => {
-              const on = (tool.agents || []).includes(role)
-              return (
-                <label key={role} className="flex items-center gap-1 text-[10px] text-cat-subtext">
-                  <input
-                    type="checkbox"
-                    checked={on}
-                    onChange={() => {
-                      const agents = new Set(tool.agents || [])
-                      if (on) agents.delete(role)
-                      else agents.add(role)
-                      patchCustom(index, { agents: Array.from(agents) })
-                    }}
-                  />
-                  {role.split(' ')[0]}
-                </label>
-              )
-            })}
-          </div>
-          {tool.executor === 'sql' && (
-            <textarea
-              className="w-full h-16 bg-cat-base border border-cat-surface1 rounded px-2 py-1 text-[10px] font-mono text-white"
-              value={JSON.stringify(tool.sql ?? { connections: { local: 'sqlite:///./data/app.db' }, readOnly: true, maxRows: 200 }, null, 2)}
-              onChange={(e) => {
-                try {
-                  patchCustom(index, { sql: JSON.parse(e.target.value) })
-                } catch {
-                  /* ignore while typing */
-                }
-              }}
-              spellCheck={false}
-            />
-          )}
-          {tool.executor === 'shell' && (
-            <input
-              className="w-full bg-cat-base border border-cat-surface1 rounded px-2 py-0.5 text-[10px] font-mono text-white"
-              value={tool.shell?.command ?? ''}
-              onChange={(e) => patchCustom(index, { shell: { command: e.target.value } })}
-              placeholder="python scripts/run.py --db {db_name} --query {query}"
-            />
-          )}
-          {tool.executor === 'http' && (
-            <div className="flex gap-1">
-              <select
-                className="bg-cat-base border border-cat-surface1 rounded px-1 text-[10px] text-white"
-                value={tool.http?.method ?? 'POST'}
-                onChange={(e) =>
-                  patchCustom(index, {
-                    http: { ...(tool.http || {}), method: e.target.value, url: tool.http?.url ?? '' },
-                  })
-                }
-              >
-                <option value="POST">POST</option>
-                <option value="GET">GET</option>
-              </select>
-              <input
-                className="flex-1 bg-cat-base border border-cat-surface1 rounded px-2 py-0.5 text-[10px] font-mono text-white"
-                value={tool.http?.url ?? ''}
-                onChange={(e) =>
-                  patchCustom(index, {
-                    http: { ...(tool.http || {}), url: e.target.value, method: tool.http?.method ?? 'POST' },
-                  })
-                }
-                placeholder="http://localhost:9000/query"
-              />
-            </div>
-          )}
-          <details className="text-[10px] text-cat-overlay">
-            <summary className="cursor-pointer">Parameters JSON schema</summary>
-            <textarea
-              className="w-full h-20 mt-1 bg-cat-base border border-cat-surface1 rounded px-2 py-1 font-mono text-white"
-              value={JSON.stringify(tool.parameters ?? {}, null, 2)}
-              onChange={(e) => {
-                try {
-                  patchCustom(index, { parameters: JSON.parse(e.target.value) })
-                } catch {
-                  /* ignore while typing */
-                }
-              }}
-              spellCheck={false}
-            />
-          </details>
-        </div>
-      ))}
+        {onOpenCustomTools && (
+          <button
+            type="button"
+            onClick={onOpenCustomTools}
+            className="text-[10px] text-indigo-300 hover:underline"
+          >
+            Open Tools → Custom tools
+          </button>
+        )}
+      </div>
     </div>
   )
 }

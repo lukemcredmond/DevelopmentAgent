@@ -237,52 +237,8 @@ def normalize_custom_tool_def(raw: Dict[str, Any]) -> Optional[Dict[str, Any]]:
     }
 
 
-def build_custom_tools(settings: Optional[Dict[str, Any]] = None) -> List[Tool]:
-    """Build Tool instances from workflow settings customTools."""
-    from backend.services.workflow_settings import get_workflow_settings
-
-    ws = settings if settings is not None else get_workflow_settings()
-    raw_list = ws.get("customTools") or []
-    if not isinstance(raw_list, list):
-        raw_list = []
-
-    tools: List[Tool] = []
-    defs: List[Dict[str, Any]] = []
-    for raw in raw_list:
-        norm = normalize_custom_tool_def(raw) if isinstance(raw, dict) else None
-        if not norm:
-            continue
-        defs.append(norm)
-        tools.append(
-            Tool(
-                name=norm["name"],
-                description=norm["description"],
-                parameters=norm["parameters"],
-                func=_make_executor(norm),
-            )
-        )
-    sync_custom_canonical_names(defs)
-    return tools
-
-
-def custom_tools_for_agent(role: str, settings: Optional[Dict[str, Any]] = None) -> List[Tool]:
-    from backend.services.workflow_settings import get_workflow_settings
-
-    ws = settings if settings is not None else get_workflow_settings()
-    all_tools = build_custom_tools(ws)
-    # Rebuild defs for agent filter
-    raw_list = ws.get("customTools") or []
-    allowed_names: Set[str] = set()
-    for raw in raw_list if isinstance(raw_list, list) else []:
-        norm = normalize_custom_tool_def(raw) if isinstance(raw, dict) else None
-        if not norm:
-            continue
-        if role in norm["agents"] or "all" in [a.lower() for a in norm["agents"]]:
-            allowed_names.add(norm["name"])
-    return [t for t in all_tools if t.name in allowed_names]
-
-
-def list_custom_tool_defs(settings: Optional[Dict[str, Any]] = None) -> List[Dict[str, Any]]:
+def list_project_custom_tool_defs(settings: Optional[Dict[str, Any]] = None) -> List[Dict[str, Any]]:
+    """Project-scoped custom tools only (no global merge)."""
     from backend.services.workflow_settings import get_workflow_settings
 
     ws = settings if settings is not None else get_workflow_settings()
@@ -291,5 +247,96 @@ def list_custom_tool_defs(settings: Optional[Dict[str, Any]] = None) -> List[Dic
         if isinstance(raw, dict):
             norm = normalize_custom_tool_def(raw)
             if norm:
-                out.append(norm)
+                out.append({**norm, "scope": "project"})
     return out
+
+
+GLOBAL_CUSTOM_TOOLS_KEY = "global_custom_tools"
+
+
+def load_global_custom_tools() -> List[Dict[str, Any]]:
+    """Load global custom tool defs from ProjectStorage (survives project switches)."""
+    from backend import state
+
+    raw = state.storage.get_setting(GLOBAL_CUSTOM_TOOLS_KEY)
+    if not raw:
+        return []
+    try:
+        import json
+
+        data = json.loads(raw)
+    except (json.JSONDecodeError, TypeError):
+        return []
+    if not isinstance(data, list):
+        return []
+    out: List[Dict[str, Any]] = []
+    for item in data:
+        if not isinstance(item, dict):
+            continue
+        norm = normalize_custom_tool_def(item)
+        if norm:
+            out.append({**norm, "scope": "global"})
+    return out
+
+
+def save_global_custom_tools(defs: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
+    """Normalize and persist global custom tools; returns saved defs with scope."""
+    import json
+
+    from backend import state
+
+    saved: List[Dict[str, Any]] = []
+    for raw in defs or []:
+        if not isinstance(raw, dict):
+            continue
+        norm = normalize_custom_tool_def(raw)
+        if norm:
+            saved.append({**norm, "scope": "global"})
+    # Persist without scope field noise (re-added on load)
+    persist = [{k: v for k, v in d.items() if k != "scope"} for d in saved]
+    state.storage.set_setting(GLOBAL_CUSTOM_TOOLS_KEY, json.dumps(persist))
+    return saved
+
+
+def merged_custom_tool_defs(settings: Optional[Dict[str, Any]] = None) -> List[Dict[str, Any]]:
+    """Global first, then project — same name → project wins."""
+    by_name: Dict[str, Dict[str, Any]] = {}
+    for d in load_global_custom_tools():
+        by_name[d["name"]] = {**d, "scope": "global"}
+    for d in list_project_custom_tool_defs(settings):
+        by_name[d["name"]] = {**d, "scope": "project"}
+    return list(by_name.values())
+
+
+def build_custom_tools(settings: Optional[Dict[str, Any]] = None) -> List[Tool]:
+    """Build Tool instances from merged global + project customTools."""
+    defs = merged_custom_tool_defs(settings)
+    tools: List[Tool] = []
+    for norm in defs:
+        # Executor closes over def without scope
+        exec_def = {k: v for k, v in norm.items() if k != "scope"}
+        tools.append(
+            Tool(
+                name=norm["name"],
+                description=norm["description"],
+                parameters=norm["parameters"],
+                func=_make_executor(exec_def),
+            )
+        )
+    sync_custom_canonical_names(defs)
+    return tools
+
+
+def custom_tools_for_agent(role: str, settings: Optional[Dict[str, Any]] = None) -> List[Tool]:
+    all_tools = build_custom_tools(settings)
+    allowed_names: Set[str] = set()
+    for norm in merged_custom_tool_defs(settings):
+        agents = norm.get("agents") or []
+        if role in agents or any(str(a).lower() == "all" for a in agents):
+            allowed_names.add(norm["name"])
+    return [t for t in all_tools if t.name in allowed_names]
+
+
+def list_custom_tool_defs(settings: Optional[Dict[str, Any]] = None) -> List[Dict[str, Any]]:
+    """Merged custom tool defs with scope for catalog/UI."""
+    return merged_custom_tool_defs(settings)

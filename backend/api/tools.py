@@ -105,8 +105,22 @@ def clear_tools_history():
 def get_tool_registry(agent: str = Query(default="dev")):
     if agent not in VALID_AGENTS:
         raise HTTPException(status_code=400, detail=f"Unknown agent: {agent}")
+    from backend.services.custom_tools import list_custom_tool_defs
+
     with state.STATE_LOCK:
-        return {"agent": agent, "tools": list_agent_tools(agent)}
+        tools = list_agent_tools(agent)
+        custom_by_name = {d["name"]: d for d in list_custom_tool_defs()}
+        enriched = []
+        for t in tools:
+            item = dict(t) if isinstance(t, dict) else {"name": getattr(t, "name", str(t))}
+            name = str(item.get("name") or "")
+            if name in custom_by_name:
+                item["kind"] = "custom"
+                item["scope"] = custom_by_name[name].get("scope") or "project"
+            else:
+                item.setdefault("kind", "builtin")
+            enriched.append(item)
+        return {"agent": agent, "tools": enriched}
 
 
 @router.get("/api/tools/catalog")
@@ -149,6 +163,81 @@ def get_tools_catalog():
             "presets": {"query_sql": QUERY_SQL_PRESET},
             "agentTools": ws.get("agentTools") or {},
             "agentToolsAllowWritesInRefinement": bool(ws.get("agentToolsAllowWritesInRefinement")),
+        }
+
+
+class CustomToolsSavePayload(BaseModel):
+    model_config = ConfigDict(populate_by_name=True)
+
+    scope: str = "project"  # project | global
+    tools: List[Dict[str, Any]] = Field(default_factory=list)
+
+
+@router.get("/api/tools/custom")
+def get_custom_tools(scope: str = Query(default="all")):
+    """List custom tools for project, global, or merged all."""
+    from backend.services.custom_tools import (
+        list_custom_tool_defs,
+        list_project_custom_tool_defs,
+        load_global_custom_tools,
+    )
+    from backend.services.workflow_settings import get_workflow_settings
+
+    scope_norm = (scope or "all").strip().lower()
+    with state.STATE_LOCK:
+        ws = get_workflow_settings()
+        if scope_norm == "global":
+            tools = load_global_custom_tools()
+        elif scope_norm == "project":
+            tools = list_project_custom_tool_defs(ws)
+        else:
+            tools = list_custom_tool_defs(ws)
+        return {"scope": scope_norm, "tools": tools}
+
+
+@router.put("/api/tools/custom")
+def put_custom_tools(payload: CustomToolsSavePayload):
+    """Save project or global custom tools and reconfigure agent registries."""
+    from backend.agents.registry import configure_agent_tools
+    from backend.services.custom_tools import (
+        list_custom_tool_defs,
+        list_project_custom_tool_defs,
+        normalize_custom_tool_def,
+        save_global_custom_tools,
+    )
+    from backend.services.workflow_settings import get_workflow_settings, save_workflow_settings
+
+    scope_norm = (payload.scope or "project").strip().lower()
+    if scope_norm not in ("project", "global"):
+        raise HTTPException(status_code=400, detail="scope must be 'project' or 'global'")
+
+    normalized: List[Dict[str, Any]] = []
+    for raw in payload.tools or []:
+        if not isinstance(raw, dict):
+            continue
+        norm = normalize_custom_tool_def(raw)
+        if not norm:
+            raise HTTPException(
+                status_code=400,
+                detail=f"Invalid custom tool def (name must be identifier): {raw.get('name')!r}",
+            )
+        normalized.append(norm)
+
+    with state.STATE_LOCK:
+        if scope_norm == "global":
+            saved = save_global_custom_tools(normalized)
+        else:
+            project_defs = [{k: v for k, v in d.items() if k != "scope"} for d in normalized]
+            ws = get_workflow_settings()
+            ws["customTools"] = project_defs
+            save_workflow_settings(ws)
+            saved = list_project_custom_tool_defs(ws)
+        configure_agent_tools()
+        return {
+            "ok": True,
+            "scope": scope_norm,
+            "tools": saved,
+            "merged": list_custom_tool_defs(),
         }
 
 

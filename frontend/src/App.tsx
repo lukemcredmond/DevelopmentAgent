@@ -228,7 +228,7 @@ export default function App() {
     content: string
   } | null>(null)
   const [toolsPreferredSubTab, setToolsPreferredSubTab] = useState<
-    'log' | 'manual' | 'replay' | undefined
+    'log' | 'manual' | 'custom' | 'replay' | undefined
   >(undefined)
   const workspaceColumnRef = useRef<HTMLDivElement>(null)
   const preMaximizeHeightRef = useRef(bottomPanelHeight)
@@ -1326,6 +1326,12 @@ export default function App() {
           )
         }
         onWorkflowSettingsChange={handleWorkflowSettingsChange}
+        onOpenCustomTools={() => {
+          setSettingsOpen(false)
+          expandBottomPanel()
+          setBottomTab('tools')
+          setToolsPreferredSubTab('custom')
+        }}
         onExportProject={() => exportProject(state.projectId)}
         onImportProject={(file) =>
           void withLoading(async () => handleState(await importProject(file)))
