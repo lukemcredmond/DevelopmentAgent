@@ -61,6 +61,14 @@ DEFAULT_WORKFLOW_SETTINGS: Dict[str, Any] = {
     "enableSemanticSprintContext": True,
     "pauseSprintOnNeedsUser": False,
     "autoFormatAfterEdit": True,
+    # Outbound-only phone alerts (Discord webhook) — never opens inbound ports.
+    "phoneNotifyEnabled": False,
+    "phoneNotifyProvider": "discord",
+    "phoneNotifyDiscordWebhookUrl": "",
+    "phoneNotifyOnNeedsUser": True,
+    "phoneNotifyOnNeedsPo": False,
+    "phoneNotifyOnToolApproval": True,
+    "phoneNotifyOnSprintEnd": True,
 }
 
 DEFAULT_SPRINT_SUMMARY: Dict[str, Any] = {
@@ -100,6 +108,8 @@ def save_workflow_settings(settings: Dict[str, Any], project_id: str | None = No
     updates = dict(settings)
     if not str(updates.get("qdrantApiKey") or "").strip():
         updates.pop("qdrantApiKey", None)
+    if not str(updates.get("phoneNotifyDiscordWebhookUrl") or "").strip():
+        updates.pop("phoneNotifyDiscordWebhookUrl", None)
     current.update(updates)
     state.storage.set_setting(_settings_key(pid), json.dumps(current))
     return current

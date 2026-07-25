@@ -678,6 +678,18 @@ def _redirect_to_needs_po(task_id: str, task: Dict[str, Any], msg: str, *, kind:
         lane="Needs PO",
     )
     add_system_log("System", "info", f"{task_id}: routed to Needs PO (not Needs User): {msg[:120]}")
+    try:
+        from backend.services.phone_notify import notify_if_enabled
+
+        title = task.get("title") or task_id
+        notify_if_enabled(
+            "needs_po",
+            "Needs PO",
+            f"{title}\n{msg[:400]}",
+            task_id=task_id,
+        )
+    except Exception:
+        pass
     return True
 
 
@@ -723,6 +735,19 @@ def _try_move_to_needs_user(
         lane="Needs User",
     )
     add_system_log("System", "warning", f"{task_id}: {msg}")
+    try:
+        from backend.services.phone_notify import notify_if_enabled
+
+        title = task.get("title") or task_id
+        reason = task.get("needsUserReason") or msg
+        notify_if_enabled(
+            "needs_user",
+            "Needs your answer",
+            f"{title}\n{str(reason)[:400]}",
+            task_id=task_id,
+        )
+    except Exception:
+        pass
     return True
 
 
@@ -784,6 +809,18 @@ def _check_stuck_and_escalate(task_id: str, lane_before: str) -> None:
             lane="Needs PO",
         )
         add_system_log("System", "warning", f"{task_id}: stuck loop → Needs PO")
+        try:
+            from backend.services.phone_notify import notify_if_enabled
+
+            title = task.get("title") or task_id
+            notify_if_enabled(
+                "needs_po",
+                "Needs PO",
+                f"{title}\n{stuck_msg[:400]}",
+                task_id=task_id,
+            )
+        except Exception:
+            pass
 
 
 def _escalate_po_limit(task: Dict[str, Any]) -> bool:
@@ -2748,6 +2785,20 @@ def _build_sprint_summary(steps: int, status: str = "completed") -> Dict[str, An
     }
     save_sprint_summary(summary)
     publish_event("sprint", summary)
+    try:
+        from backend.services.phone_notify import notify_if_enabled
+
+        notify_if_enabled(
+            "sprint_end",
+            f"Sprint {status}",
+            (
+                f"steps={steps} · Needs User={summary['needsUser']} · "
+                f"Needs PO={summary['needsPo']} · QA fail={len(qa_failed)}"
+            ),
+            task_id=f"sprint:{status}:{steps}",
+        )
+    except Exception:
+        pass
     return summary
 
 

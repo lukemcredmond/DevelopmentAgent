@@ -627,6 +627,19 @@ export async function updateWorkflowSettings(
   })
 }
 
+export async function testPhoneNotify(payload?: {
+  phoneNotifyDiscordWebhookUrl?: string
+}): Promise<{
+  ok: boolean
+  skipped?: string
+  error?: string
+}> {
+  return request('/api/workflow/phone-notify/test', {
+    method: 'POST',
+    body: JSON.stringify(payload ?? {}),
+  })
+}
+
 export async function cancelSprint(): Promise<{ ok: boolean }> {
   return request<{ ok: boolean }>('/api/sprint/cancel', { method: 'POST' })
 }

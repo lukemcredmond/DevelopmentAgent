@@ -369,6 +369,24 @@ Persisted per project. Update via sidebar **Workflow** or `POST /api/workflow/se
 | maxToolOutputCharsForLlm | 6000 | Truncate tool output in LLM context |
 | messagePruneThresholdPct | 60 | Prune message history when context fills |
 
+#### Phone alerts (outbound Discord)
+
+Outbound HTTPS only — **does not open ports** on your PC. Notifications go to Discord; use the Discord mobile app for phone push.
+
+| Setting | Default | Purpose |
+|---------|---------|---------|
+| phoneNotifyEnabled | Off | Master switch (Settings → Workflow → Phone alerts) |
+| phoneNotifyProvider | discord | Discord webhook (v1) |
+| phoneNotifyDiscordWebhookUrl | (secret) | Channel webhook URL — never logged or returned to the UI after save |
+| phoneNotifyOnNeedsUser | On | Alert when a card needs your answer |
+| phoneNotifyOnNeedsPo | Off | Alert when a card moves to Needs PO |
+| phoneNotifyOnToolApproval | On | Alert when a tool awaits approval |
+| phoneNotifyOnSprintEnd | On | Sprint finished / cancelled / max-steps summary |
+
+**Setup:** Discord channel → Edit Channel → Integrations → Webhooks → New Webhook → Copy URL → paste under Settings → Workflow → Phone alerts → enable → **Send test**. Prefer a **private** server/channel with only you. If the URL leaks, delete/regenerate the webhook.
+
+`POST /api/workflow/phone-notify/test` sends a test message.
+
 ### Custom tools (Workflow → Agent tools)
 
 Add tools without code changes. Each entry has `name`, `description`, JSON Schema `parameters`, `agents` (roles), and an `executor`:
@@ -662,6 +680,7 @@ Live updates: `GET /api/events` (SSE).
 | POST | `/api/sprint/recovery/dismiss` | Dismiss recovery banner |
 | GET | `/api/workflow/settings` | Read workflow settings |
 | POST | `/api/workflow/settings` | Update workflow settings (reloads agent tool registries) |
+| POST | `/api/workflow/phone-notify/test` | Send a test Discord phone alert (outbound only) |
 
 ### Tasks and board
 

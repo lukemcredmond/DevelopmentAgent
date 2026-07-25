@@ -26,4 +26,7 @@ def sanitize_workflow_settings_for_client(settings: Dict[str, Any]) -> Dict[str,
     key = str(out.get("qdrantApiKey") or "").strip()
     out["qdrantApiKeyConfigured"] = bool(key)
     out.pop("qdrantApiKey", None)
+    hook = str(out.get("phoneNotifyDiscordWebhookUrl") or "").strip()
+    out["phoneNotifyDiscordWebhookConfigured"] = bool(hook)
+    out.pop("phoneNotifyDiscordWebhookUrl", None)
     return out

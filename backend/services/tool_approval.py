@@ -120,6 +120,17 @@ def queue_tool_approval(
             "nonBlocking": True,
         },
     )
+    try:
+        from backend.services.phone_notify import notify_if_enabled
+
+        notify_if_enabled(
+            "tool_approval",
+            "Tool approval needed",
+            f"{agent}: {tool_name}" + (f" (task {task_id})" if task_id else ""),
+            task_id=task_id or approval.id,
+        )
+    except Exception:
+        pass
     return approval
 
 
@@ -175,6 +186,17 @@ def request_tool_approval(
             "timestamp": approval.timestamp,
         },
     )
+    try:
+        from backend.services.phone_notify import notify_if_enabled
+
+        notify_if_enabled(
+            "tool_approval",
+            "Tool approval needed",
+            f"{agent}: {tool_name}" + (f" (task {task_id})" if task_id else ""),
+            task_id=task_id or approval.id,
+        )
+    except Exception:
+        pass
 
     if not approval.event.wait(timeout=APPROVAL_TIMEOUT_SEC):
         approval.approved = False

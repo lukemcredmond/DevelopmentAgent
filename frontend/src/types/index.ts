@@ -366,6 +366,14 @@ export interface WorkflowSettings {
   enableSemanticSprintContext?: boolean
   pauseSprintOnNeedsUser?: boolean
   autoFormatAfterEdit?: boolean
+  phoneNotifyEnabled?: boolean
+  phoneNotifyProvider?: 'discord' | string
+  phoneNotifyDiscordWebhookUrl?: string
+  phoneNotifyDiscordWebhookConfigured?: boolean
+  phoneNotifyOnNeedsUser?: boolean
+  phoneNotifyOnNeedsPo?: boolean
+  phoneNotifyOnToolApproval?: boolean
+  phoneNotifyOnSprintEnd?: boolean
 }
 
 export interface RecentToolEntry {
@@ -861,6 +869,13 @@ export interface WorkflowSettingsPayload {
   enableSemanticSprintContext?: boolean
   pauseSprintOnNeedsUser?: boolean
   autoFormatAfterEdit?: boolean
+  phoneNotifyEnabled?: boolean
+  phoneNotifyProvider?: 'discord' | string
+  phoneNotifyDiscordWebhookUrl?: string
+  phoneNotifyOnNeedsUser?: boolean
+  phoneNotifyOnNeedsPo?: boolean
+  phoneNotifyOnToolApproval?: boolean
+  phoneNotifyOnSprintEnd?: boolean
 }
 
 export interface SkillsResponse {
@@ -1074,6 +1089,12 @@ export const DEFAULT_WORKFLOW_SETTINGS: WorkflowSettings = {
   enableSemanticSprintContext: true,
   pauseSprintOnNeedsUser: false,
   autoFormatAfterEdit: true,
+  phoneNotifyEnabled: false,
+  phoneNotifyProvider: 'discord',
+  phoneNotifyOnNeedsUser: true,
+  phoneNotifyOnNeedsPo: false,
+  phoneNotifyOnToolApproval: true,
+  phoneNotifyOnSprintEnd: true,
 }
 
 export const EMPTY_BOARD: Board = {

@@ -3,6 +3,7 @@ import {
   checkQdrantHealth,
   fetchIndexStatus,
   reindexCodebase,
+  testPhoneNotify,
 } from '../api/client'
 import AgentToolsPanel from './AgentToolsPanel'
 import NumberSettingInput from './NumberSettingInput'
@@ -55,6 +56,9 @@ export default function WorkflowPanel({
   const [retryDelayText, setRetryDelayText] = useState(
     () => (settings.ollamaRetryDelaySec ?? [0, 2, 5, 10]).join(', '),
   )
+  const [discordWebhookInput, setDiscordWebhookInput] = useState('')
+  const [phoneNotifyStatus, setPhoneNotifyStatus] = useState<string | null>(null)
+  const [phoneNotifyTesting, setPhoneNotifyTesting] = useState(false)
 
   useEffect(() => {
     setMcpServersJson(JSON.stringify(settings.mcpServers ?? [], null, 2))
@@ -64,6 +68,13 @@ export default function WorkflowPanel({
   useEffect(() => {
     setRetryDelayText((settings.ollamaRetryDelaySec ?? [0, 2, 5, 10]).join(', '))
   }, [settings.ollamaRetryDelaySec])
+
+  useEffect(() => {
+    // Secret is never returned from API; keep local input blank when configured.
+    if (!settings.phoneNotifyDiscordWebhookConfigured) {
+      setDiscordWebhookInput('')
+    }
+  }, [settings.phoneNotifyDiscordWebhookConfigured])
 
   const refreshIndexStatus = useCallback(async () => {
     try {
@@ -457,6 +468,101 @@ export default function WorkflowPanel({
         onSettingsChange={onSettingsChange}
         onOpenCustomTools={onOpenCustomTools}
       />
+
+      <div className="border border-cat-surface1 rounded-lg p-2.5 space-y-2 bg-cat-base/30">
+        <p className="text-[10px] font-bold uppercase tracking-wider text-cat-subtext">
+          Phone alerts (outbound)
+        </p>
+        <p className="text-[10px] text-cat-overlay leading-relaxed">
+          Outbound only — posts to a Discord webhook. Does not open ports on this PC. Use a private
+          channel; treat the webhook URL like a password (regenerate if leaked).
+        </p>
+        <label className="flex items-center gap-2 text-[11px] text-cat-subtext cursor-pointer">
+          <input
+            type="checkbox"
+            checked={settings.phoneNotifyEnabled ?? false}
+            onChange={(e) => onSettingsChange({ phoneNotifyEnabled: e.target.checked })}
+          />
+          Enable Discord phone alerts
+        </label>
+        <label className="text-[11px] text-cat-subtext block">
+          <span className="text-[10px] text-cat-overlay block">
+            Discord webhook URL
+            {settings.phoneNotifyDiscordWebhookConfigured
+              ? ' (saved — leave blank to keep)'
+              : ''}
+          </span>
+          <input
+            type="password"
+            autoComplete="off"
+            value={discordWebhookInput}
+            onChange={(e) => setDiscordWebhookInput(e.target.value)}
+            onBlur={() => {
+              const v = discordWebhookInput.trim()
+              if (v) onSettingsChange({ phoneNotifyDiscordWebhookUrl: v })
+            }}
+            placeholder={
+              settings.phoneNotifyDiscordWebhookConfigured
+                ? '•••••••• (leave blank to keep)'
+                : 'https://discord.com/api/webhooks/…'
+            }
+            className="w-full bg-cat-base border border-cat-surface1 rounded p-1.5 font-mono text-[11px] text-white focus:outline-none"
+          />
+        </label>
+        <div className="space-y-1 pl-0.5">
+          {(
+            [
+              ['phoneNotifyOnNeedsUser', 'Needs User (needs your answer)', true],
+              ['phoneNotifyOnNeedsPo', 'Needs PO', false],
+              ['phoneNotifyOnToolApproval', 'Tool approval pending', true],
+              ['phoneNotifyOnSprintEnd', 'Sprint end summary', true],
+            ] as const
+          ).map(([key, label, defaultOn]) => (
+            <label
+              key={key}
+              className="flex items-center gap-2 text-[11px] text-cat-subtext cursor-pointer"
+            >
+              <input
+                type="checkbox"
+                checked={(settings[key] as boolean | undefined) ?? defaultOn}
+                onChange={(e) => onSettingsChange({ [key]: e.target.checked })}
+              />
+              {label}
+            </label>
+          ))}
+        </div>
+        <button
+          type="button"
+          disabled={phoneNotifyTesting || !(settings.phoneNotifyEnabled ?? false)}
+          onClick={() => {
+            setPhoneNotifyTesting(true)
+            setPhoneNotifyStatus(null)
+            const pendingUrl = discordWebhookInput.trim()
+            void (async () => {
+              if (pendingUrl) {
+                onSettingsChange({ phoneNotifyDiscordWebhookUrl: pendingUrl })
+              }
+              try {
+                const res = await testPhoneNotify(
+                  pendingUrl ? { phoneNotifyDiscordWebhookUrl: pendingUrl } : undefined,
+                )
+                if (res.ok) setPhoneNotifyStatus('Test message sent — check Discord on your phone.')
+                else setPhoneNotifyStatus(res.error || res.skipped || 'Failed')
+              } catch (e) {
+                setPhoneNotifyStatus(e instanceof Error ? e.message : 'Test failed')
+              } finally {
+                setPhoneNotifyTesting(false)
+              }
+            })()
+          }}
+          className="text-[10px] px-2.5 py-1 rounded border border-indigo-500/40 text-indigo-200 hover:bg-indigo-950/40 disabled:opacity-40"
+        >
+          {phoneNotifyTesting ? 'Sending…' : 'Send test'}
+        </button>
+        {phoneNotifyStatus && (
+          <p className="text-[10px] text-violet-300 leading-relaxed">{phoneNotifyStatus}</p>
+        )}
+      </div>
 
       <label className="flex items-center gap-2 text-[11px] text-cat-subtext cursor-pointer">
         <input

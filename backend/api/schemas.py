@@ -169,6 +169,13 @@ class WorkflowSettingsPayload(BaseModel):
     enableSemanticSprintContext: Optional[bool] = None
     pauseSprintOnNeedsUser: Optional[bool] = None
     autoFormatAfterEdit: Optional[bool] = None
+    phoneNotifyEnabled: Optional[bool] = None
+    phoneNotifyProvider: Optional[str] = None
+    phoneNotifyDiscordWebhookUrl: Optional[str] = None
+    phoneNotifyOnNeedsUser: Optional[bool] = None
+    phoneNotifyOnNeedsPo: Optional[bool] = None
+    phoneNotifyOnToolApproval: Optional[bool] = None
+    phoneNotifyOnSprintEnd: Optional[bool] = None
 
 
 class DiagnoseTaskPayload(BaseModel):
