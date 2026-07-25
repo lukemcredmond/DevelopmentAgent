@@ -145,11 +145,11 @@ Follow these steps for your first project:
 5. **Plan work** — choose one path:
    - **Fast:** **Plan outline** → **Generate Features from plan** → **Execute Sprint Step**
    - **Automated:** **Plan & Run (Brief → Features → Sprint)**
-6. **Watch agents work** — open bottom tabs **Console**, **Tools**, and **Model** during sprint steps. The **Agent Run bar** above the bottom panel shows live tool activity via SSE. If the app was interrupted mid-sprint, a **recovery banner** offers resume/dismiss (no auto-sprint).
+6. **Watch agents work** — open bottom tabs **Console**, **Tools**, and **Model** during sprint steps. The **Agent Run bar** above the bottom panel shows live tool activity via SSE, and after a step finishes shows Step / Ollama / Tools time plus token totals when Ollama reports them. Kanban cards show a compact **agent usage** line (time · tokens) once steps have run; open the card for a per-role **Agent usage** breakdown. If the app was interrupted mid-sprint, a **recovery banner** offers resume/dismiss (no auto-sprint).
 7. **Unblock cards** — click Kanban cards for the task detail modal. Resolve **Needs User** answers; approve **Pending Approval** cards. Use **Claim ready cards** or **Run In Progress (N)** when Dev should run while PO cards wait.
 8. **Pin project facts** — bottom **Memory** tab: save conventions (API keys location, auth patterns) so all agents see them in prompts.
 9. **Optional: semantic search** — start Qdrant, enable **Enable semantic search** in Workflow, then **Reindex codebase**.
-10. **Optional: agent tools** — Workflow → **Agent tools**: per-agent allowlists and custom tools (e.g. `query_sql`).
+10. **Optional: agent tools** — Workflow → **Agent tools** for per-agent allowlists. Tool Lab: **Tools → Health** (pass/fail checklist), **Manual Test**, **Custom tools**.
 
 ### Example brief (minimal REST API)
 
@@ -337,7 +337,7 @@ Persisted per project. Update via sidebar **Workflow** or `POST /api/workflow/se
 | maxFixVerifyRounds | 3 | Max fix-verify iterations |
 | agentTools | `{}` | Opt-in per-agent tool allowlists; empty role → built-in defaults |
 | agentToolsAllowWritesInRefinement | Off | Keep write/run/git_commit available during refinement |
-| customTools | `[]` | User-defined tools (shell / http / sql) registered into LLM tool schemas |
+| customTools | `[]` | Project-scoped user tools (shell / http / sql). Merged with **global** tools from `~/.allhands` (`global_custom_tools`); same name → project wins. Edit in **Tools → Custom tools**. |
 
 #### Search and context
 
@@ -452,7 +452,7 @@ Default registration is in [backend/agents/registry.py](backend/agents/registry.
 | semantic_search, graph_query | When enabled | Qdrant / Graphify |
 | git_status, git_diff, git_commit | Dev | Git operations |
 | web_search | When enabled | Optional web lookup |
-| Custom tools | Per `customTools.agents` | shell / http / sql |
+| Custom tools | Per tool `agents` list | Project `customTools` + global `global_custom_tools` (Tool Lab) |
 | MCP tools | Configurable | External MCP servers (filtered by allowlist when set) |
 
 Prefer **apply_patch** for edits to existing files; **write_file** for new files or full rewrites.
@@ -463,7 +463,7 @@ Prefer **apply_patch** for edits to existing files; **write_file** for new files
 
 ## UI guide
 
-During sprint steps, the **Agent Run bar** above the bottom panel shows live tool activity (SSE `tool_start`, `tool_end`, `agent_run`).
+During sprint steps, the **Agent Run bar** above the bottom panel shows live tool activity (SSE `tool_start`, `tool_end`, `agent_run`). After a step, it also shows Step / Ollama / Tools duration and token totals when available.
 
 ### Sidebar
 
@@ -506,7 +506,7 @@ During sprint steps, the **Agent Run bar** above the bottom panel shows live too
 |-----|---------|
 | Console | Persisted agent system logs (includes under-decomposition and gated-tool warnings) |
 | Model | LLM debug timeline — prompts, tool calls, `memoriesUsed`, `decisionsIncluded` (filters by selected task) |
-| Tools | Tool execution log, manual runs, replay, pending approvals / unknown-tool mapping, stack catalog, terminal sessions |
+| Tools | Tool Lab: execution log, **Manual Test**, **Health** (pass/fail probes), **Custom tools** (project + global), replay, approvals / unknown-tool mapping, stack catalog, terminal sessions |
 | Activity | Board / sprint activity stream (debounced SSE) |
 | Memory | View, filter, add, edit, delete project memories |
 | Chat | Streaming composer, agent selector, @file context |
@@ -514,6 +514,28 @@ During sprint steps, the **Agent Run bar** above the bottom panel shows live too
 | Search | Workspace file content search |
 | Git | Branch, status, recent changes |
 
+#### Tool Lab (Tools tab)
+
+| Subtab | Purpose |
+|--------|---------|
+| Execution Log | Live/history tool events (filter by source, task, failures) |
+| **Manual Test** | Pick agent + tool, edit JSON args, **Run tool** without a sprint step (`POST /api/tools/execute`) |
+| **Health** | Checklist of tools for an agent with green/red/amber status; **Test** / **Test all safe** smoke probes + model hints (`POST /api/tools/probe`) |
+| **Custom tools** | Create shell / http / sql tools for **This project** or **Global (all projects)**; Save reconfigures agent registries |
+| Replay | Re-run tool calls from a task transcript |
+| Stack Reference | Detected stack catalog |
+
+Shortcut: Settings → Workflow → **Open Tools → Custom tools**. After Save, new tools appear under Manual Test for the agents you assigned.
+
+#### Agent usage (time + tokens)
+
+| Where | What you see |
+|-------|----------------|
+| Kanban **task card** | Compact line when usage exists (e.g. `Dev 2h · 1.3M tok`) |
+| Card **detail modal** | **Agent usage** block — per role: wall / Ollama / tools time, steps, calls, tokens in/out |
+| **Agent Run bar** | After a step: Step / Ollama / Tools ms and token totals when Ollama reported `prompt_eval_count` / `eval_count` |
+
+Totals accumulate across steps on that card after the feature is enabled; older cards do not backfill.
 #### Memory tab filters
 
 | Control | Purpose |
@@ -565,7 +587,7 @@ After a crash or power loss mid-sprint, a **recovery banner** shows the interrup
 | **Memory** | Cross-agent project notes, semantic search, dedupe, filters |
 | **Search** | Qdrant semantic search, Graphify graph, reindex |
 | **Debug** | Model panel, Ollama LLM logs, per-task timeline, Ollama server log fallback |
-| **Tools** | Configurable per-agent tools, custom shell/http/sql tools, catalog API, approvals, aliases, invent mapping |
+| **Tools** | Tool Lab (Manual Test, Health probes, Custom tools), per-agent allowlists, project + global shell/http/sql tools, catalog API, approvals, aliases, invent mapping |
 | **Projects** | Multi-project SQLite, export/import zip |
 | **Live updates** | SSE board deltas, files, logs, sprint events |
 
@@ -593,6 +615,8 @@ After a crash or power loss mid-sprint, a **recovery banner** shows the interrup
 | `files` | array | `{ path, action }` touched for this card |
 | `decisions` | array | Agent/user decisions with timestamp |
 | `transcript` | array | Full LLM + tool audit trail |
+| `agentUsage` | object | Per-role rollup: duration, Ollama/tool ms, prompt/eval tokens, call/step counts |
+| `qaMarkdownPath` | string \| null | Path to summarized working-notes markdown (`docs/tasks/…-qa.md`) |
 
 ---
 
@@ -702,9 +726,13 @@ Live updates: `GET /api/events` (SSE).
 | GET | `/api/tools/history` | Tool execution history |
 | POST | `/api/tools/history/clear` | Clear tool history |
 | GET | `/api/tools/registry` | Registered tools for an agent |
-| GET | `/api/tools/catalog` | Builtin + custom tools, per-agent effective lists, presets |
+| GET | `/api/tools/catalog` | Builtin + custom tools (with `scope`), per-agent effective lists, presets |
 | GET | `/api/tools/stack-catalog` | Detected project stack |
-| POST | `/api/tools/execute` | Manual tool execution |
+| GET | `/api/tools/custom` | List custom tools (`?scope=project\|global\|all`) |
+| PUT | `/api/tools/custom` | Save project or global custom tools (`{ scope, tools }`) then reconfigure registries |
+| POST | `/api/tools/execute` | Manual tool execution (Tool Lab) |
+| POST | `/api/tools/probe` | Smoke-test one tool (Health UI) |
+| POST | `/api/tools/probe-all` | Smoke-test all tools for an agent (skips destructive by default) |
 | GET | `/api/tools/transcript/{task_id}` | Tool entries from task transcript |
 | POST | `/api/tools/replay` | Replay tool call |
 | GET | `/api/tools/pending` | Pending unknown-tool invent requests |

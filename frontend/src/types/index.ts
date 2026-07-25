@@ -412,6 +412,19 @@ export interface ToolDefinition {
   scope?: 'project' | 'global'
 }
 
+export type ToolProbeStatus = 'pass' | 'fail' | 'skip'
+
+export interface ToolProbeResult {
+  toolName: string
+  status: ToolProbeStatus
+  success: boolean
+  output: string
+  durationMs: number
+  hints: string[]
+  probeArgs: Record<string, unknown>
+  skipReason?: string | null
+}
+
 export interface ToolRegistryResponse {
   agent: string
   tools: ToolDefinition[]

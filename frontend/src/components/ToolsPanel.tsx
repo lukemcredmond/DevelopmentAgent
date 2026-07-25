@@ -8,6 +8,7 @@ import {
   replayTools,
 } from '../api/client'
 import CustomToolsEditor from './CustomToolsEditor'
+import ToolHealthPanel from './ToolHealthPanel'
 import type {
   AgentId,
   Board,
@@ -20,7 +21,7 @@ import type {
 } from '../types'
 
 type ToolFilter = 'all' | 'work' | 'this_task' | 'failed' | 'agent' | 'manual' | 'replay' | 'orchestrator' | 'context_inject'
-type ToolsSubTab = 'log' | 'manual' | 'custom' | 'replay' | 'reference'
+type ToolsSubTab = 'log' | 'manual' | 'custom' | 'health' | 'replay' | 'reference'
 
 const WORK_SOURCES = new Set(['agent', 'orchestrator', 'manual', 'user'])
 
@@ -57,6 +58,7 @@ interface ToolsPanelProps {
   brief?: string
   preferredSubTab?: ToolsSubTab
   workspaceDir?: string
+  projectId?: string
   sprintRunning?: boolean
   onOpenConsole?: () => void
   onInjectToolEvidence?: (
@@ -127,6 +129,7 @@ function readToolsSubTab(): ToolsSubTab {
       stored === 'log' ||
       stored === 'manual' ||
       stored === 'custom' ||
+      stored === 'health' ||
       stored === 'replay' ||
       stored === 'reference'
     )
@@ -204,6 +207,7 @@ export default function ToolsPanel({
   brief = '',
   preferredSubTab,
   workspaceDir,
+  projectId,
   sprintRunning = false,
   onOpenConsole,
   onInjectToolEvidence,
@@ -470,7 +474,7 @@ export default function ToolsPanel({
   return (
     <div className="flex flex-col h-full min-h-0 overflow-hidden bg-[#0f0f15]">
       <div className="bg-cat-mantle border-b border-cat-surface1 px-4 py-2 flex items-center gap-2 shrink-0">
-        {(['log', 'manual', 'custom', 'replay', 'reference'] as const).map((tab) => (
+        {(['log', 'manual', 'health', 'custom', 'replay', 'reference'] as const).map((tab) => (
           <button
             key={tab}
             type="button"
@@ -485,11 +489,13 @@ export default function ToolsPanel({
               ? `Execution Log${toolEvents.length > 0 ? ` (${toolEvents.length})` : ''}`
               : tab === 'manual'
                 ? 'Manual Test'
-                : tab === 'custom'
-                  ? 'Custom tools'
-                  : tab === 'reference'
-                    ? 'Stack Reference'
-                    : 'Replay'}
+                : tab === 'health'
+                  ? 'Health'
+                  : tab === 'custom'
+                    ? 'Custom tools'
+                    : tab === 'reference'
+                      ? 'Stack Reference'
+                      : 'Replay'}
           </button>
         ))}
       </div>
@@ -990,6 +996,12 @@ export default function ToolsPanel({
               </div>
             )}
           </div>
+        </div>
+      )}
+
+      {subTab === 'health' && (
+        <div className="flex-1 min-h-0 overflow-y-auto p-4 text-[11px]">
+          <ToolHealthPanel projectId={projectId} />
         </div>
       )}
 

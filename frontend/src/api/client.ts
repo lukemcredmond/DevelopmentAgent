@@ -954,6 +954,33 @@ export async function executeTool(
   })
 }
 
+export async function probeTool(payload: {
+  agent: string
+  toolName: string
+  arguments?: Record<string, unknown>
+  includeDestructive?: boolean
+}): Promise<{ ok: boolean; result: import('../types').ToolProbeResult }> {
+  return request('/api/tools/probe', {
+    method: 'POST',
+    body: JSON.stringify(payload),
+  })
+}
+
+export async function probeAllTools(payload: {
+  agent: string
+  includeDestructive?: boolean
+}): Promise<{
+  ok: boolean
+  agent: string
+  results: import('../types').ToolProbeResult[]
+  summary: { pass: number; fail: number; skip: number; total: number }
+}> {
+  return request('/api/tools/probe-all', {
+    method: 'POST',
+    body: JSON.stringify(payload),
+  })
+}
+
 export async function fetchTaskToolCalls(
   taskId: string,
 ): Promise<{ taskId: string; entries: TranscriptToolEntry[] }> {

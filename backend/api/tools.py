@@ -272,6 +272,65 @@ def post_tool_execute(payload: ToolExecutePayload):
     return {"ok": True, "result": _tool_result_dict(result)}
 
 
+class ToolProbePayload(BaseModel):
+    model_config = ConfigDict(populate_by_name=True)
+
+    agent: str = "dev"
+    tool_name: str = Field(alias="toolName")
+    arguments: Optional[Dict[str, Any]] = None
+    include_destructive: bool = Field(default=False, alias="includeDestructive")
+
+
+class ToolProbeAllPayload(BaseModel):
+    model_config = ConfigDict(populate_by_name=True)
+
+    agent: str = "dev"
+    include_destructive: bool = Field(default=False, alias="includeDestructive")
+
+
+@router.post("/api/tools/probe")
+def post_tool_probe(payload: ToolProbePayload):
+    """Smoke-test one tool with safe canned args (Tool Health UI)."""
+    if payload.agent not in VALID_AGENTS:
+        raise HTTPException(status_code=400, detail=f"Unknown agent: {payload.agent}")
+    from backend.services.tool_probe import run_tool_probe
+
+    with state.STATE_LOCK:
+        try:
+            result = run_tool_probe(
+                payload.agent,
+                payload.tool_name,
+                arguments=payload.arguments,
+                include_destructive=payload.include_destructive,
+            )
+        except ValueError as exc:
+            raise HTTPException(status_code=400, detail=str(exc)) from exc
+    return {"ok": True, "result": result}
+
+
+@router.post("/api/tools/probe-all")
+def post_tool_probe_all(payload: ToolProbeAllPayload):
+    """Smoke-test all tools registered for an agent (skips destructive by default)."""
+    if payload.agent not in VALID_AGENTS:
+        raise HTTPException(status_code=400, detail=f"Unknown agent: {payload.agent}")
+    from backend.services.tool_probe import run_probe_all
+
+    with state.STATE_LOCK:
+        results = run_probe_all(
+            payload.agent,
+            include_destructive=payload.include_destructive,
+        )
+    passed = sum(1 for r in results if r.get("status") == "pass")
+    failed = sum(1 for r in results if r.get("status") == "fail")
+    skipped = sum(1 for r in results if r.get("status") == "skip")
+    return {
+        "ok": True,
+        "agent": payload.agent,
+        "results": results,
+        "summary": {"pass": passed, "fail": failed, "skip": skipped, "total": len(results)},
+    }
+
+
 @router.get("/api/tools/transcript/{task_id}")
 def get_task_tool_transcript(task_id: str):
     from backend.agents.task_context import find_task_by_id

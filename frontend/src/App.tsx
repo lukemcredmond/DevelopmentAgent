@@ -1702,6 +1702,7 @@ export default function App() {
                       brief={brief}
                       preferredSubTab={toolsPreferredSubTab}
                       workspaceDir={state.workspaceDir}
+                      projectId={state.projectId}
                       sprintRunning={orchestratedActive}
                       onOpenConsole={handleOpenConsoleTab}
                       onInjectToolEvidence={(taskId, payload) => handleInjectToolEvidence(taskId, payload)}
