@@ -4,6 +4,7 @@ import type { BoardLane, Task } from '../types'
 import type { TaskRunInfo } from '../utils/taskRunInfo'
 import { formatCardProgressBrief, formatRunStatus } from '../utils/taskRunInfo'
 import { deriveTaskFiles, formatTaskText } from '../utils/taskFormat'
+import { formatAgentUsageBrief } from '../utils/agentUsageFormat'
 
 interface TaskCardProps {
   task: Task
@@ -38,6 +39,7 @@ export default function TaskCard({
   const childTaskCount = (task.childTaskIds ?? []).length
   const isSubtask = Boolean(task.parentTaskId)
   const isFeature = task.workType === 'feature' || lane === 'Features'
+  const usageBrief = formatAgentUsageBrief(task.agentUsage)
   const featureParentId = task.featureId
   const relatedCount = (task.relatedTaskIds ?? []).length
   const hasCommit = Boolean(task.gitCommit?.hash)
@@ -144,6 +146,11 @@ export default function TaskCard({
             No lane move ×{task.stuckLoops}
           </p>
         )}
+      {usageBrief && (
+        <p className="mb-1.5 text-[9px] text-violet-200/90 truncate" title={usageBrief}>
+          {usageBrief}
+        </p>
+      )}
       <div className="flex items-center justify-between mb-1.5">
         <span className="text-[10px] bg-indigo-950 text-indigo-300 px-1.5 py-0.5 rounded font-mono font-bold">
           {task.id}

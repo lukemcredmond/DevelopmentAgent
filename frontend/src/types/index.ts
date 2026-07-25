@@ -138,6 +138,19 @@ export interface Task {
   stuckLoops?: number
   lastStepProgress?: StepProgress | null
   qaMarkdownPath?: string | null
+  agentUsage?: Record<string, AgentUsageEntry> | null
+}
+
+export interface AgentUsageEntry {
+  stepCount?: number
+  callCount?: number
+  durationMs?: number
+  ollamaMs?: number
+  toolMs?: number
+  promptTokens?: number
+  evalTokens?: number
+  totalTokens?: number
+  tokensReported?: boolean
 }
 
 export interface FeatureRollupChild {
@@ -198,6 +211,10 @@ export interface LlmDebugEntry {
   error?: string
   memoriesUsed?: Array<{ category: string; content: string }>
   decisionsIncluded?: number
+  promptTokens?: number
+  evalTokens?: number
+  totalTokens?: number
+  tokensReported?: boolean
 }
 
 export interface ModelTimelineItem {
@@ -553,6 +570,10 @@ export interface LastStepDiagnostics {
   ollamaMsTotal?: number
   ollamaCallCount?: number
   toolMsTotal?: number
+  promptTokensTotal?: number
+  evalTokensTotal?: number
+  totalTokens?: number
+  tokensReported?: boolean
   exitReason?: string
   laneBefore: string
   laneAfter?: string

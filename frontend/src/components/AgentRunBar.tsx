@@ -28,6 +28,13 @@ function formatMs(ms: number | undefined): string {
   return `${(ms / 1000).toFixed(1)}s`
 }
 
+function formatTok(n: number | undefined): string {
+  if (n == null || Number.isNaN(n) || n <= 0) return '0'
+  if (n < 1000) return String(Math.round(n))
+  if (n < 1_000_000) return `${(n / 1000).toFixed(n >= 10000 ? 0 : 1)}K`
+  return `${(n / 1_000_000).toFixed(n >= 10_000_000 ? 0 : 2)}M`
+}
+
 function progressLine(progress: StepProgress): string {
   const tools = progress.toolsUsed?.length
     ? progress.toolsUsed.join(', ')
@@ -355,6 +362,13 @@ export default function AgentRunBar({
           Tools {formatMs(timing.toolMsTotal)}
           {' · '}
           {timing.llmIterations?.used ?? '?'}/{timing.llmIterations?.max ?? '?'} iters
+          {(timing.tokensReported || (timing.totalTokens ?? 0) > 0) && (
+            <>
+              {' · '}
+              Tokens {formatTok(timing.promptTokensTotal)} in / {formatTok(timing.evalTokensTotal)} out
+              {(timing.totalTokens ?? 0) > 0 ? ` (${formatTok(timing.totalTokens)} tot)` : ''}
+            </>
+          )}
           <span className="text-cat-overlay/70">
             {' '}
             — sprint prompts/tool loops are larger than chat

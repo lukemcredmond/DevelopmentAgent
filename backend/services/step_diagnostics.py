@@ -66,6 +66,10 @@ class StepDiagnosticsTracker:
         text_chars: int = 0,
         error: Optional[str] = None,
         error_type: Optional[str] = None,
+        prompt_tokens: int = 0,
+        eval_tokens: int = 0,
+        total_tokens: int = 0,
+        tokens_reported: bool = False,
     ) -> None:
         self.llm_iterations_used = max(self.llm_iterations_used, iteration)
         self.last_event = f"ollama:iter{iteration}"
@@ -75,11 +79,29 @@ class StepDiagnosticsTracker:
             "toolCalls": tool_calls or [],
             "textChars": text_chars,
             "error": error,
+            "promptTokens": int(prompt_tokens or 0),
+            "evalTokens": int(eval_tokens or 0),
+            "totalTokens": int(total_tokens or (prompt_tokens or 0) + (eval_tokens or 0)),
+            "tokensReported": bool(tokens_reported),
         }
         if error_type:
             entry["errorType"] = error_type
         self.ollama_calls.append(entry)
         self._flush_checkpoint()
+        # Live rollup onto the card
+        try:
+            from backend.services.agent_usage import record_ollama_call_usage
+
+            record_ollama_call_usage(
+                task_id=self.task_id,
+                role=self.agent,
+                duration_ms=duration_ms,
+                prompt_tokens=int(prompt_tokens or 0),
+                eval_tokens=int(eval_tokens or 0),
+                tokens_reported=bool(tokens_reported),
+            )
+        except Exception:
+            pass
 
     def set_llm_iterations_max(self, max_iterations: int) -> None:
         self.llm_iterations_max = max_iterations
@@ -175,6 +197,14 @@ class StepDiagnosticsTracker:
             },
             "ollamaMsTotal": sum(int(c.get("durationMs") or 0) for c in self.ollama_calls),
             "ollamaCallCount": len(self.ollama_calls),
+            "promptTokensTotal": sum(int(c.get("promptTokens") or 0) for c in self.ollama_calls),
+            "evalTokensTotal": sum(int(c.get("evalTokens") or 0) for c in self.ollama_calls),
+            "totalTokens": sum(
+                int(c.get("totalTokens") or 0)
+                or (int(c.get("promptTokens") or 0) + int(c.get("evalTokens") or 0))
+                for c in self.ollama_calls
+            ),
+            "tokensReported": any(bool(c.get("tokensReported")) for c in self.ollama_calls),
             "toolMsTotal": 0,  # filled below from toolsLog if duration present
             "ollamaCalls": self.ollama_calls,
             "toolsLog": self.tools_log,
@@ -236,6 +266,12 @@ class StepDiagnosticsTracker:
         self.file_path.parent.mkdir(parents=True, exist_ok=True)
         with open(self.file_path, "w", encoding="utf-8") as f:
             json.dump(payload, f, indent=2)
+        try:
+            from backend.services.agent_usage import record_step_usage_from_trace
+
+            record_step_usage_from_trace(self)
+        except Exception:
+            pass
         _prune_old_files(self.file_path.parent)
         duration_ms = payload["durationMs"]
         tools_summary = ",".join(sorted(self.tools_used)) or "none"
@@ -390,6 +426,10 @@ def log_ollama_call(
     text_chars: int = 0,
     error: Optional[str] = None,
     error_type: Optional[str] = None,
+    prompt_tokens: int = 0,
+    eval_tokens: int = 0,
+    total_tokens: int = 0,
+    tokens_reported: bool = False,
 ) -> None:
     trace = get_active_trace()
     if trace:
@@ -400,6 +440,10 @@ def log_ollama_call(
             text_chars=text_chars,
             error=error,
             error_type=error_type,
+            prompt_tokens=prompt_tokens,
+            eval_tokens=eval_tokens,
+            total_tokens=total_tokens,
+            tokens_reported=tokens_reported,
         )
         from backend.services.sprint_session import touch_session
 

@@ -1,6 +1,10 @@
 import { useEffect, useMemo, useState, type ReactNode } from 'react'
 import type { BoardLane, CommandDiagnostic, Task, TaskFile, TaskGitCommit, TaskTranscriptEntry } from '../types'
 import { formatAcceptanceCriteria, formatTaskText, deriveTaskFiles, sanitizeTaskForUi, formatQaPair } from '../utils/taskFormat'
+import {
+  formatDurationMs,
+  formatTokensLine,
+} from '../utils/agentUsageFormat'
 import SlideOver from './SlideOver'
 
 function getCommandDiagnostics(task: Task): CommandDiagnostic[] {
@@ -539,6 +543,46 @@ export default function TaskDetailModal({
                     Suggested: {lsp.suggestedAction}
                   </p>
                 )}
+              </div>
+            )
+          })()}
+
+          {(() => {
+            const usage = safeTask.agentUsage
+            const rows = usage
+              ? Object.entries(usage).filter(
+                  ([, e]) =>
+                    e &&
+                    ((e.durationMs ?? 0) > 0 ||
+                      (e.ollamaMs ?? 0) > 0 ||
+                      (e.callCount ?? 0) > 0 ||
+                      (e.stepCount ?? 0) > 0),
+                )
+              : []
+            if (!rows.length) return null
+            return (
+              <div className="bg-violet-950/20 border border-violet-500/30 rounded-lg p-3 space-y-2">
+                <h4 className="text-xs font-bold text-violet-200">Agent usage</h4>
+                <div className="space-y-1.5">
+                  {rows.map(([role, e]) => (
+                    <div
+                      key={role}
+                      className="flex flex-wrap items-baseline justify-between gap-x-3 gap-y-0.5 text-[11px]"
+                    >
+                      <span className="text-white font-medium">{role}</span>
+                      <span className="text-cat-subtext tabular-nums">
+                        {formatDurationMs(e.durationMs ?? e.ollamaMs)} wall
+                        {(e.ollamaMs ?? 0) > 0 ? ` · ${formatDurationMs(e.ollamaMs)} Ollama` : ''}
+                        {(e.toolMs ?? 0) > 0 ? ` · ${formatDurationMs(e.toolMs)} tools` : ''}
+                        {(e.stepCount ?? 0) > 0 ? ` · ${e.stepCount} steps` : ''}
+                        {(e.callCount ?? 0) > 0 ? ` · ${e.callCount} calls` : ''}
+                      </span>
+                      <span className="w-full text-cat-overlay tabular-nums">
+                        Tokens: {formatTokensLine(e)}
+                      </span>
+                    </div>
+                  ))}
+                </div>
               </div>
             )
           })()}

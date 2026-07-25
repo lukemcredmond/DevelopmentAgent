@@ -255,7 +255,20 @@ class ScrumAgent:
                 options=self._chat_options(),
             )
             duration_ms = int((time.time() - started) * 1000)
+            prompt_tokens = eval_tokens = total_tokens = 0
+            tokens_reported = False
             if not stream and result is not None:
+                from backend.services.agent_usage import extract_ollama_token_counts
+
+                prompt_tokens, eval_tokens, total_tokens, tokens_reported = extract_ollama_token_counts(
+                    result
+                )
+                self._last_token_usage = {
+                    "promptTokens": prompt_tokens,
+                    "evalTokens": eval_tokens,
+                    "totalTokens": total_tokens,
+                    "tokensReported": tokens_reported,
+                }
                 msg = result.message
                 tool_calls = []
                 if msg.tool_calls:
@@ -280,6 +293,10 @@ class ScrumAgent:
                     duration_ms=duration_ms,
                     memories_used=getattr(self, "_last_memories_used", None),
                     decisions_included=getattr(self, "_decisions_in_prompt", None),
+                    prompt_tokens=prompt_tokens,
+                    eval_tokens=eval_tokens,
+                    total_tokens=total_tokens,
+                    tokens_reported=tokens_reported,
                 )
             return result, None, None, duration_ms
         except Exception as exc:
@@ -1013,6 +1030,12 @@ class ScrumAgent:
                     duration_ms=ollama_duration_ms,
                     tool_calls=tool_call_names,
                     text_chars=text_chars,
+                    prompt_tokens=int((getattr(self, "_last_token_usage", None) or {}).get("promptTokens") or 0),
+                    eval_tokens=int((getattr(self, "_last_token_usage", None) or {}).get("evalTokens") or 0),
+                    total_tokens=int((getattr(self, "_last_token_usage", None) or {}).get("totalTokens") or 0),
+                    tokens_reported=bool(
+                        (getattr(self, "_last_token_usage", None) or {}).get("tokensReported")
+                    ),
                 )
                 if message.tool_calls:
                     early_stop = self._process_tool_calls(

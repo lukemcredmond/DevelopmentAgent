@@ -72,6 +72,10 @@ def append_llm_log_entry(
     run_id: Optional[str] = None,
     memories_used: Optional[List[Dict[str, Any]]] = None,
     decisions_included: Optional[int] = None,
+    prompt_tokens: int = 0,
+    eval_tokens: int = 0,
+    total_tokens: int = 0,
+    tokens_reported: bool = False,
 ) -> Dict[str, Any]:
     entry: Dict[str, Any] = {
         "id": uuid.uuid4().hex[:12],
@@ -87,8 +91,13 @@ def append_llm_log_entry(
         "responseContent": (response_content or "")[:MAX_MESSAGE_CHARS],
         "responseToolCalls": response_tool_calls or [],
         "durationMs": duration_ms,
-        "error": error,
+        "promptTokens": int(prompt_tokens or 0),
+        "evalTokens": int(eval_tokens or 0),
+        "totalTokens": int(total_tokens or (prompt_tokens or 0) + (eval_tokens or 0)),
+        "tokensReported": bool(tokens_reported),
     }
+    if error:
+        entry["error"] = error
     if error_type:
         entry["errorType"] = error_type
     if memories_used is not None:

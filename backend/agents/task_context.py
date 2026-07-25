@@ -383,6 +383,8 @@ def normalize_task(task: Dict[str, Any]) -> Dict[str, Any]:
         task["poRoundTrips"] = 0
     if "stuckLoops" not in task or not isinstance(task.get("stuckLoops"), (int, float)):
         task["stuckLoops"] = 0
+    if "agentUsage" not in task or not isinstance(task.get("agentUsage"), dict):
+        task["agentUsage"] = {}
     for decision in task.get("decisions") or []:
         if isinstance(decision, dict):
             decision["summary"] = coerce_task_text(decision.get("summary"))
@@ -550,6 +552,7 @@ def init_new_task(task: Dict[str, Any]) -> Dict[str, Any]:
     task["userQuestion"] = None
     task["poRoundTrips"] = 0
     task["stuckLoops"] = 0
+    task["agentUsage"] = {}
     task["userResolutions"] = []
     task["needsUserCooldownUntilStep"] = None
     task["needsUserDuplicate"] = False
