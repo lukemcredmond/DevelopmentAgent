@@ -309,8 +309,8 @@ Persisted per project. Update via sidebar **Workflow** or `POST /api/workflow/se
 | maxSprintSteps | 20 | Cap for Auto Sprint and Plan & Run |
 | maxLlmIterationsPerStep | 8 | Tool-call loop limit per agent turn |
 | maxPoRoundTrips | 3 | PO clarification rounds per card |
-| maxStuckSteps | 3 | Escalate when card does not move |
-| maxToolFailuresPerStep | 5 | Stop agent loop after N tool failures |
+| maxStuckSteps | 3 | Escalate when card does not move (Settings → Workflow) |
+| maxToolFailuresPerStep | 5 | Stop agent loop after N tool failures (Settings → Workflow) |
 | pauseSprintOnNeedsUser | Off | Idle sprint while Needs User cards exist |
 
 #### Autonomous behavior
@@ -320,19 +320,19 @@ Persisted per project. Update via sidebar **Workflow** or `POST /api/workflow/se
 | autonomousMode | Off | Reduce Needs User escalations |
 | maxNeedsUserPerSprint | 2 | Cap Needs User cards per auto-sprint run |
 | needsUserCooldownSteps | 3 | Steps between Needs User escalations |
-| autoStartSprint | On | Auto-sprint behavior after plan |
+| autoStartSprint | On | Auto-start sprint after Plan & Run (Settings → Workflow) |
 
 #### Tools and safety
 
 | Setting | Default | Purpose |
 |---------|---------|---------|
 | requireToolApproval | Off | Approve/deny listed tools before execute |
-| toolApprovalTools | write_file, run_command, delete_file | Tools requiring approval (`apply_patch` implied with write_file; use `customTools` or `*` for customs) |
+| toolApprovalTools | write_file, run_command, delete_file | Tools requiring approval — editable in Workflow when approval is on (`apply_patch` implied with write_file; use `customTools` or `*` for customs) |
 | nonBlockingToolApproval | On | Other tools continue while awaiting approval |
-| commandAutoRunMode | off | off / allowlist / denylist for run_command |
+| commandAutoRunMode | off | off / allowlist / denylist for run_command (shown when tool approval is on) |
 | commandAllowlist | flutter analyze, pytest, … | Allowed commands when mode is allowlist |
 | commandDenylist | rm, del, … | Blocked commands when mode is denylist |
-| allowChainedCommands | Off | Allow `&&` chained shell commands |
+| allowChainedCommands | **On** | Allow `&&` / `;` chained shell commands. Always visible under Settings → Workflow (not gated by tool approval). Redirects (`\| > <`) remain blocked. |
 | enableFixVerifyLoop | Off | Auto retry lint/fix loop after Dev step |
 | maxFixVerifyRounds | 3 | Max fix-verify iterations |
 | agentTools | `{}` | Opt-in per-agent tool allowlists; empty role → built-in defaults |
@@ -353,7 +353,7 @@ Persisted per project. Update via sidebar **Workflow** or `POST /api/workflow/se
 | ollamaKeepAlive | 30m | Ollama model keep-alive duration |
 | ollamaRequestTimeoutSec | 300 | Per-request timeout for Ollama calls |
 | ollamaMaxRetries | 4 | Retries on transient Ollama failures |
-| ollamaRetryDelaySec | [0, 2, 5, 10] | Delay schedule between retries |
+| ollamaRetryDelaySec | [0, 2, 5, 10] | Delay schedule between retries (comma-separated list in Settings → Workflow) |
 | ollamaCooldownRetryEnabled | On | Extra cooldown retries when Ollama is busy |
 | ollamaCooldownRetrySec | 15 | Cooldown wait between busy retries |
 | ollamaCooldownRetryAttempts | 2 | Max cooldown retry attempts |
@@ -362,7 +362,7 @@ Persisted per project. Update via sidebar **Workflow** or `POST /api/workflow/se
 
 | Setting | Default | Purpose |
 |---------|---------|---------|
-| mcpServers | [] | MCP server configs (stdio, http, or sse; tools as `mcp_{server}_{tool}`) |
+| mcpServers | [] | MCP server configs (stdio, http, or sse; tools as `mcp_{server}_{tool}`). Editable as JSON under Settings → Workflow. |
 | maxMcpTools | 40 | Max MCP tools registered |
 | definitionOfDone | [] | Checklist injected into PO/Dev/QA prompts |
 | autoFormatAfterEdit | On | Format files after agent edits when supported |

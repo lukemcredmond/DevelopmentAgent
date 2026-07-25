@@ -37,8 +37,15 @@ def test_parallel_safe_tools_partition():
     assert not is_parallel_safe("apply_patch")
 
 
-def test_command_validate_blocks_chaining_by_default():
+def test_command_validate_allows_chaining_by_default():
     reset_workflow_settings()
+    ok, _ = validate_command("npm test && npm run lint")
+    assert ok
+
+
+def test_command_validate_blocks_chaining_when_disabled():
+    reset_workflow_settings()
+    save_workflow_settings({"allowChainedCommands": False})
     ok, reason = validate_command("npm test && npm run lint")
     assert not ok
     assert "Chained" in reason or "chained" in reason.lower()

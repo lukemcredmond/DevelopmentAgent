@@ -24,7 +24,7 @@ DEFAULT_WORKFLOW_SETTINGS: Dict[str, Any] = {
     "commandAutoRunMode": "off",
     "commandAllowlist": ["flutter analyze", "dart analyze", "npm test", "npm run lint", "pytest", "ruff check"],
     "commandDenylist": ["rm ", "del ", "rmdir ", "format ", "shutdown"],
-    "allowChainedCommands": False,
+    "allowChainedCommands": True,
     "maxMcpTools": 40,
     "mcpServers": [],
     # Opt-in per-agent tool allowlists (empty/missing → built-in defaults).

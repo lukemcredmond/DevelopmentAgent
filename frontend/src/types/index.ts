@@ -1039,7 +1039,7 @@ export const DEFAULT_WORKFLOW_SETTINGS: WorkflowSettings = {
   commandAutoRunMode: 'off',
   commandAllowlist: ['flutter analyze', 'dart analyze', 'npm test', 'npm run lint', 'pytest', 'ruff check'],
   commandDenylist: ['rm ', 'del ', 'rmdir ', 'format ', 'shutdown'],
-  allowChainedCommands: false,
+  allowChainedCommands: true,
   maxMcpTools: 40,
   mcpServers: [],
   agentTools: {},

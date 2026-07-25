@@ -48,6 +48,22 @@ export default function WorkflowPanel({
   const [qdrantTestStatus, setQdrantTestStatus] = useState<string | null>(null)
   const [qdrantTesting, setQdrantTesting] = useState(false)
   const [reindexResult, setReindexResult] = useState<string | null>(null)
+  const [mcpServersJson, setMcpServersJson] = useState(() =>
+    JSON.stringify(settings.mcpServers ?? [], null, 2),
+  )
+  const [mcpServersError, setMcpServersError] = useState<string | null>(null)
+  const [retryDelayText, setRetryDelayText] = useState(
+    () => (settings.ollamaRetryDelaySec ?? [0, 2, 5, 10]).join(', '),
+  )
+
+  useEffect(() => {
+    setMcpServersJson(JSON.stringify(settings.mcpServers ?? [], null, 2))
+    setMcpServersError(null)
+  }, [settings.mcpServers])
+
+  useEffect(() => {
+    setRetryDelayText((settings.ollamaRetryDelaySec ?? [0, 2, 5, 10]).join(', '))
+  }, [settings.ollamaRetryDelaySec])
 
   const refreshIndexStatus = useCallback(async () => {
     try {
@@ -307,6 +323,25 @@ export default function WorkflowPanel({
       {(settings.requireToolApproval ?? false) && (
         <div className="pl-5 space-y-2">
           <label className="text-[11px] text-cat-subtext block">
+            <span className="text-[10px] text-cat-overlay block">
+              Tools requiring approval (one per line)
+            </span>
+            <textarea
+              rows={3}
+              value={(settings.toolApprovalTools ?? ['write_file', 'run_command', 'delete_file']).join(
+                '\n',
+              )}
+              onChange={(e) => {
+                const lines = e.target.value
+                  .split('\n')
+                  .map((l) => l.trim())
+                  .filter(Boolean)
+                onSettingsChange({ toolApprovalTools: lines })
+              }}
+              className="w-full bg-cat-base border border-cat-surface1 rounded p-1 text-[10px] font-mono text-white"
+            />
+          </label>
+          <label className="text-[11px] text-cat-subtext block">
             <span className="text-[10px] text-cat-overlay block">Command auto-run mode</span>
             <select
               value={settings.commandAutoRunMode ?? 'off'}
@@ -355,16 +390,22 @@ export default function WorkflowPanel({
               />
             </label>
           )}
-          <label className="flex items-center gap-2 text-[11px] text-cat-subtext cursor-pointer">
-            <input
-              type="checkbox"
-              checked={settings.allowChainedCommands ?? false}
-              onChange={(e) => onSettingsChange({ allowChainedCommands: e.target.checked })}
-            />
-            Allow safe command chaining (&& and ;)
-          </label>
         </div>
       )}
+
+      <label className="flex items-center gap-2 text-[11px] text-cat-subtext cursor-pointer">
+        <input
+          type="checkbox"
+          checked={settings.allowChainedCommands !== false}
+          onChange={(e) => onSettingsChange({ allowChainedCommands: e.target.checked })}
+        />
+        Allow safe command chaining (&amp;&amp; and ;)
+      </label>
+      <p className="text-[10px] text-cat-overlay leading-relaxed -mt-1 pl-5">
+        On by default. When off, <span className="font-mono">run_command</span> rejects{' '}
+        <span className="font-mono">&amp;&amp;</span> / <span className="font-mono">;</span> chains.
+        Redirects (<span className="font-mono">| &gt; &lt;</span>) stay blocked either way.
+      </p>
 
       <label className="text-[11px] text-cat-subtext block">
         <span className="text-[10px] text-cat-overlay block">Max MCP tools (budget)</span>
@@ -377,10 +418,39 @@ export default function WorkflowPanel({
         />
       </label>
       <p className="text-[10px] text-cat-overlay leading-relaxed -mt-1">
-        MCP servers are configured in workflow settings JSON (stdio, http, or sse transport).
-        Per-server <span className="font-mono">enabledTools</span> /{' '}
+        MCP servers use stdio, http, or sse transport. Per-server{' '}
+        <span className="font-mono">enabledTools</span> /{' '}
         <span className="font-mono">disabledTools</span> filter which tools register.
       </p>
+      <label className="text-[11px] text-cat-subtext block">
+        <span className="text-[10px] text-cat-overlay block">MCP servers (JSON array)</span>
+        <textarea
+          rows={5}
+          value={mcpServersJson}
+          onChange={(e) => {
+            setMcpServersJson(e.target.value)
+            setMcpServersError(null)
+          }}
+          onBlur={() => {
+            try {
+              const parsed = JSON.parse(mcpServersJson || '[]') as unknown
+              if (!Array.isArray(parsed)) {
+                setMcpServersError('MCP servers must be a JSON array')
+                return
+              }
+              onSettingsChange({ mcpServers: parsed as WorkflowSettings['mcpServers'] })
+              setMcpServersError(null)
+            } catch {
+              setMcpServersError('Invalid JSON')
+            }
+          }}
+          className="w-full bg-cat-base border border-cat-surface1 rounded p-1 text-[10px] font-mono text-white"
+          spellCheck={false}
+        />
+      </label>
+      {mcpServersError && (
+        <p className="text-[10px] text-rose-400 -mt-1">{mcpServersError}</p>
+      )}
 
       <AgentToolsPanel
         settings={settings}
@@ -399,6 +469,15 @@ export default function WorkflowPanel({
       <p className="text-[10px] text-cat-overlay leading-relaxed -mt-1 pl-5">
         Off by default — sprint continues other lanes while cards wait for your input.
       </p>
+
+      <label className="flex items-center gap-2 text-[11px] text-cat-subtext cursor-pointer">
+        <input
+          type="checkbox"
+          checked={settings.autoStartSprint !== false}
+          onChange={(e) => onSettingsChange({ autoStartSprint: e.target.checked })}
+        />
+        Auto-start sprint after plan (Plan &amp; Run)
+      </label>
 
       <label className="flex items-center gap-2 text-[11px] text-cat-subtext cursor-pointer">
         <input
@@ -698,6 +777,33 @@ export default function WorkflowPanel({
         />
       </label>
 
+      <label className="text-[11px] text-cat-subtext block">
+        <span className="text-[10px] text-cat-overlay block">
+          Ollama retry delays (seconds, comma-separated)
+        </span>
+        <input
+          type="text"
+          value={retryDelayText}
+          onChange={(e) => setRetryDelayText(e.target.value)}
+          onBlur={() => {
+            const parts = retryDelayText
+              .split(/[,\s]+/)
+              .map((p) => p.trim())
+              .filter(Boolean)
+              .map((p) => Number(p))
+              .filter((n) => Number.isFinite(n) && n >= 0)
+            if (parts.length === 0) {
+              setRetryDelayText((settings.ollamaRetryDelaySec ?? [0, 2, 5, 10]).join(', '))
+              return
+            }
+            onSettingsChange({ ollamaRetryDelaySec: parts })
+            setRetryDelayText(parts.join(', '))
+          }}
+          className="w-full bg-cat-base border border-cat-surface1 rounded p-1 text-white font-mono text-[11px]"
+          placeholder="0, 2, 5, 10"
+        />
+      </label>
+
       <label className="flex items-center gap-2 text-[11px] text-cat-subtext cursor-pointer">
         <input
           type="checkbox"
@@ -783,6 +889,26 @@ export default function WorkflowPanel({
             min={1}
             max={10}
             onCommit={(maxPoRoundTrips) => onSettingsChange({ maxPoRoundTrips })}
+            className="w-full bg-cat-base border border-cat-surface1 rounded p-1 text-white"
+          />
+        </label>
+        <label>
+          <span className="text-[10px] text-cat-overlay block">Max stuck steps</span>
+          <NumberSettingInput
+            value={settings.maxStuckSteps ?? 3}
+            min={1}
+            max={20}
+            onCommit={(maxStuckSteps) => onSettingsChange({ maxStuckSteps })}
+            className="w-full bg-cat-base border border-cat-surface1 rounded p-1 text-white"
+          />
+        </label>
+        <label>
+          <span className="text-[10px] text-cat-overlay block">Max tool failures/step</span>
+          <NumberSettingInput
+            value={settings.maxToolFailuresPerStep ?? 5}
+            min={1}
+            max={50}
+            onCommit={(maxToolFailuresPerStep) => onSettingsChange({ maxToolFailuresPerStep })}
             className="w-full bg-cat-base border border-cat-surface1 rounded p-1 text-white"
           />
         </label>
