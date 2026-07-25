@@ -176,6 +176,7 @@ class WorkflowSettingsPayload(BaseModel):
     phoneNotifyOnNeedsPo: Optional[bool] = None
     phoneNotifyOnToolApproval: Optional[bool] = None
     phoneNotifyOnSprintEnd: Optional[bool] = None
+    phoneNotifyOnBoardStatus: Optional[bool] = None
 
 
 class DiagnoseTaskPayload(BaseModel):

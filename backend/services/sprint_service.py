@@ -1824,9 +1824,14 @@ def _run_refinement_dev_review(active_task: Dict[str, Any], brief: str) -> None:
         + "\nREFINEMENT ONLY — do not implement. Explore the codebase with read-only tools "
         "(read_file, grep, glob_file_search, search_code, git_status, git_diff). "
         "Do NOT use write_file, apply_patch, run_command, or git_commit.\n"
+        "DECOMPOSE CHECK FIRST: Before marking ready, decide if this card mixes unrelated "
+        "deliverables or is too large for one implementation pass. If so, return "
+        '{"ready": false, "questions": ["..."], "explorationNotes": "..."} recommending a split '
+        "into distinct components (PO should use add_backlog_tasks or add_subtasks) — do not "
+        "ask vague AC questions while the scope itself is too broad.\n"
         "Reply with a JSON object:\n"
-        '{"ready": true} when acceptance criteria are sufficient to implement, OR\n'
-        '{"ready": false, "questions": ["..."], "explorationNotes": "..."} when clarification is needed, OR\n'
+        '{"ready": true} when acceptance criteria are sufficient to implement as one focused card, OR\n'
+        '{"ready": false, "questions": ["..."], "explorationNotes": "..."} when clarification or a split is needed, OR\n'
         '{"ready": false, "needsSpike": true, "spikeObjective": "...", "explorationNotes": "..."} '
         "when technical unknowns require a dedicated spike exploration first.\n"
         "If blocked after repeated rounds, use update_board to move to 'Needs PO'."
@@ -1994,6 +1999,10 @@ def _run_refinement_po_update(active_task: Dict[str, Any], brief: str) -> None:
         build_task_prompt(active_task, brief)
         + f"\nDeveloper refinement questions:\n{q_block}\n"
         + f"Developer marked ready: {dev_ready}\n"
+        "DECOMPOSE FIRST: Before refining AC, decide whether this card should be split into "
+        "distinct backlog cards (add_backlog_tasks / split) or ordered subtasks (add_subtasks / "
+        "executionPlan). Only then refine description and acceptance criteria on the surviving "
+        "parent scope. Do not mark complete while the card still mixes unrelated deliverables.\n"
         "Update description and acceptance criteria. Reply with JSON: "
         '{"description": "...", "acceptanceCriteria": ["..."], "briefAddition": "..."}\n'
         "Use add_backlog_tasks to split scope if needed. "
@@ -2684,6 +2693,16 @@ def run_sprint_step(brief: str, ollama_url: str) -> None:
                     agent_name,
                 )
             _finish_single_step_progress(active_task)
+        try:
+            from backend.services.board_status_digest import notify_board_status_after_step
+
+            notify_board_status_after_step(
+                active_task=active_task,
+                handler=handler,
+                agent=agent_name,
+            )
+        except Exception:
+            pass
 
 
 def run_in_progress_step(

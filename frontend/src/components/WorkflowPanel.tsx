@@ -516,6 +516,7 @@ export default function WorkflowPanel({
               ['phoneNotifyOnNeedsPo', 'Needs PO', false],
               ['phoneNotifyOnToolApproval', 'Tool approval pending', true],
               ['phoneNotifyOnSprintEnd', 'Sprint end summary', true],
+              ['phoneNotifyOnBoardStatus', 'Board status after each sprint step', true],
             ] as const
           ).map(([key, label, defaultOn]) => (
             <label

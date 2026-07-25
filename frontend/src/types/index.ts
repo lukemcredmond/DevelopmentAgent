@@ -374,6 +374,7 @@ export interface WorkflowSettings {
   phoneNotifyOnNeedsPo?: boolean
   phoneNotifyOnToolApproval?: boolean
   phoneNotifyOnSprintEnd?: boolean
+  phoneNotifyOnBoardStatus?: boolean
 }
 
 export interface RecentToolEntry {
@@ -876,6 +877,7 @@ export interface WorkflowSettingsPayload {
   phoneNotifyOnNeedsPo?: boolean
   phoneNotifyOnToolApproval?: boolean
   phoneNotifyOnSprintEnd?: boolean
+  phoneNotifyOnBoardStatus?: boolean
 }
 
 export interface SkillsResponse {
@@ -1095,6 +1097,7 @@ export const DEFAULT_WORKFLOW_SETTINGS: WorkflowSettings = {
   phoneNotifyOnNeedsPo: false,
   phoneNotifyOnToolApproval: true,
   phoneNotifyOnSprintEnd: true,
+  phoneNotifyOnBoardStatus: true,
 }
 
 export const EMPTY_BOARD: Board = {

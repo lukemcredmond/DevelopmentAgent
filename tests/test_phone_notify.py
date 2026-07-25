@@ -136,3 +136,5 @@ def test_ui_phone_notify_markers():
     assert "phoneNotifyEnabled" in readme
     assert "Discord" in readme
     assert "/api/workflow/phone-notify/test" in readme
+    assert "phoneNotifyOnBoardStatus" in panel
+    assert "Board status after each sprint step" in panel

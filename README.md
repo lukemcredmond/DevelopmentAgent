@@ -382,6 +382,7 @@ Outbound HTTPS only — **does not open ports** on your PC. Notifications go to 
 | phoneNotifyOnNeedsPo | Off | Alert when a card moves to Needs PO |
 | phoneNotifyOnToolApproval | On | Alert when a tool awaits approval |
 | phoneNotifyOnSprintEnd | On | Sprint finished / cancelled / max-steps summary |
+| phoneNotifyOnBoardStatus | On | After each sprint step: lane counts + current work (deduped ~3 min if unchanged) |
 
 **Setup:** Discord channel → Edit Channel → Integrations → Webhooks → New Webhook → Copy URL → paste under Settings → Workflow → Phone alerts → enable → **Send test**. Prefer a **private** server/channel with only you. If the URL leaks, delete/regenerate the webhook.
 

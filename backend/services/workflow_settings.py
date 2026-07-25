@@ -69,6 +69,7 @@ DEFAULT_WORKFLOW_SETTINGS: Dict[str, Any] = {
     "phoneNotifyOnNeedsPo": False,
     "phoneNotifyOnToolApproval": True,
     "phoneNotifyOnSprintEnd": True,
+    "phoneNotifyOnBoardStatus": True,
 }
 
 DEFAULT_SPRINT_SUMMARY: Dict[str, Any] = {

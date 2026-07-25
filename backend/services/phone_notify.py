@@ -14,6 +14,7 @@ from backend.services.logs import add_system_log
 from backend.services.workflow_settings import get_workflow_settings
 
 DEDUP_WINDOW_SEC = 120.0
+BOARD_STATUS_DEDUP_WINDOW_SEC = 180.0
 _DISCORD_HOSTS = frozenset(
     {
         "discord.com",
@@ -48,14 +49,15 @@ def is_allowed_discord_webhook_url(url: str) -> bool:
 
 def _should_skip_dedup(kind: str, task_id: Optional[str]) -> bool:
     key = (kind, task_id or "")
+    window = BOARD_STATUS_DEDUP_WINDOW_SEC if kind == "board_status" else DEDUP_WINDOW_SEC
     now = time.monotonic()
     with _dedup_lock:
         # prune
-        stale = [k for k, t in _recent.items() if now - t > DEDUP_WINDOW_SEC]
+        stale = [k for k, t in _recent.items() if now - t > max(DEDUP_WINDOW_SEC, BOARD_STATUS_DEDUP_WINDOW_SEC)]
         for k in stale:
             _recent.pop(k, None)
         last = _recent.get(key)
-        if last is not None and now - last < DEDUP_WINDOW_SEC:
+        if last is not None and now - last < window:
             return True
         _recent[key] = now
         return False
@@ -147,6 +149,7 @@ def notify_if_enabled(kind: str, title: str, body: str, *, task_id: Optional[str
         "needs_po": ("phoneNotifyOnNeedsPo", False),
         "tool_approval": ("phoneNotifyOnToolApproval", True),
         "sprint_end": ("phoneNotifyOnSprintEnd", True),
+        "board_status": ("phoneNotifyOnBoardStatus", True),
         "test": (None, True),
     }
     entry = flag_defaults.get(kind)
