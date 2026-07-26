@@ -68,6 +68,9 @@ def test_release_blocked_when_dep_done():
     with patch(
         "backend.services.workflow_settings.get_workflow_settings",
         return_value={"enableBlockedLane": True, "requireBacklogRefinement": False},
+    ), patch(
+        "backend.services.blocked_lane.get_workflow_settings",
+        return_value={"enableBlockedLane": True, "requireBacklogRefinement": False},
     ):
         dep = init_new_task(
             {
@@ -95,6 +98,88 @@ def test_release_blocked_when_dep_done():
         move_board_stage("DEP-2", "Done")
         assert get_task_lane("PAR-2") == "Backlog"
         assert "blockedReturnLane" not in parent or not parent.get("blockedReturnLane")
+
+
+def test_on_task_completed_releases_blocked_waiters():
+    """Completion hook alone (not only move_board_stage post-sync) frees Blocked cards."""
+    from backend.agents.task_context import on_task_completed
+
+    _empty_board()
+    settings = {"enableBlockedLane": True, "requireBacklogRefinement": False}
+    with patch(
+        "backend.services.blocked_lane.get_workflow_settings",
+        return_value=settings,
+    ), patch(
+        "backend.services.workflow_settings.get_workflow_settings",
+        return_value=settings,
+    ):
+        dep = init_new_task(
+            {
+                "id": "DEP-HOOK",
+                "title": "Dep",
+                "description": "d",
+                "status": "Done",
+                "requiresDev": True,
+            }
+        )
+        parent = init_new_task(
+            {
+                "id": "PAR-HOOK",
+                "title": "Parent",
+                "description": "p",
+                "status": "Blocked",
+                "blockedBy": ["DEP-HOOK"],
+                "requiresDev": True,
+                "blockedReturnLane": "Backlog",
+            }
+        )
+        state.SHARED_BOARD["Done"] = [dep]
+        state.SHARED_BOARD["Blocked"] = [parent]
+        on_task_completed("DEP-HOOK")
+        assert get_task_lane("PAR-HOOK") == "Backlog"
+
+
+def test_release_to_refinement_when_refinement_required():
+    _empty_board()
+    settings = {
+        "enableBlockedLane": True,
+        "requireBacklogRefinement": True,
+    }
+    with patch(
+        "backend.services.blocked_lane.get_workflow_settings",
+        return_value=settings,
+    ), patch(
+        "backend.services.workflow_settings.get_workflow_settings",
+        return_value=settings,
+    ):
+        dep = init_new_task(
+            {
+                "id": "DEP-REF",
+                "title": "Dep",
+                "description": "d",
+                "status": "Backlog",
+                "requiresDev": True,
+            }
+        )
+        parent = init_new_task(
+            {
+                "id": "PAR-REF",
+                "title": "Parent",
+                "description": "p",
+                "status": "Refinement",
+                "blockedBy": ["DEP-REF"],
+                "requiresDev": True,
+                "refinementComplete": False,
+            }
+        )
+        state.SHARED_BOARD["Refinement"] = [parent]
+        state.SHARED_BOARD["Backlog"] = [dep]
+        sync_blocked_lane(persist=False)
+        assert get_task_lane("PAR-REF") == "Blocked"
+        assert parent.get("blockedReturnLane") == "Refinement"
+
+        move_board_stage("DEP-REF", "Done")
+        assert get_task_lane("PAR-REF") == "Refinement"
 
 
 def test_in_progress_not_auto_yanked_to_blocked():

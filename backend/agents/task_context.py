@@ -1014,6 +1014,14 @@ def on_task_completed(task_id: str) -> None:
 
         rollup_child_to_feature(task_id)
 
+    # Free any Blocked waiters whose deps are now all Done → Backlog / Refinement.
+    try:
+        from backend.services.blocked_lane import release_blocked_waiting_on
+
+        release_blocked_waiting_on(needle)
+    except Exception:
+        pass
+
 
 def _format_older_decisions_block(decisions: List[Dict[str, Any]]) -> str:
     if len(decisions) <= 8:
