@@ -1,6 +1,7 @@
 import { useCallback, useEffect, useState } from 'react'
 import {
   checkQdrantHealth,
+  exportTrainingJsonl,
   fetchIndexStatus,
   reindexCodebase,
   testPhoneNotify,
@@ -23,6 +24,12 @@ interface WorkflowPanelProps {
   indexProgress?: IndexProgress | null
   onOpenMemoryTab?: () => void
   onOpenCustomTools?: () => void
+  discordBotStatus?: {
+    status?: string
+    lastError?: string
+    readyAt?: string
+    running?: boolean
+  } | null
 }
 
 export default function WorkflowPanel({
@@ -34,6 +41,7 @@ export default function WorkflowPanel({
   indexProgress = null,
   onOpenMemoryTab,
   onOpenCustomTools,
+  discordBotStatus = null,
 }: WorkflowPanelProps) {
   const [dodInput, setDodInput] = useState('')
   const [showChangelog, setShowChangelog] = useState(false)
@@ -63,6 +71,10 @@ export default function WorkflowPanel({
   const [discordAllowedUsersText, setDiscordAllowedUsersText] = useState(
     () => (settings.discordBotAllowedUserIds ?? []).join('\n'),
   )
+  const [trainingExportLimit, setTrainingExportLimit] = useState(50)
+  const [trainingExportStatus, setTrainingExportStatus] = useState<string | null>(null)
+  const [trainingExporting, setTrainingExporting] = useState(false)
+
 
   useEffect(() => {
     setMcpServersJson(JSON.stringify(settings.mcpServers ?? [], null, 2))
@@ -176,6 +188,61 @@ export default function WorkflowPanel({
             </span>
           )}
         </div>
+      </div>
+
+      <div
+        className="flex flex-wrap gap-1.5 items-center"
+        data-testid="workflow-presets"
+      >
+        <span className="text-[10px] text-cat-overlay mr-1">Presets:</span>
+        {(
+          [
+            {
+              id: 'solo',
+              label: 'Solo',
+              patch: {
+                requireToolApproval: false,
+                requireCodeReview: false,
+                requireCleanLint: false,
+                requireBacklogApproval: false,
+                autonomousMode: false,
+              },
+            },
+            {
+              id: 'gated',
+              label: 'Gated',
+              patch: {
+                requireToolApproval: true,
+                requireCodeReview: true,
+                requireCleanLint: true,
+                requireDevVerification: true,
+                autonomousMode: false,
+              },
+            },
+            {
+              id: 'autonomous',
+              label: 'Autonomous',
+              patch: {
+                autonomousMode: true,
+                requireToolApproval: false,
+                maxNeedsUserPerSprint: 8,
+                pauseSprintOnNeedsUser: false,
+              },
+            },
+          ] as const
+        ).map((p) => (
+          <button
+            key={p.id}
+            type="button"
+            onClick={() => onSettingsChange({ ...p.patch })}
+            className="text-[10px] px-2 py-0.5 rounded border border-cat-surface1 text-cat-subtext hover:bg-cat-base hover:text-white"
+          >
+            {p.label}
+          </button>
+        ))}
+        <span className="text-[9px] text-cat-overlay">
+          (never clears Discord/phone secrets)
+        </span>
       </div>
 
       <div className="border border-indigo-500/20 bg-indigo-950/20 rounded-lg p-2 space-y-2">
@@ -510,10 +577,10 @@ export default function WorkflowPanel({
         onOpenCustomTools={onOpenCustomTools}
       />
 
-      <div className="border border-cat-surface1 rounded-lg p-2.5 space-y-2 bg-cat-base/30">
-        <p className="text-[10px] font-bold uppercase tracking-wider text-cat-subtext">
+      <details open className="border border-cat-surface1 rounded-lg p-2.5 space-y-2 bg-cat-base/30" data-testid="workflow-section-phone-discord">
+        <summary className="text-[10px] font-bold uppercase tracking-wider text-cat-subtext cursor-pointer">
           Phone / Discord control
-        </p>
+        </summary>
         <p className="text-[10px] text-cat-overlay leading-relaxed">
           Phone alerts (outbound webhook) and optional Discord control bot (Gateway outbound on this
           PC). Neither opens inbound ports. Prefer a private server; treat tokens/URLs like passwords.
@@ -628,6 +695,22 @@ export default function WorkflowPanel({
           />
           Enable Discord control bot
         </label>
+        <p className="text-[10px] text-cat-overlay" data-testid="discord-bot-status">
+          Bot status:{' '}
+          <span className="text-cat-subtext">
+            {!settings.discordBotEnabled
+              ? 'off'
+              : discordBotStatus?.status === 'ready'
+                ? `connected${discordBotStatus.readyAt ? ` · ${discordBotStatus.readyAt}` : ''}`
+                : discordBotStatus?.status === 'error'
+                  ? `error${discordBotStatus.lastError ? `: ${discordBotStatus.lastError}` : ''}`
+                  : discordBotStatus?.status === 'connecting'
+                    ? 'connecting…'
+                    : settings.discordBotTokenConfigured
+                      ? discordBotStatus?.status || 'idle'
+                      : 'enabled — token missing'}
+          </span>
+        </p>
         <label className="text-[11px] text-cat-subtext block">
           <span className="text-[10px] text-cat-overlay block">
             Bot token
@@ -697,7 +780,7 @@ export default function WorkflowPanel({
             className="w-full bg-cat-base border border-cat-surface1 rounded p-1.5 font-mono text-[11px] text-white focus:outline-none"
           />
         </label>
-      </div>
+      </details>
 
       <label className="flex items-center gap-2 text-[11px] text-cat-subtext cursor-pointer">
         <input
@@ -970,9 +1053,52 @@ export default function WorkflowPanel({
         Save end-of-step lesson to memory
       </label>
       <p className="text-[10px] text-cat-overlay leading-relaxed pl-5">
-        Fine-tuning: use <span className="font-mono">GET /api/training/export</span> for JSONL.
-        Training is not run in AllHands.
+        Fine-tuning is not run in AllHands. Export step traces as JSONL for offline SFT.
       </p>
+      <div className="flex flex-wrap items-center gap-2 pl-5" data-testid="training-export">
+        <label className="text-[10px] text-cat-overlay flex items-center gap-1">
+          Limit
+          <input
+            type="number"
+            min={1}
+            max={500}
+            value={trainingExportLimit}
+            onChange={(e) => setTrainingExportLimit(Number(e.target.value) || 50)}
+            className="w-16 bg-cat-base border border-cat-surface1 rounded px-1 py-0.5 text-white font-mono"
+          />
+        </label>
+        <button
+          type="button"
+          disabled={trainingExporting}
+          onClick={() => {
+            setTrainingExporting(true)
+            setTrainingExportStatus(null)
+            void (async () => {
+              try {
+                const res = await exportTrainingJsonl(trainingExportLimit)
+                const blob = new Blob([res.jsonl || ''], { type: 'application/x-ndjson' })
+                const url = URL.createObjectURL(blob)
+                const a = document.createElement('a')
+                a.href = url
+                a.download = `allhands-training-${res.projectId || 'export'}.jsonl`
+                a.click()
+                URL.revokeObjectURL(url)
+                setTrainingExportStatus(`Downloaded ${res.count} row(s).`)
+              } catch (e) {
+                setTrainingExportStatus(e instanceof Error ? e.message : 'Export failed')
+              } finally {
+                setTrainingExporting(false)
+              }
+            })()
+          }}
+          className="text-[10px] px-2.5 py-1 rounded border border-indigo-500/40 text-indigo-200 hover:bg-indigo-950/40 disabled:opacity-40"
+        >
+          {trainingExporting ? 'Exporting…' : 'Download JSONL'}
+        </button>
+        {trainingExportStatus && (
+          <span className="text-[10px] text-violet-300">{trainingExportStatus}</span>
+        )}
+      </div>
 
       <div className="border-t border-cat-surface1 pt-2">
         <button

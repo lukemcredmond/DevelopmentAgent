@@ -17,8 +17,9 @@ Local multi-agent AI development workspace with Kanban board, Ollama-powered age
 9. [API reference](#api-reference)
 10. [Configuration](#configuration)
 11. [Development](#development)
-12. [Troubleshooting](#troubleshooting)
-13. [Offline / no-Ollama mode](#offline--no-ollama-mode)
+12. [Known limitations](#known-limitations)
+13. [Troubleshooting](#troubleshooting)
+14. [Offline / no-Ollama mode](#offline--no-ollama-mode)
 
 ---
 
@@ -430,11 +431,16 @@ Optional **inbound-from-Discord** quick actions via the Discord Gateway (**outbo
 |---------------|----------|
 | `/ah-status` | Board digest + sprint cancel flag |
 | `/ah-pause` | Set sprint cancel (pause auto-sprint) |
-| `/ah-resume` | Clear cancel and start auto-sprint in the background |
+| `/ah-resume` | Clear cancel and start auto-sprint in the background (no double-start) |
 | `/ah-cancel` | Same cancel flag; reply says cancelled (no auto-resume) |
 | `/ah-backup-dev` | Force-arm Dev backup for active In Progress card (optional `task_id`) |
 | `/ah-model` | Choice `fast` \| `quality` — applies preset to Dev primary (optional all roles) |
 | `/ah-feature` | Create **draft** Feature + backlog child; does **not** start a sprint |
+| `/ah-pending` | List Needs User cards + pending tool approvals |
+| `/ah-answer` | Answer a Needs User card (`answer`, optional `task_id`, `target` = dev/refinement/po) |
+| `/ah-approve` | Approve or deny a pending tool approval (`decision`, optional `approval_id`) |
+
+**Remote unblock:** Phone alerts for Needs User / tool approval can be acted on from Discord via `/ah-pending` + `/ah-answer` / `/ah-approve` — no desktop UI required for those paths.
 
 **Setup:** Create a Discord application → Bot → copy token → invite bot to your private server with `applications.commands` → enable Developer Mode → copy your user ID → paste under Settings → Workflow → Phone / Discord control → enable → save. Training export / LoRA is unrelated.
 
@@ -926,6 +932,22 @@ Offline fine-tuning export (no in-app training): `GET /api/training/export?limit
 - **Agents:** `ScrumAgent` uses [Ollama Python SDK](https://github.com/ollama/ollama-python); tool loop via native `tools` parameter
 
 ---
+
+## Known limitations
+
+- **Localhost only** — binds to `127.0.0.1`; no built-in authentication.
+- **Discord phone alerts** are outbound webhooks only (no inbound ports).
+- **Discord control bot** is Gateway-outbound on this PC; fixed slash commands only — no free-form agent chat, shell, or free-text model tags.
+- **Training** — `GET /api/training/export` JSONL only; no in-app LoRA / SFT.
+- Acceptance criteria on cards are **not auto-scored**; agents and humans still decide Done.
+- Offline / simulation fallbacks may apply when Ollama is unavailable (see Offline mode).
+
+### Discord ops checklist
+
+1. Create a Discord application → Bot → copy token; invite with `applications.commands`.
+2. Enable Developer Mode → copy your user ID → allowlist under Workflow → Phone / Discord control.
+3. Optional guild ID for faster slash sync; save settings (bot reloads in-process).
+4. Use `/ah-pending` then `/ah-answer` / `/ah-approve` to unblock Needs User / tool approvals from your phone.
 
 ## Troubleshooting
 

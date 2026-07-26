@@ -138,12 +138,17 @@ export default function TaskCard({
           )}
         </div>
       )}
+      {needsUser && (
+        <p className="mb-1.5 text-[9px] text-amber-200/90" data-testid="card-needs-user-hint">
+          Needs your answer — open card to resolve
+        </p>
+      )}
       {!isActiveRun &&
         runInfo == null &&
         !task.lastStepProgress?.whyCardStayed &&
         (task.stuckLoops ?? 0) > 0 && (
           <p className="mb-1.5 text-[9px] text-amber-300/80">
-            No lane move ×{task.stuckLoops}
+            No lane move ×{task.stuckLoops} — open card for next action
           </p>
         )}
       {usageBrief && (

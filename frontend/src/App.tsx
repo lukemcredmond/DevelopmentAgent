@@ -403,7 +403,7 @@ export default function App() {
     [applyState],
   )
 
-  const { autoSprint, setAutoSprint, autoSprintPaused, sprintRunning, stopAutoSprint } =
+  const { autoSprint, setAutoSprint, autoSprintPaused, sprintRunning, stopAutoSprint, startAutoSprint } =
     useAutoSprint(brief, ollamaUrl, state.board, state.workflowSettings, handleState)
 
   const orchestratedActive = sprintRunning || planRunActive || sprintBusy
@@ -1491,6 +1491,13 @@ export default function App() {
                 sprintRunning={sprintRunning}
                 currentTool={currentTool}
                 onOpenTask={openTaskFromRunBar}
+                needsUserCount={state.board['Needs User']?.length ?? 0}
+                onPause={() => void stopAutoSprint()}
+                onCancel={() => void stopAutoSprint()}
+                onResume={() => {
+                  setAutoSprint(true)
+                  void startAutoSprint()
+                }}
               />
               <AgentRunBar
                 activeRun={activeRun}

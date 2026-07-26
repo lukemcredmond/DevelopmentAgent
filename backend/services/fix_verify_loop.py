@@ -37,6 +37,17 @@ def run_fix_verify_loop(
     last_result = ""
 
     for round_num in range(1, max_rounds + 1):
+        from backend import state as _state
+
+        if getattr(_state, "SPRINT_CANCEL", False):
+            add_system_log(
+                "Developer",
+                "warning",
+                f"Fix-verify aborted at round {round_num}/{max_rounds} (sprint cancelled)",
+            )
+            log_event("fix_verify_done", "aborted_sprint_cancel")
+            return last_result or "Fix-verify aborted: sprint cancelled."
+
         if round_num == 1:
             iterations_per_round = max(6, max_iterations)
         else:

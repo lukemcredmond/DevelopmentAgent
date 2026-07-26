@@ -10,6 +10,7 @@ from __future__ import annotations
 import asyncio
 import logging
 import threading
+from datetime import datetime, timezone
 from typing import Any, Callable, Dict, List, Optional, Tuple
 
 from backend import state
@@ -26,6 +27,9 @@ CMD_CANCEL = "ah-cancel"
 CMD_BACKUP_DEV = "ah-backup-dev"
 CMD_MODEL = "ah-model"
 CMD_FEATURE = "ah-feature"
+CMD_ANSWER = "ah-answer"
+CMD_APPROVE = "ah-approve"
+CMD_PENDING = "ah-pending"
 
 _KNOWN_COMMANDS = frozenset(
     {
@@ -36,6 +40,9 @@ _KNOWN_COMMANDS = frozenset(
         CMD_BACKUP_DEV,
         CMD_MODEL,
         CMD_FEATURE,
+        CMD_ANSWER,
+        CMD_APPROVE,
+        CMD_PENDING,
     }
 )
 
@@ -43,6 +50,31 @@ _main_loop: Optional[asyncio.AbstractEventLoop] = None
 _bot_task: Optional[asyncio.Task] = None
 _client: Any = None
 _bot_lock = threading.Lock()
+_auto_sprint_thread: Optional[threading.Thread] = None
+_auto_sprint_lock = threading.Lock()
+
+_bot_status: Dict[str, Any] = {
+    "status": "idle",  # idle | connecting | ready | error | off
+    "lastError": "",
+    "readyAt": "",
+}
+
+
+def get_discord_bot_status() -> Dict[str, Any]:
+    out = dict(_bot_status)
+    out["running"] = discord_bot_running()
+    return out
+
+
+def _set_bot_status(status: str, *, last_error: str = "") -> None:
+    _bot_status["status"] = status
+    if last_error:
+        _bot_status["lastError"] = str(last_error)[:300]
+    elif status in ("ready", "idle", "off", "connecting"):
+        if status != "error":
+            _bot_status["lastError"] = ""
+    if status == "ready":
+        _bot_status["readyAt"] = datetime.now(timezone.utc).strftime("%Y-%m-%d %H:%M:%S UTC")
 
 
 def _ollama_url() -> str:
@@ -65,7 +97,6 @@ def is_actor_allowed(
     if not uid or uid not in allowed:
         return False
     configured_guild = str(ws.get("discordBotGuildId") or "").strip()
-    # DMs: allowlisted users only (already checked). Guild messages: must match if set.
     if guild_id is not None and configured_guild:
         if str(guild_id).strip() != configured_guild:
             return False
@@ -95,54 +126,121 @@ def _active_in_progress_task(task_id: Optional[str] = None) -> Optional[Dict[str
     from backend.agents.task_context import find_task_by_id
 
     if task_id:
-        task = find_task_by_id(str(task_id).strip())
-        return task
+        return find_task_by_id(str(task_id).strip())
     lane = state.SHARED_BOARD.get("In Progress") or []
     if not lane:
         return None
     return lane[0] if isinstance(lane[0], dict) else None
 
 
+def _first_needs_user_task(task_id: Optional[str] = None) -> Optional[Dict[str, Any]]:
+    from backend.agents.task_context import find_task_by_id
+
+    if task_id:
+        tid = str(task_id).strip()
+        task = find_task_by_id(tid)
+        if not task:
+            return None
+        if not any(t.get("id") == tid for t in state.SHARED_BOARD.get("Needs User", []) or []):
+            return None
+        return task
+    lane = state.SHARED_BOARD.get("Needs User") or []
+    return lane[0] if lane and isinstance(lane[0], dict) else None
+
+
+def is_auto_sprint_active() -> bool:
+    """True if a background auto-sprint thread is alive or session is running."""
+    with _auto_sprint_lock:
+        thr = _auto_sprint_thread
+        if thr is not None and thr.is_alive():
+            return True
+    try:
+        from backend.services.sprint_session import _load_session
+
+        session = _load_session()
+        if session and session.get("status") == "running":
+            return True
+    except Exception:
+        pass
+    return False
+
+
 def cmd_status(_options: Dict[str, Any]) -> str:
     from backend.services.board_status_digest import build_board_status_digest
+    from backend.services.tool_approval import list_pending_approvals
 
     active = _active_in_progress_task()
-    digest = build_board_status_digest(active_task=active, handler="idle" if not active else None)
+    digest = build_board_status_digest(
+        active_task=active,
+        handler="idle" if not active else None,
+        include_operator_extras=True,
+    )
     cancel = bool(getattr(state, "SPRINT_CANCEL", False))
-    flags = f"sprintCancel={cancel}"
-    return f"{digest}\n{flags}"
+    intent = str(getattr(state, "SPRINT_CANCEL_INTENT", None) or "") or "none"
+    pending = list_pending_approvals()
+    bot = get_discord_bot_status()
+    lines = [
+        digest,
+        f"sprintCancel={cancel} intent={intent} autoSprintActive={is_auto_sprint_active()}",
+        f"pendingApprovals={len(pending)} discordBot={bot.get('status')}",
+    ]
+    return "\n".join(lines)
 
 
 def cmd_pause(_options: Dict[str, Any]) -> str:
     state.SPRINT_CANCEL = True
-    return "Paused — auto-sprint cancel flag set. Use /ah-resume to continue."
+    state.SPRINT_CANCEL_INTENT = "paused"
+    return "Paused — auto-sprint cancel flag set (intent=paused). Use /ah-resume to continue."
 
 
 def cmd_cancel(_options: Dict[str, Any]) -> str:
     state.SPRINT_CANCEL = True
-    return "Cancelled — auto-sprint cancel flag set (no auto-resume)."
+    state.SPRINT_CANCEL_INTENT = "cancelled"
+    return "Cancelled — auto-sprint cancel flag set (intent=cancelled; no auto-resume)."
 
 
-def _start_auto_sprint_background() -> None:
+def _start_auto_sprint_background() -> bool:
+    """Start one background auto-sprint. Returns False if already active."""
+    global _auto_sprint_thread
     from backend.services.sprint_service import run_auto_sprint
 
-    def _run() -> None:
-        try:
-            run_auto_sprint("", _ollama_url())
-        except Exception as exc:  # pragma: no cover - defensive
-            logger.exception("discord resume sprint failed")
-            add_system_log(
-                "discord",
-                "error",
-                f"source=discord command={CMD_RESUME} sprint_error={exc}",
-            )
+    with _auto_sprint_lock:
+        if _auto_sprint_thread is not None and _auto_sprint_thread.is_alive():
+            return False
 
-    threading.Thread(target=_run, name="discord-resume-sprint", daemon=True).start()
+        def _run() -> None:
+            try:
+                run_auto_sprint("", _ollama_url())
+            except Exception as exc:  # pragma: no cover - defensive
+                logger.exception("discord resume sprint failed")
+                add_system_log(
+                    "discord",
+                    "error",
+                    f"source=discord command={CMD_RESUME} sprint_error={exc}",
+                )
+
+        thr = threading.Thread(target=_run, name="discord-resume-sprint", daemon=True)
+        _auto_sprint_thread = thr
+        thr.start()
+        return True
 
 
 def cmd_resume(_options: Dict[str, Any]) -> str:
+    if is_auto_sprint_active():
+        return "Sprint already active — not starting another auto-sprint."
+
+    try:
+        from backend.services.sprint_session import dismiss_interrupted, get_recovery_context
+
+        if get_recovery_context() is not None:
+            dismiss_interrupted()
+    except Exception:
+        pass
+
     state.SPRINT_CANCEL = False
-    _start_auto_sprint_background()
+    state.SPRINT_CANCEL_INTENT = None
+    if not _start_auto_sprint_background():
+        return "Sprint already active — not starting another auto-sprint."
     return "Resumed — cancel cleared; auto-sprint starting in background."
 
 
@@ -226,6 +324,127 @@ def cmd_feature(options: Dict[str, Any]) -> str:
     )
 
 
+def cmd_answer(options: Dict[str, Any]) -> str:
+    """Resolve a Needs User card (same path as POST /api/tasks/{id}/resolve-user)."""
+    from backend.agents.task_context import (
+        init_refinement_fields,
+        normalize_task,
+        record_task_decision,
+        record_task_transcript,
+    )
+    from backend.services.board_service import move_board_stage
+    from backend.services.logs import add_system_log as _log
+    from backend.services.needs_user_guard import append_user_resolution, set_needs_user_cooldown
+
+    answer = str(options.get("answer") or "").strip()
+    if not answer:
+        return "answer is required."
+    target = str(options.get("target") or "dev").strip().lower()
+    if target not in ("dev", "refinement", "po"):
+        return "target must be dev, refinement, or po."
+    lane_map = {"dev": "In Progress", "refinement": "Refinement", "po": "Needs PO"}
+    target_lane = lane_map[target]
+
+    task_id_opt = options.get("task_id") or options.get("taskId")
+    task = _first_needs_user_task(str(task_id_opt) if task_id_opt else None)
+    if not task:
+        return "No Needs User card found (pass task_id or move a card to Needs User)."
+    task_id = str(task.get("id") or "")
+    normalize_task(task)
+    prior_question = (
+        task.get("userQuestion")
+        or task.get("needsUserReason")
+        or task.get("needsUserAction")
+        or ""
+    )
+    append_user_resolution(task, str(prior_question), answer, target_lane)
+    set_needs_user_cooldown(task)
+    task["needsUserDuplicate"] = False
+    record_task_transcript(
+        task_id,
+        "user",
+        f"User response (→ {target_lane}):\n{answer}",
+        agent="User",
+    )
+    task["userQuestion"] = None
+    task["needsUserReason"] = None
+    task["needsUserAction"] = None
+    record_task_decision(
+        task_id,
+        "User",
+        "resolve",
+        f"User routed to {target_lane} (discord)",
+        answer[:500],
+    )
+    if target == "refinement":
+        init_refinement_fields(task)
+        task["refinementStatus"] = "pending"
+        task["refinementNotes"] = answer
+    move_board_stage(task_id, target_lane)
+    _log("System", "success", f"User resolved {task_id} → {target_lane} (discord)")
+    return f"Answered [{task_id}] → {target_lane}."
+
+
+def cmd_approve(options: Dict[str, Any]) -> str:
+    from backend.services.tool_approval import list_pending_approvals, resolve_tool_approval
+
+    decision_raw = str(options.get("decision") or "approve").strip().lower()
+    if decision_raw in ("approve", "yes", "y", "true", "1"):
+        approved = True
+    elif decision_raw in ("deny", "reject", "no", "n", "false", "0"):
+        approved = False
+    else:
+        return "decision must be approve or deny."
+
+    approval_id = str(options.get("approval_id") or options.get("approvalId") or "").strip()
+    pending = list_pending_approvals()
+    if not approval_id:
+        if not pending:
+            return "No pending tool approvals."
+        approval_id = str(pending[0].get("id") or "")
+    if not approval_id:
+        return "No pending tool approvals."
+    ok = resolve_tool_approval(approval_id, approved)
+    remaining = list_pending_approvals()
+    if not ok:
+        return f"Approval {approval_id} not found or already resolved. pending={len(remaining)}"
+    verb = "approved" if approved else "denied"
+    return f"Tool approval {approval_id} {verb}. pending={len(remaining)}"
+
+
+def cmd_pending(_options: Dict[str, Any]) -> str:
+    from backend.services.tool_approval import list_pending_approvals
+
+    lines: List[str] = []
+    needs = state.SHARED_BOARD.get("Needs User") or []
+    if needs:
+        lines.append(f"Needs User ({len(needs)}):")
+        for t in needs[:8]:
+            if not isinstance(t, dict):
+                continue
+            tid = str(t.get("id") or "?")
+            q = str(t.get("userQuestion") or t.get("needsUserReason") or t.get("title") or "")
+            q = q.replace("\n", " ").strip()
+            if len(q) > 80:
+                q = q[:79] + "…"
+            lines.append(f"  [{tid}] {q}")
+    else:
+        lines.append("Needs User: (none)")
+
+    pending = list_pending_approvals()
+    if pending:
+        lines.append(f"Tool approvals ({len(pending)}):")
+        for p in pending[:8]:
+            pid = str(p.get("id") or "?")
+            tool = str(p.get("toolName") or "?")
+            tid = str(p.get("taskId") or "")
+            extra = f" task={tid}" if tid else ""
+            lines.append(f"  [{pid}] {tool}{extra}")
+    else:
+        lines.append("Tool approvals: (none)")
+    return "\n".join(lines)
+
+
 _HANDLERS: Dict[str, Callable[[Dict[str, Any]], str]] = {
     CMD_STATUS: cmd_status,
     CMD_PAUSE: cmd_pause,
@@ -234,6 +453,9 @@ _HANDLERS: Dict[str, Callable[[Dict[str, Any]], str]] = {
     CMD_BACKUP_DEV: cmd_backup_dev,
     CMD_MODEL: cmd_model,
     CMD_FEATURE: cmd_feature,
+    CMD_ANSWER: cmd_answer,
+    CMD_APPROVE: cmd_approve,
+    CMD_PENDING: cmd_pending,
 }
 
 
@@ -295,7 +517,6 @@ def _make_discord_client(guild_id: str) -> Any:
             guild_id=gid,
             options=options,
         )
-        # Discord message limit 2000
         if len(text) > 1900:
             text = text[:1899] + "…"
         await interaction.followup.send(text, ephemeral=True)
@@ -304,7 +525,7 @@ def _make_discord_client(guild_id: str) -> Any:
     async def _status(interaction: discord.Interaction) -> None:
         await _reply(interaction, CMD_STATUS, {})
 
-    @tree.command(name=CMD_PAUSE, description="Pause / cancel current auto-sprint")
+    @tree.command(name=CMD_PAUSE, description="Pause current auto-sprint")
     async def _pause(interaction: discord.Interaction) -> None:
         await _reply(interaction, CMD_PAUSE, {})
 
@@ -365,8 +586,58 @@ def _make_discord_client(guild_id: str) -> Any:
             opts["child_title"] = child_title
         await _reply(interaction, CMD_FEATURE, opts)
 
+    @tree.command(name=CMD_ANSWER, description="Answer a Needs User card")
+    @app_commands.describe(
+        answer="Your answer / decision",
+        task_id="Optional task id (defaults to first Needs User card)",
+        target="Where to route: dev, refinement, or po",
+    )
+    @app_commands.choices(
+        target=[
+            app_commands.Choice(name="dev", value="dev"),
+            app_commands.Choice(name="refinement", value="refinement"),
+            app_commands.Choice(name="po", value="po"),
+        ]
+    )
+    async def _answer(
+        interaction: discord.Interaction,
+        answer: str,
+        task_id: Optional[str] = None,
+        target: Optional[app_commands.Choice[str]] = None,
+    ) -> None:
+        opts: Dict[str, Any] = {"answer": answer, "target": target.value if target else "dev"}
+        if task_id:
+            opts["task_id"] = task_id
+        await _reply(interaction, CMD_ANSWER, opts)
+
+    @tree.command(name=CMD_APPROVE, description="Approve or deny a pending tool approval")
+    @app_commands.describe(
+        decision="approve or deny",
+        approval_id="Optional approval id (defaults to oldest pending)",
+    )
+    @app_commands.choices(
+        decision=[
+            app_commands.Choice(name="approve", value="approve"),
+            app_commands.Choice(name="deny", value="deny"),
+        ]
+    )
+    async def _approve(
+        interaction: discord.Interaction,
+        decision: app_commands.Choice[str],
+        approval_id: Optional[str] = None,
+    ) -> None:
+        opts: Dict[str, Any] = {"decision": decision.value}
+        if approval_id:
+            opts["approval_id"] = approval_id
+        await _reply(interaction, CMD_APPROVE, opts)
+
+    @tree.command(name=CMD_PENDING, description="List Needs User cards and pending tool approvals")
+    async def _pending(interaction: discord.Interaction) -> None:
+        await _reply(interaction, CMD_PENDING, {})
+
     @client.event
     async def on_ready() -> None:
+        _set_bot_status("ready")
         add_system_log(
             "discord",
             "info",
@@ -387,6 +658,7 @@ def _make_discord_client(guild_id: str) -> Any:
             )
         except Exception as exc:
             logger.exception("discord slash sync failed")
+            _set_bot_status("error", last_error=f"slash_sync: {exc}")
             add_system_log("discord", "error", f"source=discord slash_sync_error={exc}")
 
     return client
@@ -399,9 +671,11 @@ async def start_discord_bot() -> None:
 
     ws = get_workflow_settings()
     if not ws.get("discordBotEnabled"):
+        _set_bot_status("off")
         return
     token = str(ws.get("discordBotToken") or "").strip()
     if not token:
+        _set_bot_status("error", last_error="enabled but token missing")
         add_system_log(
             "discord",
             "warning",
@@ -411,6 +685,7 @@ async def start_discord_bot() -> None:
     try:
         import discord  # noqa: F401
     except ImportError:
+        _set_bot_status("error", last_error="discord.py not installed")
         add_system_log(
             "discord",
             "error",
@@ -419,6 +694,7 @@ async def start_discord_bot() -> None:
         return
 
     guild_id = str(ws.get("discordBotGuildId") or "").strip()
+    _set_bot_status("connecting")
 
     async def _runner() -> None:
         global _client
@@ -430,10 +706,13 @@ async def start_discord_bot() -> None:
             raise
         except Exception as exc:
             logger.exception("discord bot crashed")
+            _set_bot_status("error", last_error=str(exc))
             add_system_log("discord", "error", f"source=discord bot_error={exc}")
         finally:
             if _client is client:
                 _client = None
+            if _bot_status.get("status") == "ready":
+                _set_bot_status("idle")
 
     with _bot_lock:
         if _bot_task and not _bot_task.done():
@@ -460,6 +739,11 @@ async def stop_discord_bot() -> None:
             await task
         except (asyncio.CancelledError, Exception):
             pass
+    ws = get_workflow_settings()
+    if not ws.get("discordBotEnabled"):
+        _set_bot_status("off")
+    elif _bot_status.get("status") not in ("error",):
+        _set_bot_status("idle")
 
 
 async def reload_discord_bot() -> None:

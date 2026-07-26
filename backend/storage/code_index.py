@@ -653,6 +653,32 @@ def build_semantic_sprint_context(
     if not results:
         return "", []
 
+    # Light retrieval feedback: log when dense hits sit near/under the score floor
+    try:
+        from backend.services.logs import add_system_log
+
+        weak = 0
+        for hit in results:
+            ds = hit.get("denseScore")
+            sc = float(ds if ds is not None else hit.get("score") or 0)
+            if (hit.get("source") or "dense") == "dense" and sc < min_score + 0.05:
+                weak += 1
+        if weak >= max(1, len(results) // 2):
+            task["retrievalFeedback"] = {
+                "weakHits": weak,
+                "totalHits": len(results),
+                "minScore": min_score,
+                "note": "semantic context near score floor — may be noisy",
+            }
+            add_system_log(
+                "System",
+                "info",
+                f"retrieval_feedback task={task.get('id')} weakHits={weak}/{len(results)} "
+                f"minScore={min_score}",
+            )
+    except Exception:
+        pass
+
     header = "\n=== SEMANTIC CODE CONTEXT (from index) ===\n"
     blocks: List[str] = []
     paths: List[str] = []

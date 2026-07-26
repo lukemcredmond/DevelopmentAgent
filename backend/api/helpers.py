@@ -30,6 +30,7 @@ def build_state_response(*, include_files: bool = True) -> dict:
     file_paths = list_workspace_file_paths()
     file_list = sync_virtual_filesystem_from_disk() if include_files else {}
     ws = get_workflow_settings()
+    from backend.services.discord_bot import get_discord_bot_status
     from backend.services.qdrant_auth import sanitize_workflow_settings_for_client
 
     response: dict = {
@@ -66,7 +67,9 @@ def build_state_response(*, include_files: bool = True) -> dict:
         },
         "projectsList": state.storage.list_projects(),
         "sprintCancel": state.SPRINT_CANCEL,
+        "sprintCancelIntent": getattr(state, "SPRINT_CANCEL_INTENT", None),
         "workflowSettings": sanitize_workflow_settings_for_client(ws),
+        "discordBotStatus": get_discord_bot_status(),
         "activeLanes": get_active_lanes(ws),
         "briefChangelog": state.storage.get_brief_changelog(state.CURRENT_PROJECT_ID, limit=50),
         "lastSprintSummary": get_last_sprint_summary(),

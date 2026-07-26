@@ -600,6 +600,7 @@ export default function SettingsSlideOver({
               indexProgress={indexProgress}
               onOpenMemoryTab={onOpenMemoryTab}
               onOpenCustomTools={onOpenCustomTools}
+              discordBotStatus={state.discordBotStatus ?? null}
             />
           )}
         </div>

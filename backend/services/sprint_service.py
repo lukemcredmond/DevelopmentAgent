@@ -796,10 +796,15 @@ def _try_move_to_needs_user(
 
         title = task.get("title") or task_id
         reason = task.get("needsUserReason") or msg
+        action = str(task.get("needsUserAction") or "").strip()
+        body_parts = [f"[{task_id}] {title}", str(reason)[:350]]
+        if action:
+            body_parts.append(f"Action: {action[:200]}")
+        body_parts.append("Reply with /ah-answer or use the UI.")
         notify_if_enabled(
             "needs_user",
             "Needs your answer",
-            f"{title}\n{str(reason)[:400]}",
+            "\n".join(body_parts),
             task_id=task_id,
         )
     except Exception:
@@ -3310,6 +3315,7 @@ def run_auto_sprint(brief: str, ollama_url: str, max_steps: int | None = None) -
 
     set_sprint_mode("auto")
     state.SPRINT_CANCEL = False
+    state.SPRINT_CANCEL_INTENT = None
     state.SPRINT_NEEDS_USER_COUNT = 0
     ws = get_workflow_settings()
     limit = max_steps if max_steps is not None else int(ws.get("maxSprintSteps", 20))
@@ -3350,6 +3356,7 @@ def run_plan_and_run(brief: str, ollama_url: str, max_steps: int | None = None) 
     ws = get_workflow_settings()
     limit = max_steps if max_steps is not None else int(ws.get("maxSprintSteps", 20))
     state.SPRINT_CANCEL = False
+    state.SPRINT_CANCEL_INTENT = None
     state.SPRINT_NEEDS_USER_COUNT = 0
     state.SPRINT_PROGRESS_MAX = limit
     state.SPRINT_PROGRESS_STEP = 0

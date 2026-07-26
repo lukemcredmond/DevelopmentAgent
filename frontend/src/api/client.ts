@@ -640,6 +640,16 @@ export async function testPhoneNotify(payload?: {
   })
 }
 
+export async function exportTrainingJsonl(limit = 50): Promise<{
+  ok: boolean
+  count: number
+  projectId?: string
+  jsonl: string
+  note?: string
+}> {
+  return request(`/api/training/export?limit=${encodeURIComponent(String(limit))}`)
+}
+
 export async function cancelSprint(): Promise<{ ok: boolean }> {
   return request<{ ok: boolean }>('/api/sprint/cancel', { method: 'POST' })
 }

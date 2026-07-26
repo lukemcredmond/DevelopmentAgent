@@ -56,6 +56,7 @@ def build_board_status_digest(
     agent: Optional[str] = None,
     project_name: Optional[str] = None,
     board: Optional[Dict[str, Any]] = None,
+    include_operator_extras: bool = False,
 ) -> str:
     """
     One Discord-friendly status message: project, lane counts, current work.
@@ -89,6 +90,15 @@ def build_board_status_digest(
     needs_user = counts.get("Needs User", 0)
     if needs_user > 0:
         lines.append(f"Needs your input: {needs_user} card(s) in Needs User")
+        if include_operator_extras:
+            nu_ids: List[str] = []
+            for t in (board or state.SHARED_BOARD).get("Needs User", []) or []:
+                if isinstance(t, dict) and t.get("id"):
+                    nu_ids.append(str(t["id"]))
+                if len(nu_ids) >= 5:
+                    break
+            if nu_ids:
+                lines.append("Needs User ids: " + ", ".join(nu_ids))
 
     blocked = counts.get("Blocked", 0)
     if blocked > 0:
@@ -130,10 +140,30 @@ def build_board_status_digest(
     elif handler == "needs_user":
         lines.append("Working on: paused for Needs User")
 
+    if include_operator_extras:
+        cancel = bool(getattr(state, "SPRINT_CANCEL", False))
+        intent = str(getattr(state, "SPRINT_CANCEL_INTENT", None) or "") or "none"
+        lines.append(f"Sprint: cancel={cancel} intent={intent}")
+
     text = "\n".join(lines)
     if len(text) > 1800:
         text = text[:1799] + "…"
     return text
+
+
+def board_status_fingerprint(
+    *,
+    active_task: Optional[Dict[str, Any]] = None,
+    board: Optional[Dict[str, Any]] = None,
+) -> str:
+    """Stable key for digest notify: lane counts + Needs User/Blocked + active id."""
+    counts = _lane_counts(board)
+    parts = [f"{k}:{counts.get(k, 0)}" for k in _LANE_ORDER if k in counts or k in _ALWAYS]
+    active_id = ""
+    if active_task and isinstance(active_task, dict):
+        active_id = str(active_task.get("id") or "")
+    raw = "|".join(parts) + f"|active={active_id}|nu={counts.get('Needs User', 0)}|bl={counts.get('Blocked', 0)}"
+    return hashlib.sha256(raw.encode("utf-8")).hexdigest()[:16]
 
 
 def notify_board_status_after_step(
@@ -151,8 +181,8 @@ def notify_board_status_after_step(
         agent=agent,
         project_name=getattr(state, "PROJECT_NAME", None),
     )
-    # Dedup key = content hash so unchanged board skips spam within window
-    digest_key = hashlib.sha256(body.encode("utf-8")).hexdigest()[:16]
+    # Prefer structural fingerprint so unchanged lane/active board skips spam
+    digest_key = board_status_fingerprint(active_task=active_task)
     notify_if_enabled(
         "board_status",
         "Board status",

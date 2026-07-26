@@ -14,7 +14,7 @@ from backend.services.logs import add_system_log
 from backend.services.workflow_settings import get_workflow_settings
 
 DEDUP_WINDOW_SEC = 120.0
-BOARD_STATUS_DEDUP_WINDOW_SEC = 180.0
+BOARD_STATUS_DEDUP_WINDOW_SEC = 300.0
 _DISCORD_HOSTS = frozenset(
     {
         "discord.com",

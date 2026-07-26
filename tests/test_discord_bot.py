@@ -3,22 +3,31 @@
 from __future__ import annotations
 
 from pathlib import Path
-from unittest.mock import patch
+from unittest.mock import MagicMock, patch
 
 from backend import state
 from backend.agents.registry import agent_dev
+from backend.agents.task_context import init_new_task, normalize_task
 from backend.bootstrap import initialize
 from backend.services import discord_bot
 from backend.services.board_lanes import FEATURES_LANE, normalize_board_lanes
+from backend.services.board_service import move_board_stage
 from backend.services.discord_bot import (
+    CMD_ANSWER,
+    CMD_APPROVE,
+    CMD_BACKUP_DEV,
+    CMD_CANCEL,
     CMD_FEATURE,
     CMD_MODEL,
     CMD_PAUSE,
+    CMD_PENDING,
+    CMD_RESUME,
     CMD_STATUS,
     dispatch_command,
     is_actor_allowed,
 )
 from backend.services.qdrant_auth import sanitize_workflow_settings_for_client
+from backend.services.tool_approval import PendingToolApproval
 from backend.services.workflow_settings import (
     DEFAULT_WORKFLOW_SETTINGS,
     reset_workflow_settings,
@@ -39,6 +48,10 @@ def _allow_settings(user_id: str = "111", guild: str = "999") -> dict:
         "discordModelPresetFast": "fast-model:7b",
         "discordModelPresetQuality": "quality-model:14b",
     }
+
+
+def _allow() -> None:
+    save_workflow_settings({"discordBotAllowedUserIds": ["111"]})
 
 
 def test_default_discord_bot_off():
@@ -82,8 +95,9 @@ def test_dispatch_status_and_pause():
     initialize()
     reset_workflow_settings()
     _reset_board()
-    save_workflow_settings({"discordBotAllowedUserIds": ["111"]})
+    _allow()
     state.SPRINT_CANCEL = False
+    state.SPRINT_CANCEL_INTENT = None
 
     ok, body = dispatch_command(CMD_STATUS, actor_id="111")
     assert ok is True
@@ -93,7 +107,20 @@ def test_dispatch_status_and_pause():
     ok2, body2 = dispatch_command(CMD_PAUSE, actor_id="111")
     assert ok2 is True
     assert "Paused" in body2
+    assert "intent=paused" in body2
     assert state.SPRINT_CANCEL is True
+    assert state.SPRINT_CANCEL_INTENT == "paused"
+
+
+def test_cancel_vs_pause_intent():
+    initialize()
+    reset_workflow_settings()
+    _allow()
+    state.SPRINT_CANCEL = False
+    ok, body = dispatch_command(CMD_CANCEL, actor_id="111")
+    assert ok is True
+    assert "Cancelled" in body
+    assert state.SPRINT_CANCEL_INTENT == "cancelled"
 
 
 def test_ah_feature_creates_draft_without_starting_sprint():
@@ -101,7 +128,7 @@ def test_ah_feature_creates_draft_without_starting_sprint():
     reset_workflow_settings()
     _reset_board()
     state.SPRINT_CANCEL = False
-    save_workflow_settings({"discordBotAllowedUserIds": ["111"]})
+    _allow()
 
     with patch("backend.services.discord_bot._start_auto_sprint_background") as mock_sprint:
         ok, body = dispatch_command(
@@ -116,7 +143,6 @@ def test_ah_feature_creates_draft_without_starting_sprint():
     assert "FEAT-" in body
     features = state.SHARED_BOARD.get(FEATURES_LANE) or []
     assert any(t.get("title") == "Phone auth" for t in features)
-    # No sprint cancel flip / no auto start from feature alone
     assert state.SPRINT_CANCEL is False
 
 
@@ -140,6 +166,123 @@ def test_ah_model_fast_sets_dev_primary():
     assert (state.PRIMARY_MODELS or {}).get("dev") == "fast-model:7b"
 
 
+def test_ah_answer_moves_needs_user_to_in_progress():
+    initialize()
+    reset_workflow_settings()
+    _reset_board()
+    _allow()
+    task = init_new_task({"id": "T-NU-1", "title": "Need decision", "description": "Pick auth provider"})
+    normalize_task(task)
+    task["needsUserReason"] = "Which provider?"
+    task["needsUserAction"] = "Reply with oauth or password"
+    state.SHARED_BOARD.setdefault("Needs User", []).append(task)
+    tid = str(task["id"])
+
+    ok, body = dispatch_command(
+        CMD_ANSWER,
+        actor_id="111",
+        options={"answer": "Use OAuth", "target": "dev", "task_id": tid},
+    )
+    assert ok is True
+    assert tid in body
+    assert "In Progress" in body
+    assert any(t.get("id") == tid for t in state.SHARED_BOARD.get("In Progress", []) or [])
+    assert not any(t.get("id") == tid for t in state.SHARED_BOARD.get("Needs User", []) or [])
+
+
+def test_ah_approve_resolves_pending():
+    initialize()
+    reset_workflow_settings()
+    _allow()
+    state.PENDING_TOOL_APPROVALS.clear()
+    approval = PendingToolApproval(
+        id="appr-1",
+        run_id="run-1",
+        task_id="T-1",
+        agent="Developer",
+        agent_id="dev",
+        tool_name="write_file",
+        arguments={"path": "a.py"},
+        timestamp="2026-01-01",
+    )
+    state.PENDING_TOOL_APPROVALS.append(approval)
+
+    with patch(
+        "backend.services.tool_execution_service.execute_deferred_approval",
+        MagicMock(),
+    ):
+        ok, body = dispatch_command(
+            CMD_APPROVE,
+            actor_id="111",
+            options={"decision": "approve", "approval_id": "appr-1"},
+        )
+    assert ok is True
+    assert "approved" in body.lower()
+    assert "pending=0" in body
+
+
+def test_ah_pending_lists_needs_user():
+    initialize()
+    reset_workflow_settings()
+    _reset_board()
+    _allow()
+    task = init_new_task({"id": "T-NU-2", "title": "Ask me", "description": "q"})
+    normalize_task(task)
+    task["needsUserReason"] = "Need API key"
+    state.SHARED_BOARD.setdefault("Needs User", []).append(task)
+    ok, body = dispatch_command(CMD_PENDING, actor_id="111")
+    assert ok is True
+    assert task["id"] in body
+    assert "Need API key" in body
+
+
+def test_resume_no_double_start(monkeypatch):
+    initialize()
+    reset_workflow_settings()
+    _allow()
+    state.SPRINT_CANCEL = True
+    state.SPRINT_CANCEL_INTENT = "paused"
+    calls = {"n": 0}
+
+    def fake_start():
+        calls["n"] += 1
+        return True
+
+    monkeypatch.setattr(discord_bot, "_start_auto_sprint_background", fake_start)
+    monkeypatch.setattr(discord_bot, "is_auto_sprint_active", lambda: False)
+    ok, body = dispatch_command(CMD_RESUME, actor_id="111")
+    assert ok is True
+    assert calls["n"] == 1
+    assert state.SPRINT_CANCEL is False
+
+    monkeypatch.setattr(discord_bot, "is_auto_sprint_active", lambda: True)
+    ok2, body2 = dispatch_command(CMD_RESUME, actor_id="111")
+    assert ok2 is True
+    assert "already active" in body2.lower()
+    assert calls["n"] == 1
+
+
+def test_backup_dev_arms(monkeypatch):
+    initialize()
+    reset_workflow_settings()
+    _reset_board()
+    _allow()
+    task = init_new_task({"id": "T-IP-1", "title": "Work", "description": "desc"})
+    normalize_task(task)
+    state.SHARED_BOARD.setdefault("In Progress", []).append(task)
+    monkeypatch.setattr(
+        "backend.services.backup_model.arm_backup_for_agent",
+        lambda *a, **k: True,
+    )
+    monkeypatch.setattr(
+        "backend.services.project_service.save_current_project_state",
+        lambda: None,
+    )
+    ok, body = dispatch_command(CMD_BACKUP_DEV, actor_id="111")
+    assert ok is True
+    assert "armed" in body.lower()
+
+
 def test_ui_and_readme_markers():
     root = Path(__file__).resolve().parents[1]
     panel = (root / "frontend" / "src" / "components" / "WorkflowPanel.tsx").read_text(
@@ -152,4 +295,6 @@ def test_ui_and_readme_markers():
     readme = (root / "README.md").read_text(encoding="utf-8")
     assert "Discord control bot (optional, localhost)" in readme
     assert "/ah-status" in readme
+    assert "/ah-answer" in readme
+    assert "/ah-approve" in readme
     assert "discordBotEnabled" in readme

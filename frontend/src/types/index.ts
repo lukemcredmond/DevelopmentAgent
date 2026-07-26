@@ -789,6 +789,14 @@ export interface AppState {
   models: Record<AgentId, string>
   backupModels?: Partial<Record<AgentId, string>>
   projectsList: ProjectSummary[]
+  sprintCancel?: boolean
+  sprintCancelIntent?: string | null
+  discordBotStatus?: {
+    status?: string
+    lastError?: string
+    readyAt?: string
+    running?: boolean
+  }
   workflowSettings?: WorkflowSettings
   activeLanes?: BoardLane[]
   briefChangelog?: BriefChangelogEntry[]

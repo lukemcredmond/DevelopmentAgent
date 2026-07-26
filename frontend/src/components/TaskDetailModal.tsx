@@ -451,6 +451,120 @@ export default function TaskDetailModal({
         </div>
 
         <div className="flex-1 overflow-y-auto px-5 py-4 space-y-3 min-h-0">
+          {/* action-first: Needs User resolve */}
+          {taskLane === 'Needs User' && onResolveUser && (
+            <div className="bg-amber-950/20 border border-amber-500/30 rounded-lg p-3 space-y-2">
+              <div className="flex items-center justify-between gap-2">
+                <h4 className="text-xs font-bold text-amber-300">Why this needs you</h4>
+                {isDuplicateQuestion && (
+                  <span className="text-[9px] px-1.5 py-0.5 rounded bg-rose-950/50 text-rose-300 border border-rose-500/40">
+                    Same question again?
+                  </span>
+                )}
+              </div>
+              <p className="text-[11px] text-amber-100/90 whitespace-pre-wrap">{needsUserReason}</p>
+              <div className="text-[10px] space-y-1">
+                <p className="text-amber-200 font-semibold">What to provide</p>
+                <p className="text-amber-100/80 whitespace-pre-wrap">{needsUserAction}</p>
+              </div>
+              {stuckLoopCount > 0 && (
+                <p className="text-[10px] text-amber-300/80">
+                  Stuck loop rounds: {stuckLoopCount}
+                </p>
+              )}
+              {lastFailedTool && (
+                <p className="text-[10px] text-rose-300/90">
+                  Last failed tool: {lastFailedTool.toolName ?? 'unknown'}
+                </p>
+              )}
+              {priorUserAnswers.length > 0 && (
+                <div className="text-[10px] space-y-1">
+                  <button
+                    type="button"
+                    onClick={() => setShowPriorAnswers((o) => !o)}
+                    className="text-amber-200 font-semibold hover:text-amber-100"
+                  >
+                    {showPriorAnswers ? 'Hide' : 'Show'} prior answers ({priorUserAnswers.length})
+                  </button>
+                  {showPriorAnswers && (
+                    <ul className="space-y-2 max-h-32 overflow-y-auto">
+                      {[...priorUserAnswers].reverse().map((res, i) => (
+                        <li
+                          key={`${res.timestamp}-${i}`}
+                          className="text-amber-100/80 border border-amber-500/20 rounded p-1.5"
+                        >
+                          <p className="text-amber-200/90 font-semibold">Q: {res.question}</p>
+                          <p className="whitespace-pre-wrap">A: {res.answer}</p>
+                          <p className="text-amber-400/70 text-[9px]">
+                            → {res.targetLane} · {res.timestamp}
+                          </p>
+                        </li>
+                      ))}
+                    </ul>
+                  )}
+                </div>
+              )}
+              {commandDiagnostics.length > 0 && (
+                <div className="text-[10px] space-y-1">
+                  <p className="text-amber-200 font-semibold">Top lint issues</p>
+                  <ul className="space-y-0.5 max-h-24 overflow-y-auto">
+                    {commandDiagnostics.slice(0, 5).map((d, i) => (
+                      <li key={i} className="text-amber-100/70 font-mono">
+                        {d.severity} · {d.file}:{d.line} — {d.message}
+                      </li>
+                    ))}
+                  </ul>
+                </div>
+              )}
+              <textarea
+                value={userAnswer}
+                onChange={(e) => setUserAnswer(e.target.value)}
+                placeholder="Your answer for the Developer…"
+                className="w-full text-xs bg-cat-base border border-cat-surface1 rounded p-2 min-h-[60px]"
+              />
+              <div className="flex flex-wrap gap-2 pt-1">
+                {(
+                  [
+                    { target: 'dev' as const, label: 'Send to Developer', className: 'bg-amber-600 hover:bg-amber-500' },
+                    ...(requireBacklogRefinement ||
+                    safeTask.refinementStatus ||
+                    safeTask.refinementRoundTrips
+                      ? [
+                          {
+                            target: 'refinement' as const,
+                            label: 'Send to Refinement',
+                            className: 'bg-violet-700 hover:bg-violet-600',
+                          },
+                        ]
+                      : []),
+                    {
+                      target: 'po' as const,
+                      label: 'Send to Product Owner',
+                      className: 'bg-indigo-700 hover:bg-indigo-600',
+                    },
+                  ] as const
+                ).map(({ target, label, className }) => (
+                  <button
+                    key={target}
+                    type="button"
+                    disabled={!userAnswer.trim()}
+                    onClick={() => {
+                      try {
+                        sessionStorage.removeItem(`needs-user-draft-${task.id}`)
+                      } catch {
+                        /* ignore */
+                      }
+                      onResolveUser(task.id, userAnswer.trim(), target)
+                      setUserAnswer('')
+                    }}
+                    className={`${className} disabled:opacity-50 text-white text-xs py-1.5 px-3 rounded-lg`}
+                  >
+                    {label}
+                  </button>
+                ))}
+              </div>
+            </div>
+          )}
           <CollapsibleSection title="Description" defaultOpen>
             {editing ? (
               <textarea
@@ -1312,119 +1426,6 @@ export default function TaskDetailModal({
             </button>
           )}
 
-          {taskLane === 'Needs User' && onResolveUser && (
-            <div className="bg-amber-950/20 border border-amber-500/30 rounded-lg p-3 space-y-2">
-              <div className="flex items-center justify-between gap-2">
-                <h4 className="text-xs font-bold text-amber-300">Why this needs you</h4>
-                {isDuplicateQuestion && (
-                  <span className="text-[9px] px-1.5 py-0.5 rounded bg-rose-950/50 text-rose-300 border border-rose-500/40">
-                    Same question again?
-                  </span>
-                )}
-              </div>
-              <p className="text-[11px] text-amber-100/90 whitespace-pre-wrap">{needsUserReason}</p>
-              <div className="text-[10px] space-y-1">
-                <p className="text-amber-200 font-semibold">What to provide</p>
-                <p className="text-amber-100/80 whitespace-pre-wrap">{needsUserAction}</p>
-              </div>
-              {stuckLoopCount > 0 && (
-                <p className="text-[10px] text-amber-300/80">
-                  Stuck loop rounds: {stuckLoopCount}
-                </p>
-              )}
-              {lastFailedTool && (
-                <p className="text-[10px] text-rose-300/90">
-                  Last failed tool: {lastFailedTool.toolName ?? 'unknown'}
-                </p>
-              )}
-              {priorUserAnswers.length > 0 && (
-                <div className="text-[10px] space-y-1">
-                  <button
-                    type="button"
-                    onClick={() => setShowPriorAnswers((o) => !o)}
-                    className="text-amber-200 font-semibold hover:text-amber-100"
-                  >
-                    {showPriorAnswers ? 'Hide' : 'Show'} prior answers ({priorUserAnswers.length})
-                  </button>
-                  {showPriorAnswers && (
-                    <ul className="space-y-2 max-h-32 overflow-y-auto">
-                      {[...priorUserAnswers].reverse().map((res, i) => (
-                        <li
-                          key={`${res.timestamp}-${i}`}
-                          className="text-amber-100/80 border border-amber-500/20 rounded p-1.5"
-                        >
-                          <p className="text-amber-200/90 font-semibold">Q: {res.question}</p>
-                          <p className="whitespace-pre-wrap">A: {res.answer}</p>
-                          <p className="text-amber-400/70 text-[9px]">
-                            → {res.targetLane} · {res.timestamp}
-                          </p>
-                        </li>
-                      ))}
-                    </ul>
-                  )}
-                </div>
-              )}
-              {commandDiagnostics.length > 0 && (
-                <div className="text-[10px] space-y-1">
-                  <p className="text-amber-200 font-semibold">Top lint issues</p>
-                  <ul className="space-y-0.5 max-h-24 overflow-y-auto">
-                    {commandDiagnostics.slice(0, 5).map((d, i) => (
-                      <li key={i} className="text-amber-100/70 font-mono">
-                        {d.severity} · {d.file}:{d.line} — {d.message}
-                      </li>
-                    ))}
-                  </ul>
-                </div>
-              )}
-              <textarea
-                value={userAnswer}
-                onChange={(e) => setUserAnswer(e.target.value)}
-                placeholder="Your answer for the Developer…"
-                className="w-full text-xs bg-cat-base border border-cat-surface1 rounded p-2 min-h-[60px]"
-              />
-              <div className="flex flex-wrap gap-2 pt-1">
-                {(
-                  [
-                    { target: 'dev' as const, label: 'Send to Developer', className: 'bg-amber-600 hover:bg-amber-500' },
-                    ...(requireBacklogRefinement ||
-                    safeTask.refinementStatus ||
-                    safeTask.refinementRoundTrips
-                      ? [
-                          {
-                            target: 'refinement' as const,
-                            label: 'Send to Refinement',
-                            className: 'bg-violet-700 hover:bg-violet-600',
-                          },
-                        ]
-                      : []),
-                    {
-                      target: 'po' as const,
-                      label: 'Send to Product Owner',
-                      className: 'bg-indigo-700 hover:bg-indigo-600',
-                    },
-                  ] as const
-                ).map(({ target, label, className }) => (
-                  <button
-                    key={target}
-                    type="button"
-                    disabled={!userAnswer.trim()}
-                    onClick={() => {
-                      try {
-                        sessionStorage.removeItem(`needs-user-draft-${task.id}`)
-                      } catch {
-                        /* ignore */
-                      }
-                      onResolveUser(task.id, userAnswer.trim(), target)
-                      setUserAnswer('')
-                    }}
-                    className={`${className} disabled:opacity-50 text-white text-xs py-1.5 px-3 rounded-lg`}
-                  >
-                    {label}
-                  </button>
-                ))}
-              </div>
-            </div>
-          )}
 
           {editing && (
             <div className="flex gap-2 flex-wrap">

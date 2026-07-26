@@ -100,7 +100,8 @@ def trigger_plan_and_run(payload: SprintRunPayload):
 @router.post("/api/sprint/cancel")
 def cancel_auto_sprint():
     state.SPRINT_CANCEL = True
-    return {"ok": True, "sprintCancel": True}
+    state.SPRINT_CANCEL_INTENT = "cancelled"
+    return {"ok": True, "sprintCancel": True, "sprintCancelIntent": "cancelled"}
 
 
 @router.post("/api/workflow/settings")
