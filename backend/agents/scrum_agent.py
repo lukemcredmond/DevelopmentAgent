@@ -750,12 +750,21 @@ class ScrumAgent:
             command = str(arguments.get("command") or "")
             diagnostics = parse_command_diagnostics(command, body or llm_output)
             if diagnostics:
+                try:
+                    from backend.services.workflow_settings import get_workflow_settings
+
+                    max_keep = int(get_workflow_settings().get("maxInCardLintFixes", 5))
+                except Exception:
+                    max_keep = 5
                 messages.append(
                     {
                         "role": "system",
                         "content": (
-                            f"Command returned {len(diagnostics)} problems — fix each "
-                            "file:line listed above before re-running."
+                            f"Command returned {len(diagnostics)} problem(s). "
+                            f"Fix at most {max_keep} highest-severity findings relevant to this "
+                            "card's AC (in-card lint budget) with apply_patch/write_file before "
+                            "re-running. Do not clear the whole project on this card — leftover "
+                            "lint is split to related Backlog cards automatically."
                         ),
                     }
                 )
@@ -765,7 +774,7 @@ class ScrumAgent:
                         "role": "system",
                         "content": (
                             "Command completed with findings (non-zero exit). "
-                            "Fix listed issues with apply_patch/write_file, then re-run "
+                            "Fix budgeted issues with apply_patch/write_file, then re-run "
                             "the lint command once. Do not repeat the same command without making changes."
                         ),
                     }

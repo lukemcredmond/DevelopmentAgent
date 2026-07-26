@@ -323,6 +323,9 @@ export interface WorkflowSettings {
   maxSubtaskSpawns?: number
   enableFixVerifyLoop?: boolean
   maxFixVerifyRounds?: number
+  maxInCardLintFixes?: number
+  maxLintFanoutCards?: number
+  lintFanoutThreshold?: number
   requireToolApproval?: boolean
   toolApprovalTools?: string[]
   nonBlockingToolApproval?: boolean
@@ -828,6 +831,9 @@ export interface WorkflowSettingsPayload {
   maxSubtaskSpawns?: number
   enableFixVerifyLoop?: boolean
   maxFixVerifyRounds?: number
+  maxInCardLintFixes?: number
+  maxLintFanoutCards?: number
+  lintFanoutThreshold?: number
   requireToolApproval?: boolean
   toolApprovalTools?: string[]
   nonBlockingToolApproval?: boolean
@@ -1050,6 +1056,9 @@ export const DEFAULT_WORKFLOW_SETTINGS: WorkflowSettings = {
   maxSubtaskSpawns: 8,
   enableFixVerifyLoop: false,
   maxFixVerifyRounds: 3,
+  maxInCardLintFixes: 5,
+  maxLintFanoutCards: 8,
+  lintFanoutThreshold: 6,
   requireToolApproval: false,
   toolApprovalTools: ['write_file', 'run_command', 'delete_file'],
   nonBlockingToolApproval: true,

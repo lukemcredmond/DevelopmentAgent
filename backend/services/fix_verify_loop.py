@@ -7,6 +7,7 @@ from typing import Any, Dict
 
 from backend.agents.task_context import find_task_by_id, record_task_decision
 from backend.services.command_result import format_command_result_for_agent, run_workspace_command
+from backend.services.lint_fanout import format_budgeted_problems, maybe_fanout_lint_diagnostics
 from backend.services.logs import add_system_log
 from backend.services.step_diagnostics import log_event
 from backend.services.workflow_settings import get_workflow_settings
@@ -30,6 +31,7 @@ def run_fix_verify_loop(
         return agent.execute_step(user_prompt, max_iterations=max_iterations)
 
     max_rounds = max(1, int(ws.get("maxFixVerifyRounds", 3)))
+    max_keep = max(0, int(ws.get("maxInCardLintFixes", 5)))
     task_id = str(task.get("id") or "")
     prompt = user_prompt
     last_result = ""
@@ -78,23 +80,45 @@ def run_fix_verify_loop(
             log_event("fix_verify_done", f"clean after round {round_num}")
             return last_result
 
+        # Hybrid: fan out leftovers when over threshold; re-prompt only the in-card budget.
+        fanout_task = board_task or task
+        fanout = maybe_fanout_lint_diagnostics(
+            fanout_task,
+            cmd_result.diagnostics,
+        )
+        kept = fanout.get("kept") or []
+
         if round_num >= max_rounds:
             record_task_decision(
                 task_id,
                 "Developer",
                 "fix_verify",
-                f"Lint still has {len(cmd_result.diagnostics)} issue(s) after {max_rounds} rounds",
+                f"Lint still has {finding_count} issue(s) after {max_rounds} rounds "
+                f"(in-card budget {len(kept)}; spawned {len(fanout.get('spawned') or [])})",
                 detail=cmd_result.summary,
             )
             log_event("fix_verify_done", f"findings remain after {max_rounds} rounds")
             break
 
-        problems = format_command_result_for_agent(cmd_result)
+        budgeted = format_budgeted_problems(kept or cmd_result.diagnostics, max_keep=max_keep)
+        if not budgeted:
+            # Fall back to trimmed agent format if budget empty
+            budgeted = format_command_result_for_agent(cmd_result)
+        spawn_note = ""
+        spawned = fanout.get("spawned") or []
+        if spawned:
+            spawn_note = (
+                f"\nLeftover project lint was split into related Backlog card(s): "
+                f"{', '.join(spawned)}. Do not chase those on this card.\n"
+            )
         prompt = (
             f"{user_prompt}\n\n"
             f"=== FIX-VERIFY ROUND {round_num}/{max_rounds} ===\n"
-            "Lint still reports issues. Fix every file:line below before continuing.\n\n"
-            f"{problems}"
+            f"Lint still reports issues. Fix only the listed in-card budget "
+            f"(at most {max_keep} highest-severity findings relevant to this card's AC). "
+            "Do not clear the whole project on this card.\n"
+            f"{spawn_note}\n"
+            f"{budgeted}"
         )
 
     return last_result

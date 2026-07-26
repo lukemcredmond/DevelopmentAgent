@@ -209,7 +209,9 @@ def retry_agent_step(
         )
         user_prompt = (
             f"{base_prompt}\n\n=== RETRY CONTEXT ===\n{failure_context[:2500]}\n"
-            "Fix all listed lint issues, then verify with the project lint command."
+            "Fix only the in-card lint budget (highest-severity findings relevant to this "
+            "card's AC), then verify with the project lint command. Do not clear the whole "
+            "project on this card — leftover lint is split to related Backlog cards."
         )
     else:
         user_prompt = base_prompt

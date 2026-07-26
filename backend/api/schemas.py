@@ -129,6 +129,9 @@ class WorkflowSettingsPayload(BaseModel):
     maxSubtaskSpawns: Optional[int] = None
     enableFixVerifyLoop: Optional[bool] = None
     maxFixVerifyRounds: Optional[int] = None
+    maxInCardLintFixes: Optional[int] = None
+    maxLintFanoutCards: Optional[int] = None
+    lintFanoutThreshold: Optional[int] = None
     requireToolApproval: Optional[bool] = None
     toolApprovalTools: Optional[List[str]] = None
     nonBlockingToolApproval: Optional[bool] = None

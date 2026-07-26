@@ -2156,6 +2156,7 @@ def _run_developer_step(active_task: Dict[str, Any], brief: str) -> None:
         target = _dev_complete_lane()
         lint_cmd = derive_project_lint_command()
         lint_hint = f" (e.g. '{lint_cmd}')" if lint_cmd else ""
+        max_in_card = int(get_workflow_settings().get("maxInCardLintFixes", 5))
         instructions = (
             "Registered tools: read_file, write_file, apply_patch, run_command, update_board, "
             "grep, glob_file_search, git_status, git_diff, git_commit, search_code. "
@@ -2167,8 +2168,10 @@ def _run_developer_step(active_task: Dict[str, Any], brief: str) -> None:
             "Read each tool result before calling update_board — if write_file or apply_patch fails, "
             "try a different path or approach (do not repeat the same failing arguments). "
             f"Use run_command with the project lint command{lint_hint}. "
-            "Findings are expected — fix each file:line listed in the Problems section, "
-            "don't treat lint output as a tool failure. "
+            "Findings are expected — don't treat lint output as a tool failure. "
+            f"Fix at most {max_in_card} highest-severity findings relevant to this card's AC "
+            "(in-card lint budget). Do not clear the whole project on this card — "
+            "leftover project lint is split into related Backlog cards automatically. "
             "Fix syntax/parse errors before logic changes. "
             "After edits, run the lint command once to verify. "
             "Do NOT re-run the same lint command without fixing code first. "
@@ -2264,6 +2267,16 @@ def _run_developer_step(active_task: Dict[str, Any], brief: str) -> None:
                                 f"'{fresh.get('title', task_id)}' finished with no files written — "
                                 "staying In Progress",
                             )
+            # Hybrid lint fan-out when fix-verify is off or leftovers remain after the step.
+            fresh_for_lint = find_task_by_id(task_id) or task
+            diags = fresh_for_lint.get("lastCommandDiagnostics") or []
+            if isinstance(diags, list) and diags:
+                try:
+                    from backend.services.lint_fanout import maybe_fanout_lint_diagnostics
+
+                    maybe_fanout_lint_diagnostics(fresh_for_lint, diags, step_marker=step_started)
+                except Exception:
+                    pass
             _log_sprint_step_outcome("Developer", task_id, task.get("title", task_id), lane_before, result)
             _audit_dev_files_written(find_task_by_id(task_id) or task, lane_before, task_id)
             _audit_dev_verification(find_task_by_id(task_id) or task, lane_before, task_id, step_started)

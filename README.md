@@ -335,6 +335,9 @@ Persisted per project. Update via sidebar **Workflow** or `POST /api/workflow/se
 | allowChainedCommands | **On** | Allow `&&` / `;` chained shell commands. Always visible under Settings → Workflow (not gated by tool approval). Redirects (`\| > <`) remain blocked. |
 | enableFixVerifyLoop | Off | Auto retry lint/fix loop after Dev step |
 | maxFixVerifyRounds | 3 | Max fix-verify iterations |
+| maxInCardLintFixes | 5 | Max lint findings to fix on the current feature card |
+| lintFanoutThreshold | 6 | When analyze findings ≥ this, fan leftovers to related Backlog cards |
+| maxLintFanoutCards | 8 | Max related lint follow-up cards spawned per fan-out (grouped by file) |
 | agentTools | `{}` | Opt-in per-agent tool allowlists; empty role → built-in defaults |
 | agentToolsAllowWritesInRefinement | Off | Keep write/run/git_commit available during refinement |
 | customTools | `[]` | Project-scoped user tools (shell / http / sql). Merged with **global** tools from `~/.allhands` (`global_custom_tools`); same name → project wins. Edit in **Tools → Custom tools**. |

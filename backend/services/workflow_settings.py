@@ -19,6 +19,10 @@ DEFAULT_WORKFLOW_SETTINGS: Dict[str, Any] = {
     "maxSubtaskSpawns": 8,
     "enableFixVerifyLoop": False,
     "maxFixVerifyRounds": 3,
+    # Hybrid lint fan-out: keep a small in-card budget; spawn related Backlog cards for the rest.
+    "maxInCardLintFixes": 5,
+    "maxLintFanoutCards": 8,
+    "lintFanoutThreshold": 6,
     "toolApprovalTools": ["write_file", "run_command", "delete_file"],
     "nonBlockingToolApproval": True,
     "commandAutoRunMode": "off",
