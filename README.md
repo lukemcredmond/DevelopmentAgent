@@ -311,7 +311,9 @@ Persisted per project. Update via sidebar **Workflow** or `POST /api/workflow/se
 | maxSprintSteps | 20 | Cap for Auto Sprint and Plan & Run |
 | maxLlmIterationsPerStep | 8 | Tool-call loop limit per agent turn |
 | maxPoRoundTrips | 3 | PO clarification rounds per card |
-| maxStuckSteps | 3 | Escalate when card does not move (Settings → Workflow) |
+| maxStuckSteps | 3 | Escalate when card does not move (`stuckLoops` → Needs PO; Settings → Workflow) |
+| maxAgentStepDurationSec | 2700 | Wall-clock cap per agent tool loop (45 min). Ends with `Timed out:…` |
+| enableBlockedLane | On | Auto-move unmet `blockedBy` cards into **Blocked** (healthy wait); sprint never claims them |
 | enableBackupModelOnStuck | On | Use per-agent backup model for the next N stuck steps (Settings → Models) |
 | backupModelStuckSteps | 2 | How many steps to run on the backup model before reverting to primary |
 | maxToolFailuresPerStep | 5 | Stop agent loop after N tool failures (Settings → Workflow) |
@@ -435,7 +437,16 @@ Custom tools appear in the agent’s Ollama `tools` list. If an allowlist is set
 
 **Always visible:** Features (Epics) → Backlog → In Progress → Needs PO → Needs User → QA → Done
 
-**Conditional:** Pending Approval, Code Review, Refinement
+**Conditional:** Pending Approval, Code Review, Refinement, **Blocked** (when `enableBlockedLane` is on — default)
+
+#### Blocked vs agent loop stop vs stuck loops
+
+| Term | Meaning | Board / UX |
+|------|---------|------------|
+| **Blocked (lane)** | Healthy wait: `blockedBy` not all Done | Auto move into **Blocked**; auto release when deps Done. Sprint does not claim these cards. |
+| **Agent loop stop** | Same tool+args repeated, max tool failures, max LLM iterations, or **max step duration** | Card stays In Progress; result = clear `Stopped:…` / `Timed out:…` |
+| **Stuck loops** | Sprint steps with **no lane move** (`stuckLoops`) | Escalate after `maxStuckSteps` → Needs PO |
+| **Deadlock** | Cycle / all-missing blockers | Needs User |
 
 ```mermaid
 flowchart TB
@@ -449,6 +460,8 @@ flowchart TB
     Children -->|auto default| Backlog[Backlog]
     Children -->|approval ON| Pending[Pending Approval]
     Pending -->|user approves| Backlog
+    Backlog -->|deps unmet| BlockedLane[Blocked]
+    BlockedLane -->|deps Done| Backlog
     Backlog -->|priority + deps met| Dev[In Progress]
     Dev -->|complete| CRgate{Code Review ON?}
     CRgate -->|yes| CR[Code Review]

@@ -121,7 +121,15 @@ def move_board_stage(task_id: str, target_lane: str) -> str:
         )
         save_current_project_state()
         publish_board_update(task_id, target_lane, source="move")
-        return f"Successfully moved task {task_id} to '{target_lane}'."
+        moved_to_done = target_lane == "Done"
+    if moved_to_done or target_lane in ("Backlog", "Refinement", "Pending Approval", "Blocked"):
+        try:
+            from backend.services.blocked_lane import sync_blocked_lane
+
+            sync_blocked_lane(persist=True)
+        except Exception:
+            pass
+    return f"Successfully moved task {task_id} to '{target_lane}'."
 
 
 def claim_ready_backlog_tasks(limit: int = 5) -> List[str]:
@@ -423,4 +431,12 @@ def append_backlog_tasks(
             )
         if not parts:
             return "No tasks added."
-        return " ".join(parts) if len(parts) == 1 else "\n".join(parts)
+        result_msg = " ".join(parts) if len(parts) == 1 else "\n".join(parts)
+
+    try:
+        from backend.services.blocked_lane import sync_blocked_lane
+
+        sync_blocked_lane(persist=True)
+    except Exception:
+        pass
+    return result_msg

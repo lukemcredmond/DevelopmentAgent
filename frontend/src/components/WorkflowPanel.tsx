@@ -212,6 +212,14 @@ export default function WorkflowPanel({
         />
         Require backlog refinement before dev
       </label>
+      <label className="flex items-center gap-2 text-[11px] text-cat-subtext cursor-pointer">
+        <input
+          type="checkbox"
+          checked={settings.enableBlockedLane !== false}
+          onChange={(e) => onSettingsChange({ enableBlockedLane: e.target.checked })}
+        />
+        Auto Blocked lane (move cards waiting on deps)
+      </label>
       {(settings.requireBacklogRefinement ?? false) && (
         <label className="flex items-center gap-2 text-[11px] text-cat-subtext pl-5 cursor-pointer">
           <input
@@ -1022,6 +1030,16 @@ export default function WorkflowPanel({
             min={1}
             max={20}
             onCommit={(maxStuckSteps) => onSettingsChange({ maxStuckSteps })}
+            className="w-full bg-cat-base border border-cat-surface1 rounded p-1 text-white"
+          />
+        </label>
+        <label>
+          <span className="text-[10px] text-cat-overlay block">Max agent step duration (sec)</span>
+          <NumberSettingInput
+            value={settings.maxAgentStepDurationSec ?? 2700}
+            min={60}
+            max={28800}
+            onCommit={(maxAgentStepDurationSec) => onSettingsChange({ maxAgentStepDurationSec })}
             className="w-full bg-cat-base border border-cat-surface1 rounded p-1 text-white"
           />
         </label>

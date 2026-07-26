@@ -12,6 +12,7 @@ _LANE_ORDER = (
     "Pending Approval",
     "Backlog",
     "Refinement",
+    "Blocked",
     "In Progress",
     "Needs PO",
     "Needs User",
@@ -35,7 +36,7 @@ _ALWAYS = frozenset(
 )
 
 # Include when the lane exists on the board (even empty) or has cards
-_WHEN_PRESENT = frozenset({"Pending Approval", "Code Review"})
+_WHEN_PRESENT = frozenset({"Pending Approval", "Code Review", "Blocked"})
 
 
 def _lane_counts(board: Optional[Dict[str, Any]] = None) -> Dict[str, int]:

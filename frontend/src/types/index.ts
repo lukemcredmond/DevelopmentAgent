@@ -5,6 +5,7 @@ export type BoardLane =
   | 'Backlog'
   | 'Pending Approval'
   | 'Refinement'
+  | 'Blocked'
   | 'In Progress'
   | 'Needs PO'
   | 'Needs User'
@@ -348,6 +349,10 @@ export interface WorkflowSettings {
   maxLlmIterationsPerStep: number
   maxPoRoundTrips: number
   maxStuckSteps?: number
+  /** Wall-clock seconds for one agent tool loop (default 2700 = 45 min). */
+  maxAgentStepDurationSec?: number
+  /** Auto-move unmet blockedBy cards into Blocked lane (default true). */
+  enableBlockedLane?: boolean
   maxToolFailuresPerStep?: number
   autoStartSprint?: boolean
   autonomousMode?: boolean
@@ -864,6 +869,8 @@ export interface WorkflowSettingsPayload {
   maxLlmIterationsPerStep?: number
   maxPoRoundTrips?: number
   maxStuckSteps?: number
+  maxAgentStepDurationSec?: number
+  enableBlockedLane?: boolean
   maxToolFailuresPerStep?: number
   autoStartSprint?: boolean
   autonomousMode?: boolean
@@ -1093,6 +1100,8 @@ export const DEFAULT_WORKFLOW_SETTINGS: WorkflowSettings = {
   maxLlmIterationsPerStep: 8,
   maxPoRoundTrips: 3,
   maxStuckSteps: 3,
+  maxAgentStepDurationSec: 2700,
+  enableBlockedLane: true,
   maxToolFailuresPerStep: 5,
   autoStartSprint: true,
   autonomousMode: false,
@@ -1129,6 +1138,7 @@ export const DEFAULT_WORKFLOW_SETTINGS: WorkflowSettings = {
 export const EMPTY_BOARD: Board = {
   Features: [],
   Backlog: [],
+  Blocked: [],
   'In Progress': [],
   'Needs PO': [],
   'Needs User': [],
@@ -1179,6 +1189,7 @@ export function getDisplayLanes(
   const lanes: BoardLane[] = ['Features', 'Backlog']
   if (settings?.requireBacklogApproval) lanes.push('Pending Approval')
   if (settings?.requireBacklogRefinement) lanes.push('Refinement')
+  if (settings?.enableBlockedLane !== false) lanes.push('Blocked')
   lanes.push('In Progress', 'Needs PO', 'Needs User')
   if (settings?.requireCodeReview) lanes.push('Code Review')
   lanes.push('QA', 'Done')

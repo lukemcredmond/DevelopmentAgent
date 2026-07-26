@@ -11,6 +11,7 @@ BASE_LANES = [
     FEATURES_LANE,
     "Backlog",
     "Refinement",
+    "Blocked",
     "In Progress",
     "Needs PO",
     "Needs User",
@@ -28,6 +29,8 @@ def normalize_board_lanes(board: Dict[str, Any]) -> Dict[str, Any]:
         board["Needs User"] = []
     if "Needs PO" not in board:
         board["Needs PO"] = []
+    if "Blocked" not in board:
+        board["Blocked"] = []
 
     settings = get_workflow_settings()
     if settings.get("requireBacklogApproval"):

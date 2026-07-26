@@ -147,6 +147,11 @@ class StepDiagnosticsTracker:
                 "Check Model tab iteration 2+ or attach this JSON."
             ),
             "max_iterations": "Agent hit max LLM iterations without finishing edits.",
+            "step_timeout": (
+                "Agent step exceeded maxAgentStepDurationSec — stopped to avoid an unbounded loop. "
+                "Resume with Sprint step or chat."
+            ),
+            "duplicate_tool": "Same tool + identical args repeated — agent loop stop.",
             "tool_failure_stop": "Tool failures exceeded the step limit.",
             "ollama_fallback": "Ollama was unavailable during the step.",
             "completed_text_only": (
@@ -734,7 +739,12 @@ def derive_exit_reason(
         return "interrupted"
     if agent_result == "SIMULATION_FALLBACK":
         return "ollama_fallback"
+    if agent_result and agent_result.startswith("Timed out:"):
+        return "step_timeout"
     if agent_result and agent_result.startswith("Stopped:"):
+        lower = agent_result.lower()
+        if "identical arguments" in lower or "same arguments" in lower:
+            return "duplicate_tool"
         return "tool_failure_stop"
     if agent_result and agent_result.startswith("Max tool iterations"):
         return "max_iterations"

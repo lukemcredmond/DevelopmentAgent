@@ -240,7 +240,12 @@ export default function ChatPanel({
         onMessagesChange((prev) =>
           prev.map((m) =>
             m.id === assistantId
-              ? { ...m, content: m.content ? `${m.content}\n(Stopped)` : '(Stopped)' }
+              ? {
+                  ...m,
+                  content: m.content
+                    ? `${m.content}\n(Stopped — request cancelled)`
+                    : '(Stopped — request cancelled)',
+                }
               : m,
           ),
         )

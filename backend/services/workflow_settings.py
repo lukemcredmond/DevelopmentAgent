@@ -57,6 +57,10 @@ DEFAULT_WORKFLOW_SETTINGS: Dict[str, Any] = {
     "maxLlmIterationsPerStep": 8,
     "maxPoRoundTrips": 3,
     "maxStuckSteps": 3,
+    # Wall-clock cap for one agent tool loop (LLM+tools). Default 45 minutes.
+    "maxAgentStepDurationSec": 2700,
+    # Auto-move cards with unmet blockedBy into the Blocked lane (healthy wait).
+    "enableBlockedLane": True,
     "maxToolFailuresPerStep": 5,
     "autoStartSprint": True,
     "autonomousMode": False,
@@ -167,6 +171,8 @@ def get_active_lanes(settings: Dict[str, Any] | None = None) -> List[str]:
         lanes.append("Pending Approval")
     if ws.get("requireBacklogRefinement"):
         lanes.append("Refinement")
+    if ws.get("enableBlockedLane", True):
+        lanes.append("Blocked")
     lanes.extend(["In Progress", "Needs PO", "Needs User"])
     if ws.get("requireCodeReview"):
         lanes.append("Code Review")

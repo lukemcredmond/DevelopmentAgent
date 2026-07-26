@@ -265,6 +265,16 @@ def _outcome_why_card_stayed(
         return (
             f"Agent hit the LLM iteration limit on '{title}' without writing edits. {base}"
         )
+    if stop_reason == "step_timeout":
+        return (
+            f"Agent step hit the wall-clock duration limit on '{title}' and stopped "
+            f"to avoid an unbounded loop. {base}"
+        )
+    if stop_reason == "duplicate_tool":
+        return (
+            f"Agent repeated the same tool call on '{title}' and stopped (agent loop stop). "
+            f"{base}"
+        )
     if stop_reason == "completed_text_only":
         return (
             f"Developer returned text-only on '{title}' without apply_patch/write_file. {base}"
@@ -332,7 +342,11 @@ def _build_last_step_outcome(
         if agent_result == "SIMULATION_FALLBACK":
             ok = False
             message = f"Ollama unavailable — simulation fallback on '{title}'."
-        elif agent_result.startswith("Stopped:") or agent_result.startswith("Max tool iterations"):
+        elif (
+            agent_result.startswith("Stopped:")
+            or agent_result.startswith("Max tool iterations")
+            or agent_result.startswith("Timed out:")
+        ):
             ok = False
             message = f"{agent_result[:200]}"
     if tool_failures > 0:
@@ -365,6 +379,7 @@ def _build_last_step_outcome(
         "ok": ok,
         "message": message,
         "stopReason": stop_reason,
+        "exitReason": stop_reason,
         "planRejections": plan_rejections,
         "textRejections": text_rejections,
         "toolsUsed": tools_used,
@@ -2584,11 +2599,15 @@ def _escalate_dependency_deadlock(task: Dict[str, Any], issues: Dict[str, Any]) 
 
 
 def _try_claim_dependency_unblocker() -> tuple[Optional[str], Optional[Dict[str, Any]]]:
-    """Prefer working a dependency of a blocked Backlog parent (unblockers first)."""
+    """Prefer working a dependency of a blocked parent (unblockers first)."""
     sort_backlog()
-    blocked_parents = [
-        t for t in state.SHARED_BOARD.get("Backlog", []) if not task_dependencies_met(t)
-    ]
+    blocked_parents = []
+    for lane in ("Blocked", "Backlog", "Refinement", "Pending Approval"):
+        blocked_parents.extend(
+            t
+            for t in state.SHARED_BOARD.get(lane, [])
+            if isinstance(t, dict) and not task_dependencies_met(t)
+        )
     for parent in blocked_parents:
         normalize_task(parent)
         issues = detect_blocked_by_issues(parent)
@@ -2636,45 +2655,63 @@ def _try_backlog_handler() -> tuple[Optional[str], Optional[Dict[str, Any]]]:
 
     Never returns handler \"blocked\" — that used to short-circuit other lanes.
     """
-    if not state.SHARED_BOARD.get("Backlog"):
-        return None, None
-    task = next_claimable_backlog_task()
-    if task:
-        move_board_stage(task["id"], "In Progress")
-        record_task_decision(task["id"], "Developer", "claim", "Claimed from Backlog")
-        claimed = find_task_by_id(task["id"]) or task
-        return "dev", dict(claimed)
-    po_plan = next_po_planning_backlog_task()
-    if po_plan:
-        move_board_stage(po_plan["id"], "Needs PO")
-        record_task_decision(
-            po_plan["id"],
-            "Product Owner",
-            "escalation",
-            "Planning card routed to PO",
-        )
-        return "po", dict(find_task_by_id(po_plan["id"]) or po_plan)
+    if state.SHARED_BOARD.get("Backlog"):
+        task = next_claimable_backlog_task()
+        if task:
+            move_board_stage(task["id"], "In Progress")
+            record_task_decision(task["id"], "Developer", "claim", "Claimed from Backlog")
+            claimed = find_task_by_id(task["id"]) or task
+            return "dev", dict(claimed)
+        po_plan = next_po_planning_backlog_task()
+        if po_plan:
+            move_board_stage(po_plan["id"], "Needs PO")
+            record_task_decision(
+                po_plan["id"],
+                "Product Owner",
+                "escalation",
+                "Planning card routed to PO",
+            )
+            return "po", dict(find_task_by_id(po_plan["id"]) or po_plan)
 
     unblocker = _try_claim_dependency_unblocker()
     if unblocker[0] is not None:
         return unblocker
 
     # Escalate any remaining cycle / all-missing parents.
-    for parent in list(state.SHARED_BOARD.get("Backlog", [])):
-        if task_dependencies_met(parent):
-            continue
-        issues = detect_blocked_by_issues(parent)
-        if issues.get("cycle") or (
-            issues.get("missing")
-            and not any(find_task_by_id(str(d)) for d in (parent.get("blockedBy") or []))
-        ):
-            _escalate_dependency_deadlock(parent, issues)
+    for lane in ("Blocked", "Backlog"):
+        for parent in list(state.SHARED_BOARD.get(lane, [])):
+            if task_dependencies_met(parent):
+                continue
+            issues = detect_blocked_by_issues(parent)
+            if issues.get("cycle") or (
+                issues.get("missing")
+                and not any(find_task_by_id(str(d)) for d in (parent.get("blockedBy") or []))
+            ):
+                _escalate_dependency_deadlock(parent, issues)
 
     return None, None
 
 
 def _log_idle_dependency_status() -> None:
-    """Richer diagnostic when sprint is idle but Backlog still has blocked cards."""
+    """Richer diagnostic when sprint is idle but cards wait on dependencies."""
+    blocked_lane = [
+        t for t in state.SHARED_BOARD.get("Blocked", []) if isinstance(t, dict)
+    ]
+    if blocked_lane:
+        add_system_log(
+            "System",
+            "info",
+            f"{len(blocked_lane)} card(s) in Blocked waiting on deps.",
+        )
+        t = blocked_lane[0]
+        normalize_task(t)
+        status = format_dependency_block_status(t)
+        add_system_log(
+            "System",
+            "info",
+            f"Blocked — waiting on dependencies for {t.get('id')}: {status}",
+        )
+        return
     blocked = [t for t in state.SHARED_BOARD.get("Backlog", []) if not task_dependencies_met(t)]
     if not blocked:
         return
@@ -2705,21 +2742,22 @@ def has_sprint_work() -> bool:
             return True
     # A blocked parent with a claimable dependency is still actionable.
     sort_backlog()
-    for parent in board.get("Backlog", []):
-        if task_dependencies_met(parent):
-            continue
-        for dep in parent.get("blockedBy") or []:
-            dep_id = str(dep)
-            dep_task = find_task_by_id(dep_id)
-            if not dep_task:
+    for lane in ("Blocked", "Backlog"):
+        for parent in board.get(lane, []):
+            if task_dependencies_met(parent):
                 continue
-            lane = get_task_lane(dep_id) or ""
-            if lane == "Backlog" and is_backlog_claimable(dep_task):
-                return True
-            if lane == "Refinement" and (
-                is_refinement_claimable(dep_task) or dep_task.get("workType") == "spike"
-            ):
-                return True
+            for dep in parent.get("blockedBy") or []:
+                dep_id = str(dep)
+                dep_task = find_task_by_id(dep_id)
+                if not dep_task:
+                    continue
+                dep_lane = get_task_lane(dep_id) or ""
+                if dep_lane == "Backlog" and is_backlog_claimable(dep_task):
+                    return True
+                if dep_lane == "Refinement" and (
+                    is_refinement_claimable(dep_task) or dep_task.get("workType") == "spike"
+                ):
+                    return True
     return False
 
 
@@ -2729,6 +2767,13 @@ def run_sprint_step(brief: str, ollama_url: str) -> None:
     agent_po.ollama_url = ollama_url
     agent_qa.ollama_url = ollama_url
     agent_cr.ollama_url = ollama_url
+
+    try:
+        from backend.services.blocked_lane import sync_blocked_lane
+
+        sync_blocked_lane(persist=True)
+    except Exception:
+        pass
 
     single_step = _prepare_single_step_progress()
     if single_step:

@@ -424,7 +424,18 @@ class ScrumAgent:
         return None
 
     def _log_step_exit(self, message: str, log_type: str = "warning") -> None:
-        add_system_log(self.role, log_type, message)
+        # Agent loop stop: duplicate tools, max failures, max iterations, or step duration.
+        if message.startswith(("Stopped:", "Timed out:", "Max tool iterations")):
+            add_system_log(self.role, log_type, f"Agent loop stop: {message}")
+        else:
+            add_system_log(self.role, log_type, message)
+
+    def _step_timeout_message(self, max_duration_sec: int) -> str:
+        mins = max(1, int(round(max_duration_sec / 60)))
+        return (
+            f"Timed out: agent step exceeded {mins} min — stopping to avoid an unbounded loop. "
+            "Resume with Sprint step or chat."
+        )
 
     def _publish_work_progress(
         self,
@@ -880,6 +891,10 @@ class ScrumAgent:
             )
         self._last_memories_used = []
         self._decisions_in_prompt = 0
+        ws = get_workflow_settings()
+        max_tool_failures = int(ws.get("maxToolFailuresPerStep", 5))
+        max_duration_sec = int(ws.get("maxAgentStepDurationSec", 2700) or 2700)
+        step_started_mono = time.monotonic()
         messages: List[ChatMessage] = [
             {"role": "system", "content": self._build_system_content()},
             {"role": "user", "content": self._build_user_content(user_prompt)},
@@ -889,8 +904,6 @@ class ScrumAgent:
         successful_tool_keys: List[Tuple[str, str]] = []
         total_failures: List[int] = [0]
         tools_used: set[str] = set()
-        ws = get_workflow_settings()
-        max_tool_failures = int(ws.get("maxToolFailuresPerStep", 5))
         task_id = state.ACTIVE_SPRINT_TASK_ID
         if task_id:
             active_task = find_task_by_id(task_id)
@@ -908,6 +921,14 @@ class ScrumAgent:
 
         try:
             for iteration in range(1, max_iterations + 1):
+                elapsed = time.monotonic() - step_started_mono
+                if max_duration_sec > 0 and elapsed >= max_duration_sec:
+                    stop_msg = self._step_timeout_message(max_duration_sec)
+                    add_system_log(self.role, "warning", stop_msg)
+                    self._log_step_exit(stop_msg, "warning")
+                    log_event("step_timeout", stop_msg)
+                    finish_run(status="failed", error=stop_msg)
+                    return stop_msg
                 if task_id and is_task_done(task_id) and not state.ALLOW_DONE_RETRY:
                     stop_msg = "Stopped: task already Done"
                     add_system_log(self.role, "info", stop_msg)
