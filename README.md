@@ -938,7 +938,7 @@ Offline fine-tuning export (no in-app training): `GET /api/training/export?limit
 ## Known limitations
 
 - **Localhost only** — binds to `127.0.0.1`; no built-in authentication by default.
-- **Optional API token:** set `ALLHANDS_API_TOKEN` to require `Authorization: Bearer …` (or `X-AllHands-Token`) on `/api/*`. Frontend: `VITE_ALLHANDS_API_TOKEN` or `localStorage.allhandsApiToken`.
+- **Optional API token:** set `ALLHANDS_API_TOKEN` to require `Authorization: Bearer …` (or `X-AllHands-Token`) on `/api/*` (health probes like `/api/ollama/health` stay open). Frontend: Settings → Models → Localhost API token, or `VITE_ALLHANDS_API_TOKEN` / `localStorage.allhandsApiToken`.
 - **Discord secrets via env (preferred):** `ALLHANDS_DISCORD_BOT_TOKEN`, `ALLHANDS_DISCORD_WEBHOOK_URL` override Workflow settings when set.
 - **Discord phone alerts** are outbound webhooks only (no inbound ports).
 - **Discord control bot** is Gateway-outbound on this PC; fixed slash commands only — no free-form agent chat, shell, or free-text model tags.

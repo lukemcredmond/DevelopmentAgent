@@ -4,7 +4,7 @@ from __future__ import annotations
 
 import os
 import secrets
-from typing import Callable, Optional
+from typing import Callable
 
 from starlette.middleware.base import BaseHTTPMiddleware
 from starlette.requests import Request
@@ -37,6 +37,15 @@ def resolve_discord_webhook_url(settings_url: str = "") -> str:
     return str(settings_url or "").strip()
 
 
+def is_public_api_path(path: str) -> bool:
+    """True for readiness probes that stay reachable without the API token."""
+    normalized = (path or "").rstrip("/") or "/"
+    if not normalized.startswith("/api/"):
+        return False
+    # /api/ollama/health and any /api/*/health
+    return normalized.endswith("/health")
+
+
 class AllHandsApiTokenMiddleware(BaseHTTPMiddleware):
     """When ALLHANDS_API_TOKEN is set, require Bearer or X-AllHands-Token on /api/*."""
 
@@ -49,6 +58,8 @@ class AllHandsApiTokenMiddleware(BaseHTTPMiddleware):
             return await call_next(request)
         # Allow CORS preflight
         if request.method == "OPTIONS":
+            return await call_next(request)
+        if is_public_api_path(path):
             return await call_next(request)
         provided = ""
         auth = request.headers.get("authorization") or ""

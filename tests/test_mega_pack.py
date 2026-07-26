@@ -94,7 +94,14 @@ def test_api_token_middleware_rejects(monkeypatch):
     async def ok(_request):
         return PlainTextResponse("ok")
 
-    app = Starlette(routes=[Route("/api/state", ok), Route("/", ok)])
+    app = Starlette(
+        routes=[
+            Route("/api/state", ok),
+            Route("/api/ollama/health", ok),
+            Route("/api/foo/health", ok),
+            Route("/", ok),
+        ]
+    )
     app.add_middleware(AllHandsApiTokenMiddleware)
     client = TestClient(app)
     assert client.get("/api/state").status_code == 401
@@ -103,6 +110,9 @@ def test_api_token_middleware_rejects(monkeypatch):
         == 200
     )
     assert client.get("/").status_code == 200
+    # Health probes stay open without a token
+    assert client.get("/api/ollama/health").status_code == 200
+    assert client.get("/api/foo/health").status_code == 200
 
 
 def test_mcp_probe_empty():
@@ -136,6 +146,11 @@ def test_ui_mega_pack_markers():
     assert "mcp-actions" in panel
     assert "Test MCP" in panel
     assert "requireAcChecklistForDone" in panel
+    settings = (root / "frontend" / "src" / "components" / "SettingsSlideOver.tsx").read_text(
+        encoding="utf-8"
+    )
+    assert "settings-api-token" in settings
+    assert "allhandsApiToken" in settings
     recovery = (root / "frontend" / "src" / "components" / "BoardRecoveryPanel.tsx").read_text(
         encoding="utf-8"
     )

@@ -116,6 +116,16 @@ export default function SettingsSlideOver({
   const [tab, setTab] = useState<SettingsTab>(initialTab)
   const [modelFocus, setModelFocus] = useState<'PO' | 'DEV' | 'CR' | 'QA'>('DEV')
   const [llmHealthStatus, setLlmHealthStatus] = useState<string | null>(null)
+  const [apiTokenInput, setApiTokenInput] = useState('')
+
+  useEffect(() => {
+    if (!open) return
+    try {
+      setApiTokenInput(localStorage.getItem('allhandsApiToken') || '')
+    } catch {
+      setApiTokenInput('')
+    }
+  }, [open])
 
   // Re-hydrate role model fields from server state when Settings opens / project changes.
   useEffect(() => {
@@ -349,6 +359,48 @@ export default function SettingsSlideOver({
                   className="w-full bg-cat-base border border-cat-surface1 rounded p-2 text-white font-mono focus:outline-none"
                 />
               </label>
+              <div className="space-y-1.5" data-testid="settings-api-token">
+                <label className="block">
+                  <span className="text-[10px] text-cat-subtext block mb-0.5">
+                    LOCALHOST API TOKEN
+                  </span>
+                  <input
+                    type="password"
+                    autoComplete="off"
+                    value={apiTokenInput}
+                    onChange={(e) => setApiTokenInput(e.target.value)}
+                    onBlur={() => {
+                      const v = apiTokenInput.trim()
+                      try {
+                        if (v) localStorage.setItem('allhandsApiToken', v)
+                        else localStorage.removeItem('allhandsApiToken')
+                      } catch {
+                        /* ignore */
+                      }
+                    }}
+                    placeholder="Only if ALLHANDS_API_TOKEN is set on the server"
+                    className="w-full bg-cat-base border border-cat-surface1 rounded p-2 text-white font-mono focus:outline-none"
+                  />
+                </label>
+                <p className="text-[10px] text-cat-overlay leading-relaxed">
+                  Stored in this browser only (not sent as a Workflow setting). Leave blank when the
+                  backend has no token. Or set <span className="font-mono">VITE_ALLHANDS_API_TOKEN</span>.
+                </p>
+                <button
+                  type="button"
+                  onClick={() => {
+                    setApiTokenInput('')
+                    try {
+                      localStorage.removeItem('allhandsApiToken')
+                    } catch {
+                      /* ignore */
+                    }
+                  }}
+                  className="text-[10px] text-cat-overlay hover:text-rose-300"
+                >
+                  Clear stored token
+                </button>
+              </div>
               <div className="space-y-3">
                 {(
                   [
