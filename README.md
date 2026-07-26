@@ -436,9 +436,11 @@ Optional **inbound-from-Discord** quick actions via the Discord Gateway (**outbo
 | `/ah-backup-dev` | Force-arm Dev backup for active In Progress card (optional `task_id`) |
 | `/ah-model` | Choice `fast` \| `quality` — applies preset to Dev primary (optional all roles) |
 | `/ah-feature` | Create **draft** Feature + backlog child; does **not** start a sprint |
-| `/ah-pending` | List Needs User cards + pending tool approvals |
+| `/ah-pending` | List Needs User cards + Pending Approval cards + pending tool approvals |
 | `/ah-answer` | Answer a Needs User card (`answer`, optional `task_id`, `target` = dev/refinement/po) |
-| `/ah-approve` | Approve or deny a pending tool approval (`decision`, optional `approval_id`) |
+| `/ah-approve` | `kind=tool` (default): approve/deny tool approval; `kind=card`: approve Pending Approval → Backlog |
+| `/ah-claim` | Claim ready backlog cards into In Progress (optional `limit`, default 3) |
+| `/ah-extend` | Extend Dev step iterations for In Progress / recovery card (optional `task_id`, `extra`) |
 
 **Remote unblock:** Phone alerts for Needs User / tool approval can be acted on from Discord via `/ah-pending` + `/ah-answer` / `/ah-approve` — no desktop UI required for those paths.
 
@@ -935,11 +937,14 @@ Offline fine-tuning export (no in-app training): `GET /api/training/export?limit
 
 ## Known limitations
 
-- **Localhost only** — binds to `127.0.0.1`; no built-in authentication.
+- **Localhost only** — binds to `127.0.0.1`; no built-in authentication by default.
+- **Optional API token:** set `ALLHANDS_API_TOKEN` to require `Authorization: Bearer …` (or `X-AllHands-Token`) on `/api/*`. Frontend: `VITE_ALLHANDS_API_TOKEN` or `localStorage.allhandsApiToken`.
+- **Discord secrets via env (preferred):** `ALLHANDS_DISCORD_BOT_TOKEN`, `ALLHANDS_DISCORD_WEBHOOK_URL` override Workflow settings when set.
 - **Discord phone alerts** are outbound webhooks only (no inbound ports).
 - **Discord control bot** is Gateway-outbound on this PC; fixed slash commands only — no free-form agent chat, shell, or free-text model tags.
 - **Training** — `GET /api/training/export` JSONL only; no in-app LoRA / SFT.
-- Acceptance criteria on cards are **not auto-scored**; agents and humans still decide Done.
+- Acceptance criteria use an **AC checklist gate** before Done when `requireAcChecklistForDone` is on (default); they are not auto-scored by the model.
+- **Retrieval feedback:** when semantic hits look weak, Task detail shows a “Semantic context may be noisy” banner with **Raise min score** (+0.05) and **Re-index**.
 - Offline / simulation fallbacks may apply when Ollama is unavailable (see Offline mode).
 
 ### Discord ops checklist

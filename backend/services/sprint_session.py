@@ -143,6 +143,13 @@ def get_recovery_context() -> Optional[Dict[str, Any]]:
 
 
 def _build_recovery_from_session(session: Dict[str, Any]) -> Dict[str, Any]:
+    mode = str(session.get("sprintMode") or "single_step")
+    if mode == "auto":
+        suggested = "Resume auto-sprint"
+    elif mode == "in_progress":
+        suggested = "Resume In Progress step on this card"
+    else:
+        suggested = "Resume step on this card"
     return {
         "interrupted": True,
         "taskId": session.get("taskId", ""),
@@ -151,7 +158,8 @@ def _build_recovery_from_session(session: Dict[str, Any]) -> Dict[str, Any]:
         "agent": session.get("agent", ""),
         "diagnosticsFile": session.get("diagnosticsFile", ""),
         "lastEvent": session.get("lastEvent", ""),
-        "suggestedAction": "Run In Progress on this card",
+        "sprintMode": mode,
+        "suggestedAction": suggested,
     }
 
 

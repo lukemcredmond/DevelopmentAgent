@@ -3,7 +3,9 @@ import {
   checkQdrantHealth,
   exportTrainingJsonl,
   fetchIndexStatus,
+  probeMcpServers,
   reindexCodebase,
+  reloadMcpServers,
   testPhoneNotify,
 } from '../api/client'
 import AgentToolsPanel from './AgentToolsPanel'
@@ -74,6 +76,11 @@ export default function WorkflowPanel({
   const [trainingExportLimit, setTrainingExportLimit] = useState(50)
   const [trainingExportStatus, setTrainingExportStatus] = useState<string | null>(null)
   const [trainingExporting, setTrainingExporting] = useState(false)
+  const [workflowTab, setWorkflowTab] = useState<
+    'gates' | 'autonomy' | 'rag' | 'tools' | 'discord'
+  >('gates')
+  const [mcpProbeStatus, setMcpProbeStatus] = useState<string | null>(null)
+  const [mcpBusy, setMcpBusy] = useState(false)
 
 
   useEffect(() => {
@@ -245,6 +252,32 @@ export default function WorkflowPanel({
         </span>
       </div>
 
+      <div className="flex flex-wrap gap-1" data-testid="workflow-tabs">
+        {(
+          [
+            ['gates', 'Gates'],
+            ['autonomy', 'Autonomy'],
+            ['rag', 'RAG / Memory'],
+            ['tools', 'Tools / MCP'],
+            ['discord', 'Phone / Discord'],
+          ] as const
+        ).map(([id, label]) => (
+          <button
+            key={id}
+            type="button"
+            onClick={() => setWorkflowTab(id)}
+            className={`text-[10px] px-2 py-0.5 rounded border ${
+              workflowTab === id
+                ? 'border-indigo-500/50 text-indigo-200 bg-indigo-950/40'
+                : 'border-cat-surface1 text-cat-subtext hover:bg-cat-base'
+            }`}
+          >
+            {label}
+          </button>
+        ))}
+      </div>
+
+      {(workflowTab === 'autonomy') && (
       <div className="border border-indigo-500/20 bg-indigo-950/20 rounded-lg p-2 space-y-2">
         <p className="text-[10px] font-bold uppercase tracking-wider text-indigo-200">
           LLM context / speed
@@ -276,7 +309,10 @@ export default function WorkflowPanel({
           />
         </label>
       </div>
+      )}
 
+      {(workflowTab === 'gates') && (
+      <>
       <label className="flex items-center gap-2 text-[11px] text-cat-subtext cursor-pointer">
         <input
           type="checkbox"
@@ -376,6 +412,17 @@ export default function WorkflowPanel({
         />
         Require clean lint before dev/QA advance (Cursor-like)
       </label>
+      <label className="flex items-center gap-2 text-[11px] text-cat-subtext cursor-pointer">
+        <input
+          type="checkbox"
+          checked={settings.requireAcChecklistForDone ?? true}
+          onChange={(e) => onSettingsChange({ requireAcChecklistForDone: e.target.checked })}
+        />
+        Require AC checklist before Done
+      </label>
+      <p className="text-[10px] text-cat-overlay leading-relaxed -mt-1 pl-5">
+        When on, all acceptance criteria must be checked on the card (or QA override) before Done.
+      </p>
       <label className="flex items-center gap-2 text-[11px] text-cat-subtext cursor-pointer">
         <input
           type="checkbox"
@@ -512,6 +559,11 @@ export default function WorkflowPanel({
         </div>
       )}
 
+      </>
+      )}
+
+      {(workflowTab === 'tools') && (
+      <>
       <label className="flex items-center gap-2 text-[11px] text-cat-subtext cursor-pointer">
         <input
           type="checkbox"
@@ -570,13 +622,66 @@ export default function WorkflowPanel({
       {mcpServersError && (
         <p className="text-[10px] text-rose-400 -mt-1">{mcpServersError}</p>
       )}
+      <div className="flex flex-wrap gap-2" data-testid="mcp-actions">
+        <button
+          type="button"
+          disabled={mcpBusy}
+          onClick={() => {
+            setMcpBusy(true)
+            setMcpProbeStatus(null)
+            void (async () => {
+              try {
+                const res = await probeMcpServers()
+                const parts = (res.servers || []).map((s) =>
+                  s.ok ? `${s.name}: ok (${s.toolCount ?? 0} tools)` : `${s.name}: ${s.error || 'fail'}`,
+                )
+                setMcpProbeStatus(parts.join(' · ') || 'No MCP servers configured')
+              } catch (e) {
+                setMcpProbeStatus(e instanceof Error ? e.message : 'Probe failed')
+              } finally {
+                setMcpBusy(false)
+              }
+            })()
+          }}
+          className="text-[10px] px-2.5 py-1 rounded border border-indigo-500/40 text-indigo-200 hover:bg-indigo-950/40 disabled:opacity-40"
+        >
+          {mcpBusy ? 'Working…' : 'Test MCP'}
+        </button>
+        <button
+          type="button"
+          disabled={mcpBusy}
+          onClick={() => {
+            setMcpBusy(true)
+            setMcpProbeStatus(null)
+            void (async () => {
+              try {
+                const res = await reloadMcpServers()
+                setMcpProbeStatus(`Reloaded — registered ${res.registered ?? 0} tool(s)`)
+              } catch (e) {
+                setMcpProbeStatus(e instanceof Error ? e.message : 'Reload failed')
+              } finally {
+                setMcpBusy(false)
+              }
+            })()
+          }}
+          className="text-[10px] px-2.5 py-1 rounded border border-emerald-500/40 text-emerald-200 hover:bg-emerald-950/40 disabled:opacity-40"
+        >
+          Reload MCP
+        </button>
+      </div>
+      {mcpProbeStatus && (
+        <p className="text-[10px] text-violet-300 leading-relaxed">{mcpProbeStatus}</p>
+      )}
 
       <AgentToolsPanel
         settings={settings}
         onSettingsChange={onSettingsChange}
         onOpenCustomTools={onOpenCustomTools}
       />
+      </>
+      )}
 
+      {(workflowTab === 'discord') && (
       <details open className="border border-cat-surface1 rounded-lg p-2.5 space-y-2 bg-cat-base/30" data-testid="workflow-section-phone-discord">
         <summary className="text-[10px] font-bold uppercase tracking-wider text-cat-subtext cursor-pointer">
           Phone / Discord control
@@ -781,7 +886,10 @@ export default function WorkflowPanel({
           />
         </label>
       </details>
+      )}
 
+      {(workflowTab === 'autonomy') && (
+      <>
       <label className="flex items-center gap-2 text-[11px] text-cat-subtext cursor-pointer">
         <input
           type="checkbox"
@@ -843,7 +951,11 @@ export default function WorkflowPanel({
         Uses DuckDuckGo HTML search locally, or set{' '}
         <span className="font-mono">WEB_SEARCH_API_KEY</span> for Serper.
       </p>
+      </>
+      )}
 
+      {(workflowTab === 'rag') && (
+      <>
       <label className="flex items-center gap-2 text-[11px] text-cat-subtext cursor-pointer">
         <input
           type="checkbox"
@@ -1099,7 +1211,11 @@ export default function WorkflowPanel({
           <span className="text-[10px] text-violet-300">{trainingExportStatus}</span>
         )}
       </div>
+      </>
+      )}
 
+      {(workflowTab === 'autonomy') && (
+      <>
       <div className="border-t border-cat-surface1 pt-2">
         <button
           type="button"
@@ -1441,7 +1557,10 @@ export default function WorkflowPanel({
           />
         </label>
       </div>
+      </>
+      )}
 
+      {(workflowTab === 'gates') && (
       <div>
         <span className="text-[10px] text-cat-overlay block mb-1">Definition of Done</span>
         <div className="flex gap-1 mb-1">
@@ -1485,7 +1604,9 @@ export default function WorkflowPanel({
           ))}
         </ul>
       </div>
+      )}
 
+      {(workflowTab === 'rag') && (
       <div className="border-t border-cat-surface1 pt-2">
         <p className="text-[10px] text-cat-overlay leading-relaxed">
           Project memories are injected into agent prompts. View, add, and edit notes in the bottom
@@ -1501,6 +1622,7 @@ export default function WorkflowPanel({
           </button>
         )}
       </div>
+      )}
 
       <button
         type="button"

@@ -11,17 +11,34 @@ interface BoardRecoveryPanelProps {
   onRestored: (state: import('../types').AppState) => void
 }
 
+function formatLanes(counts?: Record<string, number> | null): string {
+  if (!counts || !Object.keys(counts).length) return ''
+  return Object.entries(counts)
+    .filter(([, n]) => n > 0)
+    .slice(0, 6)
+    .map(([k, n]) => `${k}:${n}`)
+    .join(' · ')
+}
+
 export default function BoardRecoveryPanel({ projectId, onRestored }: BoardRecoveryPanelProps) {
   const [snapshots, setSnapshots] = useState<
     Array<{ id: string; savedAt?: string; taskCount?: number }>
   >([])
   const [candidates, setCandidates] = useState<
-    Array<{ kind: string; id: string; label: string; taskCount?: number }>
+    Array<{
+      kind: string
+      id: string
+      label: string
+      taskCount?: number
+      laneCounts?: Record<string, number>
+    }>
   >([])
   const [liveCount, setLiveCount] = useState<number | null>(null)
+  const [liveLanes, setLiveLanes] = useState<Record<string, number>>({})
   const [busy, setBusy] = useState(false)
   const [message, setMessage] = useState<string | null>(null)
   const [error, setError] = useState<string | null>(null)
+  const [confirmOverwrite, setConfirmOverwrite] = useState(false)
 
   const refresh = () => {
     if (!projectId) return
@@ -31,11 +48,13 @@ export default function BoardRecoveryPanel({ projectId, onRestored }: BoardRecov
     void fetchBoardRecoveryOptions(projectId)
       .then((r) => {
         setLiveCount(r.liveTaskCount ?? 0)
+        setLiveLanes((r as { liveLaneCounts?: Record<string, number> }).liveLaneCounts ?? {})
         setCandidates(r.candidates ?? [])
       })
       .catch(() => {
         setCandidates([])
         setLiveCount(null)
+        setLiveLanes({})
       })
   }
 
@@ -44,6 +63,14 @@ export default function BoardRecoveryPanel({ projectId, onRestored }: BoardRecov
   }, [projectId])
 
   if (!projectId) return null
+
+  const guard = (fn: () => void) => {
+    if (!confirmOverwrite) {
+      setError('Confirm “Overwrite live board” before restoring.')
+      return
+    }
+    fn()
+  }
 
   return (
     <div className="space-y-2 border-t border-cat-surface1 pt-4">
@@ -56,7 +83,24 @@ export default function BoardRecoveryPanel({ projectId, onRestored }: BoardRecov
         <span className="text-cat-subtext font-mono">
           {liveCount == null ? '—' : `${liveCount} card(s)`}
         </span>
+        {formatLanes(liveLanes) ? (
+          <span className="block text-cat-overlay mt-0.5">{formatLanes(liveLanes)}</span>
+        ) : null}
       </p>
+      <label
+        className="flex items-center gap-2 text-[11px] text-amber-200 cursor-pointer"
+        data-testid="board-restore-confirm"
+      >
+        <input
+          type="checkbox"
+          checked={confirmOverwrite}
+          onChange={(e) => {
+            setConfirmOverwrite(e.target.checked)
+            setError(null)
+          }}
+        />
+        Overwrite live board (required)
+      </label>
       {message && <p className="text-[10px] text-emerald-300">{message}</p>}
       {error && <p className="text-[10px] text-rose-300">{error}</p>}
       {snapshots.length > 0 && (
@@ -67,21 +111,23 @@ export default function BoardRecoveryPanel({ projectId, onRestored }: BoardRecov
               key={s.id}
               type="button"
               disabled={busy}
-              onClick={() => {
-                setBusy(true)
-                setError(null)
-                setMessage(null)
-                void restoreBoardSnapshot(projectId, s.id)
-                  .then((st) => {
-                    onRestored(st)
-                    setMessage(`Restored snapshot ${s.id}`)
-                    refresh()
-                  })
-                  .catch((err: unknown) => {
-                    setError(err instanceof Error ? err.message : 'Restore failed')
-                  })
-                  .finally(() => setBusy(false))
-              }}
+              onClick={() =>
+                guard(() => {
+                  setBusy(true)
+                  setError(null)
+                  setMessage(null)
+                  void restoreBoardSnapshot(projectId, s.id)
+                    .then((st) => {
+                      onRestored(st)
+                      setMessage(`Restored snapshot ${s.id}`)
+                      refresh()
+                    })
+                    .catch((err: unknown) => {
+                      setError(err instanceof Error ? err.message : 'Restore failed')
+                    })
+                    .finally(() => setBusy(false))
+                })
+              }
               className="w-full text-left text-[10px] px-2 py-1.5 rounded border border-amber-500/30 text-amber-100 hover:bg-amber-950/40 disabled:opacity-50"
             >
               {s.savedAt ?? s.id} · {s.taskCount ?? '?'} cards
@@ -97,24 +143,29 @@ export default function BoardRecoveryPanel({ projectId, onRestored }: BoardRecov
               key={`${c.kind}-${c.id}`}
               type="button"
               disabled={busy}
-              onClick={() => {
-                setBusy(true)
-                setError(null)
-                setMessage(null)
-                void restoreBoardFromRecovery(projectId, { kind: c.kind, id: c.id })
-                  .then((st) => {
-                    onRestored(st)
-                    setMessage(c.label)
-                    refresh()
-                  })
-                  .catch((err: unknown) => {
-                    setError(err instanceof Error ? err.message : 'Recovery failed')
-                  })
-                  .finally(() => setBusy(false))
-              }}
+              onClick={() =>
+                guard(() => {
+                  setBusy(true)
+                  setError(null)
+                  setMessage(null)
+                  void restoreBoardFromRecovery(projectId, { kind: c.kind, id: c.id })
+                    .then((st) => {
+                      onRestored(st)
+                      setMessage(c.label)
+                      refresh()
+                    })
+                    .catch((err: unknown) => {
+                      setError(err instanceof Error ? err.message : 'Recovery failed')
+                    })
+                    .finally(() => setBusy(false))
+                })
+              }
               className="w-full text-left text-[10px] px-2 py-1.5 rounded border border-emerald-500/30 text-emerald-100 hover:bg-emerald-950/40 disabled:opacity-50"
             >
               {c.label}
+              {formatLanes(c.laneCounts) ? (
+                <span className="block text-cat-overlay">{formatLanes(c.laneCounts)}</span>
+              ) : null}
             </button>
           ))}
         </div>

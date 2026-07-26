@@ -135,7 +135,10 @@ interface TaskDetailModalProps {
     description: string,
     acceptanceCriteria: string[],
   ) => void
+  onAcChecklistChange?: (taskId: string, acChecklist: boolean[]) => void
   onDelete: (taskId: string) => void
+  onRaiseSemanticMinScore?: () => void
+  onReindexCodebase?: () => void
   onClearTranscript?: (taskId: string) => void
   onApprove?: (taskId: string) => void
   onResolveUser?: (taskId: string, answer: string, target: 'dev' | 'refinement' | 'po') => void
@@ -251,6 +254,7 @@ export default function TaskDetailModal({
   onClose,
   onOpenFile,
   onUpdate,
+  onAcChecklistChange,
   onDelete,
   onClearTranscript,
   onApprove,
@@ -266,6 +270,8 @@ export default function TaskDetailModal({
   onRetryStep,
   onViewFileDiff,
   onOpenModelTab,
+  onRaiseSemanticMinScore,
+  onReindexCodebase,
   maxRefinementRoundTrips,
   requireBacklogRefinement = false,
   onEscapeSubtasks,
@@ -588,15 +594,70 @@ export default function TaskDetailModal({
                 className="w-full text-xs font-mono bg-cat-base border border-cat-surface1 rounded p-2 min-h-[60px] max-h-32 overflow-y-auto"
               />
             ) : acList.length > 0 ? (
-              <ul className="text-[11px] text-cat-subtext list-disc pl-4 space-y-0.5 max-h-32 overflow-y-auto">
-                {acList.map((c, i) => (
-                  <li key={i}>{c}</li>
-                ))}
+              <ul
+                className="text-[11px] text-cat-subtext space-y-1 max-h-40 overflow-y-auto"
+                data-testid="ac-checklist"
+              >
+                {acList.map((c, i) => {
+                  const checks = safeTask.acChecklist ?? []
+                  const checked = Boolean(checks[i])
+                  return (
+                    <li key={i} className="flex items-start gap-2">
+                      <input
+                        type="checkbox"
+                        className="mt-0.5"
+                        checked={checked}
+                        disabled={!onAcChecklistChange}
+                        onChange={() => {
+                          if (!onAcChecklistChange) return
+                          const next = acList.map((_, j) =>
+                            j === i ? !checked : Boolean(checks[j]),
+                          )
+                          onAcChecklistChange(task.id, next)
+                        }}
+                      />
+                      <span className={checked ? 'text-emerald-200/90 line-through' : ''}>{c}</span>
+                    </li>
+                  )
+                })}
               </ul>
             ) : (
               <p className="text-[11px] text-cat-overlay italic">None defined</p>
             )}
           </CollapsibleSection>
+
+          {safeTask.retrievalFeedback && (
+            <div
+              className="rounded-lg border border-amber-500/30 bg-amber-950/20 p-2.5 space-y-1.5"
+              data-testid="retrieval-feedback-banner"
+            >
+              <p className="text-[11px] text-amber-200 font-semibold">Semantic context may be noisy</p>
+              <p className="text-[10px] text-amber-100/80">
+                {safeTask.retrievalFeedback.note ||
+                  `Weak hits ${safeTask.retrievalFeedback.weakHits ?? '?'}/${safeTask.retrievalFeedback.totalHits ?? '?'}`}
+              </p>
+              <div className="flex flex-wrap gap-2">
+                {onRaiseSemanticMinScore && (
+                  <button
+                    type="button"
+                    onClick={onRaiseSemanticMinScore}
+                    className="text-[10px] px-2 py-0.5 rounded border border-amber-500/40 text-amber-200 hover:bg-amber-950/40"
+                  >
+                    Raise min score
+                  </button>
+                )}
+                {onReindexCodebase && (
+                  <button
+                    type="button"
+                    onClick={onReindexCodebase}
+                    className="text-[10px] px-2 py-0.5 rounded border border-indigo-500/40 text-indigo-200 hover:bg-indigo-950/40"
+                  >
+                    Re-index
+                  </button>
+                )}
+              </div>
+            </div>
+          )}
 
           {(() => {
             const lsp = safeTask.lastStepProgress

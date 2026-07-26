@@ -43,6 +43,7 @@ import {
   updateConfig,
   updateTask,
   updateWorkflowSettings,
+  reindexCodebase,
 } from './api/client'
 import ActivityPanel from './components/ActivityPanel'
 import AgentConsole from './components/AgentConsole'
@@ -1058,6 +1059,8 @@ export default function App() {
       })
     }
     if (state.recovery?.interrupted) {
+      const mode = state.recovery.sprintMode || 'single_step'
+      const preferAuto = mode === 'auto'
       items.push({
         id: 'recovery',
         tone: 'warning',
@@ -1066,13 +1069,16 @@ export default function App() {
           <span>
             Lane {state.recovery.lane}
             {state.recovery.agent ? ` · ${state.recovery.agent}` : ''}
+            {mode ? ` · mode=${mode}` : ''}
             {state.recovery.lastEvent ? ` · Last: ${state.recovery.lastEvent}` : ''}
+            {state.recovery.suggestedAction ? ` · ${state.recovery.suggestedAction}` : ''}
           </span>
         ),
         actions: (
           <>
             <button
               type="button"
+              data-testid="recovery-resume-step"
               onClick={() => {
                 if (orchestratedActive) {
                   setActionError('Wait for the current sprint step to finish before resuming.')
@@ -1088,6 +1094,11 @@ export default function App() {
                     })
                     handleState(data)
                     applyStepOutcome(data)
+                    try {
+                      handleState(await dismissSprintRecovery())
+                    } catch {
+                      /* ignore */
+                    }
                   } catch (err) {
                     const message =
                       err instanceof ApiError
@@ -1099,12 +1110,44 @@ export default function App() {
                   }
                 })
               }}
-              className="px-2 py-0.5 rounded bg-amber-600/50 text-[10px] font-semibold"
+              className={
+                preferAuto
+                  ? 'px-2 py-0.5 rounded border border-amber-500/40 text-[10px] font-semibold'
+                  : 'px-2 py-0.5 rounded bg-amber-600/50 text-[10px] font-semibold'
+              }
             >
-              Resume
+              Resume step
             </button>
             <button
               type="button"
+              data-testid="recovery-resume-auto"
+              onClick={() => {
+                if (orchestratedActive) {
+                  setActionError('Wait for the current sprint step to finish before resuming.')
+                  return
+                }
+                void withLoading(async () => {
+                  setActionError(null)
+                  try {
+                    await dismissSprintRecovery()
+                  } catch {
+                    /* ignore */
+                  }
+                  setAutoSprint(true)
+                  void startAutoSprint()
+                })
+              }}
+              className={
+                preferAuto
+                  ? 'px-2 py-0.5 rounded bg-amber-600/50 text-[10px] font-semibold'
+                  : 'px-2 py-0.5 rounded border border-amber-500/40 text-[10px] font-semibold'
+              }
+            >
+              Resume auto
+            </button>
+            <button
+              type="button"
+              data-testid="recovery-dismiss"
               onClick={() =>
                 void withLoading(async () => handleState(await dismissSprintRecovery()))
               }
@@ -1817,6 +1860,29 @@ export default function App() {
             setSelectedTask(null)
           })
         }
+        onAcChecklistChange={(taskId, acChecklist) =>
+          void withLoading(async () => {
+            const data = await updateTask(taskId, { acChecklist })
+            handleState(data)
+            const next = findTaskOnBoard(data.board, taskId)
+            if (next) setSelectedTask(next)
+          })
+        }
+        onRaiseSemanticMinScore={() => {
+          const cur = state.workflowSettings?.semanticMinScore ?? 0.35
+          void withLoading(async () => {
+            handleState(
+              await updateWorkflowSettings({
+                semanticMinScore: Math.min(0.95, Math.round((cur + 0.05) * 100) / 100),
+              }),
+            )
+          })
+        }}
+        onReindexCodebase={() => {
+          void withLoading(async () => {
+            await reindexCodebase({ ollama_url: ollamaUrl })
+          })
+        }}
         onApprove={(taskId) =>
           void withLoading(async () => {
             handleState(await approveTask(taskId))

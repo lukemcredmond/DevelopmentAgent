@@ -1334,6 +1334,25 @@ def qa_gate_blocks_done(task: Dict[str, Any]) -> tuple[bool, str]:
         diagnostics = task.get("lastCommandDiagnostics") or []
         if diagnostics:
             return True, f"Unresolved lint ({len(diagnostics)} issues) — fix before Done."
+    ws = get_workflow_settings()
+    if ws.get("requireAcChecklistForDone", True):
+        acs = [str(c).strip() for c in (task.get("acceptanceCriteria") or []) if str(c).strip()]
+        if acs:
+            checks = task.get("acChecklist")
+            if not isinstance(checks, list):
+                checks = []
+            # Pad/truncate alignment
+            while len(checks) < len(acs):
+                checks.append(False)
+            checks = checks[: len(acs)]
+            task["acChecklist"] = [bool(x) for x in checks]
+            unchecked = sum(1 for c in task["acChecklist"] if not c)
+            if unchecked:
+                return (
+                    True,
+                    f"Acceptance criteria unchecked ({unchecked}/{len(acs)}) — "
+                    "check all ACs in the card (or set qaEvidence.userOverride).",
+                )
     return False, ""
 
 

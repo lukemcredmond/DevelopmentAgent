@@ -149,3 +149,19 @@ def post_phone_notify_test(payload: PhoneNotifyTestPayload | None = None):
     if not result.get("ok") and result.get("skipped") == "disabled":
         raise HTTPException(status_code=400, detail="Phone notify is disabled")
     return result
+
+
+@router.post("/api/mcp/probe")
+def post_mcp_probe():
+    from backend.services.mcp_tools import probe_mcp_servers
+
+    return probe_mcp_servers()
+
+
+@router.post("/api/mcp/reload")
+def post_mcp_reload():
+    from backend.services.mcp_tools import reload_mcp_tools_from_settings
+
+    with state.STATE_LOCK:
+        result = reload_mcp_tools_from_settings()
+    return {**build_state_response(), **result}

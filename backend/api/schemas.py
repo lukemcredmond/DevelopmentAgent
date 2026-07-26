@@ -68,6 +68,7 @@ class UpdateTaskPayload(BaseModel):
     title: Optional[str] = None
     description: Optional[str] = None
     acceptanceCriteria: Optional[List[str]] = None
+    acChecklist: Optional[List[bool]] = None
     blockedBy: Optional[List[str]] = None
     priority: Optional[int] = None
 
@@ -213,6 +214,7 @@ class WorkflowSettingsPayload(BaseModel):
     discordBotAllowedUserIds: Optional[List[str]] = None
     discordModelPresetFast: Optional[str] = None
     discordModelPresetQuality: Optional[str] = None
+    requireAcChecklistForDone: Optional[bool] = None
 
 
 class DiagnoseTaskPayload(BaseModel):

@@ -30,6 +30,8 @@ CMD_FEATURE = "ah-feature"
 CMD_ANSWER = "ah-answer"
 CMD_APPROVE = "ah-approve"
 CMD_PENDING = "ah-pending"
+CMD_CLAIM = "ah-claim"
+CMD_EXTEND = "ah-extend"
 
 _KNOWN_COMMANDS = frozenset(
     {
@@ -43,6 +45,8 @@ _KNOWN_COMMANDS = frozenset(
         CMD_ANSWER,
         CMD_APPROVE,
         CMD_PENDING,
+        CMD_CLAIM,
+        CMD_EXTEND,
     }
 )
 
@@ -386,7 +390,27 @@ def cmd_answer(options: Dict[str, Any]) -> str:
 
 
 def cmd_approve(options: Dict[str, Any]) -> str:
+    from backend.agents.task_context import find_task_by_id, record_task_decision, sort_backlog
+    from backend.services.board_service import move_board_stage
     from backend.services.tool_approval import list_pending_approvals, resolve_tool_approval
+
+    kind = str(options.get("kind") or "tool").strip().lower()
+    if kind in ("card", "feature", "pending"):
+        task_id = str(options.get("task_id") or options.get("taskId") or options.get("approval_id") or "").strip()
+        lane = state.SHARED_BOARD.get("Pending Approval") or []
+        if not task_id:
+            if not lane:
+                return "No Pending Approval cards."
+            task_id = str(lane[0].get("id") or "")
+        if not task_id:
+            return "No Pending Approval cards."
+        if not any(str(t.get("id")) == task_id for t in lane if isinstance(t, dict)):
+            return f"Task {task_id} is not in Pending Approval."
+        move_board_stage(task_id, "Backlog")
+        sort_backlog()
+        record_task_decision(task_id, "User", "approve", "User approved feature for development (discord)")
+        add_system_log("System", "success", f"Approved {task_id} → Backlog (discord)")
+        return f"Card [{task_id}] approved → Backlog."
 
     decision_raw = str(options.get("decision") or "approve").strip().lower()
     if decision_raw in ("approve", "yes", "y", "true", "1"):
@@ -431,6 +455,20 @@ def cmd_pending(_options: Dict[str, Any]) -> str:
     else:
         lines.append("Needs User: (none)")
 
+    pending_cards = state.SHARED_BOARD.get("Pending Approval") or []
+    if pending_cards:
+        lines.append(f"Pending Approval ({len(pending_cards)}):")
+        for t in pending_cards[:8]:
+            if not isinstance(t, dict):
+                continue
+            tid = str(t.get("id") or "?")
+            title = str(t.get("title") or "").replace("\n", " ").strip()
+            if len(title) > 60:
+                title = title[:59] + "…"
+            lines.append(f"  [{tid}] {title}")
+    else:
+        lines.append("Pending Approval: (none)")
+
     pending = list_pending_approvals()
     if pending:
         lines.append(f"Tool approvals ({len(pending)}):")
@@ -445,6 +483,58 @@ def cmd_pending(_options: Dict[str, Any]) -> str:
     return "\n".join(lines)
 
 
+def cmd_claim(options: Dict[str, Any]) -> str:
+    from backend.agents.agent_run import get_active_run
+    from backend.agents.task_context import count_claimable_backlog_tasks
+    from backend.services.board_service import claim_ready_backlog_tasks
+
+    if get_active_run() is not None:
+        return "Cannot claim while an agent sprint step is running."
+    try:
+        limit = int(options.get("limit") or 3)
+    except (TypeError, ValueError):
+        limit = 3
+    limit = max(1, min(20, limit))
+    if count_claimable_backlog_tasks() == 0:
+        return "No claimable backlog cards."
+    claimed = claim_ready_backlog_tasks(limit=limit)
+    remaining = count_claimable_backlog_tasks()
+    if not claimed:
+        return "No cards claimed."
+    return f"Claimed {len(claimed)}: {', '.join(claimed)}. readyRemaining={remaining}"
+
+
+def cmd_extend(options: Dict[str, Any]) -> str:
+    from backend.services.prompt_retry import extend_agent_step
+    from backend.services.sprint_session import get_recovery_context
+
+    task_id = str(options.get("task_id") or options.get("taskId") or "").strip()
+    if not task_id:
+        active = _active_in_progress_task()
+        if active:
+            task_id = str(active.get("id") or "")
+        if not task_id:
+            recovery = get_recovery_context() or {}
+            task_id = str(recovery.get("taskId") or "")
+    if not task_id:
+        return "No task_id — pass task_id or have an In Progress / recovery card."
+    try:
+        extra = int(options.get("extra") or options.get("extra_iterations") or 4)
+    except (TypeError, ValueError):
+        extra = 4
+    extra = max(1, min(16, extra))
+    result = extend_agent_step(
+        task_id,
+        "dev",
+        _ollama_url(),
+        action="extend",
+        extra_iterations=extra,
+    )
+    if result.get("ok") is False:
+        return f"Extend failed: {result.get('error') or result}"
+    return f"Extended [{task_id}] by +{extra} iterations."
+
+
 _HANDLERS: Dict[str, Callable[[Dict[str, Any]], str]] = {
     CMD_STATUS: cmd_status,
     CMD_PAUSE: cmd_pause,
@@ -456,6 +546,8 @@ _HANDLERS: Dict[str, Callable[[Dict[str, Any]], str]] = {
     CMD_ANSWER: cmd_answer,
     CMD_APPROVE: cmd_approve,
     CMD_PENDING: cmd_pending,
+    CMD_CLAIM: cmd_claim,
+    CMD_EXTEND: cmd_extend,
 }
 
 
@@ -610,30 +702,67 @@ def _make_discord_client(guild_id: str) -> Any:
             opts["task_id"] = task_id
         await _reply(interaction, CMD_ANSWER, opts)
 
-    @tree.command(name=CMD_APPROVE, description="Approve or deny a pending tool approval")
+    @tree.command(name=CMD_APPROVE, description="Approve tool request or Pending Approval card")
     @app_commands.describe(
-        decision="approve or deny",
-        approval_id="Optional approval id (defaults to oldest pending)",
+        kind="tool (default) or card",
+        decision="approve or deny (tool only)",
+        approval_id="Tool approval id or card task id",
+        task_id="Pending Approval card id (kind=card)",
     )
     @app_commands.choices(
+        kind=[
+            app_commands.Choice(name="tool", value="tool"),
+            app_commands.Choice(name="card", value="card"),
+        ],
         decision=[
             app_commands.Choice(name="approve", value="approve"),
             app_commands.Choice(name="deny", value="deny"),
-        ]
+        ],
     )
     async def _approve(
         interaction: discord.Interaction,
-        decision: app_commands.Choice[str],
+        kind: Optional[app_commands.Choice[str]] = None,
+        decision: Optional[app_commands.Choice[str]] = None,
         approval_id: Optional[str] = None,
+        task_id: Optional[str] = None,
     ) -> None:
-        opts: Dict[str, Any] = {"decision": decision.value}
+        opts: Dict[str, Any] = {"kind": kind.value if kind else "tool"}
+        if decision:
+            opts["decision"] = decision.value
         if approval_id:
             opts["approval_id"] = approval_id
+        if task_id:
+            opts["task_id"] = task_id
         await _reply(interaction, CMD_APPROVE, opts)
 
-    @tree.command(name=CMD_PENDING, description="List Needs User cards and pending tool approvals")
+    @tree.command(name=CMD_PENDING, description="List Needs User, Pending Approval, and tool approvals")
     async def _pending(interaction: discord.Interaction) -> None:
         await _reply(interaction, CMD_PENDING, {})
+
+    @tree.command(name=CMD_CLAIM, description="Claim ready backlog cards into In Progress")
+    @app_commands.describe(limit="Max cards to claim (default 3)")
+    async def _claim(interaction: discord.Interaction, limit: Optional[int] = None) -> None:
+        opts: Dict[str, Any] = {}
+        if limit is not None:
+            opts["limit"] = limit
+        await _reply(interaction, CMD_CLAIM, opts)
+
+    @tree.command(name=CMD_EXTEND, description="Extend current Dev step iterations")
+    @app_commands.describe(
+        task_id="Optional task id (defaults to In Progress / recovery)",
+        extra="Extra iterations (default 4)",
+    )
+    async def _extend(
+        interaction: discord.Interaction,
+        task_id: Optional[str] = None,
+        extra: Optional[int] = None,
+    ) -> None:
+        opts: Dict[str, Any] = {}
+        if task_id:
+            opts["task_id"] = task_id
+        if extra is not None:
+            opts["extra"] = extra
+        await _reply(interaction, CMD_EXTEND, opts)
 
     @client.event
     async def on_ready() -> None:
@@ -673,7 +802,9 @@ async def start_discord_bot() -> None:
     if not ws.get("discordBotEnabled"):
         _set_bot_status("off")
         return
-    token = str(ws.get("discordBotToken") or "").strip()
+    from backend.services.api_auth import resolve_discord_bot_token
+
+    token = resolve_discord_bot_token(str(ws.get("discordBotToken") or ""))
     if not token:
         _set_bot_status("error", last_error="enabled but token missing")
         add_system_log(

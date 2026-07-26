@@ -45,9 +45,28 @@ async function request<T>(
   path: string,
   init?: RequestInit,
 ): Promise<T> {
+  const viteToken =
+    typeof import.meta !== 'undefined' && import.meta.env?.VITE_ALLHANDS_API_TOKEN
+      ? String(import.meta.env.VITE_ALLHANDS_API_TOKEN)
+      : ''
+  let stored = ''
+  try {
+    stored = localStorage.getItem('allhandsApiToken') || ''
+  } catch {
+    /* ignore */
+  }
+  const token = (viteToken || stored).trim()
+  const authHeaders: Record<string, string> = token
+    ? { Authorization: `Bearer ${token}` }
+    : {}
+
   const res = await fetch(path, {
-    headers: { 'Content-Type': 'application/json', ...init?.headers },
     ...init,
+    headers: {
+      'Content-Type': 'application/json',
+      ...authHeaders,
+      ...(init?.headers as Record<string, string> | undefined),
+    },
   })
 
   if (!res.ok) {
@@ -648,6 +667,24 @@ export async function exportTrainingJsonl(limit = 50): Promise<{
   note?: string
 }> {
   return request(`/api/training/export?limit=${encodeURIComponent(String(limit))}`)
+}
+
+export async function probeMcpServers(): Promise<{
+  ok: boolean
+  servers: Array<{
+    name: string
+    transport?: string
+    ok: boolean
+    toolCount?: number
+    tools?: string[]
+    error?: string
+  }>
+}> {
+  return request('/api/mcp/probe', { method: 'POST', body: '{}' })
+}
+
+export async function reloadMcpServers(): Promise<AppState & { registered?: number }> {
+  return request('/api/mcp/reload', { method: 'POST', body: '{}' })
 }
 
 export async function cancelSprint(): Promise<{ ok: boolean }> {

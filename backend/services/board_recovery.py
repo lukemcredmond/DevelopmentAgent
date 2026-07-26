@@ -52,6 +52,16 @@ def _read_projects_from_db(db_path: Path) -> List[Dict[str, Any]]:
     return out
 
 
+def _lane_counts(board: Any) -> Dict[str, int]:
+    if not isinstance(board, dict):
+        return {}
+    out: Dict[str, int] = {}
+    for lane, tasks in board.items():
+        if isinstance(tasks, list):
+            out[str(lane)] = len(tasks)
+    return out
+
+
 def scan_board_recovery_options(project_id: str, project_name: str = "") -> Dict[str, Any]:
     """Compare live DB, legacy DB, and snapshots for richer board copies."""
     live_db = allhands_home() / "scrum_memory.db"
@@ -60,11 +70,19 @@ def scan_board_recovery_options(project_id: str, project_name: str = "") -> Dict
 
     live = next((p for p in live_projects if p["id"] == project_id), None)
     live_count = int(live["taskCount"]) if live else 0
+    live_lanes = _lane_counts(live["board_state"]) if live else {}
 
     candidates: List[Dict[str, Any]] = []
 
     for snap in list_board_snapshots(project_id):
         if snap.get("taskCount", 0) > live_count:
+            snap_board = None
+            try:
+                loaded = load_board_snapshot(project_id, str(snap["id"]))
+                if isinstance(loaded, dict):
+                    snap_board = loaded.get("board_state") if "board_state" in loaded else loaded
+            except Exception:
+                snap_board = None
             candidates.append(
                 {
                     "kind": "snapshot",
@@ -72,6 +90,7 @@ def scan_board_recovery_options(project_id: str, project_name: str = "") -> Dict
                     "label": f"Snapshot {snap.get('savedAt')} ({snap.get('taskCount')} cards)",
                     "taskCount": snap.get("taskCount", 0),
                     "source": snap.get("filename"),
+                    "laneCounts": _lane_counts(snap_board) if snap_board else {},
                 }
             )
 
@@ -88,12 +107,14 @@ def scan_board_recovery_options(project_id: str, project_name: str = "") -> Dict
                     "taskCount": proj["taskCount"],
                     "source": proj["source"],
                     "legacyProjectId": proj["id"],
+                    "laneCounts": _lane_counts(proj.get("board_state")),
                 }
             )
 
     return {
         "projectId": project_id,
         "liveTaskCount": live_count,
+        "liveLaneCounts": live_lanes,
         "liveDb": str(live_db),
         "legacyDbExists": LEGACY_DB_PATH.is_file(),
         "candidates": sorted(candidates, key=lambda c: int(c.get("taskCount") or 0), reverse=True),

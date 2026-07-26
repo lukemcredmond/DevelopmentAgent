@@ -89,6 +89,7 @@ export interface Task {
   transcript?: TaskTranscriptEntry[]
   transcriptTruncated?: boolean
   acceptanceCriteria?: string[]
+  acChecklist?: boolean[]
   priority?: number
   blockedBy?: string[]
   dependencyOutcomes?: DependencyOutcome[]
@@ -112,6 +113,12 @@ export interface Task {
   lastStepOutcome?: LastStepOutcome | null
   lastStepDiagnostics?: Partial<LastStepDiagnostics> | null
   autoExtendUsed?: boolean
+  retrievalFeedback?: {
+    weakHits?: number
+    totalHits?: number
+    minScore?: number
+    note?: string
+  }
   refinementStatus?:
     | 'pending'
     | 'dev_reviewed'
@@ -413,6 +420,7 @@ export interface WorkflowSettings {
   discordBotAllowedUserIds?: string[]
   discordModelPresetFast?: string
   discordModelPresetQuality?: string
+  requireAcChecklistForDone?: boolean
 }
 
 export interface RecentToolEntry {
@@ -675,6 +683,7 @@ export interface RecoveryContext {
   agent: string
   diagnosticsFile?: string
   lastEvent?: string
+  sprintMode?: 'auto' | 'single_step' | 'in_progress' | string
   suggestedAction?: string
 }
 
@@ -855,6 +864,7 @@ export interface UpdateTaskPayload {
   title?: string
   description?: string
   acceptanceCriteria?: string[]
+  acChecklist?: boolean[]
   blockedBy?: string[]
   priority?: number
   status?: BoardLane
@@ -959,6 +969,7 @@ export interface WorkflowSettingsPayload {
   discordBotAllowedUserIds?: string[]
   discordModelPresetFast?: string
   discordModelPresetQuality?: string
+  requireAcChecklistForDone?: boolean
 }
 
 export interface SkillsResponse {
@@ -1208,6 +1219,7 @@ export const DEFAULT_WORKFLOW_SETTINGS: WorkflowSettings = {
   discordBotAllowedUserIds: [],
   discordModelPresetFast: 'qwen2.5-coder:7b',
   discordModelPresetQuality: 'qwen2.5-coder:14b',
+  requireAcChecklistForDone: true,
 }
 
 export const EMPTY_BOARD: Board = {

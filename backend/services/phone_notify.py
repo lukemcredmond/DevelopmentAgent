@@ -91,6 +91,12 @@ def _send_sync(kind: str, title: str, body: str, *, task_id: Optional[str] = Non
         return {"ok": False, "skipped": "unsupported_provider"}
 
     url = str(ws.get("phoneNotifyDiscordWebhookUrl") or "").strip()
+    try:
+        from backend.services.api_auth import resolve_discord_webhook_url
+
+        url = resolve_discord_webhook_url(url)
+    except Exception:
+        pass
     if not url:
         return {"ok": False, "skipped": "missing_webhook"}
     if not is_allowed_discord_webhook_url(url):

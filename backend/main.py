@@ -26,6 +26,10 @@ async def lifespan(_app: FastAPI):
 
 app = FastAPI(title="All Hands Local Scrum Engine", version="1.0.0", lifespan=lifespan)
 
+from backend.services.api_auth import AllHandsApiTokenMiddleware
+
+app.add_middleware(AllHandsApiTokenMiddleware)
+
 app.add_middleware(
     CORSMiddleware,
     allow_origins=CORS_ORIGINS,

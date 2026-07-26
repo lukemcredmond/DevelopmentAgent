@@ -17,6 +17,8 @@ from backend.services.discord_bot import (
     CMD_APPROVE,
     CMD_BACKUP_DEV,
     CMD_CANCEL,
+    CMD_CLAIM,
+    CMD_EXTEND,
     CMD_FEATURE,
     CMD_MODEL,
     CMD_PAUSE,
@@ -297,4 +299,62 @@ def test_ui_and_readme_markers():
     assert "/ah-status" in readme
     assert "/ah-answer" in readme
     assert "/ah-approve" in readme
+    assert "/ah-claim" in readme
+    assert "/ah-extend" in readme
     assert "discordBotEnabled" in readme
+
+
+def test_ah_approve_card_moves_pending_approval():
+    initialize()
+    reset_workflow_settings()
+    _reset_board()
+    _allow()
+    task = init_new_task({"id": "T-PA-1", "title": "Feature X", "description": "d"})
+    normalize_task(task)
+    state.SHARED_BOARD.setdefault("Pending Approval", []).append(task)
+    ok, body = dispatch_command(
+        CMD_APPROVE,
+        actor_id="111",
+        options={"kind": "card", "task_id": "T-PA-1"},
+    )
+    assert ok is True
+    assert "Backlog" in body
+    assert any(t.get("id") == "T-PA-1" for t in state.SHARED_BOARD.get("Backlog", []) or [])
+
+
+def test_ah_claim_calls_service(monkeypatch):
+    initialize()
+    reset_workflow_settings()
+    _allow()
+    monkeypatch.setattr(
+        "backend.agents.agent_run.get_active_run",
+        lambda: None,
+    )
+    monkeypatch.setattr(
+        "backend.agents.task_context.count_claimable_backlog_tasks",
+        lambda: 2,
+    )
+    monkeypatch.setattr(
+        "backend.services.board_service.claim_ready_backlog_tasks",
+        lambda limit=3: ["T-1", "T-2"][:limit],
+    )
+    ok, body = dispatch_command(CMD_CLAIM, actor_id="111", options={"limit": 2})
+    assert ok is True
+    assert "T-1" in body
+
+
+def test_ah_extend_calls_extend(monkeypatch):
+    initialize()
+    reset_workflow_settings()
+    _reset_board()
+    _allow()
+    task = init_new_task({"id": "T-EX-1", "title": "Work", "description": "d"})
+    normalize_task(task)
+    state.SHARED_BOARD.setdefault("In Progress", []).append(task)
+    monkeypatch.setattr(
+        "backend.services.prompt_retry.extend_agent_step",
+        lambda *a, **k: {"ok": True},
+    )
+    ok, body = dispatch_command(CMD_EXTEND, actor_id="111", options={"extra": 4})
+    assert ok is True
+    assert "Extended" in body

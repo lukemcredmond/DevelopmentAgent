@@ -116,6 +116,17 @@ def _apply_task_update(task: dict, payload: UpdateTaskPayload) -> None:
         task["description"] = payload.description
     if payload.acceptanceCriteria is not None:
         task["acceptanceCriteria"] = payload.acceptanceCriteria
+        acs = [str(c).strip() for c in payload.acceptanceCriteria if str(c).strip()]
+        checks = list(task.get("acChecklist") or [])
+        while len(checks) < len(acs):
+            checks.append(False)
+        task["acChecklist"] = [bool(x) for x in checks[: len(acs)]]
+    if payload.acChecklist is not None:
+        acs = [str(c).strip() for c in (task.get("acceptanceCriteria") or []) if str(c).strip()]
+        checks = list(payload.acChecklist)
+        while len(checks) < len(acs):
+            checks.append(False)
+        task["acChecklist"] = [bool(x) for x in checks[: len(acs)]]
     if payload.blockedBy is not None:
         task["blockedBy"] = payload.blockedBy
     if payload.priority is not None:

@@ -121,6 +121,7 @@ DEFAULT_WORKFLOW_SETTINGS: Dict[str, Any] = {
     "discordBotAllowedUserIds": [],
     "discordModelPresetFast": "qwen2.5-coder:7b",
     "discordModelPresetQuality": "qwen2.5-coder:14b",
+    "requireAcChecklistForDone": True,
 }
 
 DEFAULT_SPRINT_SUMMARY: Dict[str, Any] = {

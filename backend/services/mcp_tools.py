@@ -252,6 +252,65 @@ def reregister_mcp_tools_on_agents(agent_tools_cfg: Optional[Dict[str, Any]] = N
         return len(_MCP_TOOL_INSTANCES)
 
 
+def probe_mcp_servers() -> Dict[str, Any]:
+    """Try connect + list_tools for each configured MCP server (no agent register)."""
+    servers = get_workflow_settings().get("mcpServers") or []
+    if not isinstance(servers, list):
+        return {"ok": True, "servers": []}
+    results: List[Dict[str, Any]] = []
+    for spec in servers:
+        if not isinstance(spec, dict):
+            continue
+        name = str(spec.get("name") or "mcp")
+        transport = str(spec.get("transport") or "stdio").lower()
+        entry: Dict[str, Any] = {"name": name, "transport": transport, "ok": False}
+        client: Any = None
+        try:
+            if transport in ("http", "sse", "streamable_http", "streamable-http"):
+                url = spec.get("url") or spec.get("endpoint")
+                if not url:
+                    entry["error"] = "missing url"
+                    results.append(entry)
+                    continue
+                headers = spec.get("headers") if isinstance(spec.get("headers"), dict) else {}
+                client = _McpHttpClient(name, str(url), headers=headers)
+            elif transport == "stdio":
+                command = spec.get("command")
+                if not command:
+                    entry["error"] = "missing command"
+                    results.append(entry)
+                    continue
+                args = spec.get("args") or []
+                if not isinstance(args, list):
+                    args = []
+                client = _McpStdioClient(name, str(command), [str(a) for a in args])
+            else:
+                entry["error"] = f"unsupported transport {transport}"
+                results.append(entry)
+                continue
+            tools = client.list_tools()
+            entry["ok"] = True
+            entry["toolCount"] = len(tools) if isinstance(tools, list) else 0
+            entry["tools"] = [
+                str(t.get("name") or "") for t in (tools or [])[:20] if isinstance(t, dict)
+            ]
+        except Exception as exc:
+            entry["error"] = str(exc)[:200]
+        finally:
+            if client is not None:
+                try:
+                    client.close()
+                except Exception:
+                    pass
+        results.append(entry)
+    return {"ok": True, "servers": results}
+
+
+def reload_mcp_tools_from_settings() -> Dict[str, Any]:
+    n = register_mcp_tools_from_settings()
+    return {"ok": True, "registered": n}
+
+
 def register_mcp_tools_from_settings() -> int:
     """Connect configured MCP servers and register their tools on all agents."""
     clear_mcp_tools()
