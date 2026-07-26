@@ -2,7 +2,75 @@
 
 from __future__ import annotations
 
+from typing import Any, Dict, Optional
+
 DEFAULT_NUM_CTX = 32768
+
+_ROLE_KEYS = frozenset({"po", "dev", "cr", "qa"})
+
+_ROLE_ALIASES = {
+    "product owner": "po",
+    "developer": "dev",
+    "code reviewer": "cr",
+    "qa tester": "qa",
+    "po": "po",
+    "dev": "dev",
+    "cr": "cr",
+    "qa": "qa",
+}
+
+
+def normalize_role_key(role: Optional[str]) -> Optional[str]:
+    if not role:
+        return None
+    key = str(role).strip().lower()
+    return _ROLE_ALIASES.get(key, key if key in _ROLE_KEYS else None)
+
+
+def resolve_ollama_num_ctx(
+    role: Optional[str] = None,
+    *,
+    settings: Optional[Dict[str, Any]] = None,
+) -> int:
+    """
+    Resolve num_ctx for a role.
+    Dev defaults to global; PO/CR/QA default to min(global, 16384) when unset in map.
+    When ollamaNumCtxAuto and VRAM tier is low/minimal, halve Dev ctx.
+    """
+    try:
+        from backend.services.workflow_settings import get_workflow_settings
+
+        ws = settings if settings is not None else get_workflow_settings()
+    except Exception:
+        ws = settings or {}
+
+    global_ctx = int(ws.get("ollamaNumCtx") or DEFAULT_NUM_CTX)
+    global_ctx = max(1024, global_ctx)
+    by_role = ws.get("ollamaNumCtxByRole") or {}
+    if not isinstance(by_role, dict):
+        by_role = {}
+
+    key = normalize_role_key(role)
+    if key and key in by_role and by_role[key] not in (None, "", 0, "0"):
+        try:
+            ctx = max(1024, int(by_role[key]))
+        except (TypeError, ValueError):
+            ctx = global_ctx if key == "dev" else min(global_ctx, 16384)
+    elif key == "dev" or key is None:
+        ctx = global_ctx
+    else:
+        ctx = min(global_ctx, 16384)
+
+    if key == "dev" and ws.get("ollamaNumCtxAuto"):
+        try:
+            from backend.services.system_capacity import probe_system_capacity
+
+            tier = str(probe_system_capacity().get("tier") or "")
+            if tier in ("low", "minimal"):
+                ctx = max(2048, ctx // 2)
+        except Exception:
+            pass
+    return ctx
 
 
 def sprint_file_context_max_chars(num_ctx: int) -> int:

@@ -109,6 +109,9 @@ export interface Task {
   createdBy?: 'po' | 'user' | 'split'
   lastDiagnosis?: TaskDiagnosis
   lastCommandDiagnostics?: CommandDiagnostic[]
+  lastStepOutcome?: LastStepOutcome | null
+  lastStepDiagnostics?: Partial<LastStepDiagnostics> | null
+  autoExtendUsed?: boolean
   refinementStatus?:
     | 'pending'
     | 'dev_reviewed'
@@ -324,6 +327,8 @@ export interface WorkflowSettings {
   maxSubtaskSpawns?: number
   enableFixVerifyLoop?: boolean
   maxFixVerifyRounds?: number
+  autoExtendOnMaxIter?: boolean
+  autoExtendExtraIterations?: number
   maxInCardLintFixes?: number
   maxLintFanoutCards?: number
   lintFanoutThreshold?: number
@@ -367,9 +372,12 @@ export interface WorkflowSettings {
   qdrantApiKeyConfigured?: boolean
   embedModel?: string
   ollamaNumCtx?: number
+  ollamaNumCtxByRole?: Partial<Record<'po' | 'dev' | 'cr' | 'qa', number>>
+  ollamaNumCtxAuto?: boolean
   ollamaKeepAlive?: string
   ollamaRequestTimeoutSec?: number
   terminalTimeoutSec?: number
+  enableVramAwareModelSwap?: boolean
   ollamaMaxRetries?: number
   ollamaRetryDelaySec?: number[]
   ollamaCooldownRetryEnabled?: boolean
@@ -389,6 +397,9 @@ export interface WorkflowSettings {
   phoneNotifyOnToolApproval?: boolean
   phoneNotifyOnSprintEnd?: boolean
   phoneNotifyOnBoardStatus?: boolean
+  phoneNotifyOnStuckEscalation?: boolean
+  phoneNotifyOnStepTimeout?: boolean
+  phoneNotifyOnBackupArmed?: boolean
 }
 
 export interface RecentToolEntry {
@@ -847,6 +858,8 @@ export interface WorkflowSettingsPayload {
   maxSubtaskSpawns?: number
   enableFixVerifyLoop?: boolean
   maxFixVerifyRounds?: number
+  autoExtendOnMaxIter?: boolean
+  autoExtendExtraIterations?: number
   maxInCardLintFixes?: number
   maxLintFanoutCards?: number
   lintFanoutThreshold?: number
@@ -886,9 +899,12 @@ export interface WorkflowSettingsPayload {
   qdrantApiKeyConfigured?: boolean
   embedModel?: string
   ollamaNumCtx?: number
+  ollamaNumCtxByRole?: Partial<Record<'po' | 'dev' | 'cr' | 'qa', number>>
+  ollamaNumCtxAuto?: boolean
   ollamaKeepAlive?: string
   ollamaRequestTimeoutSec?: number
   terminalTimeoutSec?: number
+  enableVramAwareModelSwap?: boolean
   ollamaMaxRetries?: number
   ollamaRetryDelaySec?: number[]
   ollamaCooldownRetryEnabled?: boolean
@@ -907,6 +923,9 @@ export interface WorkflowSettingsPayload {
   phoneNotifyOnToolApproval?: boolean
   phoneNotifyOnSprintEnd?: boolean
   phoneNotifyOnBoardStatus?: boolean
+  phoneNotifyOnStuckEscalation?: boolean
+  phoneNotifyOnStepTimeout?: boolean
+  phoneNotifyOnBackupArmed?: boolean
 }
 
 export interface SkillsResponse {
@@ -1079,6 +1098,8 @@ export const DEFAULT_WORKFLOW_SETTINGS: WorkflowSettings = {
   maxSubtaskSpawns: 8,
   enableFixVerifyLoop: false,
   maxFixVerifyRounds: 3,
+  autoExtendOnMaxIter: true,
+  autoExtendExtraIterations: 4,
   maxInCardLintFixes: 5,
   maxLintFanoutCards: 8,
   lintFanoutThreshold: 6,
@@ -1117,9 +1138,12 @@ export const DEFAULT_WORKFLOW_SETTINGS: WorkflowSettings = {
   qdrantApiKeyConfigured: false,
   embedModel: 'nomic-embed-text',
   ollamaNumCtx: 32768,
+  ollamaNumCtxByRole: {},
+  ollamaNumCtxAuto: false,
   ollamaKeepAlive: '30m',
   ollamaRequestTimeoutSec: 300,
-  terminalTimeoutSec: 120,
+  terminalTimeoutSec: 600,
+  enableVramAwareModelSwap: true,
   ollamaMaxRetries: 4,
   ollamaRetryDelaySec: [0, 2, 5, 10],
   ollamaCooldownRetryEnabled: true,
@@ -1137,6 +1161,9 @@ export const DEFAULT_WORKFLOW_SETTINGS: WorkflowSettings = {
   phoneNotifyOnToolApproval: true,
   phoneNotifyOnSprintEnd: true,
   phoneNotifyOnBoardStatus: true,
+  phoneNotifyOnStuckEscalation: true,
+  phoneNotifyOnStepTimeout: true,
+  phoneNotifyOnBackupArmed: true,
 }
 
 export const EMPTY_BOARD: Board = {

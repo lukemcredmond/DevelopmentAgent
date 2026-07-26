@@ -310,6 +310,8 @@ Persisted per project. Update via sidebar **Workflow** or `POST /api/workflow/se
 |---------|---------|---------|
 | maxSprintSteps | 20 | Cap for Auto Sprint and Plan & Run |
 | maxLlmIterationsPerStep | 8 | Tool-call loop limit per agent turn |
+| autoExtendOnMaxIter | On | Auto-extend once when Dev hits max iterations with progress (writes/tools) |
+| autoExtendExtraIterations | 4 | Extra iterations for auto-extend |
 | maxPoRoundTrips | 3 | PO clarification rounds per card |
 | maxStuckSteps | 3 | Escalate when card does not move (`stuckLoops` → Needs PO; Settings → Workflow) |
 | maxAgentStepDurationSec | 2700 | Wall-clock cap per agent tool loop (45 min). Ends with `Timed out:…` |
@@ -317,6 +319,7 @@ Persisted per project. Update via sidebar **Workflow** or `POST /api/workflow/se
 | enableBackupModelOnStuck | On | Use per-agent backup model for the next N stuck steps (Settings → Models) |
 | backupModelStuckSteps | 2 | How many steps to run on the backup model before reverting to primary |
 | enableSplitOnStuck | On | After backup attempts fail at `maxStuckSteps`, auto-split once via PO before Needs PO |
+| enableVramAwareModelSwap | On | Unload primary before loading backup when GPU VRAM &gt;85% full |
 | maxToolFailuresPerStep | 5 | Stop agent loop after N tool failures (Settings → Workflow) |
 | pauseSprintOnNeedsUser | Off | Idle sprint while Needs User cards exist |
 
@@ -340,7 +343,7 @@ Persisted per project. Update via sidebar **Workflow** or `POST /api/workflow/se
 | commandAllowlist | flutter analyze, pytest, … | Allowed commands when mode is allowlist |
 | commandDenylist | rm, del, … | Blocked commands when mode is denylist |
 | allowChainedCommands | **On** | Allow `&&` / `;` chained shell commands. Always visible under Settings → Workflow (not gated by tool approval). Redirects (`\| > <`) remain blocked. |
-| enableFixVerifyLoop | Off | Auto retry lint/fix loop after Dev step |
+| enableFixVerifyLoop | Off | Auto retry lint/fix loop after Dev step (also on when requireCleanLint is On) |
 | maxFixVerifyRounds | 3 | Max fix-verify iterations |
 | maxInCardLintFixes | 5 | Max lint findings to fix on the current feature card |
 | lintFanoutThreshold | 6 | When analyze findings ≥ this, fan leftovers to related Backlog cards |
@@ -348,6 +351,7 @@ Persisted per project. Update via sidebar **Workflow** or `POST /api/workflow/se
 | agentTools | `{}` | Opt-in per-agent tool allowlists; empty role → built-in defaults |
 | agentToolsAllowWritesInRefinement | Off | Keep write/run/git_commit available during refinement |
 | customTools | `[]` | Project-scoped user tools (shell / http / sql). Merged with **global** tools from `~/.allhands` (`global_custom_tools`); same name → project wins. Edit in **Tools → Custom tools**. |
+| terminalTimeoutSec | 600 | Shell `run_command` timeout floor; long builds use remaining step time (up to 30 min) |
 
 #### Search and context
 
@@ -359,7 +363,9 @@ Persisted per project. Update via sidebar **Workflow** or `POST /api/workflow/se
 | embedModel | nomic-embed-text | Ollama embedding model |
 | enableSemanticSprintContext | On | Inject semantic + graph context into sprint prompts |
 | enableWebSearch | Off | Web search tool for agents |
-| ollamaNumCtx | 32768 | Context window hint for Ollama |
+| ollamaNumCtx | 32768 | Context window hint for Ollama (Dev default) |
+| ollamaNumCtxByRole | `{}` | Optional per-role `{po,dev,cr,qa}` overrides; unset PO/CR/QA use min(global, 16384) |
+| ollamaNumCtxAuto | Off | When On, halve Dev num_ctx on low/minimal VRAM tiers |
 | ollamaKeepAlive | 30m | Ollama model keep-alive duration |
 | ollamaRequestTimeoutSec | 300 | Per-request timeout for Ollama calls |
 | ollamaMaxRetries | 4 | Retries on transient Ollama failures |
@@ -389,7 +395,10 @@ Outbound HTTPS only — **does not open ports** on your PC. Notifications go to 
 | phoneNotifyProvider | discord | Discord webhook (v1) |
 | phoneNotifyDiscordWebhookUrl | (secret) | Channel webhook URL — never logged or returned to the UI after save |
 | phoneNotifyOnNeedsUser | On | Alert when a card needs your answer |
-| phoneNotifyOnNeedsPo | Off | Alert when a card moves to Needs PO |
+| phoneNotifyOnNeedsPo | Off | Alert when a card moves to Needs PO (non-stuck paths) |
+| phoneNotifyOnStuckEscalation | On | Alert when stuck ladder escalates to Needs PO |
+| phoneNotifyOnStepTimeout | On | Alert when an agent step hits the wall-clock timeout |
+| phoneNotifyOnBackupArmed | On | Alert when a backup model is armed for a card |
 | phoneNotifyOnToolApproval | On | Alert when a tool awaits approval |
 | phoneNotifyOnSprintEnd | On | Sprint finished / cancelled / max-steps summary |
 | phoneNotifyOnBoardStatus | On | After each sprint step: lane counts + current work (deduped ~3 min if unchanged) |

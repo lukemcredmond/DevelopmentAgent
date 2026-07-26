@@ -133,11 +133,14 @@ class WorkflowSettingsPayload(BaseModel):
     maxSubtaskSpawns: Optional[int] = None
     enableFixVerifyLoop: Optional[bool] = None
     maxFixVerifyRounds: Optional[int] = None
+    autoExtendOnMaxIter: Optional[bool] = None
+    autoExtendExtraIterations: Optional[int] = None
     maxInCardLintFixes: Optional[int] = None
     maxLintFanoutCards: Optional[int] = None
     lintFanoutThreshold: Optional[int] = None
     enableBackupModelOnStuck: Optional[bool] = None
     backupModelStuckSteps: Optional[int] = None
+    enableSplitOnStuck: Optional[bool] = None
     requireWorkspaceStructure: Optional[bool] = None
     autoScaffoldOnStructureGap: Optional[bool] = None
     requireToolApproval: Optional[bool] = None
@@ -158,6 +161,8 @@ class WorkflowSettingsPayload(BaseModel):
     maxPoRoundTrips: Optional[int] = None
     maxToolFailuresPerStep: Optional[int] = None
     maxStuckSteps: Optional[int] = None
+    maxAgentStepDurationSec: Optional[int] = None
+    enableBlockedLane: Optional[bool] = None
     autoStartSprint: Optional[bool] = None
     autonomousMode: Optional[bool] = None
     maxNeedsUserPerSprint: Optional[int] = None
@@ -168,8 +173,12 @@ class WorkflowSettingsPayload(BaseModel):
     qdrantApiKey: Optional[str] = None
     embedModel: Optional[str] = None
     ollamaNumCtx: Optional[int] = None
+    ollamaNumCtxByRole: Optional[Dict[str, int]] = None
+    ollamaNumCtxAuto: Optional[bool] = None
     ollamaKeepAlive: Optional[str] = None
     ollamaRequestTimeoutSec: Optional[int] = None
+    terminalTimeoutSec: Optional[int] = None
+    enableVramAwareModelSwap: Optional[bool] = None
     ollamaMaxRetries: Optional[int] = None
     ollamaRetryDelaySec: Optional[List[int]] = None
     ollamaCooldownRetryEnabled: Optional[bool] = None
@@ -188,6 +197,9 @@ class WorkflowSettingsPayload(BaseModel):
     phoneNotifyOnToolApproval: Optional[bool] = None
     phoneNotifyOnSprintEnd: Optional[bool] = None
     phoneNotifyOnBoardStatus: Optional[bool] = None
+    phoneNotifyOnStuckEscalation: Optional[bool] = None
+    phoneNotifyOnStepTimeout: Optional[bool] = None
+    phoneNotifyOnBackupArmed: Optional[bool] = None
 
 
 class DiagnoseTaskPayload(BaseModel):

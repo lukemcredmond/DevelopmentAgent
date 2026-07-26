@@ -90,6 +90,10 @@ def build_board_status_digest(
     if needs_user > 0:
         lines.append(f"Needs your input: {needs_user} card(s) in Needs User")
 
+    blocked = counts.get("Blocked", 0)
+    if blocked > 0:
+        lines.append(f"Blocked: {blocked} card(s) waiting on dependencies")
+
     if active_task and isinstance(active_task, dict):
         tid = str(active_task.get("id") or "?")
         title = str(active_task.get("title") or "?").strip() or "?"
@@ -102,6 +106,25 @@ def build_board_status_digest(
             lane = lane or "?"
         who = (agent or handler or "agent").strip()
         lines.append(f"Working on: [{tid}] {title} ({lane} · {who})")
+        # Richer active-card line: stuck / stop / backup remaining
+        extras: List[str] = []
+        stuck = active_task.get("stuckLoops")
+        if stuck not in (None, 0, "0"):
+            extras.append(f"stuckLoops={stuck}")
+        outcome = active_task.get("lastStepOutcome")
+        if isinstance(outcome, dict):
+            stop = outcome.get("stopReason") or outcome.get("exitReason")
+            if stop:
+                extras.append(f"stop={stop}")
+        rem = active_task.get("backupModelStepsRemaining")
+        if isinstance(rem, dict):
+            left = sum(max(0, int(v or 0)) for v in rem.values() if v is not None)
+            if left > 0:
+                extras.append(f"backupRemaining={left}")
+        elif isinstance(rem, (int, float)) and rem > 0:
+            extras.append(f"backupRemaining={int(rem)}")
+        if extras:
+            lines.append("Active card: " + " · ".join(extras))
     elif handler == "idle":
         lines.append("Working on: (idle — no active card)")
     elif handler == "needs_user":

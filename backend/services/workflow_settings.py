@@ -19,6 +19,9 @@ DEFAULT_WORKFLOW_SETTINGS: Dict[str, Any] = {
     "maxSubtaskSpawns": 8,
     "enableFixVerifyLoop": False,
     "maxFixVerifyRounds": 3,
+    # Auto-extend one more chunk of iterations on max_iterations when progress is evident.
+    "autoExtendOnMaxIter": True,
+    "autoExtendExtraIterations": 4,
     # Hybrid lint fan-out: keep a small in-card budget; spawn related Backlog cards for the rest.
     "maxInCardLintFixes": 5,
     "maxLintFanoutCards": 8,
@@ -74,9 +77,15 @@ DEFAULT_WORKFLOW_SETTINGS: Dict[str, Any] = {
     "qdrantApiKey": "",
     "embedModel": "nomic-embed-text",
     "ollamaNumCtx": 32768,
+    # Optional per-role override map {po,dev,cr,qa}; unset roles use sensible defaults.
+    "ollamaNumCtxByRole": {},
+    # When true, halve Dev ctx on low/minimal VRAM tiers.
+    "ollamaNumCtxAuto": False,
     "ollamaKeepAlive": "30m",
     "ollamaRequestTimeoutSec": 300,
-    "terminalTimeoutSec": 120,
+    "terminalTimeoutSec": 600,
+    # Unload primary before loading backup when VRAM is nearly full.
+    "enableVramAwareModelSwap": True,
     "ollamaMaxRetries": 4,
     "ollamaRetryDelaySec": [0, 2, 5, 10],
     "ollamaCooldownRetryEnabled": True,
@@ -96,6 +105,9 @@ DEFAULT_WORKFLOW_SETTINGS: Dict[str, Any] = {
     "phoneNotifyOnToolApproval": True,
     "phoneNotifyOnSprintEnd": True,
     "phoneNotifyOnBoardStatus": True,
+    "phoneNotifyOnStuckEscalation": True,
+    "phoneNotifyOnStepTimeout": True,
+    "phoneNotifyOnBackupArmed": True,
 }
 
 DEFAULT_SPRINT_SUMMARY: Dict[str, Any] = {

@@ -144,10 +144,9 @@ class ScrumAgent:
         if not self.assigned_skills:
             return ""
 
-        from backend.services.prompt_budget import skills_context_max_chars
-        from backend.services.workflow_settings import get_workflow_settings
+        from backend.services.prompt_budget import resolve_ollama_num_ctx, skills_context_max_chars
 
-        max_chars = skills_context_max_chars(int(get_workflow_settings().get("ollamaNumCtx", 32768)))
+        max_chars = skills_context_max_chars(resolve_ollama_num_ctx(self.role))
         skills_context = "\n=== SPECIALIZED AGENT SKILLS ===\n"
         used = len(skills_context)
         truncated = False
@@ -195,10 +194,12 @@ class ScrumAgent:
         return "\n\n".join(parts)
 
     def _chat_options(self) -> Dict[str, Any]:
+        from backend.services.prompt_budget import resolve_ollama_num_ctx
+
         ws = get_workflow_settings()
         opts: Dict[str, Any] = {
             "temperature": 0.1,
-            "num_ctx": int(ws.get("ollamaNumCtx", 32768)),
+            "num_ctx": resolve_ollama_num_ctx(self.role),
         }
         keep_alive = ws.get("ollamaKeepAlive")
         if keep_alive:
@@ -222,8 +223,9 @@ class ScrumAgent:
         return "other"
 
     def _context_overflow_message(self) -> str:
-        ws = get_workflow_settings()
-        num_ctx = int(ws.get("ollamaNumCtx", 32768))
+        from backend.services.prompt_budget import resolve_ollama_num_ctx
+
+        num_ctx = resolve_ollama_num_ctx(self.role)
         return (
             f"Request exceeded Ollama context (num_ctx={num_ctx}). "
             "Increase Ollama context size in Workflow settings, or shorten the project brief / remove assigned skills."
@@ -895,6 +897,12 @@ class ScrumAgent:
         max_tool_failures = int(ws.get("maxToolFailuresPerStep", 5))
         max_duration_sec = int(ws.get("maxAgentStepDurationSec", 2700) or 2700)
         step_started_mono = time.monotonic()
+        self._mid_step_backup_switched = False
+        try:
+            if getattr(state, "SPRINT_STEP_STARTED_MONO", None) is None:
+                state.SPRINT_STEP_STARTED_MONO = step_started_mono
+        except Exception:
+            pass
         messages: List[ChatMessage] = [
             {"role": "system", "content": self._build_system_content()},
             {"role": "user", "content": self._build_user_content(user_prompt)},
@@ -927,6 +935,17 @@ class ScrumAgent:
                     add_system_log(self.role, "warning", stop_msg)
                     self._log_step_exit(stop_msg, "warning")
                     log_event("step_timeout", stop_msg)
+                    try:
+                        from backend.services.phone_notify import notify_if_enabled
+
+                        notify_if_enabled(
+                            "step_timeout",
+                            "Agent step timed out",
+                            f"{self.role}: {stop_msg[:400]}",
+                            task_id=task_id,
+                        )
+                    except Exception:
+                        pass
                     finish_run(status="failed", error=stop_msg)
                     return stop_msg
                 if task_id and is_task_done(task_id) and not state.ALLOW_DONE_RETRY:
@@ -976,7 +995,7 @@ class ScrumAgent:
                     self.role,
                     "info",
                     f"Waiting for model (Ollama) — iter {iteration}/{max_iterations}, "
-                    f"model={self.model} num_ctx={get_workflow_settings().get('ollamaNumCtx', 32768)} "
+                    f"model={self.model} num_ctx={self._chat_options().get('num_ctx')} "
                     f"keep_alive={get_workflow_settings().get('ollamaKeepAlive', '30m')} "
                     f"(LLM call in flight)",
                 )
@@ -1186,6 +1205,50 @@ class ScrumAgent:
                         publish_activity_event=True,
                     )
                     messages.append({"role": "system", "content": _PLAN_REJECTION_MESSAGE})
+                    # Mid-step backup switch after repeated plan/text rejects.
+                    if (
+                        self.role == "Developer"
+                        and (plan_n + text_n) >= 2
+                        and not getattr(self, "_mid_step_backup_switched", False)
+                    ):
+                        try:
+                            from backend.services.backup_model import (
+                                arm_backup_for_agent,
+                                backup_model,
+                                primary_model,
+                            )
+
+                            tid = state.ACTIVE_SPRINT_TASK_ID
+                            board_task = find_task_by_id(tid) if tid else None
+                            if board_task:
+                                backup = backup_model("dev")
+                                primary = primary_model("dev")
+                                if backup and backup != primary and backup != str(self.model or ""):
+                                    armed = arm_backup_for_agent(
+                                        "dev",
+                                        board_task,
+                                        reason=f"mid-step plan/text rejects ({plan_n}/{text_n})",
+                                        force=True,
+                                    )
+                                    if armed or backup:
+                                        try:
+                                            from backend.services.ollama_warmup import (
+                                                maybe_vram_unload_primary,
+                                            )
+
+                                            maybe_vram_unload_primary(primary, backup=backup)
+                                        except Exception:
+                                            pass
+                                        self.model = backup
+                                        self._mid_step_backup_switched = True
+                                        add_system_log(
+                                            self.role,
+                                            "info",
+                                            f"Mid-step backup switch → {backup} "
+                                            f"(after {plan_n} plan / {text_n} text rejects)",
+                                        )
+                        except Exception:
+                            pass
                     continue
 
                 if task_id and content:

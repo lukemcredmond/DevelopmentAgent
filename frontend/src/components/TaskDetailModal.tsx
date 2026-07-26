@@ -811,6 +811,62 @@ export default function TaskDetailModal({
             </CollapsibleSection>
           )}
 
+          {(safeTask.lastStepDiagnostics || safeTask.lastStepOutcome) && (
+            <CollapsibleSection title="Step diagnostics" defaultOpen>
+              <div className="space-y-1 text-[11px] font-mono text-cat-subtext" data-testid="task-step-diagnostics">
+                <p className="text-cat-overlay text-[10px] uppercase tracking-wide">LAST_STEP_DIAGNOSTICS</p>
+                {safeTask.lastStepDiagnostics?.exitReason && (
+                  <p>
+                    <span className="text-cat-overlay">exitReason:</span>{' '}
+                    {safeTask.lastStepDiagnostics.exitReason}
+                  </p>
+                )}
+                {safeTask.lastStepOutcome?.stopReason &&
+                  safeTask.lastStepOutcome.stopReason !== safeTask.lastStepDiagnostics?.exitReason && (
+                    <p>
+                      <span className="text-cat-overlay">stopReason:</span>{' '}
+                      {safeTask.lastStepOutcome.stopReason}
+                    </p>
+                  )}
+                {typeof safeTask.lastStepDiagnostics?.durationMs === 'number' && (
+                  <p>
+                    <span className="text-cat-overlay">duration:</span>{' '}
+                    {Math.round(safeTask.lastStepDiagnostics.durationMs / 1000)}s
+                    {typeof safeTask.lastStepDiagnostics.ollamaMsTotal === 'number' &&
+                      ` · ollama ${Math.round(safeTask.lastStepDiagnostics.ollamaMsTotal / 1000)}s`}
+                    {typeof safeTask.lastStepDiagnostics.toolMsTotal === 'number' &&
+                      ` · tools ${Math.round(safeTask.lastStepDiagnostics.toolMsTotal / 1000)}s`}
+                  </p>
+                )}
+                {(safeTask.lastStepDiagnostics?.planRejections != null ||
+                  safeTask.lastStepDiagnostics?.textRejections != null) && (
+                  <p>
+                    <span className="text-cat-overlay">rejects:</span> plan{' '}
+                    {safeTask.lastStepDiagnostics.planRejections ?? 0} / text{' '}
+                    {safeTask.lastStepDiagnostics.textRejections ?? 0}
+                  </p>
+                )}
+                {(safeTask.lastStepDiagnostics?.toolsUsed?.length ?? 0) > 0 && (
+                  <p className="break-all">
+                    <span className="text-cat-overlay">toolsUsed:</span>{' '}
+                    {safeTask.lastStepDiagnostics?.toolsUsed?.join(', ')}
+                  </p>
+                )}
+                {safeTask.lastStepDiagnostics?.filePath && (
+                  <p className="break-all text-indigo-300">
+                    <span className="text-cat-overlay">file:</span>{' '}
+                    {safeTask.lastStepDiagnostics.filePath}
+                  </p>
+                )}
+                {safeTask.lastStepOutcome?.whyCardStayed && (
+                  <p className="text-amber-200/90 whitespace-pre-wrap">
+                    {safeTask.lastStepOutcome.whyCardStayed}
+                  </p>
+                )}
+              </div>
+            </CollapsibleSection>
+          )}
+
           {blockedBy.length > 0 && (
             <div>
               <h4 className="text-xs font-bold uppercase tracking-wider text-cat-subtext mb-1">

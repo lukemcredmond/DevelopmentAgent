@@ -150,6 +150,9 @@ def notify_if_enabled(kind: str, title: str, body: str, *, task_id: Optional[str
         "tool_approval": ("phoneNotifyOnToolApproval", True),
         "sprint_end": ("phoneNotifyOnSprintEnd", True),
         "board_status": ("phoneNotifyOnBoardStatus", True),
+        "stuck_escalation": ("phoneNotifyOnStuckEscalation", True),
+        "step_timeout": ("phoneNotifyOnStepTimeout", True),
+        "backup_armed": ("phoneNotifyOnBackupArmed", True),
         "test": (None, True),
     }
     entry = flag_defaults.get(kind)

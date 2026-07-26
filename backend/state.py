@@ -29,6 +29,8 @@ PENDING_TOOL_APPROVALS: List[Any] = []
 
 # Timestamp marking the start of the current sprint agent step (for transcript scoping).
 SPRINT_STEP_STARTED_AT: Optional[str] = None
+# Monotonic clock at step start (for remaining-step command timeout budget).
+SPRINT_STEP_STARTED_MONO: Optional[float] = None
 
 # Current step counters for sprint_progress SSE (set by run_auto_sprint / plan-and-run).
 SPRINT_PROGRESS_STEP: int = 0

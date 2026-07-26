@@ -35,19 +35,48 @@ def is_long_running_command(command: str) -> bool:
 
 
 def resolve_command_timeout(command: str, *, explicit: Optional[int] = None) -> int:
-    """Pick shell timeout: explicit > long-command heuristic > workflow/default."""
+    """Pick shell timeout: explicit > long-command / step-budget > workflow/default."""
     if explicit is not None and explicit > 0:
         return int(explicit)
     try:
         from backend.services.workflow_settings import get_workflow_settings
 
-        base = int(get_workflow_settings().get("terminalTimeoutSec") or TERMINAL_TIMEOUT_SEC)
+        ws = get_workflow_settings()
+        base = int(ws.get("terminalTimeoutSec") or TERMINAL_TIMEOUT_SEC)
+        max_step = int(ws.get("maxAgentStepDurationSec") or 2700)
     except Exception:
+        ws = {}
         base = TERMINAL_TIMEOUT_SEC
+        max_step = 2700
     base = max(30, base)
+
+    # When a sprint step is active, allow long builds up to remaining step time.
+    step_budget = _remaining_step_command_timeout(base_floor=base, max_step_sec=max_step)
     if is_long_running_command(command):
-        return max(base, LONG_COMMAND_TIMEOUT_SEC)
-    return base
+        long_to = max(base, LONG_COMMAND_TIMEOUT_SEC)
+        return max(long_to, step_budget) if step_budget else long_to
+    return max(base, step_budget) if step_budget else base
+
+
+def _remaining_step_command_timeout(*, base_floor: int, max_step_sec: int) -> Optional[int]:
+    """
+    timeout = max(terminalTimeoutSec, min(remaining_step_sec - 30, 1800))
+    when a sprint step mono clock is set. Ceiling 30 min.
+    """
+    try:
+        from backend import state
+
+        started = getattr(state, "SPRINT_STEP_STARTED_MONO", None)
+        if started is None:
+            return None
+        elapsed = time.monotonic() - float(started)
+        remaining = max(0, int(max_step_sec) - int(elapsed))
+        if remaining <= 30:
+            return base_floor
+        budget = min(remaining - 30, 1800)
+        return max(base_floor, budget)
+    except Exception:
+        return None
 
 
 @dataclass

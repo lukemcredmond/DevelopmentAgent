@@ -319,7 +319,10 @@ export default function WorkflowPanel({
         />
         Enable fix-verify loop on dev steps
       </label>
-      {(settings.enableFixVerifyLoop ?? false) && (
+      <p className="text-[10px] text-cat-overlay leading-relaxed -mt-1 pl-5">
+        Also runs automatically when &quot;Require clean lint&quot; is on, even if this checkbox is off.
+      </p>
+      {(settings.enableFixVerifyLoop ?? false) || (settings.requireCleanLint ?? false) ? (
         <label className="flex items-center gap-2 text-[11px] text-cat-subtext pl-5">
           <span className="text-cat-overlay shrink-0">Max rounds</span>
           <NumberSettingInput
@@ -330,7 +333,7 @@ export default function WorkflowPanel({
             className="w-16 bg-cat-base border border-cat-surface1 rounded px-2 py-0.5 text-cat-text"
           />
         </label>
-      )}
+      ) : null}
       <label className="flex items-center gap-2 text-[11px] text-cat-subtext cursor-pointer">
         <input
           type="checkbox"
@@ -538,6 +541,9 @@ export default function WorkflowPanel({
             [
               ['phoneNotifyOnNeedsUser', 'Needs User (needs your answer)', true],
               ['phoneNotifyOnNeedsPo', 'Needs PO', false],
+              ['phoneNotifyOnStuckEscalation', 'Stuck escalation → Needs PO', true],
+              ['phoneNotifyOnStepTimeout', 'Agent step timeout', true],
+              ['phoneNotifyOnBackupArmed', 'Backup model armed', true],
               ['phoneNotifyOnToolApproval', 'Tool approval pending', true],
               ['phoneNotifyOnSprintEnd', 'Sprint end summary', true],
               ['phoneNotifyOnBoardStatus', 'Board status after each sprint step', true],
@@ -858,8 +864,8 @@ export default function WorkflowPanel({
         />
       </label>
       <p className="text-[10px] text-cat-overlay leading-relaxed -mt-1">
-        Increase if you see exceed_context_size_error. Higher values use more RAM/VRAM and slow each
-        call. On ≤12 GB VRAM, prefer ≤16384.
+        Global default. Dev uses this; PO/CR/QA default to min(global, 16384) unless overridden below.
+        Increase if you see exceed_context_size_error. Higher values use more RAM/VRAM.
       </p>
       {(settings.ollamaNumCtx ?? 32768) > 16384 && (
         <p className="text-[10px] text-amber-300 leading-relaxed -mt-1">
@@ -867,6 +873,47 @@ export default function WorkflowPanel({
           multi-minute Ollama waits.
         </p>
       )}
+      <div className="grid grid-cols-2 gap-2 text-[11px] pl-0.5">
+        {(['po', 'dev', 'cr', 'qa'] as const).map((role) => (
+          <label key={role}>
+            <span className="text-[10px] text-cat-overlay block">num_ctx {role}</span>
+            <NumberSettingInput
+              value={settings.ollamaNumCtxByRole?.[role] ?? 0}
+              min={0}
+              max={131072}
+              onCommit={(v) => {
+                const next = { ...(settings.ollamaNumCtxByRole ?? {}) }
+                if (!v) {
+                  delete next[role]
+                } else {
+                  next[role] = v
+                }
+                onSettingsChange({ ollamaNumCtxByRole: next })
+              }}
+              className="w-full bg-cat-base border border-cat-surface1 rounded p-1 text-white"
+            />
+          </label>
+        ))}
+      </div>
+      <p className="text-[10px] text-cat-overlay leading-relaxed -mt-1">
+        Per-role override (0 = use default). Optional.
+      </p>
+      <label className="flex items-center gap-2 text-[11px] text-cat-subtext cursor-pointer">
+        <input
+          type="checkbox"
+          checked={settings.ollamaNumCtxAuto ?? false}
+          onChange={(e) => onSettingsChange({ ollamaNumCtxAuto: e.target.checked })}
+        />
+        Auto-clamp Dev num_ctx on low/minimal VRAM (halve)
+      </label>
+      <label className="flex items-center gap-2 text-[11px] text-cat-subtext cursor-pointer">
+        <input
+          type="checkbox"
+          checked={settings.enableVramAwareModelSwap ?? true}
+          onChange={(e) => onSettingsChange({ enableVramAwareModelSwap: e.target.checked })}
+        />
+        VRAM-aware model swap (unload primary before backup when GPU &gt;85% full)
+      </label>
 
       <label className="text-[11px] text-cat-subtext block">
         <span className="text-[10px] text-cat-overlay block">Ollama request timeout (seconds)</span>
@@ -885,13 +932,16 @@ export default function WorkflowPanel({
       <label className="text-[11px] text-cat-subtext block">
         <span className="text-[10px] text-cat-overlay block">Shell command timeout (seconds)</span>
         <NumberSettingInput
-          value={settings.terminalTimeoutSec ?? 120}
+          value={settings.terminalTimeoutSec ?? 600}
           min={30}
           max={1800}
           onCommit={(terminalTimeoutSec) => onSettingsChange({ terminalTimeoutSec })}
           className="w-full bg-cat-base border border-cat-surface1 rounded p-1 text-white"
         />
       </label>
+      <p className="text-[10px] text-cat-overlay leading-relaxed -mt-1">
+        Floor for run_command. Long builds use remaining step time (up to 30 min).
+      </p>
       <p className="text-[10px] text-cat-overlay leading-relaxed -mt-1">
         Default for agent <code className="text-cat-subtext">run_command</code>. Long builds
         (build_runner, flutter build, dotnet build, npm run build, …) use at least 600s.
@@ -1012,6 +1062,24 @@ export default function WorkflowPanel({
             onCommit={(maxLlmIterationsPerStep) => onSettingsChange({ maxLlmIterationsPerStep })}
             className="w-full bg-cat-base border border-cat-surface1 rounded p-1 text-white"
           />
+        </label>
+        <label className="col-span-3 flex items-center gap-2 text-[11px] text-cat-subtext cursor-pointer">
+          <input
+            type="checkbox"
+            checked={settings.autoExtendOnMaxIter ?? true}
+            onChange={(e) => onSettingsChange({ autoExtendOnMaxIter: e.target.checked })}
+          />
+          Auto-extend once on max iterations when progress detected (+
+          <NumberSettingInput
+            value={settings.autoExtendExtraIterations ?? 4}
+            min={1}
+            max={16}
+            onCommit={(autoExtendExtraIterations) =>
+              onSettingsChange({ autoExtendExtraIterations })
+            }
+            className="w-12 bg-cat-base border border-cat-surface1 rounded px-1 py-0.5 text-cat-text mx-1"
+          />
+          iters)
         </label>
         <label>
           <span className="text-[10px] text-cat-overlay block">Max PO round trips</span>

@@ -23,7 +23,7 @@ def run_fix_verify_loop(
 ) -> str:
     """Run dev agent with lint re-check rounds until clean or cap reached."""
     ws = get_workflow_settings()
-    if not ws.get("enableFixVerifyLoop"):
+    if not (ws.get("enableFixVerifyLoop") or ws.get("requireCleanLint")):
         return agent.execute_step(user_prompt, max_iterations=max_iterations)
 
     lint_cmd = derive_project_lint_command()

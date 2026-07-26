@@ -424,6 +424,28 @@ def _build_last_step_outcome(
     return outcome
 
 
+def _compact_last_step_outcome_for_task(outcome: Dict[str, Any]) -> Dict[str, Any]:
+    """Persist a prompt-friendly slice of the last step outcome on the task."""
+    tools = outcome.get("toolsUsed") or []
+    if isinstance(tools, list):
+        tools_short = [str(t) for t in tools[:12]]
+    else:
+        tools_short = []
+    compact: Dict[str, Any] = {
+        "stopReason": outcome.get("stopReason") or outcome.get("exitReason"),
+        "exitReason": outcome.get("exitReason") or outcome.get("stopReason"),
+        "message": str(outcome.get("message") or "")[:240],
+        "whyCardStayed": str(outcome.get("whyCardStayed") or "")[:400],
+        "suggestedAction": str(outcome.get("suggestedAction") or "")[:240],
+        "toolsUsed": tools_short,
+        "ok": outcome.get("ok"),
+        "agent": outcome.get("agent"),
+        "laneBefore": outcome.get("laneBefore"),
+        "laneAfter": outcome.get("laneAfter"),
+    }
+    return {k: v for k, v in compact.items() if v not in (None, "", [], {})}
+
+
 def _record_last_step_outcome(
     task_id: str,
     lane_before: str,
@@ -437,7 +459,25 @@ def _record_last_step_outcome(
         agent,
         agent_result=agent_result or state.LAST_AGENT_STEP_RESULT,
     )
+    task = find_task_by_id(task_id)
+    if task and isinstance(state.LAST_STEP_OUTCOME, dict):
+        normalize_task(task)
+        task["lastStepOutcome"] = _compact_last_step_outcome_for_task(state.LAST_STEP_OUTCOME)
+        # Persist a thin diagnostics pointer when available after finalize below.
     _finalize_step_diagnostics_if_traced(task_id)
+    if task and isinstance(state.LAST_STEP_DIAGNOSTICS, dict):
+        diag = state.LAST_STEP_DIAGNOSTICS
+        task["lastStepDiagnostics"] = {
+            "exitReason": diag.get("exitReason"),
+            "durationMs": diag.get("durationMs"),
+            "ollamaMsTotal": diag.get("ollamaMsTotal"),
+            "toolMsTotal": diag.get("toolMsTotal"),
+            "planRejections": diag.get("planRejections"),
+            "textRejections": diag.get("textRejections"),
+            "toolsUsed": diag.get("toolsUsed") or [],
+            "filePath": diag.get("filePath"),
+            "ok": diag.get("ok"),
+        }
     state.DEV_STEP_READ_ONLY_NO_EDITS = False
     state.DEV_STEP_INTERRUPTED = False
 
@@ -782,6 +822,8 @@ def _check_stuck_and_escalate(
 
     if lane_before != lane_after:
         task["stuckLoops"] = 0
+        task.pop("autoExtendUsed", None)
+        task.pop("lastStepOutcome", None)
         try:
             from backend.services.backup_model import clear_backup_remaining, restore_primary_model
             from backend.agents.registry import agent_cr, agent_dev, agent_po, agent_qa
@@ -830,6 +872,7 @@ def _check_stuck_and_escalate(
             )
         except Exception:
             pass
+
 
     ws = get_workflow_settings()
     max_stuck = int(ws.get("maxStuckSteps", 3))
@@ -961,8 +1004,8 @@ def _check_stuck_and_escalate(
 
             title = task.get("title") or task_id
             notify_if_enabled(
-                "needs_po",
-                "Needs PO",
+                "stuck_escalation",
+                "Stuck escalation → Needs PO",
                 f"{title}\n{stuck_msg[:400]}",
                 task_id=task_id,
             )
@@ -989,9 +1032,108 @@ def _dev_needs_user(result: str) -> bool:
     return dev_explicit_needs_user(result)
 
 
+_NO_AUTO_EXTEND_STOPS = frozenset(
+    {"duplicate_tool", "step_timeout", "tool_failure_stop"}
+)
+_WRITE_TOOLS = frozenset({"write_file", "apply_patch"})
+
+
+def _result_is_max_iterations(result: Optional[str]) -> bool:
+    if not result:
+        return False
+    text = str(result)
+    if text.startswith("Max tool iterations"):
+        return True
+    lower = text.lower()
+    return "max tool iterations" in lower or "max_iterations" in lower
+
+
+def _maybe_auto_extend_dev_step(
+    task_id: str,
+    task: Dict[str, Any],
+    result: str,
+) -> str:
+    """
+    One auto-extend on max_iterations when progress is evident (writes or tools),
+    skipping loop-stop exits. Sets task.autoExtendUsed for the stuck cycle.
+    """
+    ws = get_workflow_settings()
+    if not ws.get("autoExtendOnMaxIter", True):
+        return result
+    normalize_task(task)
+    if task.get("autoExtendUsed"):
+        return result
+    if not _result_is_max_iterations(result):
+        return result
+
+    progress = (
+        state.LAST_STEP_PROGRESS
+        if isinstance(state.LAST_STEP_PROGRESS, dict)
+        else None
+    ) or (task.get("lastStepProgress") if isinstance(task.get("lastStepProgress"), dict) else {})
+    if state.LAST_STEP_OUTCOME and isinstance(state.LAST_STEP_OUTCOME.get("stepProgress"), dict):
+        progress = state.LAST_STEP_OUTCOME["stepProgress"] or progress
+
+    # Prefer this-step progress / result text — ignore stale LAST_STEP_OUTCOME stops.
+    stop = ""
+    if isinstance(progress, dict):
+        stop = str(progress.get("stopReason") or progress.get("exitReason") or "").lower()
+    result_l = str(result).lower()
+    if any(
+        marker in result_l
+        for marker in ("duplicate tool", "timed out", "tool failure", "same failing")
+    ):
+        return result
+    if stop in _NO_AUTO_EXTEND_STOPS:
+        return result
+
+    tools_raw = (progress or {}).get("toolsUsed") or []
+    tools = {str(t) for t in tools_raw} if isinstance(tools_raw, (list, set, tuple)) else set()
+    has_writes = bool(tools & _WRITE_TOOLS) or _task_has_write_files(task)
+    has_tools = bool(tools)
+    if not (has_writes or has_tools):
+        return result
+
+    extra = max(1, min(int(ws.get("autoExtendExtraIterations") or 4), 16))
+    add_system_log(
+        "Developer",
+        "info",
+        f"Auto-extend +{extra} iterations (progress detected)",
+    )
+    task["autoExtendUsed"] = True
+    try:
+        from backend.services.prompt_retry import extend_agent_step
+
+        ollama_url = str(getattr(state, "OLLAMA_URL", "") or "http://localhost:11434")
+        ext = extend_agent_step(
+            task_id,
+            "dev",
+            ollama_url,
+            action="extend",
+            extra_iterations=extra,
+            brief=state.PROJECT_BRIEF or "",
+        )
+        out = ext.get("output")
+        if isinstance(out, str) and out:
+            return out
+    except Exception as exc:
+        add_system_log(
+            "Developer",
+            "warning",
+            f"Auto-extend failed ({type(exc).__name__}) — continuing with original result",
+        )
+    return result
+
+
 def _mark_sprint_step_start() -> str:
     ts = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
     state.SPRINT_STEP_STARTED_AT = ts
+    try:
+        import time as _time
+
+        state.SPRINT_STEP_STARTED_MONO = _time.monotonic()
+    except Exception:
+        state.SPRINT_STEP_STARTED_MONO = None
     state.STEP_FILE_READS.clear()
     state.STEP_PATCH_FAILURES.clear()
     state.DEV_STEP_READ_ONLY_NO_EDITS = False
@@ -1036,14 +1178,14 @@ def _inject_sprint_context(
 ) -> str:
     """Build sprint prompt with pre-loaded file contents (no Tools log row per step)."""
     from backend.services.prompt_budget import (
+        resolve_ollama_num_ctx,
         semantic_sprint_context_max_chars,
         sprint_file_context_max_chars,
     )
-    from backend.services.workflow_settings import get_workflow_settings
     from backend.storage.code_index import build_semantic_sprint_context
 
     task_id = active_task["id"]
-    num_ctx = int(get_workflow_settings().get("ollamaNumCtx", 32768))
+    num_ctx = resolve_ollama_num_ctx(agent_role)
     total_budget = sprint_file_context_max_chars(num_ctx)
     semantic_block, sem_paths = build_semantic_sprint_context(
         active_task,
@@ -2405,6 +2547,12 @@ def _run_developer_step(active_task: Dict[str, Any], brief: str) -> None:
             prompt,
             max_iterations=_llm_iterations(),
         )
+        # Auto-extend outside STATE_LOCK (extend runs another LLM loop).
+        try:
+            fresh_pre = find_task_by_id(task_id) or active_task
+            result = _maybe_auto_extend_dev_step(task_id, fresh_pre, result)
+        except Exception:
+            pass
         state.LAST_AGENT_STEP_RESULT = result
 
         with state.STATE_LOCK:
@@ -2491,7 +2639,16 @@ def _run_developer_step(active_task: Dict[str, Any], brief: str) -> None:
                 except Exception:
                     pass
             # Record outcome first so exitReason is available, then arm backup.
-            _log_sprint_step_outcome("Developer", task_id, task.get("title", task_id), lane_before, result)
+            read_only_flag = bool(state.DEV_STEP_READ_ONLY_NO_EDITS)
+            _log_sprint_step_outcome(
+                "Developer", task_id, task.get("title", task_id), lane_before, result
+            )
+            try:
+                _record_last_step_outcome(
+                    task_id, lane_before, "Developer", agent_result=result
+                )
+            except Exception:
+                pass
             try:
                 from backend.services.backup_model import (
                     arm_backup_for_agent,
@@ -2501,7 +2658,7 @@ def _run_developer_step(active_task: Dict[str, Any], brief: str) -> None:
                 from backend.services.step_diagnostics import derive_exit_reason, get_active_trace
 
                 exit_reason = None
-                if state.DEV_STEP_READ_ONLY_NO_EDITS:
+                if read_only_flag:
                     exit_reason = "read_only_no_edits"
                 else:
                     outcome = state.LAST_STEP_OUTCOME or {}
@@ -2526,7 +2683,9 @@ def _run_developer_step(active_task: Dict[str, Any], brief: str) -> None:
             except Exception:
                 pass
             _audit_dev_files_written(find_task_by_id(task_id) or task, lane_before, task_id)
-            _audit_dev_verification(find_task_by_id(task_id) or task, lane_before, task_id, step_started)
+            _audit_dev_verification(
+                find_task_by_id(task_id) or task, lane_before, task_id, step_started
+            )
             _check_stuck_and_escalate(task_id, lane_before, agent_key="dev")
     except Exception:
         state.DEV_STEP_INTERRUPTED = True

@@ -166,6 +166,23 @@ def arm_backup_for_agent(
         "info",
         f"{task_id}: backup model armed for {label} → {backup} ({steps} step(s); {detail})",
     )
+    try:
+        from backend.services.phone_notify import notify_if_enabled
+
+        notify_if_enabled(
+            "backup_armed",
+            "Backup model armed",
+            f"{task.get('title') or task_id}\n{label} → {backup} ({steps} step(s); {detail})",
+            task_id=task_id,
+        )
+    except Exception:
+        pass
+    try:
+        from backend.services.ollama_warmup import preload_backup_model_async
+
+        preload_backup_model_async(backup, primary=primary_model(agent_key))
+    except Exception:
+        pass
     return True
 
 
@@ -215,6 +232,12 @@ def apply_model_for_step(agent, agent_key: str, task: Optional[Dict[str, Any]]) 
     backup = backup_model(agent_key)
 
     if left > 0 and backup and backup != primary:
+        try:
+            from backend.services.ollama_warmup import maybe_vram_unload_primary
+
+            maybe_vram_unload_primary(primary, backup=backup)
+        except Exception:
+            pass
         agent.model = backup
         rem[agent_key] = left - 1
         task["backupModelStepsRemaining"] = rem

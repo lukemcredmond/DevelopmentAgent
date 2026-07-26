@@ -1060,6 +1060,36 @@ def _format_older_resolutions_block(resolutions: List[Dict[str, Any]]) -> str:
     )
 
 
+def _format_last_step_outcome_block(task: Dict[str, Any]) -> str:
+    """Compact LAST STEP OUTCOME for the next prompt (~800 chars)."""
+    outcome = task.get("lastStepOutcome")
+    if not isinstance(outcome, dict) or not outcome:
+        return ""
+    lines = ["=== LAST STEP OUTCOME ==="]
+    stop = outcome.get("stopReason") or outcome.get("exitReason")
+    exit_r = outcome.get("exitReason") or outcome.get("stopReason")
+    if stop:
+        lines.append(f"stopReason: {stop}")
+    if exit_r and exit_r != stop:
+        lines.append(f"exitReason: {exit_r}")
+    why = str(outcome.get("whyCardStayed") or "").strip()
+    if why:
+        lines.append(f"whyCardStayed: {why[:400]}")
+    suggested = str(outcome.get("suggestedAction") or "").strip()
+    if suggested:
+        lines.append(f"suggestedAction: {suggested[:240]}")
+    tools = outcome.get("toolsUsed") or []
+    if isinstance(tools, list) and tools:
+        lines.append(f"toolsUsed: {', '.join(str(t) for t in tools[:12])}")
+    msg = str(outcome.get("message") or "").strip()
+    if msg:
+        lines.append(f"message: {msg[:240]}")
+    block = "\n".join(lines) + "\n"
+    if len(block) > 800:
+        block = block[:797] + "…\n"
+    return "\n" + block
+
+
 def build_dod_block() -> str:
     settings = get_workflow_settings()
     dod = settings.get("definitionOfDone") or []
@@ -1071,10 +1101,9 @@ def build_dod_block() -> str:
 
 def build_task_prompt(task: Dict[str, Any], brief: str) -> str:
     """Builds a structured prompt for sprint agents."""
-    from backend.services.prompt_budget import truncate_brief, workspace_file_list_cap
-    from backend.services.workflow_settings import get_workflow_settings
+    from backend.services.prompt_budget import resolve_ollama_num_ctx, truncate_brief, workspace_file_list_cap
 
-    num_ctx = int(get_workflow_settings().get("ollamaNumCtx", 32768))
+    num_ctx = resolve_ollama_num_ctx("dev")
     brief = truncate_brief(brief, num_ctx)
 
     normalize_task(task)
@@ -1156,6 +1185,21 @@ def build_task_prompt(task: Dict[str, Any], brief: str) -> str:
             f"Output: {qa_fail.get('output', '')[:500]}\n"
             f"When: {qa_fail.get('timestamp', '')}\n"
         )
+
+    last_outcome_block = _format_last_step_outcome_block(task)
+    if last_outcome_block:
+        prompt += last_outcome_block
+
+    ld = task.get("lastDiagnosis")
+    if isinstance(ld, dict) and (ld.get("problem") or ld.get("rootCause")):
+        prompt += (
+            "\n=== LAST DIAGNOSIS ===\n"
+            f"Problem: {str(ld.get('problem') or '')[:400]}\n"
+        )
+        if ld.get("rootCause"):
+            prompt += f"Root cause: {str(ld.get('rootCause'))[:300]}\n"
+        if ld.get("suggestedFix"):
+            prompt += f"Suggested fix: {str(ld.get('suggestedFix'))[:300]}\n"
 
     dependency_outcomes = task.get("dependencyOutcomes") or []
     if dependency_outcomes:
