@@ -86,6 +86,43 @@ def test_no_arm_for_lint_tool_stuck():
     assert arm_backup_for_agent("dev", task, reason="stuck") is False
 
 
+def test_force_arm_loop_stop_despite_lint():
+    from backend import state
+
+    initialize()
+    reset_workflow_settings()
+    save_workflow_settings({"enableBackupModelOnStuck": True, "backupModelStuckSteps": 2})
+    state.PRIMARY_MODELS = {**state.PRIMARY_MODELS, "dev": "primary-dev"}
+    state.BACKUP_MODELS = {**state.BACKUP_MODELS, "dev": "backup-dev"}
+    task = init_new_task({"id": "T-LOOP", "title": "t", "description": "d"})
+    task["lastCommandDiagnostics"] = [
+        {"file": "a.dart", "line": 1, "column": 1, "severity": "error", "message": "x"}
+    ]
+    assert arm_backup_for_agent("dev", task, reason="duplicate_tool", force=True) is True
+    assert task["backupModelStepsRemaining"]["dev"] == 2
+
+    agent = FakeAgent("primary-dev")
+    used = apply_model_for_step(agent, "dev", task)
+    assert used == "backup-dev"
+    assert agent.model == "backup-dev"
+
+
+def test_empty_backup_fails_loudly():
+    from backend import state
+    from backend.services.backup_model import _arm_skip_reason
+
+    initialize()
+    reset_workflow_settings()
+    save_workflow_settings({"enableBackupModelOnStuck": True})
+    state.PRIMARY_MODELS = {**state.PRIMARY_MODELS, "dev": "primary-dev"}
+    state.BACKUP_MODELS = {**state.BACKUP_MODELS, "dev": ""}
+    task = init_new_task({"id": "T-EMPTY", "title": "t", "description": "d"})
+    assert arm_backup_for_agent("dev", task, reason="max_iterations", force=True) is False
+    reason = _arm_skip_reason("dev", task, force=True)
+    assert reason is not None
+    assert "no Developer backup configured" in reason
+
+
 def test_lane_move_clears_remaining():
     from backend import state
     from backend.services.sprint_service import _check_stuck_and_escalate

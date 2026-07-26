@@ -810,12 +810,23 @@ def _check_stuck_and_escalate(
         }.get(role)
     if key and task["stuckLoops"] >= 1:
         try:
-            from backend.services.backup_model import arm_backup_for_agent
+            from backend.services.backup_model import (
+                arm_backup_for_agent,
+                latest_loop_stop_exit_reason,
+                should_force_arm_from_exit_reason,
+            )
 
+            loop_reason = latest_loop_stop_exit_reason()
+            force = should_force_arm_from_exit_reason(loop_reason)
             arm_backup_for_agent(
                 key,
                 task,
-                reason=f"no lane move (stuckLoops={task['stuckLoops']})",
+                reason=(
+                    f"{loop_reason}; no lane move (stuckLoops={task['stuckLoops']})"
+                    if loop_reason
+                    else f"no lane move (stuckLoops={task['stuckLoops']})"
+                ),
+                force=force,
             )
         except Exception:
             pass
@@ -2330,9 +2341,11 @@ def _run_developer_step(active_task: Dict[str, Any], brief: str) -> None:
     try:
         from backend.services.backup_model import apply_model_for_step
 
-        apply_model_for_step(agent_dev, "dev", find_task_by_id(task_id) or active_task)
+        model_in_use = apply_model_for_step(
+            agent_dev, "dev", find_task_by_id(task_id) or active_task
+        )
     except Exception:
-        pass
+        model_in_use = str(getattr(agent_dev, "model", "") or "")
     try:
         from backend.services.workspace_scaffold import maybe_auto_scaffold
 
@@ -2341,7 +2354,12 @@ def _run_developer_step(active_task: Dict[str, Any], brief: str) -> None:
         pass
     _ensure_dev_step_trace(task_id, title, lane_before)
     try:
-        add_system_log("Developer", "info", f"Implementing '{active_task['title']}'…")
+        model_note = f" [{model_in_use}]" if model_in_use else ""
+        add_system_log(
+            "Developer",
+            "info",
+            f"Implementing '{active_task['title']}'…{model_note}",
+        )
         target = _dev_complete_lane()
         lint_cmd = derive_project_lint_command()
         lint_hint = f" (e.g. '{lint_cmd}')" if lint_cmd else ""
@@ -2472,33 +2490,41 @@ def _run_developer_step(active_task: Dict[str, Any], brief: str) -> None:
                     maybe_fanout_lint_diagnostics(fresh_for_lint, diags, step_marker=step_started)
                 except Exception:
                     pass
-            # Arm backup on reasoning stuck exit reasons (next step uses backup model).
+            # Record outcome first so exitReason is available, then arm backup.
+            _log_sprint_step_outcome("Developer", task_id, task.get("title", task_id), lane_before, result)
             try:
                 from backend.services.backup_model import (
                     arm_backup_for_agent,
                     should_arm_from_exit_reason,
+                    should_force_arm_from_exit_reason,
                 )
-                from backend.services.step_diagnostics import get_active_trace
+                from backend.services.step_diagnostics import derive_exit_reason, get_active_trace
 
                 exit_reason = None
                 if state.DEV_STEP_READ_ONLY_NO_EDITS:
                     exit_reason = "read_only_no_edits"
                 else:
                     outcome = state.LAST_STEP_OUTCOME or {}
-                    exit_reason = outcome.get("exitReason") if isinstance(outcome, dict) else None
+                    if isinstance(outcome, dict):
+                        exit_reason = outcome.get("exitReason") or outcome.get("stopReason")
                     if not exit_reason:
                         trace = get_active_trace()
-                        if trace is not None and getattr(trace, "exit_reason", None):
-                            exit_reason = trace.exit_reason
+                        tools = set(trace.tools_used) if trace else set()
+                        exit_reason = derive_exit_reason(
+                            agent_result=result,
+                            tools_used=tools,
+                            lane_before=lane_before,
+                            lane_after=get_task_lane(task_id) or lane_before,
+                        )
                 if should_arm_from_exit_reason(exit_reason):
                     arm_backup_for_agent(
                         "dev",
                         find_task_by_id(task_id) or task,
                         reason=str(exit_reason),
+                        force=should_force_arm_from_exit_reason(exit_reason),
                     )
             except Exception:
                 pass
-            _log_sprint_step_outcome("Developer", task_id, task.get("title", task_id), lane_before, result)
             _audit_dev_files_written(find_task_by_id(task_id) or task, lane_before, task_id)
             _audit_dev_verification(find_task_by_id(task_id) or task, lane_before, task_id, step_started)
             _check_stuck_and_escalate(task_id, lane_before, agent_key="dev")

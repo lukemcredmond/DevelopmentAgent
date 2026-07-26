@@ -19,19 +19,21 @@ _ROLE_LABEL = {
     "qa": "QA Tester",
 }
 
-_ARM_EXIT_REASONS = frozenset(
+# Exit reasons that always force-arm even when lint/tool diagnostics are present.
+_FORCE_ARM_EXIT_REASONS = frozenset(
     {
         "read_only_no_edits",
         "plan_exhausted",
         "max_iterations",
         "text_only",
         "no_writes",
-        # Agent loop stops — arm backup for the next step(s)
         "duplicate_tool",
         "step_timeout",
         "tool_failure_stop",
     }
 )
+
+_ARM_EXIT_REASONS = _FORCE_ARM_EXIT_REASONS
 
 
 def _remaining_map(task: Dict[str, Any]) -> Dict[str, int]:
@@ -75,44 +77,83 @@ def restore_primary_model(agent, agent_key: str) -> str:
     return str(getattr(agent, "model", "") or "")
 
 
+def should_force_arm_from_exit_reason(exit_reason: Optional[str]) -> bool:
+    if not exit_reason:
+        return False
+    return str(exit_reason).lower() in _FORCE_ARM_EXIT_REASONS
+
+
+def _arm_skip_reason(
+    agent_key: str,
+    task: Dict[str, Any],
+    *,
+    force: bool,
+) -> Optional[str]:
+    """Return a human skip reason, or None if arming may proceed."""
+    label = _ROLE_LABEL.get(agent_key, agent_key)
+    ws = get_workflow_settings()
+    if not ws.get("enableBackupModelOnStuck", True):
+        return f"backup model not armed: enableBackupModelOnStuck is off"
+    backup = backup_model(agent_key)
+    primary = primary_model(agent_key)
+    if not backup:
+        return (
+            f"backup model not armed: no {label} backup configured "
+            f"(Settings → Models → Backup stuck)"
+        )
+    if backup == primary:
+        return f"backup model not armed: {label} backup equals primary ({primary})"
+    if not force and stuck_is_tool_or_lint(task):
+        return (
+            "backup model not armed: lint/tool wall "
+            "(fix diagnostics or wait for agent-loop stop to force-arm)"
+        )
+    return None
+
+
 def arm_backup_for_agent(
     agent_key: str,
     task: Dict[str, Any],
     *,
     reason: str = "",
+    force: bool = False,
 ) -> bool:
     """
     Arm N backup steps for this agent on this card.
     Returns True if armed (or already armed with remaining > 0).
+
+    When force=True, skip the lint/tool gate (used for agent-loop exit reasons).
     """
     agent_key = str(agent_key or "").lower()
     if agent_key not in AGENT_KEYS:
         return False
 
-    ws = get_workflow_settings()
-    if not ws.get("enableBackupModelOnStuck", True):
-        return False
-
-    backup = backup_model(agent_key)
-    primary = primary_model(agent_key)
-    if not backup or backup == primary:
-        return False
-
     normalize_task(task)
-    if stuck_is_tool_or_lint(task):
+    skip = _arm_skip_reason(agent_key, task, force=force)
+    if skip:
+        task_id = str(task.get("id") or "")
+        add_system_log(
+            "System",
+            "warning",
+            f"{task_id}: {skip}" + (f" ({reason})" if reason else ""),
+        )
         return False
 
     rem = _remaining_map(task)
     if rem.get(agent_key, 0) > 0:
         return True  # already armed
 
+    ws = get_workflow_settings()
     steps = max(1, int(ws.get("backupModelStuckSteps", 2)))
     rem[agent_key] = steps
     task["backupModelStepsRemaining"] = rem
 
+    backup = backup_model(agent_key)
     task_id = str(task.get("id") or "")
     label = _ROLE_LABEL.get(agent_key, agent_key)
     detail = reason or "stuck loop"
+    if force and detail:
+        detail = f"{detail} (force)"
     record_task_decision(
         task_id,
         "System",
@@ -132,6 +173,29 @@ def should_arm_from_exit_reason(exit_reason: Optional[str]) -> bool:
     if not exit_reason:
         return False
     return str(exit_reason).lower() in _ARM_EXIT_REASONS
+
+
+def latest_loop_stop_exit_reason() -> Optional[str]:
+    """Best-effort exit reason from LAST_STEP_OUTCOME / LAST_AGENT_STEP_RESULT."""
+    outcome = state.LAST_STEP_OUTCOME
+    if isinstance(outcome, dict):
+        for key in ("exitReason", "stopReason"):
+            val = outcome.get(key)
+            if val and should_arm_from_exit_reason(str(val)):
+                return str(val)
+    result = state.LAST_AGENT_STEP_RESULT
+    if isinstance(result, str) and result:
+        from backend.services.step_diagnostics import derive_exit_reason
+
+        derived = derive_exit_reason(
+            agent_result=result,
+            tools_used=None,
+            lane_before="In Progress",
+            lane_after="In Progress",
+        )
+        if should_arm_from_exit_reason(derived):
+            return derived
+    return None
 
 
 def apply_model_for_step(agent, agent_key: str, task: Optional[Dict[str, Any]]) -> str:
