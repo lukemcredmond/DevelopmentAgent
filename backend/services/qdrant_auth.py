@@ -29,4 +29,7 @@ def sanitize_workflow_settings_for_client(settings: Dict[str, Any]) -> Dict[str,
     hook = str(out.get("phoneNotifyDiscordWebhookUrl") or "").strip()
     out["phoneNotifyDiscordWebhookConfigured"] = bool(hook)
     out.pop("phoneNotifyDiscordWebhookUrl", None)
+    bot_token = str(out.get("discordBotToken") or "").strip()
+    out["discordBotTokenConfigured"] = bool(bot_token)
+    out.pop("discordBotToken", None)
     return out

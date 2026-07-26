@@ -59,6 +59,10 @@ export default function WorkflowPanel({
   const [discordWebhookInput, setDiscordWebhookInput] = useState('')
   const [phoneNotifyStatus, setPhoneNotifyStatus] = useState<string | null>(null)
   const [phoneNotifyTesting, setPhoneNotifyTesting] = useState(false)
+  const [discordBotTokenInput, setDiscordBotTokenInput] = useState('')
+  const [discordAllowedUsersText, setDiscordAllowedUsersText] = useState(
+    () => (settings.discordBotAllowedUserIds ?? []).join('\n'),
+  )
 
   useEffect(() => {
     setMcpServersJson(JSON.stringify(settings.mcpServers ?? [], null, 2))
@@ -75,6 +79,16 @@ export default function WorkflowPanel({
       setDiscordWebhookInput('')
     }
   }, [settings.phoneNotifyDiscordWebhookConfigured])
+
+  useEffect(() => {
+    if (!settings.discordBotTokenConfigured) {
+      setDiscordBotTokenInput('')
+    }
+  }, [settings.discordBotTokenConfigured])
+
+  useEffect(() => {
+    setDiscordAllowedUsersText((settings.discordBotAllowedUserIds ?? []).join('\n'))
+  }, [settings.discordBotAllowedUserIds])
 
   const refreshIndexStatus = useCallback(async () => {
     try {
@@ -498,11 +512,15 @@ export default function WorkflowPanel({
 
       <div className="border border-cat-surface1 rounded-lg p-2.5 space-y-2 bg-cat-base/30">
         <p className="text-[10px] font-bold uppercase tracking-wider text-cat-subtext">
-          Phone alerts (outbound)
+          Phone / Discord control
         </p>
         <p className="text-[10px] text-cat-overlay leading-relaxed">
-          Outbound only — posts to a Discord webhook. Does not open ports on this PC. Use a private
-          channel; treat the webhook URL like a password (regenerate if leaked).
+          Phone alerts (outbound webhook) and optional Discord control bot (Gateway outbound on this
+          PC). Neither opens inbound ports. Prefer a private server; treat tokens/URLs like passwords.
+        </p>
+        <p className="text-[10px] font-semibold text-cat-subtext pt-1">Phone alerts (outbound)</p>
+        <p className="text-[10px] text-cat-overlay leading-relaxed">
+          Posts to a Discord webhook for mobile push. Does not open ports on this PC.
         </p>
         <label className="flex items-center gap-2 text-[11px] text-cat-subtext cursor-pointer">
           <input
@@ -593,6 +611,92 @@ export default function WorkflowPanel({
         {phoneNotifyStatus && (
           <p className="text-[10px] text-violet-300 leading-relaxed">{phoneNotifyStatus}</p>
         )}
+
+        <p className="text-[10px] font-semibold text-cat-subtext pt-2 border-t border-cat-surface1">
+          Discord control bot (optional, localhost)
+        </p>
+        <p className="text-[10px] text-cat-overlay leading-relaxed">
+          Gateway outbound on this PC — fixed slash commands only (/ah-status, /ah-pause, /ah-resume,
+          /ah-cancel, /ah-backup-dev, /ah-model, /ah-feature). No free-form agent chat. Allowlist
+          required. Restart or save settings to apply.
+        </p>
+        <label className="flex items-center gap-2 text-[11px] text-cat-subtext cursor-pointer">
+          <input
+            type="checkbox"
+            checked={settings.discordBotEnabled ?? false}
+            onChange={(e) => onSettingsChange({ discordBotEnabled: e.target.checked })}
+          />
+          Enable Discord control bot
+        </label>
+        <label className="text-[11px] text-cat-subtext block">
+          <span className="text-[10px] text-cat-overlay block">
+            Bot token
+            {settings.discordBotTokenConfigured ? ' (saved — leave blank to keep)' : ''}
+          </span>
+          <input
+            type="password"
+            autoComplete="off"
+            value={discordBotTokenInput}
+            onChange={(e) => setDiscordBotTokenInput(e.target.value)}
+            onBlur={() => {
+              const v = discordBotTokenInput.trim()
+              if (v) onSettingsChange({ discordBotToken: v })
+            }}
+            placeholder={
+              settings.discordBotTokenConfigured
+                ? '•••••••• (leave blank to keep)'
+                : 'Discord application bot token'
+            }
+            className="w-full bg-cat-base border border-cat-surface1 rounded p-1.5 font-mono text-[11px] text-white focus:outline-none"
+          />
+        </label>
+        <label className="text-[11px] text-cat-subtext block">
+          <span className="text-[10px] text-cat-overlay block">Guild ID (optional — faster slash sync)</span>
+          <input
+            type="text"
+            value={settings.discordBotGuildId ?? ''}
+            onChange={(e) => onSettingsChange({ discordBotGuildId: e.target.value.trim() })}
+            placeholder="123456789012345678"
+            className="w-full bg-cat-base border border-cat-surface1 rounded p-1.5 font-mono text-[11px] text-white focus:outline-none"
+          />
+        </label>
+        <label className="text-[11px] text-cat-subtext block">
+          <span className="text-[10px] text-cat-overlay block">
+            Allowed Discord user IDs (one per line — required)
+          </span>
+          <textarea
+            rows={3}
+            value={discordAllowedUsersText}
+            onChange={(e) => setDiscordAllowedUsersText(e.target.value)}
+            onBlur={() => {
+              const ids = discordAllowedUsersText
+                .split(/[\n,]+/)
+                .map((s) => s.trim())
+                .filter(Boolean)
+              onSettingsChange({ discordBotAllowedUserIds: ids })
+            }}
+            placeholder={'123456789012345678\n987654321098765432'}
+            className="w-full bg-cat-base border border-cat-surface1 rounded p-1.5 font-mono text-[11px] text-white focus:outline-none"
+          />
+        </label>
+        <label className="text-[11px] text-cat-subtext block">
+          <span className="text-[10px] text-cat-overlay block">Model preset: fast</span>
+          <input
+            type="text"
+            value={settings.discordModelPresetFast ?? 'qwen2.5-coder:7b'}
+            onChange={(e) => onSettingsChange({ discordModelPresetFast: e.target.value })}
+            className="w-full bg-cat-base border border-cat-surface1 rounded p-1.5 font-mono text-[11px] text-white focus:outline-none"
+          />
+        </label>
+        <label className="text-[11px] text-cat-subtext block">
+          <span className="text-[10px] text-cat-overlay block">Model preset: quality</span>
+          <input
+            type="text"
+            value={settings.discordModelPresetQuality ?? 'qwen2.5-coder:14b'}
+            onChange={(e) => onSettingsChange({ discordModelPresetQuality: e.target.value })}
+            className="w-full bg-cat-base border border-cat-surface1 rounded p-1.5 font-mono text-[11px] text-white focus:outline-none"
+          />
+        </label>
       </div>
 
       <label className="flex items-center gap-2 text-[11px] text-cat-subtext cursor-pointer">

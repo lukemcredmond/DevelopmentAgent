@@ -413,6 +413,33 @@ Outbound HTTPS only — **does not open ports** on your PC. Notifications go to 
 
 `POST /api/workflow/phone-notify/test` sends a test message.
 
+#### Discord control bot (optional, localhost)
+
+Optional **inbound-from-Discord** quick actions via the Discord Gateway (**outbound** from this PC — no public HTTPS Interactions endpoint, no inbound ports). The bot runs **in-process** with the AllHands backend and only exposes a fixed slash-command set (no free-form Dev chat, no arbitrary shell, no free-text model tags).
+
+| Setting | Default | Purpose |
+|---------|---------|---------|
+| discordBotEnabled | Off | Master switch (Settings → Workflow → Phone / Discord control) |
+| discordBotToken | (secret) | Bot token — never returned to the UI after save |
+| discordBotGuildId | (empty) | Optional guild for faster slash-command sync |
+| discordBotAllowedUserIds | [] | Discord user IDs allowed to run commands (required) |
+| discordModelPresetFast | `qwen2.5-coder:7b` | `/ah-model fast` maps to this Ollama tag |
+| discordModelPresetQuality | `qwen2.5-coder:14b` | `/ah-model quality` maps to this Ollama tag |
+
+| Slash command | Behavior |
+|---------------|----------|
+| `/ah-status` | Board digest + sprint cancel flag |
+| `/ah-pause` | Set sprint cancel (pause auto-sprint) |
+| `/ah-resume` | Clear cancel and start auto-sprint in the background |
+| `/ah-cancel` | Same cancel flag; reply says cancelled (no auto-resume) |
+| `/ah-backup-dev` | Force-arm Dev backup for active In Progress card (optional `task_id`) |
+| `/ah-model` | Choice `fast` \| `quality` — applies preset to Dev primary (optional all roles) |
+| `/ah-feature` | Create **draft** Feature + backlog child; does **not** start a sprint |
+
+**Setup:** Create a Discord application → Bot → copy token → invite bot to your private server with `applications.commands` → enable Developer Mode → copy your user ID → paste under Settings → Workflow → Phone / Discord control → enable → save. Training export / LoRA is unrelated.
+
+Requires `discord.py` (see `requirements.txt`). Actions are logged as `source=discord`.
+
 ### Custom tools (Workflow → Agent tools)
 
 Add tools without code changes. Each entry has `name`, `description`, JSON Schema `parameters`, `agents` (roles), and an `executor`:

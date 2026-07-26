@@ -114,6 +114,13 @@ DEFAULT_WORKFLOW_SETTINGS: Dict[str, Any] = {
     "phoneNotifyOnStuckEscalation": True,
     "phoneNotifyOnStepTimeout": True,
     "phoneNotifyOnBackupArmed": True,
+    # Optional Discord Gateway control bot (outbound; same PC as AllHands).
+    "discordBotEnabled": False,
+    "discordBotToken": "",
+    "discordBotGuildId": "",
+    "discordBotAllowedUserIds": [],
+    "discordModelPresetFast": "qwen2.5-coder:7b",
+    "discordModelPresetQuality": "qwen2.5-coder:14b",
 }
 
 DEFAULT_SPRINT_SUMMARY: Dict[str, Any] = {
@@ -155,6 +162,15 @@ def save_workflow_settings(settings: Dict[str, Any], project_id: str | None = No
         updates.pop("qdrantApiKey", None)
     if not str(updates.get("phoneNotifyDiscordWebhookUrl") or "").strip():
         updates.pop("phoneNotifyDiscordWebhookUrl", None)
+    if not str(updates.get("discordBotToken") or "").strip():
+        updates.pop("discordBotToken", None)
+    if "discordBotAllowedUserIds" in updates:
+        raw_ids = updates.get("discordBotAllowedUserIds") or []
+        if isinstance(raw_ids, str):
+            raw_ids = [p.strip() for p in raw_ids.replace(",", "\n").splitlines()]
+        updates["discordBotAllowedUserIds"] = [
+            str(x).strip() for x in raw_ids if str(x).strip()
+        ]
     current.update(updates)
     state.storage.set_setting(_settings_key(pid), json.dumps(current))
     return current

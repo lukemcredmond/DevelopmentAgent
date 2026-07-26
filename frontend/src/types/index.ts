@@ -406,6 +406,13 @@ export interface WorkflowSettings {
   phoneNotifyOnStuckEscalation?: boolean
   phoneNotifyOnStepTimeout?: boolean
   phoneNotifyOnBackupArmed?: boolean
+  discordBotEnabled?: boolean
+  discordBotToken?: string
+  discordBotTokenConfigured?: boolean
+  discordBotGuildId?: string
+  discordBotAllowedUserIds?: string[]
+  discordModelPresetFast?: string
+  discordModelPresetQuality?: string
 }
 
 export interface RecentToolEntry {
@@ -938,6 +945,12 @@ export interface WorkflowSettingsPayload {
   phoneNotifyOnStuckEscalation?: boolean
   phoneNotifyOnStepTimeout?: boolean
   phoneNotifyOnBackupArmed?: boolean
+  discordBotEnabled?: boolean
+  discordBotToken?: string
+  discordBotGuildId?: string
+  discordBotAllowedUserIds?: string[]
+  discordModelPresetFast?: string
+  discordModelPresetQuality?: string
 }
 
 export interface SkillsResponse {
@@ -1182,6 +1195,11 @@ export const DEFAULT_WORKFLOW_SETTINGS: WorkflowSettings = {
   phoneNotifyOnStuckEscalation: true,
   phoneNotifyOnStepTimeout: true,
   phoneNotifyOnBackupArmed: true,
+  discordBotEnabled: false,
+  discordBotGuildId: '',
+  discordBotAllowedUserIds: [],
+  discordModelPresetFast: 'qwen2.5-coder:7b',
+  discordModelPresetQuality: 'qwen2.5-coder:14b',
 }
 
 export const EMPTY_BOARD: Board = {

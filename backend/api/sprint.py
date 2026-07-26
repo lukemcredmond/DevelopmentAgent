@@ -112,6 +112,13 @@ def update_workflow_settings(payload: WorkflowSettingsPayload):
         from backend.agents.registry import configure_agent_tools
 
         configure_agent_tools(saved)
+    # Reload optional Discord Gateway bot when enable/token/allowlist change.
+    try:
+        from backend.services.discord_bot import schedule_discord_bot_reload
+
+        schedule_discord_bot_reload()
+    except Exception:
+        pass
     return build_state_response()
 
 

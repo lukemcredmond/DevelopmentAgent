@@ -207,6 +207,12 @@ class WorkflowSettingsPayload(BaseModel):
     phoneNotifyOnStuckEscalation: Optional[bool] = None
     phoneNotifyOnStepTimeout: Optional[bool] = None
     phoneNotifyOnBackupArmed: Optional[bool] = None
+    discordBotEnabled: Optional[bool] = None
+    discordBotToken: Optional[str] = None
+    discordBotGuildId: Optional[str] = None
+    discordBotAllowedUserIds: Optional[List[str]] = None
+    discordModelPresetFast: Optional[str] = None
+    discordModelPresetQuality: Optional[str] = None
 
 
 class DiagnoseTaskPayload(BaseModel):

@@ -12,10 +12,16 @@ from backend.config import CORS_ORIGINS, FRONTEND_DIST
 
 @asynccontextmanager
 async def lifespan(_app: FastAPI):
-    yield
-    from backend.services.sprint_session import mark_interrupted
+    from backend.services.discord_bot import start_discord_bot, stop_discord_bot
 
-    mark_interrupted()
+    await start_discord_bot()
+    try:
+        yield
+    finally:
+        await stop_discord_bot()
+        from backend.services.sprint_session import mark_interrupted
+
+        mark_interrupted()
 
 
 app = FastAPI(title="All Hands Local Scrum Engine", version="1.0.0", lifespan=lifespan)
