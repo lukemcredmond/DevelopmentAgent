@@ -996,6 +996,16 @@ def _inject_sprint_context(
     if context_block:
         parts.append(context_block)
         parts.append(CONTEXT_INJECT_NOTE)
+    if agent_role == "Developer":
+        try:
+            from backend.services.workspace_structure_audit import (
+                audit_workspace_structure,
+                format_structure_audit,
+            )
+
+            parts.append(format_structure_audit(audit_workspace_structure()))
+        except Exception:
+            pass
     parts.append(instructions)
     return "\n".join(parts)
 
@@ -1210,7 +1220,7 @@ def _dev_has_verification(task: Dict[str, Any], step_started: str) -> bool:
 
 
 def dev_gate_blocks_advance(task: Dict[str, Any]) -> tuple[bool, str]:
-    """Block dev board advance when no writes, subtasks pending, or lint unresolved."""
+    """Block dev board advance when no writes, structure gaps, subtasks pending, or lint unresolved."""
     from backend.services.subtask_service import subtask_gate_blocks_advance
 
     blocked, reason = subtask_gate_blocks_advance(task)
@@ -1221,6 +1231,20 @@ def dev_gate_blocks_advance(task: Dict[str, Any]) -> tuple[bool, str]:
             True,
             "No files written — stay In Progress until apply_patch/write_file.",
         )
+    if get_workflow_settings().get("requireWorkspaceStructure", True):
+        try:
+            from backend.services.workspace_structure_audit import audit_workspace_structure
+
+            audit = audit_workspace_structure()
+            if audit.get("stack") != "unknown" and audit.get("critical"):
+                missing = ", ".join(str(m) for m in (audit.get("missing") or [])[:8])
+                return (
+                    True,
+                    f"Workspace structure incomplete ({audit.get('stack')}): MISSING {missing}. "
+                    "Create scaffold or fix structure before advancing.",
+                )
+        except Exception:
+            pass
     if not get_workflow_settings().get("requireCleanLint"):
         return False, ""
     diagnostics = task.get("lastCommandDiagnostics") or []
@@ -2214,6 +2238,12 @@ def _run_developer_step(active_task: Dict[str, Any], brief: str) -> None:
         apply_model_for_step(agent_dev, "dev", find_task_by_id(task_id) or active_task)
     except Exception:
         pass
+    try:
+        from backend.services.workspace_scaffold import maybe_auto_scaffold
+
+        maybe_auto_scaffold(find_task_by_id(task_id) or active_task)
+    except Exception:
+        pass
     _ensure_dev_step_trace(task_id, title, lane_before)
     try:
         add_system_log("Developer", "info", f"Implementing '{active_task['title']}'…")
@@ -2223,12 +2253,17 @@ def _run_developer_step(active_task: Dict[str, Any], brief: str) -> None:
         max_in_card = int(get_workflow_settings().get("maxInCardLintFixes", 5))
         instructions = (
             "Registered tools: read_file, write_file, apply_patch, run_command, update_board, "
-            "grep, glob_file_search, git_status, git_diff, git_commit, search_code. "
+            "list_dir, grep, glob_file_search, git_status, git_diff, git_commit, search_code. "
             "Use apply_patch for edits to existing files; write_file for new files. "
             "Before apply_patch you must read_file on the same path in this step and copy old_text "
             "verbatim from that read_file result — never from pre-loaded context or analyze output. "
+            "Structure first: call list_dir on '.' (and glob_file_search for stack markers) when the "
+            "WORKSPACE STRUCTURE AUDIT shows MISSING or the workspace is unfamiliar. "
+            "If critical files are MISSING for the detected stack, write_file minimal valid stubs "
+            "(or rely on auto-scaffold) BEFORE implementing this card's AC — do not invent APIs "
+            "against files that do not exist. "
             "Implement using apply_patch and write_file. "
-            "Do not output implementation plans — use tools immediately. "
+            "Do not output implementation plans — use tools immediately after structure is OK. "
             "Read each tool result before calling update_board — if write_file or apply_patch fails, "
             "try a different path or approach (do not repeat the same failing arguments). "
             f"Use run_command with the project lint command{lint_hint}. "
@@ -2243,7 +2278,8 @@ def _run_developer_step(active_task: Dict[str, Any], brief: str) -> None:
             "Needs User ONLY for: secrets/credentials you cannot invent, irreversible external "
             "actions (production deploy, billing), or product choices with no default in brief/AC. "
             "Set a specific userQuestion when moving to Needs User. "
-            "Do NOT move to Needs User for lint errors, missing files, or implementation questions. "
+            "Do NOT move to Needs User for lint errors or implementation questions — "
+            "create missing scaffold files yourself instead of asking the user. "
             f"When complete and files are written → move to '{target}'."
             f"{_autonomous_instruction_suffix()}"
         )

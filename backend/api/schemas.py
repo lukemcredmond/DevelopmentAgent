@@ -138,6 +138,8 @@ class WorkflowSettingsPayload(BaseModel):
     lintFanoutThreshold: Optional[int] = None
     enableBackupModelOnStuck: Optional[bool] = None
     backupModelStuckSteps: Optional[int] = None
+    requireWorkspaceStructure: Optional[bool] = None
+    autoScaffoldOnStructureGap: Optional[bool] = None
     requireToolApproval: Optional[bool] = None
     toolApprovalTools: Optional[List[str]] = None
     nonBlockingToolApproval: Optional[bool] = None

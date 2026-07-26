@@ -293,6 +293,8 @@ Persisted per project. Update via sidebar **Workflow** or `POST /api/workflow/se
 | requireCodeReview | Off | Dev → **Code Review** → QA |
 | requireDevVerification | Off | Dev must verify before leaving In Progress |
 | requireCleanLint | Off | Lint must pass before advance |
+| requireWorkspaceStructure | On | Block Code Review/QA while critical scaffold files are MISSING (known stacks only) |
+| autoScaffoldOnStructureGap | On | Auto-run Vite / dotnet new / Python stubs once when structure is critically incomplete |
 
 #### Refinement and subtasks
 

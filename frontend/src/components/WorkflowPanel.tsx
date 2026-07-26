@@ -290,6 +290,22 @@ export default function WorkflowPanel({
       <label className="flex items-center gap-2 text-[11px] text-cat-subtext cursor-pointer">
         <input
           type="checkbox"
+          checked={settings.requireWorkspaceStructure ?? true}
+          onChange={(e) => onSettingsChange({ requireWorkspaceStructure: e.target.checked })}
+        />
+        Require workspace structure before Code Review/QA
+      </label>
+      <label className="flex items-center gap-2 text-[11px] text-cat-subtext cursor-pointer">
+        <input
+          type="checkbox"
+          checked={settings.autoScaffoldOnStructureGap ?? true}
+          onChange={(e) => onSettingsChange({ autoScaffoldOnStructureGap: e.target.checked })}
+        />
+        Auto-scaffold when structure critically incomplete
+      </label>
+      <label className="flex items-center gap-2 text-[11px] text-cat-subtext cursor-pointer">
+        <input
+          type="checkbox"
           checked={settings.enableFixVerifyLoop ?? false}
           onChange={(e) => onSettingsChange({ enableFixVerifyLoop: e.target.checked })}
         />

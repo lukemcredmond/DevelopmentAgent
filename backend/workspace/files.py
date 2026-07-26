@@ -760,6 +760,30 @@ def get_file_tree() -> List[Dict[str, Any]]:
     return root.get("children", [])
 
 
+def _walk_dir_for_extensions(
+    ws: str,
+    rel_dir: str,
+    extensions: tuple[str, ...],
+    *,
+    limit: int,
+    paths: set[str],
+) -> None:
+    abs_dir = os.path.join(ws, rel_dir)
+    if not os.path.isdir(abs_dir):
+        return
+    count = 0
+    for root, _dirs, files_in_dir in os.walk(abs_dir):
+        for fn in sorted(files_in_dir):
+            if count >= limit:
+                return
+            if fn.endswith(extensions):
+                rel = os.path.relpath(os.path.join(root, fn), ws).replace("\\", "/")
+                if any(ex in rel for ex in ("__pycache__", "node_modules", ".pyc", "Library/", "Temp/")):
+                    continue
+                paths.add(rel)
+                count += 1
+
+
 def _collect_sprint_context_paths(task: Dict[str, Any]) -> List[str]:
     """Gather workspace paths relevant to a sprint step."""
     paths: set[str] = set()
@@ -772,13 +796,50 @@ def _collect_sprint_context_paths(task: Dict[str, Any]) -> List[str]:
     sync_virtual_filesystem_from_disk()
     ws = state.WORKSPACE_DIR
 
-    for marker in ("pubspec.yaml", "package.json", "README.md", "pyproject.toml", "requirements.txt"):
+    for marker in (
+        "pubspec.yaml",
+        "package.json",
+        "README.md",
+        "pyproject.toml",
+        "requirements.txt",
+        "index.html",
+        "ProjectSettings/ProjectVersion.txt",
+    ):
         if os.path.isfile(os.path.join(ws, marker)):
             paths.add(marker)
 
-    task_file_count = sum(
-        1 for f in (task.get("files") or []) if f
-    )
+    # Prefer common entrypoints when present (any card).
+    for preferred in (
+        "src/main.tsx",
+        "src/main.jsx",
+        "src/App.tsx",
+        "src/App.jsx",
+        "src/index.tsx",
+        "src/index.jsx",
+        "Program.cs",
+        "Startup.cs",
+        "app/page.tsx",
+        "app/page.jsx",
+    ):
+        if os.path.isfile(os.path.join(ws, preferred)):
+            paths.add(preferred)
+
+    # First .csproj at workspace root or one level down
+    try:
+        for name in os.listdir(ws):
+            if name.endswith(".csproj") and os.path.isfile(os.path.join(ws, name)):
+                paths.add(name)
+                break
+            sub = os.path.join(ws, name)
+            if os.path.isdir(sub) and not name.startswith("."):
+                for nested in os.listdir(sub):
+                    if nested.endswith(".csproj"):
+                        paths.add(f"{name}/{nested}".replace("\\", "/"))
+                        break
+    except OSError:
+        pass
+
+    task_file_count = sum(1 for f in (task.get("files") or []) if f)
     if task_file_count == 0:
         tests_dir = os.path.join(ws, "tests")
         if os.path.isdir(tests_dir):
@@ -792,17 +853,18 @@ def _collect_sprint_context_paths(task: Dict[str, Any]) -> List[str]:
                         paths.add(rel)
                         count += 1
 
-        lib_dir = os.path.join(ws, "lib")
-        if os.path.isdir(lib_dir):
-            count = 0
-            for root, _dirs, files_in_dir in os.walk(lib_dir):
-                for fn in sorted(files_in_dir):
-                    if count >= 3:
-                        break
-                    if fn.endswith((".dart", ".py", ".ts", ".tsx", ".js")):
-                        rel = os.path.relpath(os.path.join(root, fn), ws).replace("\\", "/")
-                        paths.add(rel)
-                        count += 1
+        _walk_dir_for_extensions(
+            ws, "lib", (".dart", ".py", ".ts", ".tsx", ".js"), limit=3, paths=paths
+        )
+        _walk_dir_for_extensions(
+            ws, "src", (".py", ".ts", ".tsx", ".js", ".jsx", ".cs"), limit=4, paths=paths
+        )
+        _walk_dir_for_extensions(
+            ws, "app", (".py", ".ts", ".tsx", ".js", ".jsx"), limit=3, paths=paths
+        )
+        _walk_dir_for_extensions(
+            ws, "Assets/Scripts", (".cs",), limit=3, paths=paths
+        )
 
     return sorted(paths)
 

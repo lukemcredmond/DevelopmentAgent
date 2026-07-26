@@ -328,6 +328,8 @@ export interface WorkflowSettings {
   lintFanoutThreshold?: number
   enableBackupModelOnStuck?: boolean
   backupModelStuckSteps?: number
+  requireWorkspaceStructure?: boolean
+  autoScaffoldOnStructureGap?: boolean
   requireToolApproval?: boolean
   toolApprovalTools?: string[]
   nonBlockingToolApproval?: boolean
@@ -843,6 +845,8 @@ export interface WorkflowSettingsPayload {
   lintFanoutThreshold?: number
   enableBackupModelOnStuck?: boolean
   backupModelStuckSteps?: number
+  requireWorkspaceStructure?: boolean
+  autoScaffoldOnStructureGap?: boolean
   requireToolApproval?: boolean
   toolApprovalTools?: string[]
   nonBlockingToolApproval?: boolean
@@ -1070,6 +1074,8 @@ export const DEFAULT_WORKFLOW_SETTINGS: WorkflowSettings = {
   lintFanoutThreshold: 6,
   enableBackupModelOnStuck: true,
   backupModelStuckSteps: 2,
+  requireWorkspaceStructure: true,
+  autoScaffoldOnStructureGap: true,
   requireToolApproval: false,
   toolApprovalTools: ['write_file', 'run_command', 'delete_file'],
   nonBlockingToolApproval: true,

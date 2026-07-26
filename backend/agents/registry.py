@@ -53,7 +53,9 @@ agent_dev = ScrumAgent(
     model="qwen2.5-coder:14b",
     system_prompt=(
         "You implement features from the backlog. Use apply_patch for edits to existing files "
-        "and write_file for new files. Use grep and glob_file_search to find symbols and files. "
+        "and write_file for new files. Use list_dir and glob_file_search to inventory the workspace "
+        "when it is unfamiliar or STRUCTURE AUDIT reports MISSING — create missing entrypoints "
+        "before feature work. Use grep and glob_file_search to find symbols and files. "
         "Never reply with a numbered plan or 'steps remain' list during implementation — "
         "call apply_patch or write_file in the same step after read_file. "
         "If requirements are unclear, escalate to the Product Owner by moving the task to 'Needs PO'. "
