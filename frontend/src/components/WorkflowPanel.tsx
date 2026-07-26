@@ -1061,6 +1061,14 @@ export default function WorkflowPanel({
             className="w-full bg-cat-base border border-cat-surface1 rounded p-1 text-white"
           />
         </label>
+        <label className="flex items-center gap-2 text-[11px] text-cat-subtext cursor-pointer col-span-3">
+          <input
+            type="checkbox"
+            checked={settings.enableSplitOnStuck !== false}
+            onChange={(e) => onSettingsChange({ enableSplitOnStuck: e.target.checked })}
+          />
+          Auto-split card before Needs PO (after backup attempts fail)
+        </label>
         <label>
           <span className="text-[10px] text-cat-overlay block">Max tool failures/step</span>
           <NumberSettingInput

@@ -26,6 +26,10 @@ _ARM_EXIT_REASONS = frozenset(
         "max_iterations",
         "text_only",
         "no_writes",
+        # Agent loop stops — arm backup for the next step(s)
+        "duplicate_tool",
+        "step_timeout",
+        "tool_failure_stop",
     }
 )
 

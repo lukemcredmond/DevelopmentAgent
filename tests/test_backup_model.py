@@ -20,6 +20,9 @@ class FakeAgent:
 def test_should_arm_from_exit_reason():
     assert should_arm_from_exit_reason("read_only_no_edits")
     assert should_arm_from_exit_reason("plan_exhausted")
+    assert should_arm_from_exit_reason("duplicate_tool")
+    assert should_arm_from_exit_reason("step_timeout")
+    assert should_arm_from_exit_reason("tool_failure_stop")
     assert not should_arm_from_exit_reason("completed_with_writes")
     assert not should_arm_from_exit_reason(None)
 

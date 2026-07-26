@@ -826,6 +826,86 @@ def _check_stuck_and_escalate(
         return
 
     task["stuckLoops"] = 0
+
+    # Do not yank cards already escalated / finished.
+    if lane_after in ("Needs PO", "Needs User", "Done", "Features"):
+        return
+
+    # Ladder: backup already armed above → try one auto-split before Needs PO.
+    # Skip auto-split for lint/tool walls (lint fanout covers "break into bits").
+    if (
+        ws.get("enableSplitOnStuck", True)
+        and not task.get("splitAttemptedOnStuck")
+        and not stuck_is_tool_or_lint(task)
+    ):
+        task["splitAttemptedOnStuck"] = True
+        record_task_decision(
+            task_id,
+            "System",
+            "stuck_split",
+            "Auto-split after stuck steps (backup tried first)",
+            f"stuckLoops reached {max_stuck} — attempting PO split before Needs PO",
+        )
+        try:
+            from backend.agents.registry import agent_dev, agent_po
+
+            ollama_url = (
+                str(getattr(agent_dev, "ollama_url", "") or "").strip()
+                or str(getattr(agent_po, "ollama_url", "") or "").strip()
+                or "http://localhost:11434"
+            )
+            split_result = run_po_split_task(
+                task_id,
+                ollama_url,
+                guidance=(
+                    "Auto-split: agents stuck after backup model attempts — "
+                    "break into 2–5 smallest cards."
+                ),
+            )
+            added = int((split_result or {}).get("added") or 0)
+            lane_now = get_task_lane(task_id) or lane_after
+            if added > 0 or lane_now != lane_after:
+                try:
+                    from backend.services.backup_model import (
+                        clear_backup_remaining,
+                        restore_primary_model,
+                    )
+                    from backend.agents.registry import agent_cr, agent_qa
+
+                    fresh = find_task_by_id(task_id)
+                    if fresh:
+                        clear_backup_remaining(fresh)
+                    restore_primary_model(agent_po, "po")
+                    restore_primary_model(agent_dev, "dev")
+                    restore_primary_model(agent_cr, "cr")
+                    restore_primary_model(agent_qa, "qa")
+                except Exception:
+                    pass
+                add_system_log(
+                    "System",
+                    "success",
+                    f"{task_id}: stuck recovery — auto-split added {added} card(s); skipping Needs PO",
+                )
+                return
+            add_system_log(
+                "System",
+                "warning",
+                f"{task_id}: stuck auto-split added no cards — escalating to Needs PO",
+            )
+        except Exception as exc:
+            record_task_decision(
+                task_id,
+                "System",
+                "stuck_split",
+                "Auto-split failed — escalating to Needs PO",
+                str(exc)[:500],
+            )
+            add_system_log(
+                "System",
+                "warning",
+                f"{task_id}: stuck auto-split failed ({exc}) — escalating to Needs PO",
+            )
+
     max_po = int(ws.get("maxPoRoundTrips", 3))
     msg = build_stuck_escalation_message(task, lane_after, max_stuck)
     if int(task.get("poRoundTrips", 0)) >= max_po:

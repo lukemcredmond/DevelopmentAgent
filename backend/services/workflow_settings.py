@@ -25,6 +25,8 @@ DEFAULT_WORKFLOW_SETTINGS: Dict[str, Any] = {
     "lintFanoutThreshold": 6,
     "enableBackupModelOnStuck": True,
     "backupModelStuckSteps": 2,
+    # After backup attempts fail at maxStuckSteps: one PO auto-split before Needs PO.
+    "enableSplitOnStuck": True,
     "requireWorkspaceStructure": True,
     "autoScaffoldOnStructureGap": True,
     "toolApprovalTools": ["write_file", "run_command", "delete_file"],

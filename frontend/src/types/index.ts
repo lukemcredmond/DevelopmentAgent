@@ -329,6 +329,8 @@ export interface WorkflowSettings {
   lintFanoutThreshold?: number
   enableBackupModelOnStuck?: boolean
   backupModelStuckSteps?: number
+  /** After backup attempts fail at maxStuckSteps, auto-split once before Needs PO. */
+  enableSplitOnStuck?: boolean
   requireWorkspaceStructure?: boolean
   autoScaffoldOnStructureGap?: boolean
   requireToolApproval?: boolean
@@ -850,6 +852,7 @@ export interface WorkflowSettingsPayload {
   lintFanoutThreshold?: number
   enableBackupModelOnStuck?: boolean
   backupModelStuckSteps?: number
+  enableSplitOnStuck?: boolean
   requireWorkspaceStructure?: boolean
   autoScaffoldOnStructureGap?: boolean
   requireToolApproval?: boolean
@@ -1081,6 +1084,7 @@ export const DEFAULT_WORKFLOW_SETTINGS: WorkflowSettings = {
   lintFanoutThreshold: 6,
   enableBackupModelOnStuck: true,
   backupModelStuckSteps: 2,
+  enableSplitOnStuck: true,
   requireWorkspaceStructure: true,
   autoScaffoldOnStructureGap: true,
   requireToolApproval: false,

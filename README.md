@@ -316,6 +316,7 @@ Persisted per project. Update via sidebar **Workflow** or `POST /api/workflow/se
 | enableBlockedLane | On | Auto-move unmet `blockedBy` cards into **Blocked** (healthy wait); sprint never claims them |
 | enableBackupModelOnStuck | On | Use per-agent backup model for the next N stuck steps (Settings → Models) |
 | backupModelStuckSteps | 2 | How many steps to run on the backup model before reverting to primary |
+| enableSplitOnStuck | On | After backup attempts fail at `maxStuckSteps`, auto-split once via PO before Needs PO |
 | maxToolFailuresPerStep | 5 | Stop agent loop after N tool failures (Settings → Workflow) |
 | pauseSprintOnNeedsUser | Off | Idle sprint while Needs User cards exist |
 
@@ -445,7 +446,7 @@ Custom tools appear in the agent’s Ollama `tools` list. If an allowlist is set
 |------|---------|------------|
 | **Blocked (lane)** | Healthy wait: `blockedBy` not all Done | Auto move into **Blocked**; auto release when deps Done. Sprint does not claim these cards. |
 | **Agent loop stop** | Same tool+args repeated, max tool failures, max LLM iterations, or **max step duration** | Card stays In Progress; result = clear `Stopped:…` / `Timed out:…` |
-| **Stuck loops** | Sprint steps with **no lane move** (`stuckLoops`) | Escalate after `maxStuckSteps` → Needs PO |
+| **Stuck loops** | Sprint steps with **no lane move** (`stuckLoops`) | Ladder: arm **backup model** → at `maxStuckSteps` **auto-split** once (if `enableSplitOnStuck`) → else Needs PO. No subagents. |
 | **Deadlock** | Cycle / all-missing blockers | Needs User |
 
 ```mermaid
