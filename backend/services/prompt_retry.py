@@ -15,6 +15,7 @@ from backend.agents.task_context import (
     record_task_decision,
     record_task_transcript,
     set_active_sprint_context,
+    strip_last_step_outcome_section,
 )
 from backend.services.llm_debug_log import get_llm_logs
 from backend.services.project_service import save_current_project_state
@@ -258,7 +259,7 @@ def retry_agent_step(
 
 def build_continuation_prompt(task: Dict[str, Any], brief: str, progress: Dict[str, Any]) -> str:
     """Prompt for Extend: continue from prior max-iter progress (no in-memory LLM history)."""
-    base = build_task_prompt(task, brief)
+    base = strip_last_step_outcome_section(build_task_prompt(task, brief))
     tools = progress.get("toolsUsed") or []
     tools_line = ", ".join(tools) if tools else "(none recorded)"
     last_tools = progress.get("lastTools") or []

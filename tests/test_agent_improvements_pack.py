@@ -50,7 +50,7 @@ def test_prompt_contains_last_step_outcome():
                 "stopReason": "max_iterations",
                 "exitReason": "max_iterations",
                 "whyCardStayed": "Hit iteration cap after apply_patch",
-                "suggestedAction": "Extend the step",
+                "suggestedAction": "Extend the step (+4/+8 iterations) to continue",
                 "toolsUsed": ["read_file", "apply_patch"],
             },
             "lastDiagnosis": {
@@ -62,10 +62,52 @@ def test_prompt_contains_last_step_outcome():
     state.SHARED_BOARD["In Progress"] = [task]
     prompt = build_task_prompt(task, "Brief")
     assert "=== LAST STEP OUTCOME ===" in prompt
-    assert "max_iterations" in prompt
+    assert "Previous Dev step stopped: max_iterations" in prompt
+    assert "Do next:" in prompt
+    assert "Do not:" in prompt
     assert "apply_patch" in prompt
+    assert "Extend the step" not in prompt
+    assert "suggestedAction:" not in prompt
     assert "=== LAST DIAGNOSIS ===" in prompt
     assert "Lint errors" in prompt
+    assert "Act on this diagnosis before exploring unrelated files." in prompt
+
+
+def test_continuation_strips_last_step_outcome():
+    initialize()
+    _empty_board()
+    from backend.services.prompt_retry import build_continuation_prompt
+
+    task = init_new_task(
+        {
+            "id": "T-CONT",
+            "title": "Continue",
+            "description": "d",
+            "status": "In Progress",
+            "lastStepOutcome": {
+                "stopReason": "max_iterations",
+                "whyCardStayed": "Hit cap",
+                "suggestedAction": "Extend the step",
+                "toolsUsed": ["read_file"],
+            },
+            "files": [{"path": "a.py", "action": "written"}],
+        }
+    )
+    state.SHARED_BOARD["In Progress"] = [task]
+    prompt = build_continuation_prompt(
+        task,
+        "Brief",
+        {
+            "toolsUsed": ["read_file", "write_file"],
+            "iterationsUsed": 8,
+            "iterationsMax": 8,
+            "planRejections": 1,
+            "textRejections": 0,
+        },
+    )
+    assert "CONTINUATION" in prompt
+    assert "=== LAST STEP OUTCOME ===" not in prompt
+    assert "Extend the step" not in prompt
 
 
 def test_auto_extend_once_on_max_iter_with_writes():

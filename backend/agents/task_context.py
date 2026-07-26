@@ -1060,34 +1060,114 @@ def _format_older_resolutions_block(resolutions: List[Dict[str, Any]]) -> str:
     )
 
 
+_STOP_REASON_DIRECTIVES = {
+    "max_iterations": (
+        "Call apply_patch/write_file to finish remaining AC work. Do not emit plan-only text.",
+        "Do not burn iterations on plans or re-reading without edits.",
+    ),
+    "plan_exhausted": (
+        "Stop planning. Call apply_patch or write_file on the next turn.",
+        "Do not return another plan-only or text-only reply.",
+    ),
+    "read_only_no_edits": (
+        "You already read files — now apply_patch/write_file to implement the AC.",
+        "Do not end the step after reads only.",
+    ),
+    "duplicate_tool": (
+        "Change approach: different args, path, or tool. Fix the underlying failure first.",
+        "Do not repeat the same failing tool call with the same arguments.",
+    ),
+    "step_timeout": (
+        "Prioritize the single highest-value edit for this card's AC, then verify once.",
+        "Do not start long exploratory command chains.",
+    ),
+    "tool_failure_stop": (
+        "Read the last tool error, fix the cause, then retry with different args if needed.",
+        "Do not retry the identical failing call.",
+    ),
+    "text_only": (
+        "Use tools immediately — apply_patch/write_file — instead of describing work in text.",
+        "Do not return text-only responses.",
+    ),
+    "completed_text_only": (
+        "Use tools immediately — apply_patch/write_file — instead of describing work in text.",
+        "Do not return text-only responses.",
+    ),
+    "no_writes": (
+        "Write or edit files with apply_patch/write_file before moving the card.",
+        "Do not claim completion without file edits.",
+    ),
+    "completed_with_writes": (
+        "Continue from the files already written; finish remaining AC gaps only.",
+        "Do not redo completed edits.",
+    ),
+}
+
+_LAST_STEP_OUTCOME_HEADER = "=== LAST STEP OUTCOME ==="
+
+
+def _agent_directives_for_stop(stop: str) -> Tuple[str, str]:
+    key = str(stop or "").strip().lower()
+    if key in _STOP_REASON_DIRECTIVES:
+        return _STOP_REASON_DIRECTIVES[key]
+    return (
+        "Call apply_patch/write_file to make concrete progress on the acceptance criteria.",
+        "Do not repeat the previous failing approach.",
+    )
+
+
 def _format_last_step_outcome_block(task: Dict[str, Any]) -> str:
-    """Compact LAST STEP OUTCOME for the next prompt (~800 chars)."""
+    """Compact agent-facing LAST STEP OUTCOME for the next prompt (~800 chars)."""
     outcome = task.get("lastStepOutcome")
     if not isinstance(outcome, dict) or not outcome:
         return ""
-    lines = ["=== LAST STEP OUTCOME ==="]
-    stop = outcome.get("stopReason") or outcome.get("exitReason")
-    exit_r = outcome.get("exitReason") or outcome.get("stopReason")
-    if stop:
-        lines.append(f"stopReason: {stop}")
-    if exit_r and exit_r != stop:
-        lines.append(f"exitReason: {exit_r}")
-    why = str(outcome.get("whyCardStayed") or "").strip()
-    if why:
-        lines.append(f"whyCardStayed: {why[:400]}")
-    suggested = str(outcome.get("suggestedAction") or "").strip()
-    if suggested:
-        lines.append(f"suggestedAction: {suggested[:240]}")
+    stop = str(outcome.get("stopReason") or outcome.get("exitReason") or "").strip()
     tools = outcome.get("toolsUsed") or []
+    tools_short = ""
     if isinstance(tools, list) and tools:
-        lines.append(f"toolsUsed: {', '.join(str(t) for t in tools[:12])}")
-    msg = str(outcome.get("message") or "").strip()
-    if msg:
-        lines.append(f"message: {msg[:240]}")
+        tools_short = ", ".join(str(t) for t in tools[:12])
+    why = str(outcome.get("whyCardStayed") or "").strip()
+    # Never inject UI-facing suggestedAction (e.g. "Extend the step…") into the model prompt.
+    do_next, do_not = _agent_directives_for_stop(stop)
+
+    lines = [_LAST_STEP_OUTCOME_HEADER]
+    if stop:
+        tool_bit = f" (tools: {tools_short})" if tools_short else ""
+        lines.append(f"Previous Dev step stopped: {stop}{tool_bit}.")
+    elif tools_short:
+        lines.append(f"Previous Dev step tools: {tools_short}.")
+    if why:
+        # One sentence; strip UI extend wording if it leaked into whyCardStayed
+        why_clean = why.split("\n")[0].strip()
+        if why_clean.lower().startswith("extend the step"):
+            why_clean = ""
+        if why_clean:
+            lines.append(f"Why stuck: {why_clean[:400]}")
+    lines.append(f"Do next: {do_next}")
+    lines.append(f"Do not: {do_not}")
     block = "\n".join(lines) + "\n"
     if len(block) > 800:
         block = block[:797] + "…\n"
     return "\n" + block
+
+
+def strip_last_step_outcome_section(prompt: str) -> str:
+    """Remove === LAST STEP OUTCOME === … through the next === section or end."""
+    if not prompt or _LAST_STEP_OUTCOME_HEADER not in prompt:
+        return prompt
+    start = prompt.find(_LAST_STEP_OUTCOME_HEADER)
+    if start < 0:
+        return prompt
+    # Include leading newlines before the header
+    while start > 0 and prompt[start - 1] == "\n":
+        start -= 1
+    rest = prompt[start + len(_LAST_STEP_OUTCOME_HEADER) :]
+    # Find next section header after this one
+    next_hdr = rest.find("\n===")
+    if next_hdr < 0:
+        return prompt[:start].rstrip() + "\n"
+    # rest[next_hdr] is newline before ===
+    return prompt[:start].rstrip() + rest[next_hdr:]
 
 
 def build_dod_block() -> str:
@@ -1200,6 +1280,7 @@ def build_task_prompt(task: Dict[str, Any], brief: str) -> str:
             prompt += f"Root cause: {str(ld.get('rootCause'))[:300]}\n"
         if ld.get("suggestedFix"):
             prompt += f"Suggested fix: {str(ld.get('suggestedFix'))[:300]}\n"
+        prompt += "Act on this diagnosis before exploring unrelated files.\n"
 
     dependency_outcomes = task.get("dependencyOutcomes") or []
     if dependency_outcomes:
