@@ -177,12 +177,32 @@ class ScrumAgent:
         from backend import state
 
         project_id = state.CURRENT_PROJECT_ID or "default-proj"
+        query = user_prompt
+        prefer = ["fix_pattern", "step_lesson"]
+        task_id = state.ACTIVE_SPRINT_TASK_ID
+        if task_id:
+            task = find_task_by_id(task_id)
+            if task:
+                title = str(task.get("title") or "")
+                outcome = task.get("lastStepOutcome") if isinstance(task.get("lastStepOutcome"), dict) else {}
+                stop = str(outcome.get("stopReason") or outcome.get("exitReason") or "")
+                if title or stop:
+                    query = f"{title}\n{stop}\n{user_prompt}"[:2000]
+                if stop in (
+                    "duplicate_tool",
+                    "tool_failure_stop",
+                    "step_timeout",
+                    "plan_exhausted",
+                    "max_iterations",
+                ):
+                    prefer = ["failure", "fix_pattern"]
         related_memories = self.memory.search(
             self.role,
-            user_prompt,
+            query,
             limit=3,
             project_id=project_id,
             include_all_agents=True,
+            prefer_categories=prefer,
         )
         self._last_memories_used = related_memories
         memory_context = ""
@@ -192,6 +212,98 @@ class ScrumAgent:
             )
         parts = [part for part in (memory_context, f"Task Detail:\n{user_prompt}") if part]
         return "\n\n".join(parts)
+
+    def _save_step_lesson(
+        self,
+        stop_reason: str,
+        tools_used: set[str],
+        result_snippet: str = "",
+    ) -> None:
+        ws = get_workflow_settings()
+        if not ws.get("enableStepLessonMemory", True):
+            return
+        try:
+            project_id = state.CURRENT_PROJECT_ID or "default-proj"
+            task_id = state.ACTIVE_SPRINT_TASK_ID
+            files: List[str] = []
+            if task_id:
+                task = find_task_by_id(task_id)
+                if task:
+                    for f in task.get("files") or []:
+                        if isinstance(f, dict) and f.get("path"):
+                            files.append(str(f["path"]))
+                        elif isinstance(f, str):
+                            files.append(f)
+            worked = ", ".join(sorted(tools_used)) if tools_used else "none"
+            lesson = (
+                f"Step stop={stop_reason or 'unknown'}; tools=[{worked}]. "
+                f"{str(result_snippet or '')[:240]}"
+            )
+            self.memory.save_step_lesson(
+                self.role,
+                lesson=lesson,
+                stop_reason=stop_reason or "",
+                tools_used=sorted(tools_used),
+                task_id=task_id,
+                files=files[:12],
+                project_id=project_id,
+            )
+        except Exception:
+            pass
+
+    def _append_observation_summary(
+        self,
+        messages: List[ChatMessage],
+        batch: List[Tuple[str, Dict[str, Any], Any]],
+    ) -> None:
+        ws = get_workflow_settings()
+        if not ws.get("enableObservationSummaries", True):
+            return
+        lines = ["=== OBSERVATION ==="]
+        files_touched: List[str] = []
+        for tool_name, arguments, result in batch:
+            ok = "ok" if getattr(result, "success", False) else "FAIL"
+            if getattr(result, "duplicate_skip", False):
+                ok = "skip"
+            out = str(getattr(result, "tool_output", "") or "").replace("\n", " ")[:120]
+            lines.append(f"- {tool_name}: {ok} — {out}")
+            path = ""
+            if isinstance(arguments, dict):
+                path = str(arguments.get("path") or "")
+            if path:
+                files_touched.append(path)
+        if files_touched:
+            lines.append("files touched: " + ", ".join(dict.fromkeys(files_touched)))
+        messages.append({"role": "system", "content": "\n".join(lines)})
+
+    def _inject_ac_progress_after_write(self, messages: List[ChatMessage], task_id: Optional[str]) -> None:
+        if not task_id:
+            return
+        try:
+            from backend.services.step_diagnostics import build_card_work_snapshot
+
+            snap = build_card_work_snapshot(task_id=task_id) or {}
+            remaining = snap.get("remainingAcceptance") or snap.get("acceptanceRemaining")
+            files = snap.get("files") or snap.get("filesTouched") or []
+            ac_lines = []
+            task = find_task_by_id(task_id)
+            if task:
+                for c in (task.get("acceptanceCriteria") or [])[:6]:
+                    ac_lines.append(f"- {c}")
+            block = ["=== PERCEIVE (after write) ===", "Re-check remaining work before more tools."]
+            if ac_lines:
+                block.append("Acceptance criteria:")
+                block.extend(ac_lines)
+            if remaining:
+                block.append(f"Remaining: {str(remaining)[:400]}")
+            if files:
+                block.append(
+                    "Files on card: "
+                    + ", ".join(str(f) for f in (files if isinstance(files, list) else [])[:8])
+                )
+            messages.append({"role": "system", "content": "\n".join(block)})
+        except Exception:
+            pass
 
     def _chat_options(self) -> Dict[str, Any]:
         from backend.services.prompt_budget import resolve_ollama_num_ctx
@@ -866,6 +978,22 @@ class ScrumAgent:
                 duplicate_skip=bool(getattr(result, "duplicate_skip", False)),
             )
 
+        batch = [
+            (
+                results_by_id[id(call)][0],
+                results_by_id[id(call)][1],
+                results_by_id[id(call)][2],
+            )
+            for call in all_calls
+        ]
+        self._append_observation_summary(messages, batch)
+        if any(
+            results_by_id[id(call)][0] in ("write_file", "apply_patch")
+            and results_by_id[id(call)][2].success
+            for call in all_calls
+        ):
+            self._inject_ac_progress_after_write(messages, task_id)
+
         tool_summary = ", ".join(
             call.function.name for call in all_calls if hasattr(call, "function")
         )
@@ -926,6 +1054,7 @@ class ScrumAgent:
         )
 
         set_llm_iterations_max(max_iterations)
+        pending_lesson: Optional[Tuple[str, set, str]] = None
 
         try:
             for iteration in range(1, max_iterations + 1):
@@ -947,12 +1076,14 @@ class ScrumAgent:
                     except Exception:
                         pass
                     finish_run(status="failed", error=stop_msg)
+                    pending_lesson = ("step_timeout", set(tools_used), stop_msg)
                     return stop_msg
                 if task_id and is_task_done(task_id) and not state.ALLOW_DONE_RETRY:
                     stop_msg = "Stopped: task already Done"
                     add_system_log(self.role, "info", stop_msg)
                     self._log_step_exit(stop_msg, "info")
                     finish_run(status="completed")
+                    pending_lesson = ("task_done", set(tools_used), stop_msg)
                     return stop_msg
                 intent = build_live_intent(
                     phase="thinking",
@@ -1053,6 +1184,7 @@ class ScrumAgent:
                     )
                     self._log_step_exit("Ollama unavailable — SIMULATION_FALLBACK", "warning")
                     finish_run(status="failed", error="SIMULATION_FALLBACK")
+                    pending_lesson = ("ollama_unavailable", set(tools_used), "SIMULATION_FALLBACK")
                     return "SIMULATION_FALLBACK"
 
                 message = response.message
@@ -1100,12 +1232,20 @@ class ScrumAgent:
                         tools_used=tools_used,
                     )
                     if early_stop:
+                        reason = "tool_failure_stop"
+                        low = early_stop.lower()
+                        if "duplicate" in low or "same args" in low:
+                            reason = "duplicate_tool"
+                        elif "approval" in low:
+                            reason = "awaiting_approval"
+                        pending_lesson = (reason, set(tools_used), early_stop)
                         return early_stop
                     if task_id and is_task_done(task_id) and not state.ALLOW_DONE_RETRY:
                         stop_msg = "Stopped: task already Done"
                         add_system_log(self.role, "info", stop_msg)
                         self._log_step_exit(stop_msg, "info")
                         finish_run(status="completed")
+                        pending_lesson = ("task_done", set(tools_used), stop_msg)
                         return stop_msg
                     continue
 
@@ -1156,6 +1296,7 @@ class ScrumAgent:
                         )
                         self._log_step_exit(max_msg, "warning")
                         finish_run(status="failed", error=max_msg)
+                        pending_lesson = ("max_iterations", set(tools_used), max_msg)
                         return max_msg
 
                     messages.append({"role": "assistant", "content": content})
@@ -1205,6 +1346,20 @@ class ScrumAgent:
                         publish_activity_event=True,
                     )
                     messages.append({"role": "system", "content": _PLAN_REJECTION_MESSAGE})
+                    # Micro-reflect: force a concrete next tool after repeated rejects.
+                    if (plan_n + text_n) >= 2:
+                        messages.append(
+                            {
+                                "role": "system",
+                                "content": (
+                                    "=== REFLECT ===\n"
+                                    "Hypothesis: prior replies were plan/text-only. "
+                                    "Next message MUST be a concrete tool call "
+                                    "(apply_patch or write_file preferred). "
+                                    "State one-line goal in the tool args path/content only — no plans."
+                                ),
+                            }
+                        )
                     # Mid-step backup switch after repeated plan/text rejects.
                     if (
                         self.role == "Developer"
@@ -1273,6 +1428,7 @@ class ScrumAgent:
                     f"Step exit: {exit_reason} tools=[{', '.join(sorted(tools_used)) or 'none'}]",
                 )
                 finish_run(status="completed")
+                pending_lesson = (exit_reason, set(tools_used), content or "")
                 return content or "Task completed."
 
             max_msg = "Max tool iterations reached without completing the task."
@@ -1286,11 +1442,14 @@ class ScrumAgent:
                 )
             add_system_log(
                 self.role,
-                "info",
+                "warning",
                 f"Step exit: max_iterations tools=[{', '.join(sorted(tools_used)) or 'none'}]",
             )
             log_event("max_iterations", max_msg)
-            from backend.services.step_diagnostics import build_step_progress, store_step_progress
+            from backend.services.step_diagnostics import (
+                build_step_progress,
+                store_step_progress,
+            )
 
             store_step_progress(
                 build_step_progress(
@@ -1303,11 +1462,16 @@ class ScrumAgent:
             )
             self._log_step_exit(max_msg, "warning")
             finish_run(status="failed", error=max_msg)
+            pending_lesson = ("max_iterations", set(tools_used), max_msg)
             return max_msg
         except Exception as exc:
             finish_run(status="failed", error=str(exc))
+            pending_lesson = ("exception", set(tools_used), str(exc))
             raise
         finally:
+            if pending_lesson:
+                reason, tools, snip = pending_lesson
+                self._save_step_lesson(reason, tools, snip)
             if task_id:
                 task = find_task_by_id(task_id)
                 if task:
@@ -1317,7 +1481,6 @@ class ScrumAgent:
 
                     save_current_project_state()
                     publish_board_update(task_id, source="task_files")
-
 
     def stream_messages(
         self,

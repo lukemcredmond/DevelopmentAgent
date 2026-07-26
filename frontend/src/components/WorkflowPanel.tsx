@@ -806,6 +806,69 @@ export default function WorkflowPanel({
         />
         Pre-load semantic index chunks at sprint step start
       </label>
+      <label className="flex items-center gap-2 text-[11px] text-cat-subtext cursor-pointer pl-5">
+        <input
+          type="checkbox"
+          checked={settings.enableHybridSearch !== false}
+          onChange={(e) => onSettingsChange({ enableHybridSearch: e.target.checked })}
+        />
+        Hybrid search (dense + lexical RRF)
+      </label>
+      <div className="grid grid-cols-2 gap-2 pl-5 text-[11px]">
+        <label>
+          <span className="text-[10px] text-cat-overlay block">Min dense score (0–1)</span>
+          <input
+            type="number"
+            min={0}
+            max={1}
+            step={0.05}
+            value={settings.semanticMinScore ?? 0.35}
+            onChange={(e) => {
+              const v = parseFloat(e.target.value)
+              if (!Number.isNaN(v)) onSettingsChange({ semanticMinScore: v })
+            }}
+            className="w-full bg-cat-base border border-cat-surface1 rounded p-1 text-white"
+          />
+        </label>
+        <label>
+          <span className="text-[10px] text-cat-overlay block">semanticSprintTopK</span>
+          <NumberSettingInput
+            value={settings.semanticSprintTopK ?? 5}
+            min={1}
+            max={20}
+            onCommit={(semanticSprintTopK) => onSettingsChange({ semanticSprintTopK })}
+            className="w-full bg-cat-base border border-cat-surface1 rounded p-1 text-white"
+          />
+        </label>
+      </div>
+      <label className="flex items-center gap-2 text-[11px] text-cat-subtext cursor-pointer pl-5">
+        <input
+          type="checkbox"
+          checked={settings.enableObservationSummaries !== false}
+          onChange={(e) => onSettingsChange({ enableObservationSummaries: e.target.checked })}
+        />
+        Observation summaries after tool batches
+      </label>
+      <label className="flex items-center gap-2 text-[11px] text-cat-subtext cursor-pointer pl-5">
+        <input
+          type="checkbox"
+          checked={settings.enableEpisodeSummary !== false}
+          onChange={(e) => onSettingsChange({ enableEpisodeSummary: e.target.checked })}
+        />
+        Episode summary when pruning context
+      </label>
+      <label className="flex items-center gap-2 text-[11px] text-cat-subtext cursor-pointer pl-5">
+        <input
+          type="checkbox"
+          checked={settings.enableStepLessonMemory !== false}
+          onChange={(e) => onSettingsChange({ enableStepLessonMemory: e.target.checked })}
+        />
+        Save end-of-step lesson to memory
+      </label>
+      <p className="text-[10px] text-cat-overlay leading-relaxed pl-5">
+        Fine-tuning: use <span className="font-mono">GET /api/training/export</span> for JSONL.
+        Training is not run in AllHands.
+      </p>
 
       <div className="border-t border-cat-surface1 pt-2">
         <button

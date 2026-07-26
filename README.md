@@ -362,6 +362,12 @@ Persisted per project. Update via sidebar **Workflow** or `POST /api/workflow/se
 | qdrantApiKey | (empty) | Optional Qdrant API key |
 | embedModel | nomic-embed-text | Ollama embedding model |
 | enableSemanticSprintContext | On | Inject semantic + graph context into sprint prompts |
+| enableHybridSearch | On | Fuse dense Qdrant hits with lexical workspace scan (RRF) |
+| semanticMinScore | 0.35 | Drop weak dense hits from sprint inject |
+| semanticSprintTopK | 5 | Max semantic chunks injected per sprint step |
+| enableObservationSummaries | On | Compact `=== OBSERVATION ===` after each tool batch |
+| enableEpisodeSummary | On | Fold pruned tool messages into `=== EPISODE SUMMARY ===` |
+| enableStepLessonMemory | On | Save one structured lesson to memory at end of each agent step |
 | enableWebSearch | Off | Web search tool for agents |
 | ollamaNumCtx | 32768 | Context window hint for Ollama (Dev default) |
 | ollamaNumCtxByRole | `{}` | Optional per-role `{po,dev,cr,qa}` overrides; unset PO/CR/QA use min(global, 16384) |
@@ -882,6 +888,8 @@ Tools register as `mcp_{server}_{tool}` on project load (up to `maxMcpTools`). P
 | `cd frontend && npm run lint` | Run oxlint |
 | `cd frontend && npm test` | Run vitest |
 | `python -m pytest tests/ -q` | Run backend tests |
+
+Offline fine-tuning export (no in-app training): `GET /api/training/export?limit=50` returns JSONL of recent step diagnostics.
 
 ### Architecture
 

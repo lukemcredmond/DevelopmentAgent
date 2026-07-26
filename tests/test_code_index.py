@@ -45,7 +45,14 @@ def test_index_workspace_zero_chunks_is_error(mock_client, mock_preflight, mock_
     (ws / "lib" / "main.dart").write_text("void main() {}", encoding="utf-8")
     monkeypatch.setattr(state, "WORKSPACE_DIR", str(ws))
 
-    mock_client.return_value = MagicMock()
+    client = MagicMock()
+    client.get_collections.return_value.collections = []
+    client.scroll.return_value = ([], None)
+    info = MagicMock()
+    info.points_count = 0
+    info.config.params.vectors.size = 768
+    client.get_collection.return_value = info
+    mock_client.return_value = client
     engine = CodeIndexEngine(ollama_url="http://localhost:11434")
     result = engine.index_workspace()
     assert result["ok"] is False

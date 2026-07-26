@@ -386,6 +386,12 @@ export interface WorkflowSettings {
   maxToolOutputCharsForLlm?: number
   messagePruneThresholdPct?: number
   enableSemanticSprintContext?: boolean
+  enableHybridSearch?: boolean
+  semanticMinScore?: number
+  semanticSprintTopK?: number
+  enableObservationSummaries?: boolean
+  enableEpisodeSummary?: boolean
+  enableStepLessonMemory?: boolean
   pauseSprintOnNeedsUser?: boolean
   autoFormatAfterEdit?: boolean
   phoneNotifyEnabled?: boolean
@@ -913,6 +919,12 @@ export interface WorkflowSettingsPayload {
   maxToolOutputCharsForLlm?: number
   messagePruneThresholdPct?: number
   enableSemanticSprintContext?: boolean
+  enableHybridSearch?: boolean
+  semanticMinScore?: number
+  semanticSprintTopK?: number
+  enableObservationSummaries?: boolean
+  enableEpisodeSummary?: boolean
+  enableStepLessonMemory?: boolean
   pauseSprintOnNeedsUser?: boolean
   autoFormatAfterEdit?: boolean
   phoneNotifyEnabled?: boolean
@@ -1152,6 +1164,12 @@ export const DEFAULT_WORKFLOW_SETTINGS: WorkflowSettings = {
   maxToolOutputCharsForLlm: 6000,
   messagePruneThresholdPct: 60,
   enableSemanticSprintContext: true,
+  enableHybridSearch: true,
+  semanticMinScore: 0.35,
+  semanticSprintTopK: 5,
+  enableObservationSummaries: true,
+  enableEpisodeSummary: true,
+  enableStepLessonMemory: true,
   pauseSprintOnNeedsUser: false,
   autoFormatAfterEdit: true,
   phoneNotifyEnabled: false,

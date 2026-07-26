@@ -94,6 +94,12 @@ DEFAULT_WORKFLOW_SETTINGS: Dict[str, Any] = {
     "maxToolOutputCharsForLlm": 6000,
     "messagePruneThresholdPct": 60,
     "enableSemanticSprintContext": True,
+    "enableHybridSearch": True,
+    "semanticMinScore": 0.35,
+    "semanticSprintTopK": 5,
+    "enableObservationSummaries": True,
+    "enableEpisodeSummary": True,
+    "enableStepLessonMemory": True,
     "pauseSprintOnNeedsUser": False,
     "autoFormatAfterEdit": True,
     # Outbound-only phone alerts (Discord webhook) — never opens inbound ports.

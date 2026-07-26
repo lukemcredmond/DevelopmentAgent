@@ -442,20 +442,15 @@ def _record_tool_side_effects(
         from backend import state as app_state
 
         project_id = app_state.CURRENT_PROJECT_ID or "default-proj"
-        if success and tool_name in ("apply_patch", "write_file"):
-            path = file_path_from_tool(tool_name, arguments) or "?"
-            memory_engine.save_outcome(
-                agent_role,
-                f"{tool_name} {path} succeeded on task {task_id or 'system'}",
-                "fix_pattern",
-                project_id=project_id,
-            )
-        elif not success:
+        # Prefer end-of-step lessons; do not spam memory on every successful write.
+        if not success:
+            # Dedup noisy identical failures via save()'s content equality.
             memory_engine.save_outcome(
                 agent_role,
                 f"{tool_name} failed: {tool_output[:300]}",
                 "failure",
                 project_id=project_id,
+                meta={"kind": "tool_failure", "tool": tool_name, "taskId": task_id or ""},
             )
 
     task = find_task_by_id(task_id)

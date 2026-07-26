@@ -111,9 +111,16 @@ def run_fix_verify_loop(
                 f"\nLeftover project lint was split into related Backlog card(s): "
                 f"{', '.join(spawned)}. Do not chase those on this card.\n"
             )
+        # Strip prior fix-verify observe blocks so rounds do not accumulate.
+        base = user_prompt
+        marker = "=== OBSERVE (fix-verify round"
+        if marker in base:
+            base = base.split(marker)[0].rstrip()
+        if "=== FIX-VERIFY ROUND" in base:
+            base = base.split("=== FIX-VERIFY ROUND")[0].rstrip()
         prompt = (
-            f"{user_prompt}\n\n"
-            f"=== FIX-VERIFY ROUND {round_num}/{max_rounds} ===\n"
+            f"{base}\n\n"
+            f"=== OBSERVE (fix-verify round {round_num}/{max_rounds}) ===\n"
             f"Lint still reports issues. Fix only the listed in-card budget "
             f"(at most {max_keep} highest-severity findings relevant to this card's AC). "
             "Do not clear the whole project on this card.\n"

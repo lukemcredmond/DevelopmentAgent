@@ -204,8 +204,47 @@ class SemanticMemoryEngine:
         category: str,
         *,
         project_id: Optional[str] = None,
+        meta: Optional[Dict[str, Any]] = None,
     ) -> None:
-        self.save(agent_id, content, category, project_id=project_id)
+        text = content.strip()
+        if meta:
+            payload = {"lesson": text, **meta}
+            text = json.dumps(payload, ensure_ascii=False)[:4000]
+        self.save(agent_id, text, category, project_id=project_id)
+
+    def save_step_lesson(
+        self,
+        agent_id: str,
+        *,
+        lesson: str,
+        stop_reason: str = "",
+        tools_used: Optional[List[str]] = None,
+        task_id: Optional[str] = None,
+        files: Optional[List[str]] = None,
+        project_id: Optional[str] = None,
+    ) -> None:
+        """Structured end-of-step lesson (preferred over per-tool breadcrumbs)."""
+        meta: Dict[str, Any] = {
+            "kind": "step_lesson",
+            "stopReason": stop_reason or "",
+            "taskId": task_id or "",
+            "toolsUsed": list(tools_used or [])[:20],
+            "files": list(files or [])[:12],
+        }
+        category = "failure" if stop_reason in (
+            "duplicate_tool",
+            "tool_failure_stop",
+            "step_timeout",
+            "plan_exhausted",
+            "read_only_no_edits",
+        ) else "fix_pattern"
+        self.save_outcome(
+            agent_id,
+            lesson[:800],
+            category,
+            project_id=project_id,
+            meta=meta,
+        )
 
     def search(
         self,
@@ -215,6 +254,7 @@ class SemanticMemoryEngine:
         *,
         project_id: Optional[str] = None,
         include_all_agents: bool = False,
+        prefer_categories: Optional[List[str]] = None,
     ) -> List[Dict[str, Any]]:
         from backend import state
 
@@ -298,13 +338,26 @@ class SemanticMemoryEngine:
                     }
                 )
             if scored:
+                if prefer_categories:
+                    prefer = {c.lower() for c in prefer_categories}
+                    for item in scored:
+                        cat = str(item.get("category") or "").lower()
+                        if cat in prefer:
+                            item["score"] = float(item.get("score") or 0) + 0.08
                 scored.sort(key=lambda x: x["score"], reverse=True)
                 return scored[:limit]
 
-        tfidf = self._tfidf_search(query, records, limit)
+        tfidf = self._tfidf_search(query, records, limit * 2 if prefer_categories else limit)
         for item in tfidf:
             item.setdefault("agent", agent_id.split(":")[-1] if ":" in agent_id else agent_id)
-        return tfidf
+        if prefer_categories:
+            prefer = {c.lower() for c in prefer_categories}
+            for item in tfidf:
+                cat = str(item.get("category") or "").lower()
+                if cat in prefer:
+                    item["score"] = float(item.get("score") or 0) + 0.08
+            tfidf.sort(key=lambda x: x["score"], reverse=True)
+        return tfidf[:limit]
 
     def list_for_project(
         self,

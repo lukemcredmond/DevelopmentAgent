@@ -102,9 +102,10 @@ def semantic_search(q: str, limit: int = 8):
 @router.post("/api/search/reindex")
 def reindex_codebase(payload: ReindexPayload | None = None):
     ollama_url = (payload.ollama_url if payload else None) or "http://localhost:11434"
+    force = bool(payload.force) if payload else False
     with state.STATE_LOCK:
         engine = CodeIndexEngine(ollama_url=ollama_url)
-        result = engine.index_workspace()
+        result = engine.index_workspace(force=force)
         if not result.get("ok"):
             raise HTTPException(status_code=503, detail=result.get("error", "Reindex failed"))
         from backend.services.graphify_service import run_graphify_update

@@ -6,6 +6,9 @@ from typing import Any, Dict, List, MutableSequence, Sequence
 
 from backend.services.workflow_settings import get_workflow_settings
 
+_EPISODE_HEADER = "=== EPISODE SUMMARY ==="
+_EPISODE_CAP = 1500
+
 
 def max_tool_output_chars_for_llm() -> int:
     ws = get_workflow_settings()
@@ -66,38 +69,95 @@ def truncate_tool_output_for_llm(tool_name: str, tool_output: str) -> str:
     )
 
 
+def _summarize_removed(msg: Dict[str, Any]) -> str:
+    role = str(msg.get("role") or "")
+    name = str(msg.get("tool_name") or "")
+    content = str(msg.get("content") or "").replace("\n", " ").strip()
+    if role == "tool":
+        return f"- tool {name or '?'}: {content[:160]}"
+    if role == "system" and content.startswith("=== OBSERVATION ==="):
+        return f"- observation: {content[20:180].strip()}"
+    if role == "system":
+        return f"- note: {content[:140]}"
+    return f"- {role}: {content[:120]}"
+
+
+def _merge_episode_summary(existing: str, new_lines: List[str]) -> str:
+    body = existing
+    if body.startswith(_EPISODE_HEADER):
+        body = body[len(_EPISODE_HEADER) :].lstrip("\n")
+    merged = (body + "\n" if body else "") + "\n".join(new_lines)
+    merged = merged.strip()
+    if len(merged) > _EPISODE_CAP:
+        merged = "…\n" + merged[-(_EPISODE_CAP - 20) :]
+    return f"{_EPISODE_HEADER}\n{merged}"
+
+
 def prune_messages_if_needed(messages: MutableSequence[Dict[str, Any]]) -> MutableSequence[Dict[str, Any]]:
     """Drop oldest tool messages when conversation exceeds context budget."""
     if len(messages) <= 2:
         return messages
 
     ws = get_workflow_settings()
-    num_ctx = int(ws.get("ollamaNumCtx", 32768))
+    from backend.services.prompt_budget import resolve_ollama_num_ctx
+
+    num_ctx = resolve_ollama_num_ctx()
     threshold = message_prune_threshold_chars(num_ctx)
     if estimate_messages_chars(messages) <= threshold:
         return messages
 
+    enable_episode = ws.get("enableEpisodeSummary", True)
     preserved_head = 2
     pruned = 0
+    removed_summaries: List[str] = []
     while len(messages) > preserved_head + 1 and estimate_messages_chars(messages) > threshold:
         removed = messages.pop(preserved_head)
         pruned += 1
-        if removed.get("role") == "tool" and preserved_head < len(messages):
+        if enable_episode:
+            line = _summarize_removed(removed if isinstance(removed, dict) else {})
+            if line:
+                removed_summaries.append(line)
+        if (
+            isinstance(removed, dict)
+            and removed.get("role") == "tool"
+            and preserved_head < len(messages)
+        ):
             nxt = messages[preserved_head]
-            if nxt.get("role") == "system" and "Tool '" in str(nxt.get("content", "")):
-                messages.pop(preserved_head)
+            if isinstance(nxt, dict) and nxt.get("role") == "system" and "Tool '" in str(
+                nxt.get("content", "")
+            ):
+                extra = messages.pop(preserved_head)
                 pruned += 1
+                if enable_episode:
+                    removed_summaries.append(_summarize_removed(extra))
 
     if pruned:
-        messages.insert(
-            preserved_head,
-            {
-                "role": "system",
-                "content": (
-                    f"[Context pruned: removed {pruned} older tool message(s) to stay within "
-                    f"~{int(ws.get('messagePruneThresholdPct') or 60)}% of num_ctx. "
-                    "Re-read files or re-run commands if you need that detail.]"
-                ),
-            },
-        )
+        if enable_episode and removed_summaries:
+            # Fold into existing episode summary or insert new one
+            episode_idx = None
+            for i in range(preserved_head, min(len(messages), preserved_head + 4)):
+                content = str(messages[i].get("content") or "")
+                if content.startswith(_EPISODE_HEADER):
+                    episode_idx = i
+                    break
+            summary = _merge_episode_summary(
+                str(messages[episode_idx].get("content") or "") if episode_idx is not None else "",
+                removed_summaries[-40:],
+            )
+            if episode_idx is not None:
+                messages[episode_idx] = {"role": "system", "content": summary}
+            else:
+                messages.insert(preserved_head, {"role": "system", "content": summary})
+        else:
+            messages.insert(
+                preserved_head,
+                {
+                    "role": "system",
+                    "content": (
+                        f"[Context pruned: removed {pruned} older tool message(s) to stay within "
+                        f"~{int(ws.get('messagePruneThresholdPct') or 60)}% of num_ctx. "
+                        "Re-read files or re-run commands if you need that detail.]"
+                    ),
+                },
+            )
     return messages

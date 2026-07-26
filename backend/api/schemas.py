@@ -88,6 +88,7 @@ class ResolveUserPayload(BaseModel):
 
 class ReindexPayload(BaseModel):
     ollama_url: str = "http://localhost:11434"
+    force: bool = False
 
 
 class MemoryCreatePayload(BaseModel):
@@ -187,6 +188,12 @@ class WorkflowSettingsPayload(BaseModel):
     maxToolOutputCharsForLlm: Optional[int] = None
     messagePruneThresholdPct: Optional[int] = None
     enableSemanticSprintContext: Optional[bool] = None
+    enableHybridSearch: Optional[bool] = None
+    semanticMinScore: Optional[float] = None
+    semanticSprintTopK: Optional[int] = None
+    enableObservationSummaries: Optional[bool] = None
+    enableEpisodeSummary: Optional[bool] = None
+    enableStepLessonMemory: Optional[bool] = None
     pauseSprintOnNeedsUser: Optional[bool] = None
     autoFormatAfterEdit: Optional[bool] = None
     phoneNotifyEnabled: Optional[bool] = None
