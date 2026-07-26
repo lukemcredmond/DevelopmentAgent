@@ -126,6 +126,10 @@ async def import_project_zip(file: UploadFile = File(...)):
                     meta.get("dev_model", "qwen2.5-coder:14b"),
                     meta.get("cr_model", "qwen2.5-coder:7b"),
                     meta.get("qa_model", "qwen2.5-coder:7b"),
+                    meta.get("po_backup_model", ""),
+                    meta.get("dev_backup_model", ""),
+                    meta.get("cr_backup_model", ""),
+                    meta.get("qa_backup_model", ""),
                 )
                 if "logs.json" in zf.namelist():
                     logs = json.loads(zf.read("logs.json"))
@@ -148,6 +152,23 @@ def update_config(payload: ConfigPayload):
         agent_dev.model = payload.devModel
         agent_cr.model = payload.crModel
         agent_qa.model = payload.qaModel
+        state.PRIMARY_MODELS = {
+            "po": payload.poModel,
+            "dev": payload.devModel,
+            "cr": payload.crModel,
+            "qa": payload.qaModel,
+        }
+        # None means leave unchanged; empty string clears backup.
+        backup = dict(getattr(state, "BACKUP_MODELS", {}) or {})
+        if payload.poBackupModel is not None:
+            backup["po"] = payload.poBackupModel.strip()
+        if payload.devBackupModel is not None:
+            backup["dev"] = payload.devBackupModel.strip()
+        if payload.crBackupModel is not None:
+            backup["cr"] = payload.crBackupModel.strip()
+        if payload.qaBackupModel is not None:
+            backup["qa"] = payload.qaBackupModel.strip()
+        state.BACKUP_MODELS = backup
 
         os.makedirs(state.WORKSPACE_DIR, exist_ok=True)
         os.makedirs(state.SKILLS_DIR, exist_ok=True)

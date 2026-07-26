@@ -326,6 +326,8 @@ export interface WorkflowSettings {
   maxInCardLintFixes?: number
   maxLintFanoutCards?: number
   lintFanoutThreshold?: number
+  enableBackupModelOnStuck?: boolean
+  backupModelStuckSteps?: number
   requireToolApproval?: boolean
   toolApprovalTools?: string[]
   nonBlockingToolApproval?: boolean
@@ -752,6 +754,7 @@ export interface AppState {
   availableSkills: Skill[]
   assignedSkills: Record<AgentId, string[]>
   models: Record<AgentId, string>
+  backupModels?: Partial<Record<AgentId, string>>
   projectsList: ProjectSummary[]
   workflowSettings?: WorkflowSettings
   activeLanes?: BoardLane[]
@@ -775,6 +778,10 @@ export interface ConfigPayload {
   devModel: string
   crModel: string
   qaModel: string
+  poBackupModel?: string
+  devBackupModel?: string
+  crBackupModel?: string
+  qaBackupModel?: string
 }
 
 export interface BriefPayload {
@@ -834,6 +841,8 @@ export interface WorkflowSettingsPayload {
   maxInCardLintFixes?: number
   maxLintFanoutCards?: number
   lintFanoutThreshold?: number
+  enableBackupModelOnStuck?: boolean
+  backupModelStuckSteps?: number
   requireToolApproval?: boolean
   toolApprovalTools?: string[]
   nonBlockingToolApproval?: boolean
@@ -1059,6 +1068,8 @@ export const DEFAULT_WORKFLOW_SETTINGS: WorkflowSettings = {
   maxInCardLintFixes: 5,
   maxLintFanoutCards: 8,
   lintFanoutThreshold: 6,
+  enableBackupModelOnStuck: true,
+  backupModelStuckSteps: 2,
   requireToolApproval: false,
   toolApprovalTools: ['write_file', 'run_command', 'delete_file'],
   nonBlockingToolApproval: true,

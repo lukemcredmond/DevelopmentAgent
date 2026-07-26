@@ -23,6 +23,8 @@ DEFAULT_WORKFLOW_SETTINGS: Dict[str, Any] = {
     "maxInCardLintFixes": 5,
     "maxLintFanoutCards": 8,
     "lintFanoutThreshold": 6,
+    "enableBackupModelOnStuck": True,
+    "backupModelStuckSteps": 2,
     "toolApprovalTools": ["write_file", "run_command", "delete_file"],
     "nonBlockingToolApproval": True,
     "commandAutoRunMode": "off",

@@ -144,6 +144,10 @@ function applyStateFields(
     setDevModel: (v: string) => void
     setCrModel: (v: string) => void
     setQaModel: (v: string) => void
+    setPoBackupModel: (v: string) => void
+    setDevBackupModel: (v: string) => void
+    setCrBackupModel: (v: string) => void
+    setQaBackupModel: (v: string) => void
   },
 ) {
   setters.setBrief(data.brief ?? '')
@@ -154,6 +158,10 @@ function applyStateFields(
   setters.setDevModel(data.models?.dev ?? 'qwen2.5-coder:14b')
   setters.setCrModel(data.models?.cr ?? 'qwen2.5-coder:7b')
   setters.setQaModel(data.models?.qa ?? 'qwen2.5-coder:7b')
+  setters.setPoBackupModel(data.backupModels?.po ?? '')
+  setters.setDevBackupModel(data.backupModels?.dev ?? '')
+  setters.setCrBackupModel(data.backupModels?.cr ?? '')
+  setters.setQaBackupModel(data.backupModels?.qa ?? '')
 }
 
 export default function App() {
@@ -206,6 +214,10 @@ export default function App() {
   const [devModel, setDevModel] = useState('qwen2.5-coder:14b')
   const [crModel, setCrModel] = useState('qwen2.5-coder:7b')
   const [qaModel, setQaModel] = useState('qwen2.5-coder:7b')
+  const [poBackupModel, setPoBackupModel] = useState('')
+  const [devBackupModel, setDevBackupModel] = useState('')
+  const [crBackupModel, setCrBackupModel] = useState('')
+  const [qaBackupModel, setQaBackupModel] = useState('')
 
   const [selectedFile, setSelectedFile] = useState<string | null>(null)
   const [workspaceOpen, setWorkspaceOpen] = useState(readWorkspaceOpen)
@@ -376,6 +388,10 @@ export default function App() {
     setDevModel,
     setCrModel,
     setQaModel,
+    setPoBackupModel,
+    setDevBackupModel,
+    setCrBackupModel,
+    setQaBackupModel,
   }
 
   const handleState = useCallback(
@@ -1298,6 +1314,10 @@ export default function App() {
         devModel={devModel}
         crModel={crModel}
         qaModel={qaModel}
+        poBackupModel={poBackupModel}
+        devBackupModel={devBackupModel}
+        crBackupModel={crBackupModel}
+        qaBackupModel={qaBackupModel}
         indexProgress={indexProgress}
         skillSuggestionCounts={skillSuggestionCounts}
         onOllamaUrlChange={setOllamaUrl}
@@ -1308,6 +1328,10 @@ export default function App() {
         onDevModelChange={setDevModel}
         onCrModelChange={setCrModel}
         onQaModelChange={setQaModel}
+        onPoBackupModelChange={setPoBackupModel}
+        onDevBackupModelChange={setDevBackupModel}
+        onCrBackupModelChange={setCrBackupModel}
+        onQaBackupModelChange={setQaBackupModel}
         onLoadProject={(id) =>
           void withLoading(async () => handleState(await loadProject(id)))
         }

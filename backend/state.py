@@ -57,6 +57,21 @@ PROJECT_TOOL_EVIDENCE: List[Dict[str, Any]] = []
 # Interrupted sprint session context surfaced on startup (crash recovery banner).
 RECOVERY_CONTEXT: Optional[Dict[str, Any]] = None
 
+# Primary / backup Ollama model names per agent (primary is what we persist; agent.model may
+# temporarily switch to backup during stuck recovery).
+PRIMARY_MODELS: Dict[str, str] = {
+    "po": "llama3:8b",
+    "dev": "qwen2.5-coder:14b",
+    "cr": "qwen2.5-coder:7b",
+    "qa": "qwen2.5-coder:7b",
+}
+BACKUP_MODELS: Dict[str, str] = {
+    "po": "",
+    "dev": "",
+    "cr": "",
+    "qa": "",
+}
+
 # Paths read via read_file during the current sprint agent step (safe_path -> content).
 STEP_FILE_READS: Dict[str, str] = {}
 

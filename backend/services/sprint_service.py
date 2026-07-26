@@ -752,7 +752,12 @@ def _try_move_to_needs_user(
     return True
 
 
-def _check_stuck_and_escalate(task_id: str, lane_before: str) -> None:
+def _check_stuck_and_escalate(
+    task_id: str,
+    lane_before: str,
+    *,
+    agent_key: Optional[str] = None,
+) -> None:
     """Escalate when a sprint step completes without moving the card."""
     task = find_task_by_id(task_id)
     if not task:
@@ -762,9 +767,44 @@ def _check_stuck_and_escalate(task_id: str, lane_before: str) -> None:
 
     if lane_before != lane_after:
         task["stuckLoops"] = 0
+        try:
+            from backend.services.backup_model import clear_backup_remaining, restore_primary_model
+            from backend.agents.registry import agent_cr, agent_dev, agent_po, agent_qa
+
+            clear_backup_remaining(task)
+            # Restore all agents to primary after a successful lane move
+            restore_primary_model(agent_po, "po")
+            restore_primary_model(agent_dev, "dev")
+            restore_primary_model(agent_cr, "cr")
+            restore_primary_model(agent_qa, "qa")
+        except Exception:
+            pass
         return
 
     task["stuckLoops"] = int(task.get("stuckLoops", 0)) + 1
+
+    # Arm backup model for the next step(s) on reasoning/tool-use stuck (not lint walls).
+    key = agent_key
+    if not key:
+        role = str(state.ACTIVE_SPRINT_AGENT or "")
+        key = {
+            "Developer": "dev",
+            "Product Owner": "po",
+            "Code Reviewer": "cr",
+            "QA Tester": "qa",
+        }.get(role)
+    if key and task["stuckLoops"] >= 1:
+        try:
+            from backend.services.backup_model import arm_backup_for_agent
+
+            arm_backup_for_agent(
+                key,
+                task,
+                reason=f"no lane move (stuckLoops={task['stuckLoops']})",
+            )
+        except Exception:
+            pass
+
     ws = get_workflow_settings()
     max_stuck = int(ws.get("maxStuckSteps", 3))
     if task["stuckLoops"] < max_stuck:
@@ -1834,6 +1874,12 @@ def _run_refinement_dev_review(active_task: Dict[str, Any], brief: str) -> None:
     ws = get_workflow_settings()
     max_rounds = int(ws.get("maxRefinementRoundTrips") or 3)
     set_active_sprint_context(task_id, "Developer")
+    try:
+        from backend.services.backup_model import apply_model_for_step
+
+        apply_model_for_step(agent_dev, "dev", find_task_by_id(task_id) or active_task)
+    except Exception:
+        pass
     state.REFINEMENT_MODE = True
     add_system_log("Developer", "info", f"Refinement review for '{active_task['title']}'…")
     questions_block = ""
@@ -1901,7 +1947,7 @@ def _run_refinement_dev_review(active_task: Dict[str, Any], brief: str) -> None:
                 agent="System",
                 lane="Needs PO",
             )
-        _check_stuck_and_escalate(task_id, lane_before)
+        _check_stuck_and_escalate(task_id, lane_before, agent_key="dev")
 
 
 def _apply_spike_result(spike_task: Dict[str, Any], result: str) -> bool:
@@ -2006,13 +2052,19 @@ def _run_spike_dev(active_task: Dict[str, Any], brief: str) -> None:
                     f"Spike incomplete for '{spike['title']}' — missing JSON",
                 )
         publish_board_update(task_id, source="spike_complete")
-        _check_stuck_and_escalate(task_id, lane_before)
+        _check_stuck_and_escalate(task_id, lane_before, agent_key="dev")
 
 
 def _run_refinement_po_update(active_task: Dict[str, Any], brief: str) -> None:
     task_id = active_task["id"]
     lane_before = get_task_lane(task_id) or "Refinement"
     set_active_sprint_context(task_id, "Product Owner")
+    try:
+        from backend.services.backup_model import apply_model_for_step
+
+        apply_model_for_step(agent_po, "po", find_task_by_id(task_id) or active_task)
+    except Exception:
+        pass
     add_system_log("Product Owner", "info", f"Refinement update for '{active_task['title']}'…")
     questions = active_task.get("refinementQuestions") or []
     q_block = "\n".join(f"- {q}" for q in questions) if questions else "(none listed)"
@@ -2080,13 +2132,19 @@ def _run_refinement_po_update(active_task: Dict[str, Any], brief: str) -> None:
                 agent="Product Owner",
                 lane="Backlog",
             )
-        _check_stuck_and_escalate(task_id, lane_before)
+        _check_stuck_and_escalate(task_id, lane_before, agent_key="po")
 
 
 def _run_po_clarification(active_task: Dict[str, Any], brief: str) -> None:
     task_id = active_task["id"]
     lane_before = get_task_lane(task_id) or "Needs PO"
     set_active_sprint_context(task_id, "Product Owner")
+    try:
+        from backend.services.backup_model import apply_model_for_step
+
+        apply_model_for_step(agent_po, "po", find_task_by_id(task_id) or active_task)
+    except Exception:
+        pass
     add_system_log("Product Owner", "info", f"Clarifying '{active_task['title']}'…")
     prompt = (
         build_task_prompt(active_task, brief)
@@ -2141,7 +2199,7 @@ def _run_po_clarification(active_task: Dict[str, Any], brief: str) -> None:
                     "warning",
                     f"Clarification incomplete for '{task['title']}' — card stays in Needs PO",
                 )
-        _check_stuck_and_escalate(task_id, lane_before)
+        _check_stuck_and_escalate(task_id, lane_before, agent_key="po")
 
 
 def _run_developer_step(active_task: Dict[str, Any], brief: str) -> None:
@@ -2150,6 +2208,12 @@ def _run_developer_step(active_task: Dict[str, Any], brief: str) -> None:
     title = str(active_task.get("title", task_id))
     step_started = _mark_sprint_step_start()
     set_active_sprint_context(task_id, "Developer")
+    try:
+        from backend.services.backup_model import apply_model_for_step
+
+        apply_model_for_step(agent_dev, "dev", find_task_by_id(task_id) or active_task)
+    except Exception:
+        pass
     _ensure_dev_step_trace(task_id, title, lane_before)
     try:
         add_system_log("Developer", "info", f"Implementing '{active_task['title']}'…")
@@ -2277,10 +2341,36 @@ def _run_developer_step(active_task: Dict[str, Any], brief: str) -> None:
                     maybe_fanout_lint_diagnostics(fresh_for_lint, diags, step_marker=step_started)
                 except Exception:
                     pass
+            # Arm backup on reasoning stuck exit reasons (next step uses backup model).
+            try:
+                from backend.services.backup_model import (
+                    arm_backup_for_agent,
+                    should_arm_from_exit_reason,
+                )
+                from backend.services.step_diagnostics import get_active_trace
+
+                exit_reason = None
+                if state.DEV_STEP_READ_ONLY_NO_EDITS:
+                    exit_reason = "read_only_no_edits"
+                else:
+                    outcome = state.LAST_STEP_OUTCOME or {}
+                    exit_reason = outcome.get("exitReason") if isinstance(outcome, dict) else None
+                    if not exit_reason:
+                        trace = get_active_trace()
+                        if trace is not None and getattr(trace, "exit_reason", None):
+                            exit_reason = trace.exit_reason
+                if should_arm_from_exit_reason(exit_reason):
+                    arm_backup_for_agent(
+                        "dev",
+                        find_task_by_id(task_id) or task,
+                        reason=str(exit_reason),
+                    )
+            except Exception:
+                pass
             _log_sprint_step_outcome("Developer", task_id, task.get("title", task_id), lane_before, result)
             _audit_dev_files_written(find_task_by_id(task_id) or task, lane_before, task_id)
             _audit_dev_verification(find_task_by_id(task_id) or task, lane_before, task_id, step_started)
-            _check_stuck_and_escalate(task_id, lane_before)
+            _check_stuck_and_escalate(task_id, lane_before, agent_key="dev")
     except Exception:
         state.DEV_STEP_INTERRUPTED = True
         raise
@@ -2293,6 +2383,12 @@ def _run_code_review_step(active_task: Dict[str, Any], brief: str) -> None:
     lane_before = get_task_lane(task_id) or "Code Review"
     _mark_sprint_step_start()
     set_active_sprint_context(task_id, "Code Reviewer")
+    try:
+        from backend.services.backup_model import apply_model_for_step
+
+        apply_model_for_step(agent_cr, "cr", find_task_by_id(task_id) or active_task)
+    except Exception:
+        pass
     add_system_log("Code Reviewer", "info", f"Reviewing '{active_task['title']}'…")
     instructions = (
         "Registered tools: read_file, apply_patch, update_board, grep, glob_file_search, git_diff, search_code. "
@@ -2317,7 +2413,7 @@ def _run_code_review_step(active_task: Dict[str, Any], brief: str) -> None:
             _log_sprint_step_outcome(
                 "Code Reviewer", task_id, task.get("title", task_id), lane_before, result
             )
-        _check_stuck_and_escalate(task_id, lane_before)
+        _check_stuck_and_escalate(task_id, lane_before, agent_key="cr")
 
 
 def _run_qa_step(active_task: Dict[str, Any], brief: str) -> None:
@@ -2325,6 +2421,12 @@ def _run_qa_step(active_task: Dict[str, Any], brief: str) -> None:
     lane_before = get_task_lane(task_id) or "QA"
     step_started = _mark_sprint_step_start()
     set_active_sprint_context(task_id, "QA Tester")
+    try:
+        from backend.services.backup_model import apply_model_for_step
+
+        apply_model_for_step(agent_qa, "qa", find_task_by_id(task_id) or active_task)
+    except Exception:
+        pass
     add_system_log("QA Tester", "info", f"Validating '{active_task['title']}'…")
 
     playbook = _run_qa_test_playbook(task_id)
@@ -2379,7 +2481,7 @@ def _run_qa_step(active_task: Dict[str, Any], brief: str) -> None:
                     move_board_stage(task_id, "Done")
                     _commit_on_done(task)
         _log_sprint_step_outcome("QA Tester", task_id, task.get("title", task_id), lane_before, result)
-        _check_stuck_and_escalate(task_id, lane_before)
+        _check_stuck_and_escalate(task_id, lane_before, agent_key="qa")
 
 
 def _sprint_lanes_active() -> List[str]:

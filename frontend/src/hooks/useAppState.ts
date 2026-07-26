@@ -50,6 +50,12 @@ const defaultState: AppState = {
     cr: 'qwen2.5-coder:7b',
     qa: 'qwen2.5-coder:7b',
   },
+  backupModels: {
+    po: '',
+    dev: '',
+    cr: '',
+    qa: '',
+  },
   projectsList: [],
 }
 

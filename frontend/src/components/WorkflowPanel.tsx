@@ -1009,6 +1009,24 @@ export default function WorkflowPanel({
             className="w-full bg-cat-base border border-cat-surface1 rounded p-1 text-white"
           />
         </label>
+        <label className="flex items-center gap-2 text-[11px] text-cat-subtext cursor-pointer col-span-2">
+          <input
+            type="checkbox"
+            checked={settings.enableBackupModelOnStuck ?? true}
+            onChange={(e) => onSettingsChange({ enableBackupModelOnStuck: e.target.checked })}
+          />
+          Use backup model when agent is stuck (next N steps)
+        </label>
+        <label>
+          <span className="text-[10px] text-cat-overlay block">Backup model stuck steps</span>
+          <NumberSettingInput
+            value={settings.backupModelStuckSteps ?? 2}
+            min={1}
+            max={5}
+            onCommit={(backupModelStuckSteps) => onSettingsChange({ backupModelStuckSteps })}
+            className="w-full bg-cat-base border border-cat-surface1 rounded p-1 text-white"
+          />
+        </label>
         <label>
           <span className="text-[10px] text-cat-overlay block">Max tool failures/step</span>
           <NumberSettingInput

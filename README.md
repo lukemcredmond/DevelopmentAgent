@@ -310,6 +310,8 @@ Persisted per project. Update via sidebar **Workflow** or `POST /api/workflow/se
 | maxLlmIterationsPerStep | 8 | Tool-call loop limit per agent turn |
 | maxPoRoundTrips | 3 | PO clarification rounds per card |
 | maxStuckSteps | 3 | Escalate when card does not move (Settings → Workflow) |
+| enableBackupModelOnStuck | On | Use per-agent backup model for the next N stuck steps (Settings → Models) |
+| backupModelStuckSteps | 2 | How many steps to run on the backup model before reverting to primary |
 | maxToolFailuresPerStep | 5 | Stop agent loop after N tool failures (Settings → Workflow) |
 | pauseSprintOnNeedsUser | Off | Idle sprint while Needs User cards exist |
 

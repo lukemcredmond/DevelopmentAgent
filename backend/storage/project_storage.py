@@ -45,6 +45,16 @@ class ProjectStorage:
                 conn.execute("ALTER TABLE projects ADD COLUMN project_logs TEXT")
             except sqlite3.OperationalError:
                 pass
+            for col in (
+                "po_backup_model",
+                "dev_backup_model",
+                "cr_backup_model",
+                "qa_backup_model",
+            ):
+                try:
+                    conn.execute(f"ALTER TABLE projects ADD COLUMN {col} TEXT")
+                except sqlite3.OperationalError:
+                    pass
             conn.execute(
                 """
                 CREATE TABLE IF NOT EXISTS settings (
@@ -133,6 +143,10 @@ class ProjectStorage:
         dev_model: str,
         cr_model: str,
         qa_model: str,
+        po_backup_model: str = "",
+        dev_backup_model: str = "",
+        cr_backup_model: str = "",
+        qa_backup_model: str = "",
     ) -> None:
         with sqlite3.connect(self.db_path) as conn:
             conn.execute(
@@ -140,9 +154,11 @@ class ProjectStorage:
                 INSERT INTO projects (
                     id, name, brief, workspace_dir, board_state, virtual_filesystem,
                     po_skills, dev_skills, cr_skills, qa_skills,
-                    po_model, dev_model, cr_model, qa_model, updated_at
+                    po_model, dev_model, cr_model, qa_model,
+                    po_backup_model, dev_backup_model, cr_backup_model, qa_backup_model,
+                    updated_at
                 )
-                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, CURRENT_TIMESTAMP)
+                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, CURRENT_TIMESTAMP)
                 ON CONFLICT(id) DO UPDATE SET
                     name=excluded.name,
                     brief=excluded.brief,
@@ -157,6 +173,10 @@ class ProjectStorage:
                     dev_model=excluded.dev_model,
                     cr_model=excluded.cr_model,
                     qa_model=excluded.qa_model,
+                    po_backup_model=excluded.po_backup_model,
+                    dev_backup_model=excluded.dev_backup_model,
+                    cr_backup_model=excluded.cr_backup_model,
+                    qa_backup_model=excluded.qa_backup_model,
                     updated_at=CURRENT_TIMESTAMP
                 """,
                 (
@@ -174,6 +194,10 @@ class ProjectStorage:
                     dev_model,
                     cr_model,
                     qa_model,
+                    po_backup_model or "",
+                    dev_backup_model or "",
+                    cr_backup_model or "",
+                    qa_backup_model or "",
                 ),
             )
             conn.commit()
@@ -210,6 +234,18 @@ class ProjectStorage:
                     "qa_model": row["qa_model"]
                     if "qa_model" in row.keys() and row["qa_model"]
                     else "qwen2.5-coder:7b",
+                    "po_backup_model": row["po_backup_model"]
+                    if "po_backup_model" in row.keys() and row["po_backup_model"]
+                    else "",
+                    "dev_backup_model": row["dev_backup_model"]
+                    if "dev_backup_model" in row.keys() and row["dev_backup_model"]
+                    else "",
+                    "cr_backup_model": row["cr_backup_model"]
+                    if "cr_backup_model" in row.keys() and row["cr_backup_model"]
+                    else "",
+                    "qa_backup_model": row["qa_backup_model"]
+                    if "qa_backup_model" in row.keys() and row["qa_backup_model"]
+                    else "",
                 }
         return None
 

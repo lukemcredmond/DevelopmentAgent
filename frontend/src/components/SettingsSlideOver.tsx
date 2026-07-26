@@ -22,6 +22,10 @@ interface SettingsSlideOverProps {
   devModel: string
   crModel: string
   qaModel: string
+  poBackupModel: string
+  devBackupModel: string
+  crBackupModel: string
+  qaBackupModel: string
   onOllamaUrlChange: (v: string) => void
   onProjectNameChange: (v: string) => void
   onWorkspaceDirChange: (v: string) => void
@@ -30,6 +34,10 @@ interface SettingsSlideOverProps {
   onDevModelChange: (v: string) => void
   onCrModelChange: (v: string) => void
   onQaModelChange: (v: string) => void
+  onPoBackupModelChange: (v: string) => void
+  onDevBackupModelChange: (v: string) => void
+  onCrBackupModelChange: (v: string) => void
+  onQaBackupModelChange: (v: string) => void
   onLoadProject: (id: string) => void
   onSaveConfig: (payload: ConfigPayload) => void
   onOpenNewProject: () => void
@@ -73,6 +81,10 @@ export default function SettingsSlideOver({
   devModel,
   crModel,
   qaModel,
+  poBackupModel,
+  devBackupModel,
+  crBackupModel,
+  qaBackupModel,
   onOllamaUrlChange,
   onProjectNameChange,
   onWorkspaceDirChange,
@@ -81,6 +93,10 @@ export default function SettingsSlideOver({
   onDevModelChange,
   onCrModelChange,
   onQaModelChange,
+  onPoBackupModelChange,
+  onDevBackupModelChange,
+  onCrBackupModelChange,
+  onQaBackupModelChange,
   onLoadProject,
   onSaveConfig,
   onOpenNewProject,
@@ -108,8 +124,23 @@ export default function SettingsSlideOver({
     if (state.models?.dev) onDevModelChange(state.models.dev)
     if (state.models?.cr) onCrModelChange(state.models.cr)
     if (state.models?.qa) onQaModelChange(state.models.qa)
+    if (state.backupModels?.po !== undefined) onPoBackupModelChange(state.backupModels.po)
+    if (state.backupModels?.dev !== undefined) onDevBackupModelChange(state.backupModels.dev)
+    if (state.backupModels?.cr !== undefined) onCrBackupModelChange(state.backupModels.cr)
+    if (state.backupModels?.qa !== undefined) onQaBackupModelChange(state.backupModels.qa)
     // eslint-disable-next-line react-hooks/exhaustive-deps -- sync once when open/projectId/models change
-  }, [open, state.projectId, state.models?.po, state.models?.dev, state.models?.cr, state.models?.qa])
+  }, [
+    open,
+    state.projectId,
+    state.models?.po,
+    state.models?.dev,
+    state.models?.cr,
+    state.models?.qa,
+    state.backupModels?.po,
+    state.backupModels?.dev,
+    state.backupModels?.cr,
+    state.backupModels?.qa,
+  ])
 
   const assignModel = useCallback(
     (role: AgentId, name: string) => {
@@ -287,6 +318,10 @@ export default function SettingsSlideOver({
                       devModel,
                       crModel,
                       qaModel,
+                      poBackupModel,
+                      devBackupModel,
+                      crBackupModel,
+                      qaBackupModel,
                     })
                   }
                   className="w-full bg-indigo-600/40 hover:bg-indigo-600/80 border border-indigo-500/30 text-white font-semibold py-2 rounded text-[11px] transition-colors mt-2"
@@ -314,25 +349,75 @@ export default function SettingsSlideOver({
                   className="w-full bg-cat-base border border-cat-surface1 rounded p-2 text-white font-mono focus:outline-none"
                 />
               </label>
-              <div className="space-y-2">
-                {[
-                  { label: 'PO MODEL', value: poModel, onChange: onPoModelChange, focus: 'PO' as const },
-                  { label: 'DEV MODEL', value: devModel, onChange: onDevModelChange, focus: 'DEV' as const },
-                  { label: 'CR MODEL', value: crModel, onChange: onCrModelChange, focus: 'CR' as const },
-                  { label: 'QA MODEL', value: qaModel, onChange: onQaModelChange, focus: 'QA' as const },
-                ].map(({ label, value, onChange, focus }) => (
-                  <div key={label} className="flex items-center justify-between gap-2">
-                    <span className="text-[9px] text-cat-subtext font-bold shrink-0">{label}</span>
-                    <input
-                      type="text"
-                      value={value}
-                      onFocus={() => setModelFocus(focus)}
-                      onChange={(e) => onChange(e.target.value)}
-                      className="bg-cat-base border border-cat-surface1 rounded p-1.5 font-mono text-[11px] text-white text-right flex-1 focus:outline-none"
-                    />
+              <div className="space-y-3">
+                {(
+                  [
+                    {
+                      label: 'PO',
+                      value: poModel,
+                      onChange: onPoModelChange,
+                      backup: poBackupModel,
+                      onBackup: onPoBackupModelChange,
+                      focus: 'PO' as const,
+                    },
+                    {
+                      label: 'DEV',
+                      value: devModel,
+                      onChange: onDevModelChange,
+                      backup: devBackupModel,
+                      onBackup: onDevBackupModelChange,
+                      focus: 'DEV' as const,
+                    },
+                    {
+                      label: 'CR',
+                      value: crModel,
+                      onChange: onCrModelChange,
+                      backup: crBackupModel,
+                      onBackup: onCrBackupModelChange,
+                      focus: 'CR' as const,
+                    },
+                    {
+                      label: 'QA',
+                      value: qaModel,
+                      onChange: onQaModelChange,
+                      backup: qaBackupModel,
+                      onBackup: onQaBackupModelChange,
+                      focus: 'QA' as const,
+                    },
+                  ] as const
+                ).map(({ label, value, onChange, backup, onBackup, focus }) => (
+                  <div key={label} className="space-y-1">
+                    <div className="flex items-center justify-between gap-2">
+                      <span className="text-[9px] text-cat-subtext font-bold shrink-0">
+                        {label} MODEL
+                      </span>
+                      <input
+                        type="text"
+                        value={value}
+                        onFocus={() => setModelFocus(focus)}
+                        onChange={(e) => onChange(e.target.value)}
+                        className="bg-cat-base border border-cat-surface1 rounded p-1.5 font-mono text-[11px] text-white text-right flex-1 focus:outline-none"
+                      />
+                    </div>
+                    <div className="flex items-center justify-between gap-2 pl-0.5">
+                      <span className="text-[9px] text-cat-overlay shrink-0">Backup (stuck)</span>
+                      <input
+                        type="text"
+                        value={backup}
+                        onFocus={() => setModelFocus(focus)}
+                        onChange={(e) => onBackup(e.target.value)}
+                        placeholder="optional"
+                        className="bg-cat-base border border-cat-surface1 rounded p-1.5 font-mono text-[11px] text-white text-right flex-1 focus:outline-none"
+                      />
+                    </div>
                   </div>
                 ))}
               </div>
+              <p className="text-[10px] text-cat-overlay leading-relaxed">
+                Backup models run for the next few stuck steps when that agent loops on plan/text
+                with no progress, then revert to primary. Skipped for lint/tool blockers. Leave blank
+                to disable per role.
+              </p>
               <InstalledModelsPanel
                 ollamaUrl={ollamaUrl}
                 focusedRole={modelFocus}
@@ -437,6 +522,10 @@ export default function SettingsSlideOver({
                     devModel,
                     crModel,
                     qaModel,
+                    poBackupModel,
+                    devBackupModel,
+                    crBackupModel,
+                    qaBackupModel,
                   })
                 }
                 className="w-full bg-indigo-600/40 hover:bg-indigo-600/80 border border-indigo-500/30 text-white font-semibold py-2 rounded text-[11px] transition-colors"

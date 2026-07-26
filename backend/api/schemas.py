@@ -23,6 +23,10 @@ class ConfigPayload(BaseModel):
     devModel: str
     crModel: str
     qaModel: str
+    poBackupModel: Optional[str] = None
+    devBackupModel: Optional[str] = None
+    crBackupModel: Optional[str] = None
+    qaBackupModel: Optional[str] = None
 
 
 class SkillPayload(BaseModel):
@@ -132,6 +136,8 @@ class WorkflowSettingsPayload(BaseModel):
     maxInCardLintFixes: Optional[int] = None
     maxLintFanoutCards: Optional[int] = None
     lintFanoutThreshold: Optional[int] = None
+    enableBackupModelOnStuck: Optional[bool] = None
+    backupModelStuckSteps: Optional[int] = None
     requireToolApproval: Optional[bool] = None
     toolApprovalTools: Optional[List[str]] = None
     nonBlockingToolApproval: Optional[bool] = None

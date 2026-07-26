@@ -44,6 +44,18 @@ def load_project_into_state(project_id: str) -> bool:
     agent_dev.model = proj["dev_model"]
     agent_cr.model = proj["cr_model"]
     agent_qa.model = proj["qa_model"]
+    state.PRIMARY_MODELS = {
+        "po": proj["po_model"],
+        "dev": proj["dev_model"],
+        "cr": proj["cr_model"],
+        "qa": proj["qa_model"],
+    }
+    state.BACKUP_MODELS = {
+        "po": proj.get("po_backup_model") or "",
+        "dev": proj.get("dev_backup_model") or "",
+        "cr": proj.get("cr_backup_model") or "",
+        "qa": proj.get("qa_backup_model") or "",
+    }
 
     saved_logs = state.storage.load_project_logs(project_id)
     if saved_logs:
