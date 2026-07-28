@@ -13,6 +13,9 @@ __pycache__/
 *.py[cod]
 .pytest_cache/
 
+
+
+venv/
 scrum_memory.db
 backend/__pycache__/__init__.cpython-312.pyc
 backend/__pycache__/bootstrap.cpython-312.pyc
