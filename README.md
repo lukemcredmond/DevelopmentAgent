@@ -950,9 +950,10 @@ Offline fine-tuning export (no in-app training): `GET /api/training/export?limit
 ### Discord ops checklist
 
 1. Create a Discord application → Bot → copy token; invite with `applications.commands`.
-2. Enable Developer Mode → copy your user ID → allowlist under Workflow → Phone / Discord control.
+2. Enable Developer Mode → copy your user ID → allowlist under Workflow → Phone / Discord control (**required** — empty allowlist rejects everyone).
 3. Optional guild ID for faster slash sync; save settings (bot reloads in-process).
-4. Use `/ah-pending` then `/ah-answer` / `/ah-approve` to unblock Needs User / tool approvals from your phone.
+4. Confirm Bot status shows **connected** (not merely “token saved”). A watchdog restarts a dead Gateway task while the bot is enabled.
+5. Use `/ah-pending` then `/ah-answer` / `/ah-approve` to unblock Needs User / tool approvals from your phone.
 
 ## Troubleshooting
 
@@ -964,6 +965,8 @@ Offline fine-tuning export (no in-app training): `GET /api/training/export?limit
 | Dev blocked by Needs PO | Use **Run In Progress** to run Dev without waiting for PO. |
 | Duplicate memories | Enable **Group duplicates** in Memory tab; delete grouped entries. New saves dedupe automatically. |
 | Sprint not advancing | Check `blockedBy` dependencies, **pauseSprintOnNeedsUser**, empty In Progress lane, max sprint steps. |
+| UI freezes / OOM after hours | Hard-refresh the browser. Client now caps board transcripts; reopen Settings if Discord status looks stale. |
+| Discord configured but silent | Allowlist user ID; Bot status must be **connected** + running; save Workflow settings to reload; check Console for `source=discord`. |
 | Flutter analyze fails | Workspace must contain `pubspec.yaml`; Flutter SDK on PATH. |
 | Tool approval timeout | Approve or deny in modal within 120s; or disable `requireToolApproval`. |
 | Unknown Tool for `write_file` | Usually refinement or wrong agent — **Dismiss**, do not map to itself. Wait for implementation mode. |

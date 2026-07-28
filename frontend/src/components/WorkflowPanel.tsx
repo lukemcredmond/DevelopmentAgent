@@ -805,16 +805,24 @@ export default function WorkflowPanel({
           <span className="text-cat-subtext">
             {!settings.discordBotEnabled
               ? 'off'
-              : discordBotStatus?.status === 'ready'
+              : discordBotStatus?.status === 'ready' && discordBotStatus?.running
                 ? `connected${discordBotStatus.readyAt ? ` · ${discordBotStatus.readyAt}` : ''}`
+                : discordBotStatus?.status === 'ready' && !discordBotStatus?.running
+                  ? 'status ready but task not running — watchdog should restart'
                 : discordBotStatus?.status === 'error'
                   ? `error${discordBotStatus.lastError ? `: ${discordBotStatus.lastError}` : ''}`
                   : discordBotStatus?.status === 'connecting'
-                    ? 'connecting…'
+                    ? `connecting…${discordBotStatus.lastError ? ` (${discordBotStatus.lastError})` : ''}`
                     : settings.discordBotTokenConfigured
-                      ? discordBotStatus?.status || 'idle'
+                      ? `not connected (${discordBotStatus?.status || 'idle'}${
+                          discordBotStatus?.running ? ', task running' : ', task stopped'
+                        }) — check allowlist / save settings to reload`
                       : 'enabled — token missing'}
           </span>
+        </p>
+        <p className="text-[10px] text-cat-overlay leading-relaxed">
+          Token saved ≠ connected. Allowlist must include your Discord user ID. Status shows Gateway
+          health; a watchdog restarts a dead bot task while enabled.
         </p>
         <label className="text-[11px] text-cat-subtext block">
           <span className="text-[10px] text-cat-overlay block">
