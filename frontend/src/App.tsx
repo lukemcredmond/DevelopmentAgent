@@ -375,6 +375,7 @@ export default function App() {
     if (!selectedTask) return
     const fresh = findTaskOnBoard(state.board, selectedTask.id)
     if (fresh) {
+      // Keep modal in sync but use board-capped transcript (avoid second unbounded copy).
       setSelectedTask((prev) => (prev && prev.id === fresh.id ? { ...prev, ...fresh } : fresh))
     }
   }, [state.board, selectedTask?.id])
@@ -398,10 +399,12 @@ export default function App() {
   const handleState = useCallback(
     (data: AppState) => {
       applyState(data)
-      setLocalFiles(data.files)
+      if (workspaceOpen || selectedFile) {
+        setLocalFiles(data.files)
+      }
       setFileTreeKey((k) => k + 1)
     },
-    [applyState],
+    [applyState, workspaceOpen, selectedFile],
   )
 
   const { autoSprint, setAutoSprint, autoSprintPaused, sprintRunning, stopAutoSprint, startAutoSprint } =
@@ -436,13 +439,21 @@ export default function App() {
 
   useEffect(() => {
     applyStateFields(state, setters)
-    setLocalFiles(state.files)
+    if (workspaceOpen || selectedFile) {
+      setLocalFiles(state.files)
+    } else {
+      setLocalFiles({})
+    }
     setChatMessages(chatRecordsToUi(state.chatMessages))
   }, [state.projectId])
 
   useEffect(() => {
+    if (!workspaceOpen && !selectedFile) {
+      setLocalFiles({})
+      return
+    }
     setLocalFiles(state.files)
-  }, [state.files])
+  }, [state.files, workspaceOpen, selectedFile])
 
   useEffect(() => {
     if (!workspaceOpen && !selectedFile) return

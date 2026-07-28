@@ -32,6 +32,7 @@ import type {
 import { EMPTY_BOARD, hasSprintWork } from '../types'
 import { hydrateActivityFromBoard, mergeActivityEvents, filterActivityAfterClear, activityTimestampNow } from '../utils/activityFromBoard'
 import { appendTerminalOutput, capLogs } from '../utils/streamBuffers'
+import { mergeTaskHistory, trimBoardHistory } from '../utils/boardMemory'
 
 const defaultState: AppState = {
   projectId: '',
@@ -65,27 +66,7 @@ function countBoardTasks(board: Board | undefined | null): number {
 }
 
 function mergePreserveHistory(incoming: Task, existing: Task | undefined): Task {
-  if (!existing) return incoming
-  const next = { ...incoming }
-  if (
-    incoming.transcriptTruncated &&
-    Array.isArray(existing.transcript) &&
-    Array.isArray(incoming.transcript) &&
-    existing.transcript.length > incoming.transcript.length
-  ) {
-    next.transcript = existing.transcript
-    next.transcriptTruncated = true
-  }
-  if (
-    incoming.decisionsTruncated &&
-    Array.isArray(existing.decisions) &&
-    Array.isArray(incoming.decisions) &&
-    existing.decisions.length > incoming.decisions.length
-  ) {
-    next.decisions = existing.decisions
-    next.decisionsTruncated = true
-  }
-  return next
+  return mergeTaskHistory(incoming, existing)
 }
 
 function findTaskOnBoardLocal(board: Board, taskId: string): Task | undefined {
@@ -105,7 +86,7 @@ function mergeBoardPreservingHistory(prev: Board, incoming: Board): Board {
       return mergePreserveHistory(task, existing)
     })
   }
-  return next
+  return trimBoardHistory(next)
 }
 
 function mergeBoardDelta(board: Board, payload: { taskId: string; lane: string; task: Task }): Board {
@@ -149,11 +130,13 @@ function patchBoardFromEvent(data: unknown, prev: AppState): AppState | null {
   if (payload.delta && payload.task && payload.taskId && payload.lane) {
     return {
       ...prev,
-      board: mergeBoardDelta(prev.board, {
-        taskId: String(payload.taskId),
-        lane: String(payload.lane),
-        task: payload.task,
-      }),
+      board: trimBoardHistory(
+        mergeBoardDelta(prev.board, {
+          taskId: String(payload.taskId),
+          lane: String(payload.lane),
+          task: payload.task,
+        }),
+      ),
     }
   }
   if (!payload.board) return null
@@ -437,6 +420,12 @@ export function useAppState() {
   const toolHistoryDebounceRef = useRef<number | null>(null)
   const logBatchRef = useRef<SystemLog[]>([])
   const logFlushTimerRef = useRef<number | null>(null)
+  const toolEventBatchRef = useRef<
+    Array<{ kind: 'start' | 'end'; payload: Record<string, unknown> }>
+  >([])
+  const toolEventFlushTimerRef = useRef<number | null>(null)
+  const sprintProgressPendingRef = useRef<SprintProgress | null | undefined>(undefined)
+  const sprintProgressFlushTimerRef = useRef<number | null>(null)
   const [sseLive, setSseLive] = useState(true)
   const [lastToolEventAt, setLastToolEventAt] = useState<string | null>(null)
 
@@ -580,14 +569,16 @@ export function useAppState() {
     try {
       const includeFiles = options?.includeFiles !== false
       const data = await fetchState({ includeFiles })
+      const board = trimBoardHistory(data.board)
       setState((prev) => ({
         ...data,
+        board,
         files: includeFiles ? data.files : prev.files,
       }))
       if (data.projectPlanOutline != null) {
         setPlanOutline(String(data.projectPlanOutline))
       }
-      syncActivityFromBoard(data.board)
+      syncActivityFromBoard(board)
       setActiveRun(data.activeAgentRun ? mapAgentRun(data.activeAgentRun as unknown as Record<string, unknown>) : null)
       setPendingApprovals(data.pendingToolApprovals ?? [])
       setError(null)
@@ -602,19 +593,120 @@ export function useAppState() {
 
   const applyState = useCallback(
     (data: AppState) => {
-      setState(data)
-      if (data.projectPlanOutline != null) {
-        setPlanOutline(String(data.projectPlanOutline))
+      const trimmed = { ...data, board: trimBoardHistory(data.board) }
+      setState(trimmed)
+      if (trimmed.projectPlanOutline != null) {
+        setPlanOutline(String(trimmed.projectPlanOutline))
       }
-      syncActivityFromBoard(data.board)
-      setActiveRun(data.activeAgentRun ? mapAgentRun(data.activeAgentRun as unknown as Record<string, unknown>) : null)
-      setPendingApprovals(data.pendingToolApprovals ?? [])
+      syncActivityFromBoard(trimmed.board)
+      setActiveRun(trimmed.activeAgentRun ? mapAgentRun(trimmed.activeAgentRun as unknown as Record<string, unknown>) : null)
+      setPendingApprovals(trimmed.pendingToolApprovals ?? [])
       setError(null)
       void refreshPendingTools()
       void refreshPendingApprovals()
       void refreshToolHistory()
     },
     [syncActivityFromBoard, refreshPendingTools, refreshPendingApprovals, refreshToolHistory],
+  )
+
+  const flushToolEventBatch = useCallback(() => {
+    toolEventFlushTimerRef.current = null
+    const batch = toolEventBatchRef.current
+    toolEventBatchRef.current = []
+    if (batch.length === 0) return
+    const lastTs = String(
+      batch[batch.length - 1]?.payload.timestamp ?? new Date().toISOString(),
+    )
+    setLastToolEventAt(lastTs)
+    let startCount = 0
+    setToolEvents((prev) => {
+      let next = prev
+      for (const item of batch) {
+        if (item.kind === 'start') {
+          startCount += 1
+          next = [...next, mapToolStart(item.payload)].slice(-200)
+        } else {
+          next = applyToolEnd(next, item.payload)
+        }
+      }
+      return next
+    })
+    if (startCount > 0) setToolStartTick((t) => t + startCount)
+
+    const lastStart = [...batch].reverse().find((b) => b.kind === 'start')
+    const lastEnd = [...batch].reverse().find((b) => b.kind === 'end')
+    if (lastEnd && (!lastStart || batch.lastIndexOf(lastEnd) > batch.lastIndexOf(lastStart!))) {
+      const payload = lastEnd.payload
+      const entry = {
+        toolName: String(payload.toolName ?? '?'),
+        toolSuccess: payload.toolSuccess !== false,
+        toolOutput: String(payload.toolOutput ?? ''),
+        durationMs: Number(payload.durationMs ?? 0),
+        timestamp: String(payload.timestamp ?? ''),
+      }
+      const mergeRun = (prev: AgentRunState | null): AgentRunState | null => {
+        if (!prev) return prev
+        const recentTools = [...(prev.recentTools ?? []), entry].slice(-5)
+        return { ...prev, recentTools, currentTool: null, status: 'thinking' }
+      }
+      setActiveRun((prev) => mergeRun(prev))
+      setDisplayRun((prev) => mergeRun(prev))
+      setCurrentTool(null)
+      debouncedRefreshToolHistoryRef.current()
+    } else if (lastStart) {
+      const payload = lastStart.payload
+      const toolName = payload.toolName != null ? String(payload.toolName) : null
+      setCurrentTool(toolName)
+      setActiveRun((prev) => {
+        const base =
+          prev ??
+          ({
+            runId: '',
+            taskId: String(payload.taskId ?? ''),
+            agent: String(payload.agent ?? ''),
+            status: 'tool_executing',
+            currentTool: toolName,
+            startedAt: new Date().toISOString(),
+            recentTools: [],
+          } as AgentRunState)
+        return { ...base, status: 'tool_executing', currentTool: toolName }
+      })
+    }
+  }, [])
+
+  const enqueueToolEvent = useCallback(
+    (kind: 'start' | 'end', payload: Record<string, unknown>) => {
+      toolEventBatchRef.current.push({ kind, payload })
+      if (toolEventFlushTimerRef.current != null) return
+      toolEventFlushTimerRef.current = window.setTimeout(() => {
+        flushToolEventBatch()
+      }, 75)
+    },
+    [flushToolEventBatch],
+  )
+
+  const flushSprintProgressBatch = useCallback(() => {
+    sprintProgressFlushTimerRef.current = null
+    const progress = sprintProgressPendingRef.current
+    sprintProgressPendingRef.current = undefined
+    if (progress === undefined) return
+    if (progress === null || progress.phase === 'done' || progress.status === 'done') {
+      setSprintProgress(null)
+      debouncedRefreshAfterSprintRef.current()
+    } else {
+      setSprintProgress(progress)
+    }
+  }, [])
+
+  const enqueueSprintProgress = useCallback(
+    (progress: SprintProgress) => {
+      sprintProgressPendingRef.current = progress
+      if (sprintProgressFlushTimerRef.current != null) return
+      sprintProgressFlushTimerRef.current = window.setTimeout(() => {
+        flushSprintProgressBatch()
+      }, 50)
+    },
+    [flushSprintProgressBatch],
   )
 
   const appendLog = useCallback((log: SystemLog) => {
@@ -695,6 +787,10 @@ export function useAppState() {
   debouncedRefreshAfterSprintRef.current = debouncedRefreshAfterSprint
   const debouncedRefreshToolHistoryRef = useRef(debouncedRefreshToolHistory)
   debouncedRefreshToolHistoryRef.current = debouncedRefreshToolHistory
+  const enqueueToolEventRef = useRef(enqueueToolEvent)
+  enqueueToolEventRef.current = enqueueToolEvent
+  const enqueueSprintProgressRef = useRef(enqueueSprintProgress)
+  enqueueSprintProgressRef.current = enqueueSprintProgress
 
   useEffect(() => {
     void refresh()
@@ -707,11 +803,12 @@ export function useAppState() {
       setSseLive(true)
       if (event.type === 'state' && event.data) {
         const data = event.data as AppState
-        setState(data)
+        const board = trimBoardHistory(data.board)
+        setState({ ...data, board })
         if (data.projectPlanOutline != null) {
           setPlanOutline(String(data.projectPlanOutline))
         }
-        syncActivityFromBoardRef.current(data.board)
+        syncActivityFromBoardRef.current(board)
       } else if (event.type === 'log' && event.data) {
         appendLogRef.current(event.data as SystemLog)
       } else if (event.type === 'board') {
@@ -729,12 +826,7 @@ export function useAppState() {
         setDisplayRun(null)
       } else if (event.type === 'sprint_progress' && event.data) {
         const progress = mapSprintProgress(event.data as Record<string, unknown>)
-        if (progress.phase === 'done' || progress.status === 'done') {
-          setSprintProgress(null)
-          debouncedRefreshAfterSprintRef.current()
-        } else {
-          setSprintProgress(progress)
-        }
+        enqueueSprintProgressRef.current(progress)
       } else if (event.type === 'index_progress' && event.data) {
         const d = event.data as Record<string, unknown>
         setIndexProgress({
@@ -778,46 +870,9 @@ export function useAppState() {
           setCurrentTool(run.currentTool ?? null)
         }
       } else if (event.type === 'tool_start' && event.data) {
-        const payload = event.data as Record<string, unknown>
-        setLastToolEventAt(String(payload.timestamp ?? new Date().toISOString()))
-        setToolEvents((prev) => [...prev, mapToolStart(payload)].slice(-200))
-        setToolStartTick((t) => t + 1)
-        const toolName = payload.toolName != null ? String(payload.toolName) : null
-        setCurrentTool(toolName)
-        setActiveRun((prev) => {
-          const base =
-            prev ??
-            ({
-              runId: '',
-              taskId: String(payload.taskId ?? ''),
-              agent: String(payload.agent ?? ''),
-              status: 'tool_executing',
-              currentTool: toolName,
-              startedAt: new Date().toISOString(),
-              recentTools: [],
-            } as AgentRunState)
-          return { ...base, status: 'tool_executing', currentTool: toolName }
-        })
+        enqueueToolEventRef.current('start', event.data as Record<string, unknown>)
       } else if (event.type === 'tool_end' && event.data) {
-        const payload = event.data as Record<string, unknown>
-        setLastToolEventAt(String(payload.timestamp ?? new Date().toISOString()))
-        const entry = {
-          toolName: String(payload.toolName ?? '?'),
-          toolSuccess: payload.toolSuccess !== false,
-          toolOutput: String(payload.toolOutput ?? ''),
-          durationMs: Number(payload.durationMs ?? 0),
-          timestamp: String(payload.timestamp ?? ''),
-        }
-        const mergeRun = (prev: AgentRunState | null): AgentRunState | null => {
-          if (!prev) return prev
-          const recentTools = [...(prev.recentTools ?? []), entry].slice(-5)
-          return { ...prev, recentTools, currentTool: null, status: 'thinking' }
-        }
-        setActiveRun((prev) => mergeRun(prev))
-        setDisplayRun((prev) => mergeRun(prev))
-        setCurrentTool(null)
-        setToolEvents((prev) => applyToolEnd(prev, payload))
-        debouncedRefreshToolHistoryRef.current()
+        enqueueToolEventRef.current('end', event.data as Record<string, unknown>)
       } else if (event.type === 'tool_approval_required' && event.data) {
         const approval = mapApprovalFromEvent(event.data as Record<string, unknown>)
         setPendingApprovals((prev) =>
@@ -897,6 +952,14 @@ export function useAppState() {
       if (logFlushTimerRef.current) {
         window.clearTimeout(logFlushTimerRef.current)
         logFlushTimerRef.current = null
+      }
+      if (toolEventFlushTimerRef.current) {
+        window.clearTimeout(toolEventFlushTimerRef.current)
+        toolEventFlushTimerRef.current = null
+      }
+      if (sprintProgressFlushTimerRef.current) {
+        window.clearTimeout(sprintProgressFlushTimerRef.current)
+        sprintProgressFlushTimerRef.current = null
       }
     }
   }, [])

@@ -52,10 +52,13 @@ _KNOWN_COMMANDS = frozenset(
 
 _main_loop: Optional[asyncio.AbstractEventLoop] = None
 _bot_task: Optional[asyncio.Task] = None
+_watchdog_task: Optional[asyncio.Task] = None
 _client: Any = None
 _bot_lock = threading.Lock()
 _auto_sprint_thread: Optional[threading.Thread] = None
 _auto_sprint_lock = threading.Lock()
+
+_WATCHDOG_INTERVAL_SEC = 60
 
 _bot_status: Dict[str, Any] = {
     "status": "idle",  # idle | connecting | ready | error | off
@@ -787,16 +790,81 @@ def _make_discord_client(guild_id: str) -> Any:
             )
         except Exception as exc:
             logger.exception("discord slash sync failed")
-            _set_bot_status("error", last_error=f"slash_sync: {exc}")
+            # Keep Gateway status ready if we already connected; surface sync error only.
+            if _bot_status.get("status") == "ready":
+                _bot_status["lastError"] = f"slash_sync: {exc}"[:300]
+            else:
+                _set_bot_status("error", last_error=f"slash_sync: {exc}")
             add_system_log("discord", "error", f"source=discord slash_sync_error={exc}")
 
+    @client.event
+    async def on_disconnect() -> None:
+        _set_bot_status("connecting", last_error="gateway disconnected — reconnecting")
+        add_system_log(
+            "discord",
+            "warning",
+            "source=discord gateway_disconnected",
+        )
+
+    @client.event
+    async def on_resumed() -> None:
+        _set_bot_status("ready")
+        add_system_log("discord", "info", "source=discord gateway_resumed")
+
     return client
+
+
+async def _discord_watchdog_loop() -> None:
+    """If bot is enabled but the Gateway task died, restart it."""
+    while True:
+        try:
+            await asyncio.sleep(_WATCHDOG_INTERVAL_SEC)
+        except asyncio.CancelledError:
+            raise
+        ws = get_workflow_settings()
+        if not ws.get("discordBotEnabled"):
+            continue
+        with _bot_lock:
+            task = _bot_task
+            dead = task is None or task.done()
+        if not dead:
+            client = _client
+            if client is not None:
+                try:
+                    if getattr(client, "is_closed", lambda: False)():
+                        dead = True
+                except Exception:
+                    pass
+        if dead:
+            add_system_log(
+                "discord",
+                "warning",
+                "source=discord watchdog_restarting_dead_bot",
+            )
+            _set_bot_status("connecting", last_error="watchdog restarting bot")
+            try:
+                await start_discord_bot()
+            except Exception as exc:
+                logger.exception("discord watchdog restart failed")
+                _set_bot_status("error", last_error=f"watchdog: {exc}")
+
+
+def _ensure_watchdog() -> None:
+    global _watchdog_task
+    loop = _main_loop
+    if loop is None or not loop.is_running():
+        return
+    with _bot_lock:
+        if _watchdog_task is not None and not _watchdog_task.done():
+            return
+        _watchdog_task = asyncio.create_task(_discord_watchdog_loop(), name="discord-watchdog")
 
 
 async def start_discord_bot() -> None:
     """Start Gateway bot from workflow settings (no-op if disabled)."""
     global _main_loop, _bot_task, _client
     _main_loop = asyncio.get_running_loop()
+    _ensure_watchdog()
 
     ws = get_workflow_settings()
     if not ws.get("discordBotEnabled"):
@@ -853,12 +921,14 @@ async def start_discord_bot() -> None:
 
 async def stop_discord_bot() -> None:
     """Stop Gateway bot if running."""
-    global _bot_task, _client
+    global _bot_task, _client, _watchdog_task
     with _bot_lock:
         client = _client
         task = _bot_task
+        watchdog = _watchdog_task
         _client = None
         _bot_task = None
+        _watchdog_task = None
     if client is not None:
         try:
             await client.close()
@@ -868,6 +938,12 @@ async def stop_discord_bot() -> None:
         task.cancel()
         try:
             await task
+        except (asyncio.CancelledError, Exception):
+            pass
+    if watchdog is not None and not watchdog.done():
+        watchdog.cancel()
+        try:
+            await watchdog
         except (asyncio.CancelledError, Exception):
             pass
     ws = get_workflow_settings()
