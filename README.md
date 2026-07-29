@@ -17,9 +17,10 @@ Local multi-agent AI development workspace with Kanban board, Ollama-powered age
 9. [API reference](#api-reference)
 10. [Configuration](#configuration)
 11. [Development](#development)
-12. [Known limitations](#known-limitations)
-13. [Troubleshooting](#troubleshooting)
-14. [Offline / no-Ollama mode](#offline--no-ollama-mode)
+12. [AI technology and patterns](#ai-technology-and-patterns)
+13. [Known limitations](#known-limitations)
+14. [Troubleshooting](#troubleshooting)
+15. [Offline / no-Ollama mode](#offline--no-ollama-mode)
 
 ---
 
@@ -932,6 +933,144 @@ Offline fine-tuning export (no in-app training): `GET /api/training/export?limit
 - **Frontend:** Vite + React + TypeScript; `@dnd-kit` Kanban, Monaco, xterm.js
 - **Persistence:** SQLite at `~/.allhands/scrum_memory.db`
 - **Agents:** `ScrumAgent` uses [Ollama Python SDK](https://github.com/ollama/ollama-python); tool loop via native `tools` parameter
+
+---
+
+## AI technology and patterns
+
+What AllHands actually implements today (not a roadmap). Defaults and toggles live under **Settings → Workflow** unless noted.
+
+### LLM runtime
+
+| Piece | What it does |
+|-------|----------------|
+| **Ollama** | Sole inference backend for agent chat and tool-calling |
+| **Per-role models** | Separate primary models for PO / Dev / Code Review / QA (plus optional backup models when stuck) |
+| **Retries / timeouts** | HTTP timeouts, retry delays, cooldown retries, context-overflow handling around Ollama calls |
+| **VRAM-aware swap** | Optional unload/preload when arming a backup model on a full GPU |
+
+Key code: `backend/agents/scrum_agent.py`, `backend/agents/registry.py`, `backend/services/ollama_warmup.py`, `backend/api/ollama.py`.
+
+### Multi-agent scrum pattern
+
+- Four specialists (Product Owner, Developer, Code Reviewer, QA) with role prompts and role-filtered tool sets.
+- **Kanban orchestration** (`sprint_service`): lane handlers move cards Features → Backlog → In Progress → Review → QA → Done (plus Refinement, Blocked, Needs User / Needs PO).
+- Auto-sprint loops steps until idle, max steps, or cancel; Plan & Run / Run In Progress / recovery resume supported.
+- Agent Chat uses the same `execute_step` tool loop as one lane step (lighter prompt than a full sprint inject).
+
+Key code: `backend/services/sprint_service.py`, `backend/api/sprint.py`, `backend/api/chat.py`.
+
+### Tool-calling agent loop
+
+| Pattern | Behavior |
+|---------|----------|
+| **ReAct-style tool loop** | Up to `maxLlmIterationsPerStep` think → tool → observe rounds per step |
+| **Parallel safe tools** | Read/search-style tools may run in one batch |
+| **Stop reasons** | Max iterations, timeouts, duplicate tools, tool-failure caps, duration limits |
+| **Continuation** | Manual/auto **Extend** restarts with a continuation prompt (not an infinite in-memory chat) |
+| **Observation / reflect nudges** | Short guidance after tool batches to steer the next LLM turn |
+
+Key code: `backend/agents/scrum_agent.py`, `backend/services/parallel_tools.py`, `backend/services/prompt_retry.py`.
+
+### Context management (not embedding-based)
+
+- **Char prune** of old tool/observation messages when history exceeds `%` of `num_ctx` (`messagePruneThresholdPct`).
+- Optional **episode summary** lines for pruned chunks (text fold — not an embedding summarizer).
+- **Tool-output truncation** before re-injection (`maxToolOutputCharsForLlm`).
+- Embeddings are **not** used to compress the active prompt.
+
+Key code: `backend/services/llm_context.py`.
+
+### Embeddings, RAG, and memory
+
+| Piece | Role |
+|-------|------|
+| **`embedModel` (default `nomic-embed-text`)** | Ollama embeddings for retrieval only |
+| **Qdrant code index** | Chunked project files; incremental reindex on writes |
+| **Hybrid search** | Dense vectors + lexical scan fused with **RRF** (`enableHybridSearch`) |
+| **Semantic sprint context** | Top-k chunks injected at step start (`enableSemanticSprintContext`) |
+| **Retrieval feedback** | Weak-hit banner → raise min score / re-index |
+| **SQLite project memory** | Categorized notes with embeddings; TF-IDF fallback if embed fails |
+| **Step-lesson memory** | Optional end-of-step lessons saved for later retrieval |
+| **Graphify (optional)** | Structural graph context alongside RAG when Graphify is on PATH |
+
+Key code: `backend/storage/code_index.py`, `backend/storage/memory_engine.py`, `backend/services/graphify_service.py`.
+
+### Skills, MCP, and extensibility
+
+- **Skills:** Markdown procedures from a skills directory, assignable per agent, truncated to a prompt budget; brief-based suggestions.
+- **MCP:** stdio / HTTP / SSE servers; tools registered into the agent registry; Test / Reload from Workflow.
+- **Custom tools:** user-defined HTTP/SQL/etc. tools, aliases, replay, health probes (deterministic + optional LLM probe).
+- **Web search (optional):** DuckDuckGo HTML locally, or Serper when `WEB_SEARCH_API_KEY` is set.
+
+Key code: `backend/services/skills.py`, `backend/services/mcp_tools.py`, `backend/api/tools.py`, `backend/workspace/web_search.py`.
+
+### Quality gates and safety rails
+
+- Board gates: backlog approval, refinement, code review, blocked deps, Dev verification, clean lint, AC checklist before Done.
+- **Tool approval** (optional): pause `write_file` / `run_command` / etc. until UI or Discord approve.
+- **Command policy:** allowlist / denylist / chaining rules for shell.
+- **Needs User** dedupe, cooldown, autonomous cap, clarification → Needs PO.
+- Optional **API token** middleware for localhost (`ALLHANDS_API_TOKEN`).
+
+Key code: `backend/services/tool_approval.py`, `backend/services/command_policy.py`, `backend/services/needs_user_guard.py`, `backend/services/api_auth.py`.
+
+### Fix-verify and stuck recovery
+
+- **Fix-verify loop:** after Dev edits, re-run checks and allow a few fix rounds (also tied to clean-lint).
+- **Stuck ladder:** `stuckLoops` → backup model → optional auto-split → Needs PO / Needs User.
+- **Auto-extend on max iter** once per cycle when progress was detected.
+
+Key code: `backend/services/fix_verify_loop.py`, `backend/services/backup_model.py`.
+
+### Operator surfaces (not free-form agents)
+
+- **Discord control bot:** Gateway-outbound fixed `/ah-*` slash commands (status, pause/resume, approve, answer, claim, extend, …) with allowlist.
+- **Phone alerts:** outbound Discord webhooks for Needs User, approvals, sprint end, etc.
+- Live progress via SSE (`tool_*`, `agent_run`, `sprint_progress`, board deltas) — **not** full token streaming yet.
+
+Key code: `backend/services/discord_bot.py`, `backend/services/phone_notify.py`, `backend/services/events.py`.
+
+### Training and offline
+
+- **JSONL export only** of step diagnostics for offline SFT (`GET /api/training/export`) — no in-app LoRA/training.
+- **Simulation fallback** when Ollama is down: deterministic offline lane helpers so the UI workflow remains explorable.
+
+Key code: `backend/services/training_export.py`, `backend/services/sprint_service.py` (offline paths).
+
+### Frontend resilience patterns
+
+- Client caps on transcripts, decisions, `task.files`, and chat history to limit multi-hour heap growth.
+- Batched/coalesced SSE updates for logs, tools, sprint progress, and agent-run status.
+
+Key code: `frontend/src/utils/boardMemory.ts`, `frontend/src/hooks/useAppState.ts`.
+
+```mermaid
+flowchart LR
+  subgraph runtime [Runtime]
+    Ollama[Ollama LLM + embeds]
+  end
+  subgraph retrieve [Retrieve]
+    Qdrant[Qdrant code RAG]
+    Mem[SQLite memory]
+    Graph[Graphify optional]
+  end
+  subgraph agents [Agents]
+    Loop[Tool loop ScrumAgent]
+    Orch[sprint_service orchestrator]
+  end
+  subgraph gates [Gates]
+    Approve[Tool and board gates]
+    Fix[Fix-verify + stuck recovery]
+  end
+  Ollama --> Loop
+  Qdrant --> Orch
+  Mem --> Loop
+  Graph --> Orch
+  Orch --> Loop
+  Loop --> Approve
+  Loop --> Fix
+```
 
 ---
 
