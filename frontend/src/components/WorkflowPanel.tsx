@@ -882,7 +882,10 @@ export default function WorkflowPanel({
           />
         </label>
         <label className="text-[11px] text-cat-subtext block">
-          <span className="text-[10px] text-cat-overlay block">Guild ID (optional — faster slash sync)</span>
+          <span className="text-[10px] text-cat-overlay inline-flex items-center">
+            Guild ID (optional — faster slash sync)
+            <SettingHint hint="Your Discord server ID. Set this so /ah-* commands appear in autocomplete within seconds. Without it, Discord global sync can take a long time." />
+          </span>
           <input
             type="text"
             value={settings.discordBotGuildId ?? ''}
@@ -891,6 +894,10 @@ export default function WorkflowPanel({
             className="w-full bg-cat-base border border-cat-surface1 rounded p-1.5 font-mono text-[11px] text-white focus:outline-none"
           />
         </label>
+        <p className="text-[10px] text-cat-overlay leading-relaxed -mt-1">
+          After save + connected status, type <span className="font-mono">/ah</span> in that server
+          to see slash autocomplete.
+        </p>
         <label className="text-[11px] text-cat-subtext block">
           <span className="text-[10px] text-cat-overlay block">
             Allowed Discord user IDs (one per line — required)

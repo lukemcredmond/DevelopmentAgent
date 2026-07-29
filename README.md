@@ -945,15 +945,18 @@ Offline fine-tuning export (no in-app training): `GET /api/training/export?limit
 - **Training** — `GET /api/training/export` JSONL only; no in-app LoRA / SFT.
 - Acceptance criteria use an **AC checklist gate** before Done when `requireAcChecklistForDone` is on (default); they are not auto-scored by the model.
 - **Retrieval feedback:** when semantic hits look weak, Task detail shows a “Semantic context may be noisy” banner with **Raise min score** (+0.05) and **Re-index**.
+- **Embeddings (`nomic-embed-text` / `embedModel`)** are for Qdrant codebase search and project memory only — they do **not** summarize or prune chat before LLM calls. Context shrink uses char-based prune (`messagePruneThresholdPct`) and tool-output caps.
+- **No live token streaming** yet for chat or sprint — you see tools/iteration via SSE, then the full reply when the step finishes.
 - Offline / simulation fallbacks may apply when Ollama is unavailable (see Offline mode).
 
 ### Discord ops checklist
 
 1. Create a Discord application → Bot → copy token; invite with `applications.commands`.
 2. Enable Developer Mode → copy your user ID → allowlist under Workflow → Phone / Discord control (**required** — empty allowlist rejects everyone).
-3. Optional guild ID for faster slash sync; save settings (bot reloads in-process).
+3. Set **Guild ID** (recommended) so `/ah-*` slash commands appear in autocomplete quickly; without it, global sync can lag. Save settings (bot reloads in-process).
 4. Confirm Bot status shows **connected** (not merely “token saved”). A watchdog restarts a dead Gateway task while the bot is enabled.
-5. Use `/ah-pending` then `/ah-answer` / `/ah-approve` to unblock Needs User / tool approvals from your phone.
+5. In that server type `/ah` — Discord should list `/ah-status`, `/ah-pending`, etc.
+6. Use `/ah-pending` then `/ah-answer` / `/ah-approve` to unblock Needs User / tool approvals from your phone.
 
 ## Troubleshooting
 
@@ -965,10 +968,13 @@ Offline fine-tuning export (no in-app training): `GET /api/training/export?limit
 | Dev blocked by Needs PO | Use **Run In Progress** to run Dev without waiting for PO. |
 | Duplicate memories | Enable **Group duplicates** in Memory tab; delete grouped entries. New saves dedupe automatically. |
 | Sprint not advancing | Check `blockedBy` dependencies, **pauseSprintOnNeedsUser**, empty In Progress lane, max sprint steps. |
-| UI freezes / OOM after hours | Hard-refresh the browser. Client now caps board transcripts; reopen Settings if Discord status looks stale. |
+| UI freezes / OOM after hours | Hard-refresh. Client caps transcripts, task file lists, and chat history; close Workspace when unused. |
+| Max tool iterations reached | Step ended — card usually stays In Progress. Use **Extend** / raise Max LLM iter/step, or wait for auto-extend then stuck → Needs PO. |
+| Discord `/ah` not in autocomplete | Set Guild ID, save, wait until Bot status connected; invite with `applications.commands`. Global sync without guild ID can take a long time. |
 | Discord configured but silent | Allowlist user ID; Bot status must be **connected** + running; save Workflow settings to reload; check Console for `source=discord`. |
 | Discord `app_commands is not defined` | Fixed by importing `discord.app_commands` at module level — restart the backend after update. |
 | Chat shows … then cancelled | Chat stays mounted when you switch bottom tabs so the request keeps running; use **Stop** to cancel. Sprint/board agent is slower because it runs larger tool loops and orchestration. |
+| Want streamed AI tokens | Not supported yet — watch live tool/iteration status; full reply arrives when the step completes. |
 | Flutter analyze fails | Workspace must contain `pubspec.yaml`; Flutter SDK on PATH. |
 | Tool approval timeout | Approve or deny in modal within 120s; or disable `requireToolApproval`. |
 | Unknown Tool for `write_file` | Usually refinement or wrong agent — **Dismiss**, do not map to itself. Wait for implementation mode. |

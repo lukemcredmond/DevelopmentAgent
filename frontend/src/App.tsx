@@ -126,12 +126,13 @@ function writeWorkspaceOpen(open: boolean): void {
 }
 
 function chatRecordsToUi(messages: ChatMessageRecord[] | undefined): ChatUiMessage[] {
-  return (messages ?? []).map((m, i) => ({
+  const mapped = (messages ?? []).map((m, i) => ({
     id: `stored-${i}-${m.timestamp ?? i}`,
     role: m.role,
     content: m.content,
     agent: m.agent as AgentId | undefined,
   }))
+  return mapped.length > 100 ? mapped.slice(-100) : mapped
 }
 
 function applyStateFields(
@@ -461,8 +462,9 @@ export default function App() {
     const loadedCount = Object.keys(state.files).length
     if (pathCount > 0 && loadedCount >= pathCount) return
     if (pathCount === 0 && loadedCount > 0) return
+    // Avoid hammering full-file refresh when only board/state churned with same path count.
     void refresh({ includeFiles: true })
-  }, [workspaceOpen, selectedFile, state.filePaths?.length, state.files, refresh])
+  }, [workspaceOpen, selectedFile, state.filePaths?.length, refresh])
 
   useEffect(() => {
     const key = `allhands-chat-draft-${state.projectId}`
@@ -1837,6 +1839,7 @@ export default function App() {
                       toolEvents={toolEvents}
                       onClearChat={handleClearChat}
                       hidden={bottomTab !== 'chat'}
+                      activeRun={activeRun}
                     />
                   </div>
                 {bottomTab === 'terminal' && (

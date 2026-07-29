@@ -300,7 +300,7 @@ def normalize_task(task: Dict[str, Any]) -> Dict[str, Any]:
                         **({"lastTouchedAt": f["lastTouchedAt"]} if f.get("lastTouchedAt") else {}),
                     }
                 )
-        task["files"] = normalized_files
+        task["files"] = normalized_files[-80:]
     if "relatedTaskIds" not in task or not isinstance(task.get("relatedTaskIds"), list):
         task["relatedTaskIds"] = []
     else:
@@ -651,6 +651,8 @@ def sync_task_files_from_transcript(task: Dict[str, Any]) -> int:
         ts = entry.get("timestamp") or _now_timestamp()
         task["files"].append({"path": path, "action": action, "lastTouchedAt": ts})
         added += 1
+    if len(task["files"]) > 80:
+        task["files"] = task["files"][-80:]
     return added
 
 

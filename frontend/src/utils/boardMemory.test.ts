@@ -1,5 +1,6 @@
 import { describe, expect, it } from 'vitest'
 import {
+  CLIENT_TASK_FILES_CAP,
   CLIENT_TRANSCRIPT_CAP,
   mergeTaskHistory,
   trimBoardHistory,
@@ -53,6 +54,18 @@ describe('boardMemory', () => {
     const merged = mergeTaskHistory(incoming, existing)
     expect(merged.transcript?.length).toBe(5)
     expect(merged.transcript?.[0]).toEqual(expect.objectContaining({ content: 'new0' }))
+  })
+
+  it('trims task.files to CLIENT_TASK_FILES_CAP', () => {
+    const t = task({
+      id: '1',
+      files: Array.from({ length: CLIENT_TASK_FILES_CAP + 10 }, (_, i) => ({
+        path: `f${i}.ts`,
+        action: 'touched',
+      })),
+    })
+    const trimmed = trimTaskHistory(t)
+    expect(trimmed.files?.length).toBe(CLIENT_TASK_FILES_CAP)
   })
 
   it('trimBoardHistory caps every lane', () => {

@@ -1,9 +1,15 @@
 /** Client-side board memory caps to avoid multi-hour React OOM. */
 
-import type { Board, BoardLane, Task } from '../types'
+import type { Board, BoardLane, Task, TaskFile } from '../types'
 
 export const CLIENT_TRANSCRIPT_CAP = 50
 export const CLIENT_DECISIONS_CAP = 40
+export const CLIENT_TASK_FILES_CAP = 40
+
+export function trimTaskFiles(files: Task['files'] | undefined): Task['files'] {
+  if (!Array.isArray(files) || files.length <= CLIENT_TASK_FILES_CAP) return files
+  return files.slice(-CLIENT_TASK_FILES_CAP) as Task['files']
+}
 
 export function trimTaskHistory(task: Task): Task {
   const next = { ...task }
@@ -14,6 +20,9 @@ export function trimTaskHistory(task: Task): Task {
   if (Array.isArray(task.decisions) && task.decisions.length > CLIENT_DECISIONS_CAP) {
     next.decisions = task.decisions.slice(-CLIENT_DECISIONS_CAP)
     next.decisionsTruncated = true
+  }
+  if (Array.isArray(task.files) && task.files.length > CLIENT_TASK_FILES_CAP) {
+    next.files = trimTaskFiles(task.files) as TaskFile[]
   }
   return next
 }

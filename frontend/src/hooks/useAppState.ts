@@ -426,6 +426,8 @@ export function useAppState() {
   const toolEventFlushTimerRef = useRef<number | null>(null)
   const sprintProgressPendingRef = useRef<SprintProgress | null | undefined>(undefined)
   const sprintProgressFlushTimerRef = useRef<number | null>(null)
+  const agentRunPendingRef = useRef<AgentRunState | null | undefined>(undefined)
+  const agentRunFlushTimerRef = useRef<number | null>(null)
   const [sseLive, setSseLive] = useState(true)
   const [lastToolEventAt, setLastToolEventAt] = useState<string | null>(null)
 
@@ -709,6 +711,39 @@ export function useAppState() {
     [flushSprintProgressBatch],
   )
 
+  const flushAgentRunBatch = useCallback(() => {
+    agentRunFlushTimerRef.current = null
+    const run = agentRunPendingRef.current
+    agentRunPendingRef.current = undefined
+    if (run === undefined) return
+    if (run === null) {
+      setActiveRun(null)
+      setCurrentTool(null)
+      return
+    }
+    if (run.status === 'completed' || run.status === 'failed') {
+      setDisplayRun(run)
+      setActiveRun(null)
+      setCurrentTool(null)
+      scheduleDisplayRunClearRef.current()
+    } else {
+      setActiveRun(run)
+      setDisplayRun(run)
+      setCurrentTool(run.currentTool ?? null)
+    }
+  }, [])
+
+  const enqueueAgentRun = useCallback(
+    (run: AgentRunState) => {
+      agentRunPendingRef.current = run
+      if (agentRunFlushTimerRef.current != null) return
+      agentRunFlushTimerRef.current = window.setTimeout(() => {
+        flushAgentRunBatch()
+      }, 75)
+    },
+    [flushAgentRunBatch],
+  )
+
   const appendLog = useCallback((log: SystemLog) => {
     logBatchRef.current.push(log)
     if (logFlushTimerRef.current != null) return
@@ -791,6 +826,8 @@ export function useAppState() {
   enqueueToolEventRef.current = enqueueToolEvent
   const enqueueSprintProgressRef = useRef(enqueueSprintProgress)
   enqueueSprintProgressRef.current = enqueueSprintProgress
+  const enqueueAgentRunRef = useRef(enqueueAgentRun)
+  enqueueAgentRunRef.current = enqueueAgentRun
 
   useEffect(() => {
     void refresh()
@@ -859,16 +896,7 @@ export function useAppState() {
         void refreshPendingToolsRef.current()
       } else if (event.type === 'agent_run' && event.data) {
         const run = mapAgentRun(event.data as Record<string, unknown>)
-        if (run.status === 'completed' || run.status === 'failed') {
-          setDisplayRun(run)
-          setActiveRun(null)
-          setCurrentTool(null)
-          scheduleDisplayRunClearRef.current()
-        } else {
-          setActiveRun(run)
-          setDisplayRun(run)
-          setCurrentTool(run.currentTool ?? null)
-        }
+        enqueueAgentRunRef.current(run)
       } else if (event.type === 'tool_start' && event.data) {
         enqueueToolEventRef.current('start', event.data as Record<string, unknown>)
       } else if (event.type === 'tool_end' && event.data) {
@@ -960,6 +988,10 @@ export function useAppState() {
       if (sprintProgressFlushTimerRef.current) {
         window.clearTimeout(sprintProgressFlushTimerRef.current)
         sprintProgressFlushTimerRef.current = null
+      }
+      if (agentRunFlushTimerRef.current) {
+        window.clearTimeout(agentRunFlushTimerRef.current)
+        agentRunFlushTimerRef.current = null
       }
     }
   }, [])

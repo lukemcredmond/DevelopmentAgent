@@ -1,8 +1,10 @@
 import { useMemo, useRef, useState } from 'react'
 import { sendChat } from '../api/client'
-import type { AgentId, BoardLane, Task, ToolExecutionEvent } from '../types'
+import type { AgentId, AgentRunState, BoardLane, Task, ToolExecutionEvent } from '../types'
 import { AGENT_LABELS } from '../types'
 import VirtualScrollList from './VirtualScrollList'
+
+export const CLIENT_CHAT_MESSAGE_CAP = 100
 
 export interface ChatToolCallDisplay {
   toolName: string
@@ -41,6 +43,13 @@ interface ChatPanelProps {
   toolEvents?: ToolExecutionEvent[]
   onClearChat?: () => void | Promise<void>
   hidden?: boolean
+  /** Live agent run (same SSE as sprint) for waiting status. */
+  activeRun?: AgentRunState | null
+}
+
+function capChatMessages(messages: ChatUiMessage[]): ChatUiMessage[] {
+  if (messages.length <= CLIENT_CHAT_MESSAGE_CAP) return messages
+  return messages.slice(-CLIENT_CHAT_MESSAGE_CAP)
 }
 
 function isAbortError(err: unknown): boolean {
@@ -116,6 +125,7 @@ export default function ChatPanel({
   toolEvents = [],
   onClearChat,
   hidden = false,
+  activeRun = null,
 }: ChatPanelProps) {
   const [streaming, setStreaming] = useState(false)
   const [clearing, setClearing] = useState(false)
@@ -128,6 +138,37 @@ export default function ChatPanel({
   )
 
   const taskActionMode = Boolean(pinnedTask)
+
+  const waitingStatus = useMemo(() => {
+    if (!streaming) return ''
+    const runningTool = [...toolEvents].reverse().find((e) => e.status === 'running')
+    const toolName = activeRun?.currentTool || runningTool?.toolName
+    const iter =
+      activeRun?.iteration != null && activeRun?.maxIterations != null
+        ? `iter ${activeRun.iteration}/${activeRun.maxIterations}`
+        : activeRun?.iteration != null
+          ? `iter ${activeRun.iteration}`
+          : ''
+    const intent = activeRun?.intent || activeRun?.status
+    const parts = [
+      toolName ? `tool: ${toolName}` : '',
+      iter,
+      intent && intent !== 'idle' ? String(intent) : '',
+    ].filter(Boolean)
+    if (parts.length === 0) {
+      return 'Working… (tools may take a few minutes). You can switch tabs — the request keeps running.'
+    }
+    return `Working… ${parts.join(' · ')}. You can switch tabs — the request keeps running.`
+  }, [streaming, toolEvents, activeRun])
+
+  const setMessagesCapped = (
+    update: ChatUiMessage[] | ((prev: ChatUiMessage[]) => ChatUiMessage[]),
+  ) => {
+    onMessagesChange((prev) => {
+      const next = typeof update === 'function' ? update(prev) : update
+      return capChatMessages(next)
+    })
+  }
 
   const renderChatMessage = (msg: ChatUiMessage) => (
     <div className={`max-w-[90%] py-1.5 ${msg.role === 'user' ? 'ml-auto text-right' : ''}`}>
@@ -149,11 +190,14 @@ export default function ChatPanel({
             ? 'bg-indigo-600/30 text-white'
             : 'bg-cat-surface0 text-cat-text border border-cat-surface1'
         }`}
+        data-testid={
+          streaming && !msg.content && msg.id === messages[messages.length - 1]?.id
+            ? 'chat-waiting-status'
+            : undefined
+        }
       >
         {msg.content ||
-          (streaming && msg.id === messages[messages.length - 1]?.id
-            ? 'Working… (tools may take a few minutes). You can switch tabs — the request keeps running.'
-            : '')}
+          (streaming && msg.id === messages[messages.length - 1]?.id ? waitingStatus : '')}
       </div>
       {msg.splitHint && (
         <div className="mt-1 text-[10px] text-amber-200 bg-amber-950/30 border border-amber-500/30 rounded px-2 py-1.5">
@@ -188,12 +232,12 @@ export default function ChatPanel({
       role: 'user',
       content: text,
     }
-    onMessagesChange((prev) => [...prev, userMsg])
+    setMessagesCapped((prev) => [...prev, userMsg])
     onInputChange('')
     setStreaming(true)
 
     const assistantId = crypto.randomUUID()
-    onMessagesChange((prev) => [
+    setMessagesCapped((prev) => [
       ...prev,
       { id: assistantId, role: 'assistant', content: '', agent },
     ])
@@ -222,7 +266,7 @@ export default function ChatPanel({
       }))
       const capturedTools =
         fromApi.length > 0 ? fromApi : mapToolEvents(toolEvents.slice(toolBaseline))
-      onMessagesChange((prev) =>
+      setMessagesCapped((prev) =>
         prev.map((m) =>
           m.id === assistantId
             ? {
@@ -237,7 +281,7 @@ export default function ChatPanel({
       onRefreshState?.()
     } catch (err) {
       if (isAbortError(err)) {
-        onMessagesChange((prev) =>
+        setMessagesCapped((prev) =>
           prev.map((m) =>
             m.id === assistantId
               ? {
@@ -250,7 +294,7 @@ export default function ChatPanel({
           ),
         )
       } else {
-        onMessagesChange((prev) =>
+        setMessagesCapped((prev) =>
           prev.map((m) =>
             m.id === assistantId
               ? {
