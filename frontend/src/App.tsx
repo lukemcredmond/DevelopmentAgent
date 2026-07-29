@@ -1812,9 +1812,13 @@ export default function App() {
                     />
                   </div>
                 )}
-                {bottomTab === 'chat' && (
-                  <div className="absolute inset-0 flex flex-col min-h-0">
-                    <ChatPanel
+                <div
+                  className={`absolute inset-0 flex flex-col min-h-0 ${
+                    bottomTab === 'chat' ? '' : 'hidden'
+                  }`}
+                  data-testid="chat-panel-host"
+                >
+                  <ChatPanel
                       ollamaUrl={ollamaUrl}
                       filePaths={chatFilePaths}
                       agent={chatAgent}
@@ -1832,9 +1836,9 @@ export default function App() {
                       onSplitTask={(taskId) => void handleSplitTask(taskId)}
                       toolEvents={toolEvents}
                       onClearChat={handleClearChat}
+                      hidden={bottomTab !== 'chat'}
                     />
                   </div>
-                )}
                 {bottomTab === 'terminal' && (
                   <div className="absolute inset-0 flex flex-col min-h-0">
                     <TerminalPanel workspaceDir={state.workspaceDir} />

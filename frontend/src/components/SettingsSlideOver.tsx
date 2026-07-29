@@ -5,6 +5,7 @@ import { isAutoLlmToolHealthOnPick, runAndPersistLlmProbeAll } from '../lib/tool
 import BoardRecoveryPanel from './BoardRecoveryPanel'
 import GpuModelRecommendations from './GpuModelRecommendations'
 import InstalledModelsPanel from './InstalledModelsPanel'
+import { SettingHint } from './SettingHint'
 import SlideOver from './SlideOver'
 import WorkflowPanel from './WorkflowPanel'
 
@@ -291,7 +292,10 @@ export default function SettingsSlideOver({
                   Paths
                 </h3>
                 <label className="block text-xs">
-                  <span className="text-[10px] text-cat-subtext block mb-0.5">PROJECT NAME</span>
+                  <span className="text-[10px] text-cat-subtext mb-0.5 inline-flex items-center">
+                    PROJECT NAME
+                    <SettingHint hint="Display name for this project in the sidebar and exports." />
+                  </span>
                   <input
                     type="text"
                     value={projectName}
@@ -300,7 +304,10 @@ export default function SettingsSlideOver({
                   />
                 </label>
                 <label className="block text-xs">
-                  <span className="text-[10px] text-cat-subtext block mb-0.5">WORKSPACE DIR</span>
+                  <span className="text-[10px] text-cat-subtext mb-0.5 inline-flex items-center">
+                    WORKSPACE DIR
+                    <SettingHint hint="Folder on your PC where the agent reads and writes project files." />
+                  </span>
                   <input
                     type="text"
                     value={workspaceDir}
@@ -309,7 +316,10 @@ export default function SettingsSlideOver({
                   />
                 </label>
                 <label className="block text-xs">
-                  <span className="text-[10px] text-cat-subtext block mb-0.5">GLOBAL SKILLS DIR</span>
+                  <span className="text-[10px] text-cat-subtext mb-0.5 inline-flex items-center">
+                    GLOBAL SKILLS DIR
+                    <SettingHint hint="Folder of shared skill files agents can use across projects." />
+                  </span>
                   <input
                     type="text"
                     value={skillsDir}
@@ -351,7 +361,10 @@ export default function SettingsSlideOver({
           {tab === 'models' && (
             <div className="space-y-3 text-xs">
               <label className="block">
-                <span className="text-[10px] text-cat-subtext block mb-0.5">OLLAMA URL</span>
+                <span className="text-[10px] text-cat-subtext mb-0.5 inline-flex items-center">
+                  OLLAMA URL
+                  <SettingHint hint="Address of your local Ollama server that runs the AI models (usually http://localhost:11434)." />
+                </span>
                 <input
                   type="text"
                   value={ollamaUrl}
@@ -361,8 +374,9 @@ export default function SettingsSlideOver({
               </label>
               <div className="space-y-1.5" data-testid="settings-api-token">
                 <label className="block">
-                  <span className="text-[10px] text-cat-subtext block mb-0.5">
+                  <span className="text-[10px] text-cat-subtext mb-0.5 inline-flex items-center">
                     LOCALHOST API TOKEN
+                    <SettingHint hint="Password the browser sends to the backend when you set ALLHANDS_API_TOKEN on the server. Leave blank if the server has no token." />
                   </span>
                   <input
                     type="password"
@@ -440,8 +454,11 @@ export default function SettingsSlideOver({
                 ).map(({ label, value, onChange, backup, onBackup, focus }) => (
                   <div key={label} className="space-y-1">
                     <div className="flex items-center justify-between gap-2">
-                      <span className="text-[9px] text-cat-subtext font-bold shrink-0">
+                      <span className="text-[9px] text-cat-subtext font-bold shrink-0 inline-flex items-center">
                         {label} MODEL
+                        <SettingHint
+                          hint={`Primary Ollama model for the ${label} agent. Use a name from “ollama list”.`}
+                        />
                       </span>
                       <input
                         type="text"
@@ -452,7 +469,10 @@ export default function SettingsSlideOver({
                       />
                     </div>
                     <div className="flex items-center justify-between gap-2 pl-0.5">
-                      <span className="text-[9px] text-cat-overlay shrink-0">Backup (stuck)</span>
+                      <span className="text-[9px] text-cat-overlay shrink-0 inline-flex items-center">
+                        Backup (stuck)
+                        <SettingHint hint="Optional second model used for a few steps when this agent gets stuck looping." />
+                      </span>
                       <input
                         type="text"
                         value={backup}
@@ -589,8 +609,9 @@ export default function SettingsSlideOver({
 
           {tab === 'agents' && (
             <div className="space-y-3">
-              <h3 className="text-xs font-bold uppercase tracking-wider text-cat-subtext">
+              <h3 className="text-xs font-bold uppercase tracking-wider text-cat-subtext inline-flex items-center gap-1">
                 Agent Team & Skills
+                <SettingHint hint="Each role (PO, Dev, Reviewer, QA) can have skill files that teach it how to work on your project." />
               </h3>
               {agents.map(({ id, model }) => (
                 <div

@@ -10,6 +10,7 @@ import {
 } from '../api/client'
 import AgentToolsPanel from './AgentToolsPanel'
 import NumberSettingInput from './NumberSettingInput'
+import { SettingHint } from './SettingHint'
 import type {
   BriefChangelogEntry,
   IndexProgress,
@@ -287,7 +288,10 @@ export default function WorkflowPanel({
           history. Also on Settings → Models.
         </p>
         <label className="text-[11px] text-cat-subtext block">
-          <span className="text-[10px] text-cat-overlay block">Max tool output chars (to LLM)</span>
+          <span className="text-[10px] text-cat-overlay inline-flex items-center">
+            Max tool output chars (to LLM)
+            <SettingHint hint="How much of each tool result is sent back to the model. Raise if replies look cut off; lower to save memory and speed." />
+          </span>
           <NumberSettingInput
             value={settings.maxToolOutputCharsForLlm ?? 6000}
             min={1000}
@@ -297,8 +301,9 @@ export default function WorkflowPanel({
           />
         </label>
         <label className="text-[11px] text-cat-subtext block">
-          <span className="text-[10px] text-cat-overlay block">
+          <span className="text-[10px] text-cat-overlay inline-flex items-center">
             Message prune threshold (% of num_ctx)
+            <SettingHint hint="When chat history fills this percent of the model context window, older tool messages are dropped to make room." />
           </span>
           <NumberSettingInput
             value={settings.messagePruneThresholdPct ?? 60}
@@ -320,6 +325,7 @@ export default function WorkflowPanel({
           onChange={(e) => onSettingsChange({ requireBacklogApproval: e.target.checked })}
         />
         Require backlog approval (optional)
+        <SettingHint hint="New stories wait in Pending Approval until you approve them before they enter the backlog." />
       </label>
       <label className="flex items-center gap-2 text-[11px] text-cat-subtext cursor-pointer">
         <input
@@ -328,6 +334,7 @@ export default function WorkflowPanel({
           onChange={(e) => onSettingsChange({ requireBacklogRefinement: e.target.checked })}
         />
         Require backlog refinement before dev
+        <SettingHint hint="Stories go through a Refinement lane so Dev and PO can groom them before coding starts." />
       </label>
       <label className="flex items-center gap-2 text-[11px] text-cat-subtext cursor-pointer">
         <input
@@ -336,6 +343,7 @@ export default function WorkflowPanel({
           onChange={(e) => onSettingsChange({ enableBlockedLane: e.target.checked })}
         />
         Auto Blocked lane (move cards waiting on deps)
+        <SettingHint hint="Automatically parks cards that are waiting on other cards into a Blocked lane." />
       </label>
       {(settings.requireBacklogRefinement ?? false) && (
         <label className="flex items-center gap-2 text-[11px] text-cat-subtext pl-5 cursor-pointer">
@@ -347,11 +355,15 @@ export default function WorkflowPanel({
             }
           />
           Claim Backlog / In Progress before more Refinement
+          <SettingHint hint="Prefer coding ready cards over grooming more stories when both are available." />
         </label>
       )}
       {(settings.requireBacklogRefinement ?? false) && (
         <label className="flex items-center gap-2 text-[11px] text-cat-subtext pl-5">
-          <span className="text-cat-overlay shrink-0">Max refinement rounds</span>
+          <span className="text-cat-overlay shrink-0 inline-flex items-center">
+            Max refinement rounds
+            <SettingHint hint="How many times Dev and PO can bounce a card in Refinement before it must move on." />
+          </span>
           <NumberSettingInput
             value={settings.maxRefinementRoundTrips ?? 3}
             min={1}
@@ -369,7 +381,10 @@ export default function WorkflowPanel({
         </p>
       )}
       <label className="flex items-center gap-2 text-[11px] text-cat-subtext pl-5">
-        <span className="text-cat-overlay shrink-0">Max subtask depth</span>
+        <span className="text-cat-overlay shrink-0 inline-flex items-center">
+          Max subtask depth
+          <SettingHint hint="How deep nested subtasks can go when a card is split into smaller pieces." />
+        </span>
         <NumberSettingInput
           value={settings.maxSubtaskDepth ?? 4}
           min={1}
@@ -379,7 +394,10 @@ export default function WorkflowPanel({
         />
       </label>
       <label className="flex items-center gap-2 text-[11px] text-cat-subtext pl-5">
-        <span className="text-cat-overlay shrink-0">Max subtask spawns</span>
+        <span className="text-cat-overlay shrink-0 inline-flex items-center">
+          Max subtask spawns
+          <SettingHint hint="Upper limit on how many child cards one parent can create." />
+        </span>
         <NumberSettingInput
           value={settings.maxSubtaskSpawns ?? 8}
           min={1}
@@ -395,6 +413,7 @@ export default function WorkflowPanel({
           onChange={(e) => onSettingsChange({ requireCodeReview: e.target.checked })}
         />
         Require code review before QA
+        <SettingHint hint="Cards must pass the Code Reviewer agent before they can enter QA." />
       </label>
       <label className="flex items-center gap-2 text-[11px] text-cat-subtext cursor-pointer">
         <input
@@ -403,6 +422,7 @@ export default function WorkflowPanel({
           onChange={(e) => onSettingsChange({ requireDevVerification: e.target.checked })}
         />
         Require dev run_command/run_test before QA
+        <SettingHint hint="Developer must successfully run a test or command before the card can leave Dev." />
       </label>
       <label className="flex items-center gap-2 text-[11px] text-cat-subtext cursor-pointer">
         <input
@@ -411,6 +431,7 @@ export default function WorkflowPanel({
           onChange={(e) => onSettingsChange({ requireCleanLint: e.target.checked })}
         />
         Require clean lint before dev/QA advance (Cursor-like)
+        <SettingHint hint="Blocks progress while the last analyze/lint run still has unresolved findings." />
       </label>
       <label className="flex items-center gap-2 text-[11px] text-cat-subtext cursor-pointer">
         <input
@@ -419,6 +440,7 @@ export default function WorkflowPanel({
           onChange={(e) => onSettingsChange({ requireAcChecklistForDone: e.target.checked })}
         />
         Require AC checklist before Done
+        <SettingHint hint="When on, every acceptance criterion on the card must be checked (or QA override) before Done." />
       </label>
       <p className="text-[10px] text-cat-overlay leading-relaxed -mt-1 pl-5">
         When on, all acceptance criteria must be checked on the card (or QA override) before Done.
@@ -430,6 +452,7 @@ export default function WorkflowPanel({
           onChange={(e) => onSettingsChange({ requireWorkspaceStructure: e.target.checked })}
         />
         Require workspace structure before Code Review/QA
+        <SettingHint hint="Checks that expected project folders/files exist before review or QA." />
       </label>
       <label className="flex items-center gap-2 text-[11px] text-cat-subtext cursor-pointer">
         <input
@@ -438,6 +461,7 @@ export default function WorkflowPanel({
           onChange={(e) => onSettingsChange({ autoScaffoldOnStructureGap: e.target.checked })}
         />
         Auto-scaffold when structure critically incomplete
+        <SettingHint hint="If key project files are missing, the agent may create a basic scaffold automatically." />
       </label>
       <label className="flex items-center gap-2 text-[11px] text-cat-subtext cursor-pointer">
         <input
@@ -446,13 +470,17 @@ export default function WorkflowPanel({
           onChange={(e) => onSettingsChange({ enableFixVerifyLoop: e.target.checked })}
         />
         Enable fix-verify loop on dev steps
+        <SettingHint hint="After edits, automatically re-run checks and let Dev fix failures for a few rounds." />
       </label>
       <p className="text-[10px] text-cat-overlay leading-relaxed -mt-1 pl-5">
         Also runs automatically when &quot;Require clean lint&quot; is on, even if this checkbox is off.
       </p>
       {(settings.enableFixVerifyLoop ?? false) || (settings.requireCleanLint ?? false) ? (
         <label className="flex items-center gap-2 text-[11px] text-cat-subtext pl-5">
-          <span className="text-cat-overlay shrink-0">Max rounds</span>
+          <span className="text-cat-overlay shrink-0 inline-flex items-center">
+            Max rounds
+            <SettingHint hint="How many fix-then-recheck cycles Dev may run in one step." />
+          </span>
           <NumberSettingInput
             value={settings.maxFixVerifyRounds ?? 3}
             min={1}
@@ -469,6 +497,7 @@ export default function WorkflowPanel({
           onChange={(e) => onSettingsChange({ requireToolApproval: e.target.checked })}
         />
         Require approval for write_file and run_command
+        <SettingHint hint="When on, risky tools pause until you approve them in the UI (or Discord)." />
       </label>
       <p className="text-[10px] text-cat-overlay leading-relaxed -mt-1 pl-5">
         When unchecked (default), tools run immediately without asking. When checked,{' '}
@@ -571,6 +600,7 @@ export default function WorkflowPanel({
           onChange={(e) => onSettingsChange({ allowChainedCommands: e.target.checked })}
         />
         Allow safe command chaining (&amp;&amp; and ;)
+        <SettingHint hint="Lets agents run simple command chains like build && test. Redirects and pipes stay blocked." />
       </label>
       <p className="text-[10px] text-cat-overlay leading-relaxed -mt-1 pl-5">
         On by default. When off, <span className="font-mono">run_command</span> rejects{' '}
@@ -579,7 +609,10 @@ export default function WorkflowPanel({
       </p>
 
       <label className="text-[11px] text-cat-subtext block">
-        <span className="text-[10px] text-cat-overlay block">Max MCP tools (budget)</span>
+        <span className="text-[10px] text-cat-overlay inline-flex items-center">
+          Max MCP tools (budget)
+          <SettingHint hint="Caps how many external MCP tools can register so the model is not overloaded with tool choices." />
+        </span>
         <NumberSettingInput
           value={settings.maxMcpTools ?? 40}
           min={0}
@@ -701,6 +734,7 @@ export default function WorkflowPanel({
             onChange={(e) => onSettingsChange({ phoneNotifyEnabled: e.target.checked })}
           />
           Enable Discord phone alerts
+          <SettingHint hint="Sends outbound Discord webhook messages to your phone for events like Needs User or sprint end." />
         </label>
         <label className="text-[11px] text-cat-subtext block">
           <span className="text-[10px] text-cat-overlay block">
@@ -799,6 +833,7 @@ export default function WorkflowPanel({
             onChange={(e) => onSettingsChange({ discordBotEnabled: e.target.checked })}
           />
           Enable Discord control bot
+          <SettingHint hint="Runs a local Discord bot (outbound only) so you can use fixed /ah-* slash commands from your phone." />
         </label>
         <p className="text-[10px] text-cat-overlay" data-testid="discord-bot-status">
           Bot status:{' '}
@@ -905,6 +940,7 @@ export default function WorkflowPanel({
           onChange={(e) => onSettingsChange({ pauseSprintOnNeedsUser: e.target.checked })}
         />
         Pause sprint when any card is in Needs User
+        <SettingHint hint="When on, the auto-sprint pauses until you answer Needs User cards. When off, other work continues." />
       </label>
       <p className="text-[10px] text-cat-overlay leading-relaxed -mt-1 pl-5">
         Off by default — sprint continues other lanes while cards wait for your input.
@@ -917,6 +953,7 @@ export default function WorkflowPanel({
           onChange={(e) => onSettingsChange({ autoStartSprint: e.target.checked })}
         />
         Auto-start sprint after plan (Plan &amp; Run)
+        <SettingHint hint="After planning creates backlog cards, automatically begin running the sprint." />
       </label>
 
       <label className="flex items-center gap-2 text-[11px] text-cat-subtext cursor-pointer">
@@ -926,6 +963,7 @@ export default function WorkflowPanel({
           onChange={(e) => onSettingsChange({ autoFormatAfterEdit: e.target.checked })}
         />
         Auto-format Dart files after edits (dart format)
+        <SettingHint hint="Runs dart format on Dart files the agent just changed." />
       </label>
 
       <label className="flex items-center gap-2 text-[11px] text-cat-subtext cursor-pointer">
@@ -935,6 +973,7 @@ export default function WorkflowPanel({
           onChange={(e) => onSettingsChange({ autonomousMode: e.target.checked })}
         />
         Autonomous sprint mode (minimal user input)
+        <SettingHint hint="Agents prefer acting over asking. Limits how many Needs User cards can appear per sprint." />
       </label>
       <p className="text-[10px] text-cat-overlay leading-relaxed -mt-1 pl-5">
         When enabled, agents prefer acting over asking. Needs User moves are capped per sprint (
@@ -954,6 +993,7 @@ export default function WorkflowPanel({
           onChange={(e) => onSettingsChange({ enableWebSearch: e.target.checked })}
         />
         Enable web search tool for agents
+        <SettingHint hint="Lets agents look things up on the web (DuckDuckGo locally, or Serper if you set an API key)." />
       </label>
       <p className="text-[10px] text-cat-overlay leading-relaxed -mt-1 pl-5">
         Uses DuckDuckGo HTML search locally, or set{' '}
@@ -971,6 +1011,7 @@ export default function WorkflowPanel({
           onChange={(e) => onSettingsChange({ enableSemanticSearch: e.target.checked })}
         />
         Enable semantic codebase search (Qdrant)
+        <SettingHint hint="Indexes your code so agents can find relevant files by meaning, not just exact text. Needs Qdrant + an embed model." />
       </label>
       <p className="text-[10px] text-cat-overlay leading-relaxed -mt-1 pl-5">
         Requires Qdrant and an Ollama embed model (e.g.{' '}
@@ -1123,7 +1164,10 @@ export default function WorkflowPanel({
       </label>
       <div className="grid grid-cols-2 gap-2 pl-5 text-[11px]">
         <label>
-          <span className="text-[10px] text-cat-overlay block">Min dense score (0–1)</span>
+          <span className="text-[10px] text-cat-overlay inline-flex items-center">
+            Min dense score (0–1)
+            <SettingHint hint="Ignore weak code-search matches below this score. Raise if context feels noisy." />
+          </span>
           <input
             type="number"
             min={0}
@@ -1253,7 +1297,10 @@ export default function WorkflowPanel({
       </div>
 
       <label className="text-[11px] text-cat-subtext block">
-        <span className="text-[10px] text-cat-overlay block">Ollama keep-alive</span>
+        <span className="text-[10px] text-cat-overlay inline-flex items-center">
+          Ollama keep-alive
+          <SettingHint hint="How long Ollama keeps a model loaded in memory between calls (for example 30m). Longer = less reload delay." />
+        </span>
         <input
           type="text"
           value={settings.ollamaKeepAlive ?? '30m'}
@@ -1271,7 +1318,10 @@ export default function WorkflowPanel({
       </p>
 
       <label className="text-[11px] text-cat-subtext block">
-        <span className="text-[10px] text-cat-overlay block">Ollama context size (num_ctx)</span>
+        <span className="text-[10px] text-cat-overlay inline-flex items-center">
+          Ollama context size (num_ctx)
+          <SettingHint hint="How many tokens of conversation the model can hold. Higher uses more RAM/VRAM and can be slower." />
+        </span>
         <NumberSettingInput
           value={settings.ollamaNumCtx ?? 32768}
           min={4096}
@@ -1461,7 +1511,10 @@ export default function WorkflowPanel({
 
       <div className="grid grid-cols-3 gap-2 text-[11px]">
         <label>
-          <span className="text-[10px] text-cat-overlay block">Max sprint steps</span>
+          <span className="text-[10px] text-cat-overlay inline-flex items-center">
+            Max sprint steps
+            <SettingHint hint="Safety cap on how many board steps one auto-sprint can run before it stops." />
+          </span>
           <NumberSettingInput
             value={settings.maxSprintSteps}
             min={1}
@@ -1471,7 +1524,10 @@ export default function WorkflowPanel({
           />
         </label>
         <label>
-          <span className="text-[10px] text-cat-overlay block">Max LLM iter/step</span>
+          <span className="text-[10px] text-cat-overlay inline-flex items-center">
+            Max LLM iter/step
+            <SettingHint hint="How many think-then-tool rounds one agent may run in a single board step." />
+          </span>
           <NumberSettingInput
             value={settings.maxLlmIterationsPerStep}
             min={1}

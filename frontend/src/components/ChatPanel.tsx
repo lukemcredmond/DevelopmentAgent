@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useRef, useState } from 'react'
+import { useMemo, useRef, useState } from 'react'
 import { sendChat } from '../api/client'
 import type { AgentId, BoardLane, Task, ToolExecutionEvent } from '../types'
 import { AGENT_LABELS } from '../types'
@@ -150,7 +150,10 @@ export default function ChatPanel({
             : 'bg-cat-surface0 text-cat-text border border-cat-surface1'
         }`}
       >
-        {msg.content || (streaming && msg.id === messages[messages.length - 1]?.id ? '…' : '')}
+        {msg.content ||
+          (streaming && msg.id === messages[messages.length - 1]?.id
+            ? 'Working… (tools may take a few minutes). You can switch tabs — the request keeps running.'
+            : '')}
       </div>
       {msg.splitHint && (
         <div className="mt-1 text-[10px] text-amber-200 bg-amber-950/30 border border-amber-500/30 rounded px-2 py-1.5">
@@ -169,11 +172,8 @@ export default function ChatPanel({
     </div>
   )
 
-  useEffect(() => {
-    return () => {
-      abortRef.current?.abort()
-    }
-  }, [])
+  // Do not abort on unmount — App keeps this panel mounted (hidden) so tab switches
+  // do not cancel in-flight chat. Stop button still aborts via stopStreaming.
 
   const stopStreaming = () => {
     abortRef.current?.abort()
@@ -290,6 +290,9 @@ export default function ChatPanel({
   return (
     <div
       className={`flex flex-col h-full bg-cat-base overflow-hidden ${hidden ? 'hidden' : ''}`}
+      data-testid="chat-panel"
+      data-chat-hidden={hidden ? 'true' : 'false'}
+      aria-hidden={hidden}
     >
       <div className="px-4 py-2 border-b border-cat-surface1 flex items-center gap-3 shrink-0 flex-wrap">
         <h3 className="text-xs font-bold uppercase tracking-wider text-cat-subtext">

@@ -19,6 +19,14 @@ from backend.services.workflow_settings import get_workflow_settings
 
 logger = logging.getLogger(__name__)
 
+# Module-level so typing.get_type_hints (discord.py) can resolve Choice annotations.
+try:
+    import discord
+    from discord import app_commands
+except ImportError:  # pragma: no cover - optional dependency
+    discord = None  # type: ignore[assignment]
+    app_commands = None  # type: ignore[assignment]
+
 # Slash command names (Discord: lowercase + hyphens).
 CMD_STATUS = "ah-status"
 CMD_PAUSE = "ah-pause"
@@ -594,8 +602,8 @@ def dispatch_command(
 
 
 def _make_discord_client(guild_id: str) -> Any:
-    import discord
-    from discord import app_commands
+    if discord is None or app_commands is None:
+        raise ImportError("discord.py not installed")
 
     intents = discord.Intents.default()
     client = discord.Client(intents=intents)
@@ -881,9 +889,7 @@ async def start_discord_bot() -> None:
             "source=discord bot_enabled_but_token_missing",
         )
         return
-    try:
-        import discord  # noqa: F401
-    except ImportError:
+    if discord is None or app_commands is None:
         _set_bot_status("error", last_error="discord.py not installed")
         add_system_log(
             "discord",
