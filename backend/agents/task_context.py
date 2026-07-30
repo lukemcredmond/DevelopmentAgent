@@ -383,6 +383,9 @@ def normalize_task(task: Dict[str, Any]) -> Dict[str, Any]:
         task["poRoundTrips"] = 0
     if "stuckLoops" not in task or not isinstance(task.get("stuckLoops"), (int, float)):
         task["stuckLoops"] = 0
+    from backend.agents.tool_fingerprints import normalize_fingerprint_fields
+
+    normalize_fingerprint_fields(task)
     if "agentUsage" not in task or not isinstance(task.get("agentUsage"), dict):
         task["agentUsage"] = {}
     for decision in task.get("decisions") or []:
@@ -1147,9 +1150,18 @@ def _format_last_step_outcome_block(task: Dict[str, Any]) -> str:
             lines.append(f"Why stuck: {why_clean[:400]}")
     lines.append(f"Do next: {do_next}")
     lines.append(f"Do not: {do_not}")
+    blocked_block = ""
+    try:
+        from backend.agents.tool_fingerprints import format_blocked_tools_for_prompt
+
+        blocked_block = format_blocked_tools_for_prompt(task)
+    except Exception:
+        blocked_block = ""
+    if blocked_block:
+        lines.append(blocked_block)
     block = "\n".join(lines) + "\n"
-    if len(block) > 800:
-        block = block[:797] + "…\n"
+    if len(block) > 1200:
+        block = block[:1197] + "…\n"
     return "\n" + block
 
 

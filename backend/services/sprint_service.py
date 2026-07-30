@@ -463,6 +463,24 @@ def _record_last_step_outcome(
     if task and isinstance(state.LAST_STEP_OUTCOME, dict):
         normalize_task(task)
         task["lastStepOutcome"] = _compact_last_step_outcome_for_task(state.LAST_STEP_OUTCOME)
+        try:
+            from backend.agents.tool_fingerprints import finalize_step_tool_fingerprints
+
+            stop = str(
+                state.LAST_STEP_OUTCOME.get("stopReason")
+                or state.LAST_STEP_OUTCOME.get("exitReason")
+                or ""
+            )
+            step_keys = list(getattr(state, "STEP_TOOL_FINGERPRINT_KEYS", None) or [])
+            block_keys = list(getattr(state, "STEP_TOOL_BLOCK_KEYS", None) or [])
+            finalize_step_tool_fingerprints(
+                task,
+                step_keys,
+                stop_reason=stop,
+                block_keys=block_keys,
+            )
+        except Exception:
+            pass
         # Persist a thin diagnostics pointer when available after finalize below.
     _finalize_step_diagnostics_if_traced(task_id)
     if task and isinstance(state.LAST_STEP_DIAGNOSTICS, dict):
@@ -830,6 +848,12 @@ def _check_stuck_and_escalate(
         task.pop("autoExtendUsed", None)
         task.pop("lastStepOutcome", None)
         try:
+            from backend.agents.tool_fingerprints import clear_fingerprint_escalation_state
+
+            clear_fingerprint_escalation_state(task)
+        except Exception:
+            pass
+        try:
             from backend.services.backup_model import clear_backup_remaining, restore_primary_model
             from backend.agents.registry import agent_cr, agent_dev, agent_po, agent_qa
 
@@ -878,6 +902,28 @@ def _check_stuck_and_escalate(
         except Exception:
             pass
 
+    if task["stuckLoops"] >= 1:
+        try:
+            from backend.agents.tool_fingerprints import should_escalate_repeat_tool_overlap
+
+            if should_escalate_repeat_tool_overlap(task):
+                ws = get_workflow_settings()
+                max_stuck = int(ws.get("maxStuckSteps", 3))
+                task["stuckLoops"] = max_stuck
+                record_task_decision(
+                    task_id,
+                    "System",
+                    "stuck_loop",
+                    "Repeat tool overlap — escalating early",
+                    "Consecutive steps used the same tool calls; change approach or edit files.",
+                )
+                add_system_log(
+                    "System",
+                    "warning",
+                    f"{task_id}: repeat tool fingerprint overlap — treating as max stuck",
+                )
+        except Exception:
+            pass
 
     ws = get_workflow_settings()
     max_stuck = int(ws.get("maxStuckSteps", 3))
@@ -1247,6 +1293,9 @@ def _inject_sprint_context(
     base = build_task_prompt(active_task, brief)
     parts = [base]
     if context_block:
+        from backend.services.context_compress import maybe_compress_sprint_context_block
+
+        context_block = maybe_compress_sprint_context_block(context_block, agent_role=agent_role)
         parts.append(context_block)
         parts.append(CONTEXT_INJECT_NOTE)
     if agent_role == "Developer":

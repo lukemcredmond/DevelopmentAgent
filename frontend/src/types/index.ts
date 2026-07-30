@@ -399,6 +399,10 @@ export interface WorkflowSettings {
   enableObservationSummaries?: boolean
   enableEpisodeSummary?: boolean
   enableStepLessonMemory?: boolean
+  enableLlmContextCompress?: boolean
+  contextCompressMinChars?: number
+  contextCompressMaxChars?: number
+  contextCompressModel?: string
   pauseSprintOnNeedsUser?: boolean
   autoFormatAfterEdit?: boolean
   phoneNotifyEnabled?: boolean
@@ -950,6 +954,10 @@ export interface WorkflowSettingsPayload {
   enableObservationSummaries?: boolean
   enableEpisodeSummary?: boolean
   enableStepLessonMemory?: boolean
+  enableLlmContextCompress?: boolean
+  contextCompressMinChars?: number
+  contextCompressMaxChars?: number
+  contextCompressModel?: string
   pauseSprintOnNeedsUser?: boolean
   autoFormatAfterEdit?: boolean
   phoneNotifyEnabled?: boolean
@@ -1202,6 +1210,10 @@ export const DEFAULT_WORKFLOW_SETTINGS: WorkflowSettings = {
   enableObservationSummaries: true,
   enableEpisodeSummary: true,
   enableStepLessonMemory: true,
+  enableLlmContextCompress: true,
+  contextCompressMinChars: 8000,
+  contextCompressMaxChars: 3500,
+  contextCompressModel: '',
   pauseSprintOnNeedsUser: false,
   autoFormatAfterEdit: true,
   phoneNotifyEnabled: false,

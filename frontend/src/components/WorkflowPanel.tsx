@@ -1223,6 +1223,56 @@ export default function WorkflowPanel({
         />
         Save end-of-step lesson to memory
       </label>
+      <label className="flex items-center gap-2 text-[11px] text-cat-subtext cursor-pointer pl-5">
+        <input
+          type="checkbox"
+          checked={settings.enableLlmContextCompress !== false}
+          onChange={(e) => onSettingsChange({ enableLlmContextCompress: e.target.checked })}
+        />
+        LLM compress bulky sprint context (extra Ollama call)
+      </label>
+      {settings.enableLlmContextCompress !== false && (
+        <div className="grid grid-cols-2 gap-2 pl-5 text-[10px] text-cat-overlay">
+          <label>
+            Compress when inject ≥
+            <input
+              type="number"
+              min={2000}
+              max={100000}
+              value={settings.contextCompressMinChars ?? 8000}
+              onChange={(e) =>
+                onSettingsChange({ contextCompressMinChars: Number(e.target.value) || 8000 })
+              }
+              className="w-full bg-cat-base border border-cat-surface1 rounded p-1 text-white font-mono"
+            />
+            chars
+          </label>
+          <label>
+            Target max
+            <input
+              type="number"
+              min={500}
+              max={20000}
+              value={settings.contextCompressMaxChars ?? 3500}
+              onChange={(e) =>
+                onSettingsChange({ contextCompressMaxChars: Number(e.target.value) || 3500 })
+              }
+              className="w-full bg-cat-base border border-cat-surface1 rounded p-1 text-white font-mono"
+            />
+            chars
+          </label>
+          <label className="col-span-2">
+            Compress model (empty = fast preset)
+            <input
+              type="text"
+              value={settings.contextCompressModel ?? ''}
+              onChange={(e) => onSettingsChange({ contextCompressModel: e.target.value })}
+              className="w-full bg-cat-base border border-cat-surface1 rounded p-1 text-white font-mono"
+              placeholder={settings.discordModelPresetFast || 'qwen2.5-coder:7b'}
+            />
+          </label>
+        </div>
+      )}
       <p className="text-[10px] text-cat-overlay leading-relaxed pl-5">
         Fine-tuning is not run in AllHands. Export step traces as JSONL for offline SFT.
       </p>

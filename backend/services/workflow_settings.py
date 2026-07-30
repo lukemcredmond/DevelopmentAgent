@@ -100,6 +100,10 @@ DEFAULT_WORKFLOW_SETTINGS: Dict[str, Any] = {
     "enableObservationSummaries": True,
     "enableEpisodeSummary": True,
     "enableStepLessonMemory": True,
+    "enableLlmContextCompress": True,
+    "contextCompressMinChars": 8000,
+    "contextCompressMaxChars": 3500,
+    "contextCompressModel": "",
     "pauseSprintOnNeedsUser": False,
     "autoFormatAfterEdit": True,
     # Outbound-only phone alerts (Discord webhook) — never opens inbound ports.

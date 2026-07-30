@@ -370,6 +370,10 @@ Persisted per project. Update via sidebar **Workflow** or `POST /api/workflow/se
 | enableObservationSummaries | On | Compact `=== OBSERVATION ===` after each tool batch |
 | enableEpisodeSummary | On | Fold pruned tool messages into `=== EPISODE SUMMARY ===` |
 | enableStepLessonMemory | On | Save one structured lesson to memory at end of each agent step |
+| enableLlmContextCompress | On | When sprint inject (semantic + files) exceeds `contextCompressMinChars`, one extra Ollama call shrinks it to `contextCompressMaxChars` (fail-open) |
+| contextCompressMinChars | 8000 | Minimum inject size before compress runs |
+| contextCompressMaxChars | 3500 | Target size after compress |
+| contextCompressModel | (empty) | Ollama model for compress; empty uses `discordModelPresetFast` then Dev model |
 | enableWebSearch | Off | Web search tool for agents |
 | ollamaNumCtx | 32768 | Context window hint for Ollama (Dev default) |
 | ollamaNumCtxByRole | `{}` | Optional per-role `{po,dev,cr,qa}` overrides; unset PO/CR/QA use min(global, 16384) |
@@ -967,6 +971,7 @@ Key code: `backend/services/sprint_service.py`, `backend/api/sprint.py`, `backen
 | **ReAct-style tool loop** | Up to `maxLlmIterationsPerStep` think → tool → observe rounds per step |
 | **Parallel safe tools** | Read/search-style tools may run in one batch |
 | **Stop reasons** | Max iterations, timeouts, duplicate tools, tool-failure caps, duration limits |
+| **Cross-step fingerprints** | Blocked/recent `(tool, args)` keys persist on the card; next step soft-skips repeats and escalates sooner when consecutive steps overlap |
 | **Continuation** | Manual/auto **Extend** restarts with a continuation prompt (not an infinite in-memory chat) |
 | **Observation / reflect nudges** | Short guidance after tool batches to steer the next LLM turn |
 
@@ -974,12 +979,15 @@ Key code: `backend/agents/scrum_agent.py`, `backend/services/parallel_tools.py`,
 
 ### Context management (not embedding-based)
 
+**What each Dev sprint LLM call includes (order):** role system prompt + skills → optional memory search hits → `build_task_prompt` (brief, DoD, card fields, evidence, outcomes, answers, decisions, transcript) → semantic + Graphify + pre-loaded files (optionally **LLM-compressed**) → structure audit → lane instructions → tool loop with truncated outputs and char prune.
+
 - **Char prune** of old tool/observation messages when history exceeds `%` of `num_ctx` (`messagePruneThresholdPct`).
 - Optional **episode summary** lines for pruned chunks (text fold — not an embedding summarizer).
+- Optional **LLM context compress** for bulky sprint inject only (`enableLlmContextCompress`) — one Ollama call before the step; card identity fields stay verbatim.
 - **Tool-output truncation** before re-injection (`maxToolOutputCharsForLlm`).
 - Embeddings are **not** used to compress the active prompt.
 
-Key code: `backend/services/llm_context.py`.
+Key code: `backend/services/llm_context.py`, `backend/services/context_compress.py`, `backend/agents/tool_fingerprints.py`.
 
 ### Embeddings, RAG, and memory
 

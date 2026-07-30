@@ -77,6 +77,10 @@ BACKUP_MODELS: Dict[str, str] = {
 }
 
 # Paths read via read_file during the current sprint agent step (safe_path -> content).
+# Tool (name, args_json) keys invoked during the current agent step (cross-step fingerprinting).
+STEP_TOOL_FINGERPRINT_KEYS: List[Any] = []
+STEP_TOOL_BLOCK_KEYS: List[Any] = []
+
 STEP_FILE_READS: Dict[str, str] = {}
 
 # apply_patch failure counts per path within current sprint step.

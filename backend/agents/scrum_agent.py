@@ -639,6 +639,24 @@ class ScrumAgent:
         tool_summary = summarize_tool_args(tool_name, arguments)
         key = (tool_name, json.dumps(arguments, sort_keys=True, default=str))
 
+        def _track_fingerprint(*, block: bool = False) -> None:
+            if not task_id:
+                return
+            state.STEP_TOOL_FINGERPRINT_KEYS.append(key)
+            live = find_task_by_id(task_id)
+            if not live:
+                return
+            from backend.agents.tool_fingerprints import (
+                block_tool_fingerprint_on_task,
+                record_tool_fingerprint_on_task,
+            )
+
+            if block:
+                block_tool_fingerprint_on_task(live, tool_name, arguments)
+                state.STEP_TOOL_BLOCK_KEYS.append(key)
+            else:
+                record_tool_fingerprint_on_task(live, tool_name, arguments)
+
         with _FAILURE_LOCK:
             same_success = successful_tool_keys.count(key)
 
@@ -662,6 +680,7 @@ class ScrumAgent:
                 clear_tool=True,
             )
             finish_run(status="failed", error=stop_msg)
+            _track_fingerprint(block=True)
             safe_args = sanitize_tool_args_for_log(tool_name, arguments)
             result = ToolExecutionResult(
                 tool_name=tool_name,
@@ -707,6 +726,7 @@ class ScrumAgent:
             add_system_log(self.role, "info", skip_intent)
             with _FAILURE_LOCK:
                 successful_tool_keys.append(key)
+            _track_fingerprint()
             safe_args = sanitize_tool_args_for_log(tool_name, arguments)
             result = ToolExecutionResult(
                 tool_name=tool_name,
@@ -776,6 +796,7 @@ class ScrumAgent:
         if result.success and not result.pending_approval:
             with _FAILURE_LOCK:
                 successful_tool_keys.append(key)
+            _track_fingerprint()
 
         if not result.success and not result.pending_approval:
             with _FAILURE_LOCK:
@@ -783,6 +804,7 @@ class ScrumAgent:
                 failed_tool_keys.append(key)
                 same_count = failed_tool_keys.count(key)
                 fail_total = total_failures[0]
+            _track_fingerprint()
             if same_count >= SAME_ARGS_FAILURE_LIMIT:
                 stop_msg = (
                     f"Stopped: tool '{tool_name}' failed repeatedly with the same arguments. "
@@ -790,6 +812,7 @@ class ScrumAgent:
                 )
                 self._log_step_exit(stop_msg, "error")
                 finish_run(status="failed", error=stop_msg)
+                _track_fingerprint(block=True)
                 return tool_name, arguments, result, stop_msg
             if fail_total >= max_tool_failures:
                 stop_msg = (
@@ -1041,10 +1064,17 @@ class ScrumAgent:
         total_failures: List[int] = [0]
         tools_used: set[str] = set()
         task_id = state.ACTIVE_SPRINT_TASK_ID
+        state.STEP_TOOL_FINGERPRINT_KEYS = []
+        state.STEP_TOOL_BLOCK_KEYS = []
         if task_id:
             active_task = find_task_by_id(task_id)
             if active_task:
                 self._decisions_in_prompt = min(len(active_task.get("decisions") or []), 8)
+                from backend.agents.tool_fingerprints import seed_tool_keys_from_task
+
+                seeded_success, seeded_fail = seed_tool_keys_from_task(active_task)
+                successful_tool_keys.extend(seeded_success)
+                failed_tool_keys.extend(seeded_fail)
             start_run(task_id, self.role, max_iterations=max_iterations)
 
         from backend.services.step_diagnostics import (
