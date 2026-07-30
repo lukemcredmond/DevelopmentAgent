@@ -481,6 +481,12 @@ def _record_last_step_outcome(
             )
         except Exception:
             pass
+        try:
+            from backend.services.agent_work_items import refresh_agent_work_items
+
+            refresh_agent_work_items(task)
+        except Exception:
+            pass
         # Persist a thin diagnostics pointer when available after finalize below.
     _finalize_step_diagnostics_if_traced(task_id)
     if task and isinstance(state.LAST_STEP_DIAGNOSTICS, dict):

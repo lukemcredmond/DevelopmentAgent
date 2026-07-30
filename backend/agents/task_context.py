@@ -386,6 +386,14 @@ def normalize_task(task: Dict[str, Any]) -> Dict[str, Any]:
     from backend.agents.tool_fingerprints import normalize_fingerprint_fields
 
     normalize_fingerprint_fields(task)
+    try:
+        from backend.services.agent_work_items import refresh_agent_work_items
+
+        refresh_agent_work_items(task)
+    except Exception:
+        from backend.services.agent_work_items import normalize_agent_work_items
+
+        task["agentWorkItems"] = normalize_agent_work_items(task.get("agentWorkItems"))
     if "agentUsage" not in task or not isinstance(task.get("agentUsage"), dict):
         task["agentUsage"] = {}
     for decision in task.get("decisions") or []:

@@ -78,6 +78,59 @@ export interface DependencyOutcome {
   spikeReport?: string
 }
 
+export interface AgentWorkItem {
+  id: string
+  label: string
+  status: 'pending' | 'done' | 'blocked'
+  source?: 'derived'
+  agentRole?: string
+  updatedAt?: string
+}
+
+export interface TaskFlowNode {
+  kind: 'llm' | 'tool'
+  id: string
+  timestamp?: string
+  agent?: string
+  agentId?: string
+  taskId?: string
+  runId?: string
+  model?: string
+  iteration?: number
+  durationMs?: number
+  error?: string
+  requestMessages?: Array<{ role?: string; content?: string } | string>
+  responseContent?: string
+  toolCalls?: unknown[]
+  toolNames?: string[]
+  memoriesUsed?: Array<{ category?: string; content?: string }>
+  decisionsIncluded?: number
+  toolName?: string
+  toolArgs?: Record<string, unknown>
+  toolOutput?: string
+  success?: boolean
+  status?: string
+  source?: string
+  traceId?: string
+  textChars?: number
+}
+
+export interface TaskFlowResponse {
+  taskId: string
+  nodes: TaskFlowNode[]
+  traces?: Array<{
+    path?: string
+    traceId?: string
+    startedAt?: string
+    endedAt?: string
+    status?: string
+    exitReason?: string
+    agent?: string
+  }>
+  count?: number
+  includeFull?: boolean
+}
+
 export interface Task {
   id: string
   title: string
@@ -148,6 +201,7 @@ export interface Task {
   featureRollup?: FeatureRollup | null
   stuckLoops?: number
   lastStepProgress?: StepProgress | null
+  agentWorkItems?: AgentWorkItem[]
   qaMarkdownPath?: string | null
   agentUsage?: Record<string, AgentUsageEntry> | null
 }
@@ -584,6 +638,7 @@ export interface CardWorkProgress {
   filesThisStep?: string[]
   acCount?: number
   lane?: string
+  agentWorkItems?: AgentWorkItem[]
 }
 
 export interface SprintProgress {

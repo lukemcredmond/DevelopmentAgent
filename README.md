@@ -423,6 +423,8 @@ Outbound HTTPS only — **does not open ports** on your PC. Notifications go to 
 
 Optional **inbound-from-Discord** quick actions via the Discord Gateway (**outbound** from this PC — no public HTTPS Interactions endpoint, no inbound ports). The bot runs **in-process** with the AllHands backend and only exposes a fixed slash-command set (no free-form Dev chat, no arbitrary shell, no free-text model tags).
 
+**Threading / UI:** Slash handlers `defer` then run command logic via `asyncio.to_thread` (not on the browser UI thread). `/ah-resume` starts auto-sprint on a **daemon thread**. The React SPA never talks to Discord Gateway — it only reads cheap `discordBotStatus` from `/api/state`.
+
 | Setting | Default | Purpose |
 |---------|---------|---------|
 | discordBotEnabled | Off | Master switch (Settings → Workflow → Phone / Discord control) |
@@ -580,6 +582,9 @@ During sprint steps, the **Agent Run bar** above the bottom panel shows live too
 ### Task detail modal
 
 - View/edit title, description, acceptance criteria
+- **Agent progress** — derived done/pending/blocked checklist for Dev/CR/PO process work (reads, edits, verify, lane gates). Separate from **Acceptance Criteria (QA)** checkboxes
+- **Flow** — on-demand ordered LLM↔tool graph with full prompt/response/tool text from persisted logs + step diagnostics (not stored in board/page memory). `GET /api/tasks/{id}/flow`
+- Compact agent checklist also on the kanban **card** (`agentWorkItems`)
 - **Feature epic hub** — children, rolled-up files, recent decisions (`featureRollup`)
 - **Approve** (Pending Approval)
 - **Resolve & Return to Dev** (Needs User)
@@ -778,6 +783,7 @@ Live updates: `GET /api/events` (SSE).
 | POST | `/api/tasks/{id}/split` | PO split into subtasks |
 | POST | `/api/tasks/{id}/escape-subtasks` | Exit subtask loop |
 | POST | `/api/tasks/{id}/inject-tool-evidence` | Paste command output for agents |
+| GET | `/api/tasks/{id}/flow` | Ordered LLM↔tool flow (full payloads; from SQLite logs + diagnostics) |
 | DELETE | `/api/tasks/{id}/transcript` | Clear task transcript |
 | POST | `/api/tasks/reorder` | Reorder Backlog by priority |
 | POST | `/api/agents/retry-step` | Retry agent step (same/optimized/fix_and_verify) |

@@ -560,6 +560,16 @@ def build_card_work_snapshot(
     stuck = int(task.get("stuckLoops") or 0)
     files = files_this_step if files_this_step is not None else files_written_this_step()
 
+    work_items: List[Dict[str, Any]] = []
+    if task:
+        try:
+            from backend.services.agent_work_items import refresh_agent_work_items
+
+            work_items = refresh_agent_work_items(task)
+        except Exception:
+            raw = task.get("agentWorkItems") or []
+            work_items = [x for x in raw if isinstance(x, dict)][:12]
+
     return {
         "subtasksDone": subtasks_done,
         "subtasksTotal": len(subtask_ids),
@@ -570,6 +580,7 @@ def build_card_work_snapshot(
         "filesThisStep": files,
         "acCount": ac_count,
         "lane": resolved_lane,
+        "agentWorkItems": work_items,
     }
 
 

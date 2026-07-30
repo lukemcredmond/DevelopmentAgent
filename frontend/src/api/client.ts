@@ -247,6 +247,18 @@ export async function deleteTask(taskId: string): Promise<AppState> {
   })
 }
 
+export async function fetchTaskFlow(
+  taskId: string,
+  params?: { limit?: number; includeFull?: boolean },
+): Promise<import('../types').TaskFlowResponse> {
+  const q = new URLSearchParams()
+  if (params?.limit != null) q.set('limit', String(params.limit))
+  if (params?.includeFull === false) q.set('includeFull', '0')
+  else q.set('includeFull', '1')
+  const qs = q.toString()
+  return request(`/api/tasks/${encodeURIComponent(taskId)}/flow${qs ? `?${qs}` : ''}`)
+}
+
 export async function clearTaskTranscript(taskId: string): Promise<AppState> {
   return request<AppState>(
     `/api/tasks/${encodeURIComponent(taskId)}/transcript`,

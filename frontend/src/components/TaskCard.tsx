@@ -286,6 +286,58 @@ export default function TaskCard({
         </div>
       </div>
       <h4 className="font-bold text-white mb-1 leading-tight">{task.title}</h4>
+      {(() => {
+        const items =
+          task.agentWorkItems ??
+          task.lastStepProgress?.cardProgress?.agentWorkItems ??
+          []
+        if (!items.length) return null
+        const done = items.filter((i) => i.status === 'done').length
+        const blocked = items.filter((i) => i.status === 'blocked').length
+        return (
+          <div className="mb-1.5 space-y-0.5" data-testid="card-agent-work-items">
+            <p className="text-[9px] text-cat-overlay font-mono">
+              Agent {done}/{items.length}
+              {blocked > 0 ? ` · ${blocked} blocked` : ''}
+            </p>
+            <ul className="space-y-0.5">
+              {items.slice(0, 5).map((item) => (
+                <li
+                  key={item.id}
+                  className="flex items-start gap-1 text-[9px] leading-tight"
+                  title={item.label}
+                >
+                  <span
+                    className={
+                      item.status === 'done'
+                        ? 'text-emerald-400'
+                        : item.status === 'blocked'
+                          ? 'text-rose-400'
+                          : 'text-cat-overlay'
+                    }
+                  >
+                    {item.status === 'done' ? '✓' : item.status === 'blocked' ? '✕' : '○'}
+                  </span>
+                  <span
+                    className={
+                      item.status === 'done'
+                        ? 'text-cat-subtext line-through truncate'
+                        : item.status === 'blocked'
+                          ? 'text-rose-200/90 truncate'
+                          : 'text-cat-subtext truncate'
+                    }
+                  >
+                    {item.label}
+                  </span>
+                </li>
+              ))}
+              {items.length > 5 && (
+                <li className="text-[9px] text-cat-overlay pl-3">+{items.length - 5} more</li>
+              )}
+            </ul>
+          </div>
+        )
+      })()}
       {needsUser && (
         <p className="text-[10px] text-amber-200/90 line-clamp-2 mb-1">
           {task.needsUserAction?.trim() || task.userQuestion?.trim() || 'Action required — open for details'}

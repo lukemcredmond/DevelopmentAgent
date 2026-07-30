@@ -6,6 +6,7 @@ import {
   formatTokensLine,
 } from '../utils/agentUsageFormat'
 import SlideOver from './SlideOver'
+import TaskFlowPanel from './TaskFlowPanel'
 
 function getCommandDiagnostics(task: Task): CommandDiagnostic[] {
   if (task.lastCommandDiagnostics?.length) {
@@ -585,7 +586,56 @@ export default function TaskDetailModal({
             )}
           </CollapsibleSection>
 
-          <CollapsibleSection title="Acceptance Criteria" badge={acList.length} defaultOpen>
+          {(() => {
+            const items = safeTask.agentWorkItems ?? []
+            if (!items.length) return null
+            const done = items.filter((i) => i.status === 'done').length
+            return (
+              <CollapsibleSection
+                title="Agent progress"
+                badge={`${done}/${items.length}`}
+                defaultOpen
+              >
+                <p className="text-[10px] text-cat-overlay mb-2">
+                  Derived process checklist for agents (Dev/CR/PO) — not QA acceptance criteria.
+                </p>
+                <ul className="text-[11px] space-y-1.5" data-testid="agent-work-items">
+                  {items.map((item) => (
+                    <li key={item.id} className="flex items-start gap-2">
+                      <span
+                        className={
+                          item.status === 'done'
+                            ? 'text-emerald-400'
+                            : item.status === 'blocked'
+                              ? 'text-rose-400'
+                              : 'text-cat-overlay'
+                        }
+                        aria-hidden
+                      >
+                        {item.status === 'done' ? '☑' : item.status === 'blocked' ? '☒' : '☐'}
+                      </span>
+                      <span
+                        className={
+                          item.status === 'done'
+                            ? 'text-emerald-200/80 line-through'
+                            : item.status === 'blocked'
+                              ? 'text-rose-200/90'
+                              : 'text-cat-subtext'
+                        }
+                      >
+                        {item.label}
+                      </span>
+                    </li>
+                  ))}
+                </ul>
+              </CollapsibleSection>
+            )
+          })()}
+
+          <CollapsibleSection title="Acceptance Criteria (QA)" badge={acList.length} defaultOpen>
+            <p className="text-[10px] text-cat-overlay mb-2">
+              For the QA agent / Done gate — check off when verifying the card.
+            </p>
             {editing ? (
               <textarea
                 value={acceptanceCriteria}
@@ -624,6 +674,10 @@ export default function TaskDetailModal({
             ) : (
               <p className="text-[11px] text-cat-overlay italic">None defined</p>
             )}
+          </CollapsibleSection>
+
+          <CollapsibleSection title="Flow" badge="LLM + tools" defaultOpen={false}>
+            <TaskFlowPanel taskId={task.id} active />
           </CollapsibleSection>
 
           {safeTask.retrievalFeedback && (
