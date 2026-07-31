@@ -120,6 +120,8 @@ export interface TaskFlowNode {
   source?: string
   traceId?: string
   textChars?: number
+  exitReason?: string
+  duplicateSkip?: boolean
   workItemIds?: string[]
 }
 
@@ -128,6 +130,26 @@ export interface TaskFlowWorkItemIndexEntry {
   status?: string
   flowMatch?: AgentWorkItemFlowMatch
   nodeIds?: string[]
+  llmCalls?: number
+  toolCalls?: number
+  toolCounts?: Record<string, number>
+  failedToolCalls?: number
+  duplicateSkips?: number
+  llmMs?: number
+  toolMs?: number
+  durationMs?: number
+  firstAt?: string | null
+  lastAt?: string | null
+  toolLinked?: boolean
+}
+
+export interface TaskFlowTotals {
+  llmCalls?: number
+  toolCalls?: number
+  llmMs?: number
+  toolMs?: number
+  failedToolCalls?: number
+  duplicateSkips?: number
 }
 
 export interface TaskFlowResponse {
@@ -143,9 +165,20 @@ export interface TaskFlowResponse {
     agent?: string
   }>
   count?: number
+  totalCount?: number
   includeFull?: boolean
   workItemIndex?: Record<string, TaskFlowWorkItemIndexEntry>
+  totals?: TaskFlowTotals
   agentWorkItems?: AgentWorkItem[]
+}
+
+export interface TaskFlowSummaryResponse {
+  taskId: string
+  workItemIndex?: Record<string, TaskFlowWorkItemIndexEntry>
+  agentWorkItems?: AgentWorkItem[]
+  totals?: TaskFlowTotals
+  count?: number
+  totalCount?: number
 }
 
 export interface Task {
@@ -1282,7 +1315,7 @@ export const DEFAULT_WORKFLOW_SETTINGS: WorkflowSettings = {
   enableObservationSummaries: true,
   enableEpisodeSummary: true,
   enableStepLessonMemory: true,
-  enableLlmContextCompress: true,
+  enableLlmContextCompress: false,
   contextCompressMinChars: 8000,
   contextCompressMaxChars: 3500,
   contextCompressModel: '',

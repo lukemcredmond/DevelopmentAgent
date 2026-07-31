@@ -1,6 +1,11 @@
 import { useEffect, useRef, useState } from 'react'
 import { fetchTaskFlow } from '../api/client'
 import type { TaskFlowNode, TaskFlowResponse, TaskFlowWorkItemIndexEntry } from '../types'
+import {
+  formatToolBreakdown,
+  formatTimeSplit,
+  formatWorkItemCounts,
+} from '../utils/flowCounts'
 
 interface TaskFlowPanelProps {
   taskId: string
@@ -54,6 +59,16 @@ function FlowNode({
           {node.durationMs != null && <span className="text-cat-overlay">{node.durationMs}ms</span>}
           {node.error && <span className="text-rose-400">ERR</span>}
           {!isLlm && node.success === false && <span className="text-rose-400">failed</span>}
+          {node.duplicateSkip && (
+            <span className="text-amber-300/90 border border-amber-500/40 rounded px-1">
+              skipped duplicate
+            </span>
+          )}
+          {node.exitReason && (
+            <span className="text-sky-300/90 border border-sky-500/40 rounded px-1 font-mono">
+              {node.exitReason}
+            </span>
+          )}
           {node.source && <span className="text-cat-overlay font-mono">{node.source}</span>}
           <span className="text-cat-overlay ml-auto">{open ? '▾' : '▸'}</span>
         </div>
@@ -192,10 +207,13 @@ export default function TaskFlowPanel({
 
   if (!active) return null
 
-  const matchedCount =
-    highlightWorkItemId && data?.workItemIndex?.[highlightWorkItemId]?.nodeIds
-      ? data.workItemIndex[highlightWorkItemId].nodeIds!.length
-      : 0
+  const activeEntry = highlightWorkItemId ? data?.workItemIndex?.[highlightWorkItemId] : undefined
+  const matchedCount = activeEntry?.nodeIds?.length ?? 0
+  const activeCounts = formatWorkItemCounts(activeEntry)
+  const activeBreakdown = formatToolBreakdown(activeEntry)
+  const activeTiming = formatTimeSplit(activeEntry)
+  const totalsCounts = formatWorkItemCounts(data?.totals)
+  const totalsTiming = formatTimeSplit(data?.totals)
 
   return (
     <div className="space-y-2" data-testid="task-flow-panel">
@@ -204,11 +222,24 @@ export default function TaskFlowPanel({
         Expand a node for full prompt / response / tool output. Click an agent-progress chip to filter.
       </p>
       {highlightWorkItemId && (
-        <div className="flex flex-wrap items-center gap-2 text-[10px]">
+        <div
+          className="flex flex-wrap items-center gap-2 text-[10px]"
+          data-testid="flow-filter-header"
+        >
           <span className="text-sky-200">
-            Filtered: {data?.workItemIndex?.[highlightWorkItemId]?.label || highlightWorkItemId}
-            {matchedCount > 0 ? ` (${matchedCount} node${matchedCount === 1 ? '' : 's'})` : ' (no Flow tools yet)'}
+            Filtered: {activeEntry?.label || highlightWorkItemId}
+            {matchedCount > 0
+              ? ` (${matchedCount} node${matchedCount === 1 ? '' : 's'})`
+              : activeEntry?.toolLinked === false
+                ? ' (board state, no tools)'
+                : ' (no Flow tools yet)'}
           </span>
+          {activeCounts && (
+            <span className="text-cat-subtext" title={activeBreakdown || undefined}>
+              {activeCounts}
+            </span>
+          )}
+          {activeTiming && <span className="text-cat-overlay font-mono">{activeTiming}</span>}
           <button
             type="button"
             onClick={() => onHighlightWorkItem?.(null)}
@@ -224,6 +255,9 @@ export default function TaskFlowPanel({
         <>
           <p className="text-[10px] text-cat-overlay font-mono">
             {data.count ?? data.nodes.length} nodes
+            {(data.totalCount ?? 0) > (data.count ?? 0) ? ` of ${data.totalCount}` : ''}
+            {totalsCounts ? ` · ${totalsCounts}` : ''}
+            {totalsTiming ? ` · ${totalsTiming}` : ''}
             {(data.traces?.length ?? 0) > 0 ? ` · ${data.traces!.length} step trace(s)` : ''}
           </p>
           <div className="relative pl-3 space-y-2 before:absolute before:left-1 before:top-2 before:bottom-2 before:w-px before:bg-cat-surface1">

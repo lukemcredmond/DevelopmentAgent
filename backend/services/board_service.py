@@ -113,6 +113,17 @@ def move_board_stage(task_id: str, target_lane: str) -> str:
             from backend.agents.task_context import on_task_completed
 
             on_task_completed(active_task["id"])
+            # Card is finished — drop any armed backup steps and go back to primary models.
+            try:
+                from backend.services.backup_model import (
+                    clear_backup_remaining,
+                    restore_all_primary_models,
+                )
+
+                clear_backup_remaining(active_task)
+                restore_all_primary_models(reason=f"{active_task['id']} reached Done")
+            except Exception:
+                pass
         record_task_decision(
             active_task["id"],
             state.ACTIVE_SPRINT_AGENT or "System",

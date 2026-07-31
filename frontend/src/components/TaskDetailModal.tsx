@@ -1,10 +1,20 @@
 import { useEffect, useMemo, useState, type ReactNode } from 'react'
-import type { BoardLane, CommandDiagnostic, Task, TaskFile, TaskGitCommit, TaskTranscriptEntry } from '../types'
+import type {
+  BoardLane,
+  CommandDiagnostic,
+  Task,
+  TaskFile,
+  TaskFlowSummaryResponse,
+  TaskGitCommit,
+  TaskTranscriptEntry,
+} from '../types'
+import { fetchTaskFlowSummary } from '../api/client'
 import { formatAcceptanceCriteria, formatTaskText, deriveTaskFiles, sanitizeTaskForUi, formatQaPair } from '../utils/taskFormat'
 import {
   formatDurationMs,
   formatTokensLine,
 } from '../utils/agentUsageFormat'
+import { formatToolBreakdown, formatWorkItemCounts } from '../utils/flowCounts'
 import SlideOver from './SlideOver'
 import TaskFlowPanel from './TaskFlowPanel'
 
@@ -310,6 +320,7 @@ export default function TaskDetailModal({
   const [runningDevStep, setRunningDevStep] = useState(false)
   const [flowOpen, setFlowOpen] = useState(false)
   const [highlightWorkItemId, setHighlightWorkItemId] = useState<string | null>(null)
+  const [flowSummary, setFlowSummary] = useState<TaskFlowSummaryResponse | null>(null)
 
   useEffect(() => {
     if (!task) return
@@ -331,6 +342,26 @@ export default function TaskDetailModal({
       setUserAnswer('')
     }
   }, [task?.id, defaultInjectCommand])
+
+  // Counts-only flow view so each Agent progress row can show LLM/tool effort.
+  const flowRefreshKey = task?.transcript?.length ?? 0
+  useEffect(() => {
+    if (!task?.id) {
+      setFlowSummary(null)
+      return
+    }
+    let cancelled = false
+    void fetchTaskFlowSummary(task.id, { limit: 200 })
+      .then((res) => {
+        if (!cancelled) setFlowSummary(res)
+      })
+      .catch(() => {
+        if (!cancelled) setFlowSummary(null)
+      })
+    return () => {
+      cancelled = true
+    }
+  }, [task?.id, flowRefreshKey])
 
   useEffect(() => {
     if (!task?.id) return
@@ -613,10 +644,14 @@ export default function TaskDetailModal({
               >
                 <p className="text-[10px] text-cat-overlay mb-2">
                   Derived process checklist for agents (Dev/CR/PO) — not QA acceptance criteria.
-                  Click an item to open Flow and highlight matching tools.
+                  Click an item to open Flow and see the LLM calls and tools behind it.
                 </p>
                 <ul className="text-[11px] space-y-1.5" data-testid="agent-work-items">
-                  {items.map((item) => (
+                  {items.map((item) => {
+                    const entry = flowSummary?.workItemIndex?.[item.id]
+                    const counts = formatWorkItemCounts(entry)
+                    const breakdown = formatToolBreakdown(entry)
+                    return (
                     <li key={item.id}>
                       <button
                         type="button"
@@ -657,9 +692,28 @@ export default function TaskDetailModal({
                         >
                           {item.label}
                         </span>
+                        {counts ? (
+                          <span
+                            className="ml-auto shrink-0 text-[9px] text-cat-overlay font-mono"
+                            title={breakdown || undefined}
+                            data-testid={`work-item-counts-${item.id}`}
+                          >
+                            {counts}
+                          </span>
+                        ) : entry?.toolLinked === false ? (
+                          <span className="ml-auto shrink-0 text-[9px] text-cat-overlay italic">
+                            board state
+                          </span>
+                        ) : null}
                       </button>
+                      {breakdown && (
+                        <p className="pl-6 text-[9px] text-cat-overlay font-mono truncate">
+                          {breakdown}
+                        </p>
+                      )}
                     </li>
-                  ))}
+                    )
+                  })}
                 </ul>
               </CollapsibleSection>
             )

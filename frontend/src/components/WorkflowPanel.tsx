@@ -1226,12 +1226,12 @@ export default function WorkflowPanel({
       <label className="flex items-center gap-2 text-[11px] text-cat-subtext cursor-pointer pl-5">
         <input
           type="checkbox"
-          checked={settings.enableLlmContextCompress !== false}
+          checked={settings.enableLlmContextCompress === true}
           onChange={(e) => onSettingsChange({ enableLlmContextCompress: e.target.checked })}
         />
-        LLM compress bulky sprint context (extra Ollama call)
+        LLM compress bulky sprint context (off by default — extra Ollama call per step)
       </label>
-      {settings.enableLlmContextCompress !== false && (
+      {settings.enableLlmContextCompress === true && (
         <div className="grid grid-cols-2 gap-2 pl-5 text-[10px] text-cat-overlay">
           <label>
             Compress when inject ≥
@@ -1262,13 +1262,13 @@ export default function WorkflowPanel({
             chars
           </label>
           <label className="col-span-2">
-            Compress model (empty = fast preset)
+            Compress model (empty = the step agent's own model)
             <input
               type="text"
               value={settings.contextCompressModel ?? ''}
               onChange={(e) => onSettingsChange({ contextCompressModel: e.target.value })}
               className="w-full bg-cat-base border border-cat-surface1 rounded p-1 text-white font-mono"
-              placeholder={settings.discordModelPresetFast || 'qwen2.5-coder:7b'}
+              placeholder="step agent model"
             />
           </label>
         </div>

@@ -100,7 +100,8 @@ DEFAULT_WORKFLOW_SETTINGS: Dict[str, Any] = {
     "enableObservationSummaries": True,
     "enableEpisodeSummary": True,
     "enableStepLessonMemory": True,
-    "enableLlmContextCompress": True,
+    # Off by default: it adds one extra Ollama call per step.
+    "enableLlmContextCompress": False,
     "contextCompressMinChars": 8000,
     "contextCompressMaxChars": 3500,
     "contextCompressModel": "",

@@ -89,6 +89,11 @@ def _run_command_event_fields(
     return fields
 
 
+def _resolve_task_id(task_id: Optional[str]) -> str:
+    """Explicit task id, else the card the sprint/chat step is running for, else 'system'."""
+    return str(task_id or state.ACTIVE_SPRINT_TASK_ID or "system")
+
+
 def _build_history_event(
     *,
     run_id: str,
@@ -107,6 +112,7 @@ def _build_history_event(
     diagnostics: Optional[list] = None,
     command: Optional[str] = None,
     status_override: Optional[str] = None,
+    duplicate_skip: bool = False,
 ) -> Dict[str, Any]:
     event_id = event_id or str(uuid.uuid4())
     event: Dict[str, Any] = {
@@ -124,6 +130,8 @@ def _build_history_event(
         "source": source,
         "status": status_override or ("failed" if not success else "completed"),
     }
+    if duplicate_skip:
+        event["duplicateSkip"] = True
     if tool_name == "run_command":
         if command:
             event["command"] = command
@@ -507,7 +515,7 @@ def _emit_tool_end(
     end_payload: Dict[str, Any] = {
         "eventId": event_id,
         "runId": effective_run_id,
-        "taskId": task_id or "system",
+        "taskId": _resolve_task_id(task_id),
         "agent": agent_role,
         "toolName": tool_name,
         "toolArgs": safe_args,
@@ -528,7 +536,7 @@ def _emit_tool_end(
     append_global_tool_event(
         _build_history_event(
             run_id=effective_run_id,
-            task_id=task_id or "system",
+            task_id=_resolve_task_id(task_id),
             agent=agent_role,
             tool_name=tool_name,
             tool_args=safe_args,
@@ -545,6 +553,38 @@ def _emit_tool_end(
             status_override=status_override,
         )
     )
+
+
+def log_duplicate_skip_event(
+    *,
+    agent: str,
+    tool_name: str,
+    arguments: Dict[str, Any],
+    tool_output: str,
+    task_id: Optional[str] = None,
+    run_id: Optional[str] = None,
+    success: bool = True,
+) -> str:
+    """Record a skipped/blocked duplicate tool call in the tool log so Flow shows it."""
+    safe_args = sanitize_tool_args_for_log(tool_name, arguments)
+    active_run = get_active_run()
+    effective_run_id = run_id or (active_run.run_id if active_run else "agent")
+    event = _build_history_event(
+        run_id=effective_run_id,
+        task_id=_resolve_task_id(task_id),
+        agent=agent,
+        tool_name=tool_name,
+        tool_args=safe_args,
+        tool_output=tool_output,
+        success=success,
+        duration_ms=0,
+        timestamp=datetime.now().strftime("%Y-%m-%d %H:%M:%S"),
+        source="agent",
+        status_override="skipped" if success else "blocked",
+        duplicate_skip=True,
+    )
+    append_global_tool_event(event)
+    return str(event.get("eventId") or "")
 
 
 def execute_tool(
@@ -584,7 +624,7 @@ def execute_tool(
             {
                 "eventId": event_id,
                 "runId": effective_run_id,
-                "taskId": task_id or "system",
+                "taskId": _resolve_task_id(task_id),
                 "agent": agent_role,
                 "toolName": tool_name,
                 "toolArgs": safe_args,

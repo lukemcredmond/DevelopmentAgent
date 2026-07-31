@@ -370,10 +370,10 @@ Persisted per project. Update via sidebar **Workflow** or `POST /api/workflow/se
 | enableObservationSummaries | On | Compact `=== OBSERVATION ===` after each tool batch |
 | enableEpisodeSummary | On | Fold pruned tool messages into `=== EPISODE SUMMARY ===` |
 | enableStepLessonMemory | On | Save one structured lesson to memory at end of each agent step |
-| enableLlmContextCompress | On | When sprint inject (semantic + files) exceeds `contextCompressMinChars`, one extra Ollama call shrinks it to `contextCompressMaxChars` (fail-open) |
+| enableLlmContextCompress | **Off** | When sprint inject (semantic + files) exceeds `contextCompressMinChars`, one extra Ollama call shrinks it to `contextCompressMaxChars` (fail-open). Off by default because it adds a call per step |
 | contextCompressMinChars | 8000 | Minimum inject size before compress runs |
 | contextCompressMaxChars | 3500 | Target size after compress |
-| contextCompressModel | (empty) | Ollama model for compress; empty uses `discordModelPresetFast` then Dev model |
+| contextCompressModel | (empty) | Ollama model for compress; empty uses the step agent's own model (no extra model load) |
 | enableWebSearch | Off | Web search tool for agents |
 | ollamaNumCtx | 32768 | Context window hint for Ollama (Dev default) |
 | ollamaNumCtxByRole | `{}` | Optional per-role `{po,dev,cr,qa}` overrides; unset PO/CR/QA use min(global, 16384) |
@@ -989,11 +989,25 @@ Key code: `backend/agents/scrum_agent.py`, `backend/services/parallel_tools.py`,
 
 - **Char prune** of old tool/observation messages when history exceeds `%` of `num_ctx` (`messagePruneThresholdPct`).
 - Optional **episode summary** lines for pruned chunks (text fold — not an embedding summarizer).
-- Optional **LLM context compress** for bulky sprint inject only (`enableLlmContextCompress`) — one Ollama call before the step; card identity fields stay verbatim.
+- Optional **LLM context compress** for bulky sprint inject only (`enableLlmContextCompress`, **off** by default) — one extra Ollama call before the step; card identity fields stay verbatim.
 - **Tool-output truncation** before re-injection (`maxToolOutputCharsForLlm`).
 - Embeddings are **not** used to compress the active prompt.
 
 Key code: `backend/services/llm_context.py`, `backend/services/context_compress.py`, `backend/agents/tool_fingerprints.py`.
+
+### Why agent mode is slower than chat
+
+Chat and sprint steps run through the same `execute_step` and neither streams tokens, so the gap is real work per step — not a different code path:
+
+| Contributor | Effect | Setting to tune |
+|-------------|--------|-----------------|
+| Sprint context inject | Semantic chunks (~6K chars), Graphify (~2.5K), preloaded files (~12K), structure audit and lane instructions on top of `build_task_prompt`; chat usually sends just your message | `enableSemanticSprintContext`, `semanticSprintTopK`, `semanticMinScore` |
+| Tool loop iterations | Up to `maxLlmIterationsPerStep` LLM calls per step, each re-sending the whole message list plus every tool schema | `maxLlmIterationsPerStep`, `maxMcpTools` |
+| Larger context window | Dev calls use `num_ctx` 32768, so prompt eval costs more per call | `ollamaNumCtx`, `ollamaNumCtxByRole`, `ollamaNumCtxAuto` |
+| Model switching | Auto-sprint chains PO → Dev → CR → QA with different models, and each switch can reload weights | Use one model across roles; `ollamaKeepAlive` |
+| Extra LLM passes | Context compress, auto-extend on max iterations, fix-verify | `enableLlmContextCompress` (off by default), `autoExtendOnMaxIter` |
+
+Per-card evidence lives in **Task Detail → Agent progress** (LLM/tool counts per checklist item) and the **Flow** tab (`LLM 12.4s · tools 3.1s` split), so you can see whether a step spent its time in the model or in tools.
 
 ### Embeddings, RAG, and memory
 

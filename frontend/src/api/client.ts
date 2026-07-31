@@ -259,6 +259,16 @@ export async function fetchTaskFlow(
   return request(`/api/tasks/${encodeURIComponent(taskId)}/flow${qs ? `?${qs}` : ''}`)
 }
 
+export async function fetchTaskFlowSummary(
+  taskId: string,
+  params?: { limit?: number },
+): Promise<import('../types').TaskFlowSummaryResponse> {
+  const q = new URLSearchParams()
+  if (params?.limit != null) q.set('limit', String(params.limit))
+  const qs = q.toString()
+  return request(`/api/tasks/${encodeURIComponent(taskId)}/flow/summary${qs ? `?${qs}` : ''}`)
+}
+
 export async function clearTaskTranscript(taskId: string): Promise<AppState> {
   return request<AppState>(
     `/api/tasks/${encodeURIComponent(taskId)}/transcript`,

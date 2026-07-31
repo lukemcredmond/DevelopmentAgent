@@ -11,20 +11,36 @@ from backend.services.workflow_settings import get_workflow_settings
 _COMPRESSED_HEADER = "=== COMPRESSED WORKSPACE CONTEXT ==="
 
 
+_ROLE_AGENT_ATTR = {
+    "Product Owner": "po",
+    "Developer": "dev",
+    "Code Reviewer": "cr",
+    "QA Tester": "qa",
+}
+
+
+def _step_agent_model(agent_role: str) -> str:
+    """Model already loaded for this step's agent — avoids a second model load."""
+    try:
+        from backend.agents.registry import AGENT_MAP, agent_dev
+
+        agent = AGENT_MAP.get(_ROLE_AGENT_ATTR.get(agent_role, ""), agent_dev)
+        return str(getattr(agent, "model", "") or "").strip()
+    except Exception:
+        return ""
+
+
 def resolve_context_compress_model(agent_role: str = "Developer") -> str:
     ws = get_workflow_settings()
     explicit = str(ws.get("contextCompressModel") or "").strip()
     if explicit:
         return explicit
+    # Prefer the step's own model: a different model here forces a VRAM swap mid-step.
+    step_model = _step_agent_model(agent_role)
+    if step_model:
+        return step_model
     preset = str(ws.get("discordModelPresetFast") or "").strip()
-    if preset:
-        return preset
-    try:
-        from backend.agents.registry import agent_dev
-
-        return str(getattr(agent_dev, "model", "") or "").strip() or "qwen2.5-coder:7b"
-    except Exception:
-        return "qwen2.5-coder:7b"
+    return preset or "qwen2.5-coder:7b"
 
 
 def maybe_compress_sprint_context_block(
@@ -37,7 +53,7 @@ def maybe_compress_sprint_context_block(
     if not text:
         return context_block or ""
     ws = get_workflow_settings()
-    if not ws.get("enableLlmContextCompress", True):
+    if not ws.get("enableLlmContextCompress", False):
         return context_block
     min_chars = int(ws.get("contextCompressMinChars") or 8000)
     max_out = int(ws.get("contextCompressMaxChars") or 3500)

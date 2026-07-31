@@ -169,6 +169,7 @@ def build_task_flow(
                 "success": ev.get("toolSuccess") is not False,
                 "status": str(ev.get("status") or ("completed" if ev.get("toolSuccess") is not False else "failed")),
                 "durationMs": ev.get("durationMs"),
+                "duplicateSkip": bool(ev.get("duplicateSkip")),
                 "source": "tool_log",
             }
         )
@@ -180,6 +181,7 @@ def build_task_flow(
         data = load_step_trace(path) if path else None
         if not data:
             continue
+        trace_start = len(nodes)
         for call in data.get("ollamaCalls") or []:
             if not isinstance(call, dict):
                 continue
@@ -224,6 +226,13 @@ def build_task_flow(
                     "traceId": data.get("traceId"),
                 }
             )
+        # The step exit reason belongs to the last node of the trace so lane/blocked
+        # work items can link to the node where the step actually stopped.
+        trace_nodes = nodes[trace_start:]
+        exit_reason = str(data.get("exitReason") or "")
+        if trace_nodes and exit_reason:
+            trace_nodes.sort(key=lambda x: _sort_key(str(x.get("timestamp") or "")))
+            trace_nodes[-1]["exitReason"] = exit_reason
 
     # Prefer llm_log/tool_log over diagnostics duplicates (same iteration+tool+timestamp window)
     # Drop pure diagnostics llm nodes when a richer llm_log node exists for same iteration/time.
@@ -234,6 +243,10 @@ def build_task_flow(
     }
     filtered: List[Dict[str, Any]] = []
     for n in nodes:
+        if n.get("source") == "diagnostics" and n.get("exitReason"):
+            # Never drop the node carrying the step exit reason.
+            filtered.append(n)
+            continue
         if n.get("kind") == "llm" and n.get("source") == "diagnostics":
             key = (n.get("iteration"), str(n.get("timestamp") or "")[:16])
             if key in rich_iters or (n.get("iteration"),) in {(i,) for i, _ in rich_iters}:
@@ -258,15 +271,11 @@ def build_task_flow(
     filtered.sort(key=lambda x: _sort_key(str(x.get("timestamp") or "")))
     trimmed = filtered[-limit:] if len(filtered) > limit else filtered
 
-    # Associate agent work items ↔ nodes
+    # Associate agent work items ↔ nodes (counts span every node, links use the trimmed slice)
     work_items: List[Dict[str, Any]] = []
     try:
         from backend.agents.task_context import find_task_by_id
-        from backend.services.agent_work_items import (
-            refresh_agent_work_items,
-            work_item_ids_for_llm_tools,
-            work_item_ids_for_tool_name,
-        )
+        from backend.services.agent_work_items import refresh_agent_work_items
 
         task = find_task_by_id(tid)
         if task:
@@ -274,45 +283,130 @@ def build_task_flow(
     except Exception:
         work_items = []
 
-    for n in trimmed:
-        if n.get("kind") == "tool":
-            ids = work_item_ids_for_tool_name(
-                work_items,
-                str(n.get("toolName") or ""),
-                tool_args=n.get("toolArgs") if isinstance(n.get("toolArgs"), dict) else None,
-            )
-            n["workItemIds"] = ids
-        elif n.get("kind") == "llm":
-            names = [str(x) for x in (n.get("toolNames") or []) if x]
-            if not names:
-                for tc in n.get("toolCalls") or []:
-                    if isinstance(tc, dict) and tc.get("name"):
-                        names.append(str(tc["name"]))
-                    elif isinstance(tc, str):
-                        names.append(tc)
-            n["workItemIds"] = work_item_ids_for_llm_tools(work_items, names)
-        else:
-            n["workItemIds"] = []
+    try:
+        from backend.services.agent_work_items import work_item_ids_for_node
+    except Exception:
+        work_item_ids_for_node = None  # type: ignore[assignment]
 
-    work_item_index: Dict[str, Any] = {}
-    for item in work_items:
-        if not isinstance(item, dict) or not item.get("id"):
-            continue
-        wid = str(item["id"])
-        node_ids = [str(n["id"]) for n in trimmed if wid in (n.get("workItemIds") or [])]
-        work_item_index[wid] = {
-            "label": item.get("label"),
-            "status": item.get("status"),
-            "flowMatch": item.get("flowMatch") or {},
-            "nodeIds": node_ids,
-        }
+    for n in filtered:
+        n["workItemIds"] = work_item_ids_for_node(work_items, n) if work_item_ids_for_node else []
+
+    work_item_index = _aggregate_work_items(work_items, filtered, trimmed)
 
     return {
         "taskId": tid,
         "nodes": trimmed,
         "traces": traces_meta,
         "count": len(trimmed),
+        "totalCount": len(filtered),
         "includeFull": include_full,
         "workItemIndex": work_item_index,
+        "totals": _flow_totals(filtered),
         "agentWorkItems": work_items,
+    }
+
+
+def _duration_ms(node: Dict[str, Any]) -> int:
+    value = node.get("durationMs")
+    return int(value) if isinstance(value, (int, float)) else 0
+
+
+def _flow_totals(nodes: List[Dict[str, Any]]) -> Dict[str, Any]:
+    """Overall LLM/tool call counts and time split for the flow header."""
+    totals = {"llmCalls": 0, "toolCalls": 0, "llmMs": 0, "toolMs": 0, "failedToolCalls": 0, "duplicateSkips": 0}
+    for node in nodes:
+        if node.get("kind") == "llm":
+            totals["llmCalls"] += 1
+            totals["llmMs"] += _duration_ms(node)
+            continue
+        totals["toolCalls"] += 1
+        totals["toolMs"] += _duration_ms(node)
+        if node.get("success") is False:
+            totals["failedToolCalls"] += 1
+        if node.get("duplicateSkip"):
+            totals["duplicateSkips"] += 1
+    return totals
+
+
+def _aggregate_work_items(
+    work_items: List[Dict[str, Any]],
+    all_nodes: List[Dict[str, Any]],
+    trimmed: List[Dict[str, Any]],
+) -> Dict[str, Any]:
+    """Per work item: call counts, tool breakdown, timing and linkable node ids."""
+    try:
+        from backend.services.agent_work_items import is_tool_linked_item
+    except Exception:
+        is_tool_linked_item = None  # type: ignore[assignment]
+
+    trimmed_ids = {str(n.get("id") or "") for n in trimmed}
+    index: Dict[str, Any] = {}
+    for item in work_items:
+        if not isinstance(item, dict) or not item.get("id"):
+            continue
+        wid = str(item["id"])
+        llm_calls = 0
+        tool_calls = 0
+        failed = 0
+        duplicate_skips = 0
+        llm_ms = 0
+        tool_ms = 0
+        tool_counts: Dict[str, int] = {}
+        node_ids: List[str] = []
+        first_at: Optional[str] = None
+        last_at: Optional[str] = None
+        for node in all_nodes:
+            if wid not in (node.get("workItemIds") or []):
+                continue
+            timestamp = str(node.get("timestamp") or "")
+            if timestamp:
+                if first_at is None or timestamp < first_at:
+                    first_at = timestamp
+                if last_at is None or timestamp > last_at:
+                    last_at = timestamp
+            if node.get("kind") == "llm":
+                llm_calls += 1
+                llm_ms += _duration_ms(node)
+            else:
+                tool_calls += 1
+                tool_ms += _duration_ms(node)
+                name = str(node.get("toolName") or "tool")
+                tool_counts[name] = tool_counts.get(name, 0) + 1
+                if node.get("success") is False:
+                    failed += 1
+                if node.get("duplicateSkip"):
+                    duplicate_skips += 1
+            node_id = str(node.get("id") or "")
+            if node_id and node_id in trimmed_ids:
+                node_ids.append(node_id)
+        index[wid] = {
+            "label": item.get("label"),
+            "status": item.get("status"),
+            "flowMatch": item.get("flowMatch") or {},
+            "nodeIds": list(dict.fromkeys(node_ids)),
+            "llmCalls": llm_calls,
+            "toolCalls": tool_calls,
+            "toolCounts": tool_counts,
+            "failedToolCalls": failed,
+            "duplicateSkips": duplicate_skips,
+            "llmMs": llm_ms,
+            "toolMs": tool_ms,
+            "durationMs": llm_ms + tool_ms,
+            "firstAt": first_at,
+            "lastAt": last_at,
+            "toolLinked": bool(is_tool_linked_item(item)) if is_tool_linked_item else True,
+        }
+    return index
+
+
+def build_task_flow_summary(task_id: str, *, limit: int = 80) -> Dict[str, Any]:
+    """Counts-only view of the flow (no prompt bodies) for the Agent progress list."""
+    flow = build_task_flow(task_id, limit=limit, include_full=False)
+    return {
+        "taskId": flow.get("taskId"),
+        "workItemIndex": flow.get("workItemIndex") or {},
+        "agentWorkItems": flow.get("agentWorkItems") or [],
+        "totals": flow.get("totals") or {},
+        "count": flow.get("count", 0),
+        "totalCount": flow.get("totalCount", 0),
     }

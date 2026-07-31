@@ -77,6 +77,32 @@ def restore_primary_model(agent, agent_key: str) -> str:
     return str(getattr(agent, "model", "") or "")
 
 
+def restore_all_primary_models(*, reason: str = "") -> Dict[str, str]:
+    """Put every agent back on its configured primary model; returns what changed."""
+    try:
+        from backend.agents.registry import AGENT_MAP
+    except Exception:
+        return {}
+
+    restored: Dict[str, str] = {}
+    for key in AGENT_KEYS:
+        agent = AGENT_MAP.get(key)
+        if agent is None:
+            continue
+        primary = primary_model(key)
+        if primary and str(getattr(agent, "model", "") or "") != primary:
+            agent.model = primary
+            restored[key] = primary
+    if restored:
+        summary = ", ".join(f"{_ROLE_LABEL.get(k, k)} → {m}" for k, m in restored.items())
+        add_system_log(
+            "System",
+            "info",
+            f"Restored primary model: {summary}" + (f" ({reason})" if reason else ""),
+        )
+    return restored
+
+
 def should_force_arm_from_exit_reason(exit_reason: Optional[str]) -> bool:
     if not exit_reason:
         return False

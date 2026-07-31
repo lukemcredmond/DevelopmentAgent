@@ -39,6 +39,33 @@ SAME_ARGS_SUCCESS_LIMIT = 3  # early-stop after repeated identical successes
 _FAILURE_LOCK = threading.Lock()
 
 
+def _log_duplicate_skip(
+    *,
+    agent: str,
+    tool_name: str,
+    arguments: Dict[str, Any],
+    tool_output: str,
+    task_id: Optional[str],
+    run_id: Optional[str],
+    success: bool = True,
+) -> None:
+    """Keep skipped/blocked duplicates visible in the tool log (and so in Flow)."""
+    try:
+        from backend.services.tool_execution_service import log_duplicate_skip_event
+
+        log_duplicate_skip_event(
+            agent=agent,
+            tool_name=tool_name,
+            arguments=arguments,
+            tool_output=tool_output,
+            task_id=task_id,
+            run_id=run_id,
+            success=success,
+        )
+    except Exception:
+        pass
+
+
 def _normalize_tool_arguments(raw: Any) -> Dict[str, Any]:
     if isinstance(raw, str):
         try:
@@ -681,6 +708,15 @@ class ScrumAgent:
             )
             finish_run(status="failed", error=stop_msg)
             _track_fingerprint(block=True)
+            _log_duplicate_skip(
+                agent=self.role,
+                tool_name=tool_name,
+                arguments=arguments,
+                tool_output=stop_msg,
+                task_id=task_id,
+                run_id=run_id,
+                success=False,
+            )
             safe_args = sanitize_tool_args_for_log(tool_name, arguments)
             result = ToolExecutionResult(
                 tool_name=tool_name,
@@ -727,6 +763,14 @@ class ScrumAgent:
             with _FAILURE_LOCK:
                 successful_tool_keys.append(key)
             _track_fingerprint()
+            _log_duplicate_skip(
+                agent=self.role,
+                tool_name=tool_name,
+                arguments=arguments,
+                tool_output=tool_output,
+                task_id=task_id,
+                run_id=run_id,
+            )
             safe_args = sanitize_tool_args_for_log(tool_name, arguments)
             result = ToolExecutionResult(
                 tool_name=tool_name,

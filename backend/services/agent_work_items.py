@@ -299,6 +299,18 @@ def refresh_agent_work_items(task: Dict[str, Any]) -> List[Dict[str, Any]]:
     return items
 
 
+def _arg_bits(tool_args: Optional[Dict[str, Any]]) -> List[str]:
+    """Short arg values usable for fingerprint-label matching."""
+    if not isinstance(tool_args, dict):
+        return []
+    bits: List[str] = []
+    for key in ("command", "path", "test_script_path"):
+        val = tool_args.get(key)
+        if isinstance(val, str) and val.strip():
+            bits.append(val.strip()[:120])
+    return bits
+
+
 def work_item_ids_for_tool_name(
     items: List[Dict[str, Any]],
     tool_name: str,
@@ -311,17 +323,20 @@ def work_item_ids_for_tool_name(
         return []
     matched: List[str] = []
     for item in items:
-        if not isinstance(item, dict):
+        if not isinstance(item, dict) or not item.get("id"):
             continue
         fm = item.get("flowMatch") if isinstance(item.get("flowMatch"), dict) else {}
         tools = fm.get("toolNames") or []
         if name in tools:
             matched.append(str(item["id"]))
             continue
-        # Blocked fingerprint: match tool name from label when toolNames empty-ish
-        if item.get("id") == "blocked:tools" and name:
+        # Blocked fingerprints carry their tool + args inside the label.
+        if item.get("id") == "blocked:tools":
             label = str(item.get("label") or "")
-            if name in label:
+            if name and name in label:
+                matched.append(str(item["id"]))
+                continue
+            if any(bit and bit in label for bit in _arg_bits(tool_args)):
                 matched.append(str(item["id"]))
     return list(dict.fromkeys(matched))
 
@@ -331,3 +346,60 @@ def work_item_ids_for_llm_tools(items: List[Dict[str, Any]], tool_names: List[st
     for name in tool_names:
         ids.extend(work_item_ids_for_tool_name(items, name))
     return list(dict.fromkeys(ids))
+
+
+def tool_names_from_llm_node(node: Dict[str, Any]) -> List[str]:
+    """Tool names an LLM turn asked for (toolNames, else toolCalls)."""
+    names = [str(x) for x in (node.get("toolNames") or []) if x]
+    if names:
+        return names
+    for call in node.get("toolCalls") or []:
+        if isinstance(call, dict) and call.get("name"):
+            names.append(str(call["name"]))
+        elif isinstance(call, str) and call:
+            names.append(call)
+    return names
+
+
+def work_item_ids_for_stop_reason(items: List[Dict[str, Any]], stop_reason: str) -> List[str]:
+    """Link lane/blocked items to nodes carrying a matching step exit reason."""
+    reason = str(stop_reason or "").strip().lower()
+    if not reason:
+        return []
+    matched: List[str] = []
+    for item in items:
+        if not isinstance(item, dict) or not item.get("id"):
+            continue
+        fm = item.get("flowMatch") if isinstance(item.get("flowMatch"), dict) else {}
+        stops = [str(s).lower() for s in (fm.get("stopReasons") or [])]
+        if reason in stops:
+            matched.append(str(item["id"]))
+    return list(dict.fromkeys(matched))
+
+
+def work_item_ids_for_node(items: List[Dict[str, Any]], node: Dict[str, Any]) -> List[str]:
+    """All work-item ids a flow node belongs to (tools, requested tools, exit reason)."""
+    if not isinstance(node, dict):
+        return []
+    matched: List[str] = []
+    kind = str(node.get("kind") or "")
+    if kind == "tool":
+        matched.extend(
+            work_item_ids_for_tool_name(
+                items,
+                str(node.get("toolName") or ""),
+                tool_args=node.get("toolArgs") if isinstance(node.get("toolArgs"), dict) else None,
+            )
+        )
+    elif kind == "llm":
+        matched.extend(work_item_ids_for_llm_tools(items, tool_names_from_llm_node(node)))
+    reason = str(node.get("exitReason") or node.get("stopReason") or "")
+    if reason:
+        matched.extend(work_item_ids_for_stop_reason(items, reason))
+    return list(dict.fromkeys(matched))
+
+
+def is_tool_linked_item(item: Dict[str, Any]) -> bool:
+    """False for board-state items (subtasks/gates) that never map to tool nodes."""
+    fm = item.get("flowMatch") if isinstance(item.get("flowMatch"), dict) else {}
+    return bool(fm.get("toolNames") or fm.get("stopReasons"))

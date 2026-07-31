@@ -362,6 +362,19 @@ def get_task_flow(task_id: str, limit: int = 80, includeFull: int = 1):
     return build_task_flow(task_id, limit=lim, include_full=bool(includeFull))
 
 
+@router.get("/api/tasks/{task_id}/flow/summary")
+def get_task_flow_summary(task_id: str, limit: int = 80):
+    """Per work-item LLM/tool counts for the Agent progress list (no prompt bodies)."""
+    with state.STATE_LOCK:
+        task = find_task_by_id(task_id)
+        if not task:
+            raise HTTPException(status_code=404, detail=f"Task not found: {task_id}")
+    from backend.services.task_flow import build_task_flow_summary
+
+    lim = max(1, min(int(limit or 80), 200))
+    return build_task_flow_summary(task_id, limit=lim)
+
+
 @router.delete("/api/tasks/{task_id}/transcript")
 def clear_task_transcript_route(task_id: str):
     with state.STATE_LOCK:

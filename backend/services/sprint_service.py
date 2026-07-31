@@ -3365,6 +3365,13 @@ def _build_sprint_summary(steps: int, status: str = "completed") -> Dict[str, An
         "needsUser": len(board.get("Needs User", [])),
         "status": status,
     }
+    # Sprint is over (finished, idle, or cancelled) — never leave agents on a backup model.
+    try:
+        from backend.services.backup_model import restore_all_primary_models
+
+        restore_all_primary_models(reason=f"sprint {status}")
+    except Exception:
+        pass
     save_sprint_summary(summary)
     publish_event("sprint", summary)
     try:
