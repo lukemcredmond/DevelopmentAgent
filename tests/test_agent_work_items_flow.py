@@ -57,10 +57,96 @@ def test_normalize_persists_agent_work_items():
     assert len(task["agentWorkItems"]) >= 3
 
 
+def test_derive_includes_flow_match_rules():
+    initialize()
+    from backend import state
+
+    task = init_new_task({"id": "T-FM", "title": "t", "description": "d"})
+    state.SHARED_BOARD = {"In Progress": [task]}
+    items = derive_agent_work_items(task)
+    by_id = {i["id"]: i for i in items}
+    assert "read_file" in by_id["read:files"]["flowMatch"]["toolNames"]
+    assert "write_file" in by_id["write:implement"]["flowMatch"]["toolNames"]
+    assert "apply_patch" in by_id["write:implement"]["flowMatch"]["toolNames"]
+    assert "run_command" in by_id["verify:command"]["flowMatch"]["toolNames"]
+    assert "lane" in by_id["lane:advance"]["flowMatch"]["tags"]
+
+
+def test_build_task_flow_attaches_work_item_ids():
+    initialize()
+    from backend import state
+
+    task = init_new_task({"id": "T-FLOW", "title": "Flow card", "description": "d"})
+    state.SHARED_BOARD = {"In Progress": [task]}
+    state.LLM_DEBUG_LOG.clear()
+    state.TOOL_EXECUTION_LOG.clear()
+    state.LLM_DEBUG_LOG.append(
+        {
+            "id": "llm1",
+            "timestamp": "2026-01-01 10:00:00",
+            "taskId": "T-FLOW",
+            "agent": "Developer",
+            "iteration": 1,
+            "requestMessages": [{"role": "user", "content": "hello prompt"}],
+            "responseContent": "hi",
+            "responseToolCalls": [{"name": "read_file"}],
+            "toolNames": ["read_file"],
+        }
+    )
+    state.LLM_DEBUG_LOG.append(
+        {
+            "id": "llm2",
+            "timestamp": "2026-01-01 10:01:00",
+            "taskId": "OTHER",
+            "agent": "Developer",
+            "iteration": 1,
+            "requestMessages": [],
+            "responseContent": "other",
+        }
+    )
+    state.TOOL_EXECUTION_LOG.append(
+        {
+            "eventId": "ev1",
+            "timestamp": "2026-01-01 10:00:05",
+            "taskId": "T-FLOW",
+            "toolName": "read_file",
+            "toolArgs": {"path": "a.ts"},
+            "toolOutput": "file body " * 100,
+            "toolSuccess": True,
+        }
+    )
+    state.TOOL_EXECUTION_LOG.append(
+        {
+            "eventId": "ev2",
+            "timestamp": "2026-01-01 10:00:10",
+            "taskId": "T-FLOW",
+            "toolName": "write_file",
+            "toolArgs": {"path": "a.ts"},
+            "toolOutput": "ok",
+            "toolSuccess": True,
+        }
+    )
+    with patch("backend.services.task_flow.list_step_traces_for_task", return_value=[]):
+        flow = build_task_flow("T-FLOW", limit=40, include_full=True)
+    assert flow["taskId"] == "T-FLOW"
+    assert all(n.get("taskId") == "T-FLOW" for n in flow["nodes"])
+    tool_read = next(n for n in flow["nodes"] if n.get("toolName") == "read_file")
+    tool_write = next(n for n in flow["nodes"] if n.get("toolName") == "write_file")
+    assert "read:files" in (tool_read.get("workItemIds") or [])
+    assert "write:implement" in (tool_write.get("workItemIds") or [])
+    assert "read:files" not in (tool_write.get("workItemIds") or [])
+    assert "read:files" in flow["workItemIndex"]
+    assert tool_read["id"] in flow["workItemIndex"]["read:files"]["nodeIds"]
+    llm = next(n for n in flow["nodes"] if n["kind"] == "llm")
+    assert "read:files" in (llm.get("workItemIds") or [])
+
+
 def test_build_task_flow_filters_by_task_id():
     initialize()
     from backend import state
 
+    task = init_new_task({"id": "T-FLOW", "title": "Flow card", "description": "d"})
+    state.SHARED_BOARD = {"In Progress": [task]}
     state.LLM_DEBUG_LOG.clear()
     state.TOOL_EXECUTION_LOG.clear()
     state.LLM_DEBUG_LOG.append(

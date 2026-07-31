@@ -179,19 +179,30 @@ function CollapsibleSection({
   title,
   badge,
   defaultOpen = true,
+  open: openProp,
+  onOpenChange,
   children,
 }: {
   title: string
   badge?: string | number
   defaultOpen?: boolean
+  open?: boolean
+  onOpenChange?: (open: boolean) => void
   children: ReactNode
 }) {
-  const [open, setOpen] = useState(defaultOpen)
+  const [internalOpen, setInternalOpen] = useState(defaultOpen)
+  const controlled = openProp !== undefined
+  const open = controlled ? Boolean(openProp) : internalOpen
+  const setOpen = (next: boolean | ((prev: boolean) => boolean)) => {
+    const value = typeof next === 'function' ? next(open) : next
+    if (!controlled) setInternalOpen(value)
+    onOpenChange?.(value)
+  }
   return (
     <div className="border border-cat-surface1 rounded-lg overflow-hidden">
       <button
         type="button"
-        onClick={() => setOpen((o) => !o)}
+        onClick={() => setOpen(!open)}
         className="w-full flex items-center justify-between px-3 py-2 bg-cat-base/50 hover:bg-cat-base text-left"
       >
         <span className="text-xs font-bold uppercase tracking-wider text-cat-subtext">
@@ -297,6 +308,8 @@ export default function TaskDetailModal({
   const [skipRemainingRefinement, setSkipRemainingRefinement] = useState(false)
   const [movingToProgress, setMovingToProgress] = useState(false)
   const [runningDevStep, setRunningDevStep] = useState(false)
+  const [flowOpen, setFlowOpen] = useState(false)
+  const [highlightWorkItemId, setHighlightWorkItemId] = useState<string | null>(null)
 
   useEffect(() => {
     if (!task) return
@@ -309,6 +322,8 @@ export default function TaskDetailModal({
     setInjectCommand(defaultInjectCommand)
     setInjectOutput('')
     setInjectNote('')
+    setFlowOpen(false)
+    setHighlightWorkItemId(null)
     try {
       const draft = sessionStorage.getItem(`needs-user-draft-${task.id}`)
       setUserAnswer(draft ?? '')
@@ -598,33 +613,51 @@ export default function TaskDetailModal({
               >
                 <p className="text-[10px] text-cat-overlay mb-2">
                   Derived process checklist for agents (Dev/CR/PO) — not QA acceptance criteria.
+                  Click an item to open Flow and highlight matching tools.
                 </p>
                 <ul className="text-[11px] space-y-1.5" data-testid="agent-work-items">
                   {items.map((item) => (
-                    <li key={item.id} className="flex items-start gap-2">
-                      <span
-                        className={
-                          item.status === 'done'
-                            ? 'text-emerald-400'
-                            : item.status === 'blocked'
-                              ? 'text-rose-400'
-                              : 'text-cat-overlay'
-                        }
-                        aria-hidden
+                    <li key={item.id}>
+                      <button
+                        type="button"
+                        id={`agent-work-item-${item.id}`}
+                        onClick={() => {
+                          setHighlightWorkItemId(item.id)
+                          setFlowOpen(true)
+                          window.requestAnimationFrame(() => {
+                            document
+                              .getElementById('task-flow-section')
+                              ?.scrollIntoView({ behavior: 'smooth', block: 'nearest' })
+                          })
+                        }}
+                        className={`w-full flex items-start gap-2 text-left rounded px-1 py-0.5 hover:bg-cat-base/60 ${
+                          highlightWorkItemId === item.id ? 'ring-1 ring-sky-400/60 bg-sky-950/30' : ''
+                        }`}
                       >
-                        {item.status === 'done' ? '☑' : item.status === 'blocked' ? '☒' : '☐'}
-                      </span>
-                      <span
-                        className={
-                          item.status === 'done'
-                            ? 'text-emerald-200/80 line-through'
-                            : item.status === 'blocked'
-                              ? 'text-rose-200/90'
-                              : 'text-cat-subtext'
-                        }
-                      >
-                        {item.label}
-                      </span>
+                        <span
+                          className={
+                            item.status === 'done'
+                              ? 'text-emerald-400'
+                              : item.status === 'blocked'
+                                ? 'text-rose-400'
+                                : 'text-cat-overlay'
+                          }
+                          aria-hidden
+                        >
+                          {item.status === 'done' ? '☑' : item.status === 'blocked' ? '☒' : '☐'}
+                        </span>
+                        <span
+                          className={
+                            item.status === 'done'
+                              ? 'text-emerald-200/80 line-through'
+                              : item.status === 'blocked'
+                                ? 'text-rose-200/90'
+                                : 'text-cat-subtext'
+                          }
+                        >
+                          {item.label}
+                        </span>
+                      </button>
                     </li>
                   ))}
                 </ul>
@@ -676,9 +709,31 @@ export default function TaskDetailModal({
             )}
           </CollapsibleSection>
 
-          <CollapsibleSection title="Flow" badge="LLM + tools" defaultOpen={false}>
-            <TaskFlowPanel taskId={task.id} active />
-          </CollapsibleSection>
+          <div id="task-flow-section">
+            <CollapsibleSection
+              title="Flow"
+              badge="LLM + tools"
+              defaultOpen={false}
+              open={flowOpen}
+              onOpenChange={setFlowOpen}
+            >
+              <TaskFlowPanel
+                taskId={task.id}
+                active={flowOpen}
+                highlightWorkItemId={highlightWorkItemId}
+                onHighlightWorkItem={(wid) => {
+                  setHighlightWorkItemId(wid)
+                  if (wid) {
+                    window.requestAnimationFrame(() => {
+                      document
+                        .getElementById(`agent-work-item-${wid}`)
+                        ?.scrollIntoView({ behavior: 'smooth', block: 'nearest' })
+                    })
+                  }
+                }}
+              />
+            </CollapsibleSection>
+          </div>
 
           {safeTask.retrievalFeedback && (
             <div

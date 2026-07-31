@@ -258,10 +258,61 @@ def build_task_flow(
     filtered.sort(key=lambda x: _sort_key(str(x.get("timestamp") or "")))
     trimmed = filtered[-limit:] if len(filtered) > limit else filtered
 
+    # Associate agent work items ↔ nodes
+    work_items: List[Dict[str, Any]] = []
+    try:
+        from backend.agents.task_context import find_task_by_id
+        from backend.services.agent_work_items import (
+            refresh_agent_work_items,
+            work_item_ids_for_llm_tools,
+            work_item_ids_for_tool_name,
+        )
+
+        task = find_task_by_id(tid)
+        if task:
+            work_items = refresh_agent_work_items(task)
+    except Exception:
+        work_items = []
+
+    for n in trimmed:
+        if n.get("kind") == "tool":
+            ids = work_item_ids_for_tool_name(
+                work_items,
+                str(n.get("toolName") or ""),
+                tool_args=n.get("toolArgs") if isinstance(n.get("toolArgs"), dict) else None,
+            )
+            n["workItemIds"] = ids
+        elif n.get("kind") == "llm":
+            names = [str(x) for x in (n.get("toolNames") or []) if x]
+            if not names:
+                for tc in n.get("toolCalls") or []:
+                    if isinstance(tc, dict) and tc.get("name"):
+                        names.append(str(tc["name"]))
+                    elif isinstance(tc, str):
+                        names.append(tc)
+            n["workItemIds"] = work_item_ids_for_llm_tools(work_items, names)
+        else:
+            n["workItemIds"] = []
+
+    work_item_index: Dict[str, Any] = {}
+    for item in work_items:
+        if not isinstance(item, dict) or not item.get("id"):
+            continue
+        wid = str(item["id"])
+        node_ids = [str(n["id"]) for n in trimmed if wid in (n.get("workItemIds") or [])]
+        work_item_index[wid] = {
+            "label": item.get("label"),
+            "status": item.get("status"),
+            "flowMatch": item.get("flowMatch") or {},
+            "nodeIds": node_ids,
+        }
+
     return {
         "taskId": tid,
         "nodes": trimmed,
         "traces": traces_meta,
         "count": len(trimmed),
         "includeFull": include_full,
+        "workItemIndex": work_item_index,
+        "agentWorkItems": work_items,
     }

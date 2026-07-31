@@ -78,6 +78,12 @@ export interface DependencyOutcome {
   spikeReport?: string
 }
 
+export interface AgentWorkItemFlowMatch {
+  toolNames?: string[]
+  stopReasons?: string[]
+  tags?: string[]
+}
+
 export interface AgentWorkItem {
   id: string
   label: string
@@ -85,6 +91,7 @@ export interface AgentWorkItem {
   source?: 'derived'
   agentRole?: string
   updatedAt?: string
+  flowMatch?: AgentWorkItemFlowMatch
 }
 
 export interface TaskFlowNode {
@@ -113,6 +120,14 @@ export interface TaskFlowNode {
   source?: string
   traceId?: string
   textChars?: number
+  workItemIds?: string[]
+}
+
+export interface TaskFlowWorkItemIndexEntry {
+  label?: string
+  status?: string
+  flowMatch?: AgentWorkItemFlowMatch
+  nodeIds?: string[]
 }
 
 export interface TaskFlowResponse {
@@ -129,6 +144,8 @@ export interface TaskFlowResponse {
   }>
   count?: number
   includeFull?: boolean
+  workItemIndex?: Record<string, TaskFlowWorkItemIndexEntry>
+  agentWorkItems?: AgentWorkItem[]
 }
 
 export interface Task {
