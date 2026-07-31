@@ -1201,11 +1201,22 @@ def build_dod_block() -> str:
     return f"\n=== DEFINITION OF DONE (project) ===\n{lines}\n"
 
 
-def build_task_prompt(task: Dict[str, Any], brief: str) -> str:
-    """Builds a structured prompt for sprint agents."""
+def build_task_prompt(task: Dict[str, Any], brief: str, *, agent_role: Optional[str] = None) -> str:
+    """Builds a structured prompt for sprint agents.
+
+    Code Reviewer / QA get a lighter stack (fewer decisions/transcript lines) —
+    they keep AC, files, and last outcome without the full Dev history.
+    """
     from backend.services.prompt_budget import resolve_ollama_num_ctx, truncate_brief, workspace_file_list_cap
 
-    num_ctx = resolve_ollama_num_ctx("dev")
+    role = (agent_role or state.ACTIVE_SPRINT_AGENT or "").strip()
+    slim = role in ("Code Reviewer", "QA Tester")
+    decision_limit = 3 if slim else 8
+    transcript_limit = 2 if slim else 6
+    related_limit = 2 if slim else 5
+    dependency_limit = 3 if slim else 10
+
+    num_ctx = resolve_ollama_num_ctx("qa" if role == "QA Tester" else ("cr" if role == "Code Reviewer" else "dev"))
     brief = truncate_brief(brief, num_ctx)
 
     normalize_task(task)
@@ -1307,7 +1318,7 @@ def build_task_prompt(task: Dict[str, Any], brief: str) -> str:
     dependency_outcomes = task.get("dependencyOutcomes") or []
     if dependency_outcomes:
         prompt += "\n=== COMPLETED DEPENDENCY OUTCOMES ===\n"
-        for outcome in dependency_outcomes[-10:]:
+        for outcome in dependency_outcomes[-dependency_limit:]:
             if not isinstance(outcome, dict):
                 continue
             prompt += (
@@ -1327,7 +1338,7 @@ def build_task_prompt(task: Dict[str, Any], brief: str) -> str:
                     prompt += f"  - {decision.get('agent', '?')}: {decision.get('summary', '')}\n"
         prompt += "Use these completed dependency results — do not redo finished blocker work.\n"
 
-    related_ids = [str(r) for r in (task.get("relatedTaskIds") or []) if r][:5]
+    related_ids = [str(r) for r in (task.get("relatedTaskIds") or []) if r][:related_limit]
     if related_ids:
         related_blocks: List[str] = []
         for rid in related_ids:
@@ -1393,31 +1404,33 @@ def build_task_prompt(task: Dict[str, Any], brief: str) -> str:
         prompt += f"\n=== SPIKE REPORT ===\n{spike_report[:2000]}\n"
 
     decisions = task.get("decisions") or []
-    older_dec_block = _format_older_decisions_block(decisions)
-    if older_dec_block:
-        prompt += older_dec_block
+    if not slim:
+        older_dec_block = _format_older_decisions_block(decisions)
+        if older_dec_block:
+            prompt += older_dec_block
 
     if decisions:
         prompt += "\n=== PRIOR AGENT DECISIONS ON THIS CARD ===\n"
-        prompt += (
-            "Tool reuse guidance: For identical run_command results (lint/test/--version/--help), "
-            "prefer the summaries below — do not re-run the same command with the same args unless "
-            "you edited related code or are fixing a prior failure. "
-            "For read_file / list_dir / grep / glob_file_search, treat prior notes as hints only; "
-            "re-read after any write_file or apply_patch (or if unsure the workspace changed). "
-            "Do not invent paths from old directory listings alone.\n"
-        )
-        for d in decisions[-8:]:
+        if not slim:
+            prompt += (
+                "Tool reuse guidance: For identical run_command results (lint/test/--version/--help), "
+                "prefer the summaries below — do not re-run the same command with the same args unless "
+                "you edited related code or are fixing a prior failure. "
+                "For read_file / list_dir / grep / glob_file_search, treat prior notes as hints only; "
+                "re-read after any write_file or apply_patch (or if unsure the workspace changed). "
+                "Do not invent paths from old directory listings alone.\n"
+            )
+        for d in decisions[-decision_limit:]:
             prompt += (
                 f"[{d.get('timestamp', '?')}] {d.get('agent', 'Agent')} "
                 f"({d.get('type', 'note')}): {d.get('summary', '')}\n"
             )
-            if d.get("detail"):
+            if d.get("detail") and not slim:
                 prompt += f"  Detail: {d['detail'][:300]}\n"
 
     if task["transcript"]:
         prompt += "\n=== TASK TRANSCRIPT ===\n"
-        for entry in task["transcript"][-6:]:
+        for entry in task["transcript"][-transcript_limit:]:
             prompt += f"[{entry.get('timestamp', '?')}] {entry.get('agent', entry.get('role', '?'))}: {entry.get('content', '')[:200]}\n"
 
     try:

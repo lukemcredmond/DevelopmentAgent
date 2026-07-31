@@ -20,7 +20,8 @@ DEFAULT_WORKFLOW_SETTINGS: Dict[str, Any] = {
     "enableFixVerifyLoop": False,
     "maxFixVerifyRounds": 3,
     # Auto-extend one more chunk of iterations on max_iterations when progress is evident.
-    "autoExtendOnMaxIter": True,
+    # Off by default — manual Extend remains; auto +4 was a hidden latency tax.
+    "autoExtendOnMaxIter": False,
     "autoExtendExtraIterations": 4,
     # Hybrid lint fan-out: keep a small in-card budget; spawn related Backlog cards for the rest.
     "maxInCardLintFixes": 5,
@@ -80,7 +81,7 @@ DEFAULT_WORKFLOW_SETTINGS: Dict[str, Any] = {
     # Optional per-role override map {po,dev,cr,qa}; unset roles use sensible defaults.
     "ollamaNumCtxByRole": {},
     # When true, halve Dev ctx on low/minimal VRAM tiers.
-    "ollamaNumCtxAuto": False,
+    "ollamaNumCtxAuto": True,
     "ollamaKeepAlive": "30m",
     "ollamaRequestTimeoutSec": 300,
     "terminalTimeoutSec": 600,
@@ -96,7 +97,9 @@ DEFAULT_WORKFLOW_SETTINGS: Dict[str, Any] = {
     "enableSemanticSprintContext": True,
     "enableHybridSearch": True,
     "semanticMinScore": 0.35,
-    "semanticSprintTopK": 5,
+    "semanticSprintTopK": 3,
+    # excerpt = paths + short signatures (default); full = whole file bodies.
+    "sprintFileContextMode": "excerpt",
     "enableObservationSummaries": True,
     "enableEpisodeSummary": True,
     "enableStepLessonMemory": True,

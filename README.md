@@ -312,7 +312,7 @@ Persisted per project. Update via sidebar **Workflow** or `POST /api/workflow/se
 |---------|---------|---------|
 | maxSprintSteps | 20 | Cap for Auto Sprint and Plan & Run |
 | maxLlmIterationsPerStep | 8 | Tool-call loop limit per agent turn |
-| autoExtendOnMaxIter | On | Auto-extend once when Dev hits max iterations with progress (writes/tools) |
+| autoExtendOnMaxIter | **Off** | Auto-extend once when Dev hits max iterations with progress (writes/tools). Manual Extend remains |
 | autoExtendExtraIterations | 4 | Extra iterations for auto-extend |
 | maxPoRoundTrips | 3 | PO clarification rounds per card |
 | maxStuckSteps | 3 | Escalate when card does not move (`stuckLoops` → Needs PO; Settings → Workflow) |
@@ -366,7 +366,8 @@ Persisted per project. Update via sidebar **Workflow** or `POST /api/workflow/se
 | enableSemanticSprintContext | On | Inject semantic + graph context into sprint prompts |
 | enableHybridSearch | On | Fuse dense Qdrant hits with lexical workspace scan (RRF) |
 | semanticMinScore | 0.35 | Drop weak dense hits from sprint inject |
-| semanticSprintTopK | 5 | Max semantic chunks injected per sprint step |
+| semanticSprintTopK | 3 | Max semantic chunks injected per sprint step |
+| sprintFileContextMode | excerpt | `excerpt` = paths + short signatures (default); `full` = whole file bodies |
 | enableObservationSummaries | On | Compact `=== OBSERVATION ===` after each tool batch |
 | enableEpisodeSummary | On | Fold pruned tool messages into `=== EPISODE SUMMARY ===` |
 | enableStepLessonMemory | On | Save one structured lesson to memory at end of each agent step |
@@ -377,7 +378,7 @@ Persisted per project. Update via sidebar **Workflow** or `POST /api/workflow/se
 | enableWebSearch | Off | Web search tool for agents |
 | ollamaNumCtx | 32768 | Context window hint for Ollama (Dev default) |
 | ollamaNumCtxByRole | `{}` | Optional per-role `{po,dev,cr,qa}` overrides; unset PO/CR/QA use min(global, 16384) |
-| ollamaNumCtxAuto | Off | When On, halve Dev num_ctx on low/minimal VRAM tiers |
+| ollamaNumCtxAuto | **On** | When On, halve Dev num_ctx on low/minimal VRAM tiers |
 | ollamaKeepAlive | 30m | Ollama model keep-alive duration |
 | ollamaRequestTimeoutSec | 300 | Per-request timeout for Ollama calls |
 | ollamaMaxRetries | 4 | Retries on transient Ollama failures |
@@ -1001,11 +1002,11 @@ Chat and sprint steps run through the same `execute_step` and neither streams to
 
 | Contributor | Effect | Setting to tune |
 |-------------|--------|-----------------|
-| Sprint context inject | Semantic chunks (~6K chars), Graphify (~2.5K), preloaded files (~12K), structure audit and lane instructions on top of `build_task_prompt`; chat usually sends just your message | `enableSemanticSprintContext`, `semanticSprintTopK`, `semanticMinScore` |
+| Sprint context inject | Semantic chunks, Graphify, file **excerpts** (default; full bodies via `sprintFileContextMode`), structure audit and lane instructions on top of `build_task_prompt`; chat usually sends just your message | `enableSemanticSprintContext`, `semanticSprintTopK`, `semanticMinScore`, `sprintFileContextMode` |
 | Tool loop iterations | Up to `maxLlmIterationsPerStep` LLM calls per step, each re-sending the whole message list plus every tool schema | `maxLlmIterationsPerStep`, `maxMcpTools` |
-| Larger context window | Dev calls use `num_ctx` 32768, so prompt eval costs more per call | `ollamaNumCtx`, `ollamaNumCtxByRole`, `ollamaNumCtxAuto` |
+| Larger context window | Dev calls use `num_ctx` 32768 (auto-halved on low VRAM when `ollamaNumCtxAuto` is on) | `ollamaNumCtx`, `ollamaNumCtxByRole`, `ollamaNumCtxAuto` |
 | Model switching | Auto-sprint chains PO → Dev → CR → QA with different models, and each switch can reload weights | Use one model across roles; `ollamaKeepAlive` |
-| Extra LLM passes | Context compress, auto-extend on max iterations, fix-verify | `enableLlmContextCompress` (off by default), `autoExtendOnMaxIter` |
+| Extra LLM passes | Context compress, auto-extend on max iterations, fix-verify | `enableLlmContextCompress` (off by default), `autoExtendOnMaxIter` (off by default) |
 
 Per-card evidence lives in **Task Detail → Agent progress** (LLM/tool counts per checklist item) and the **Flow** tab (`LLM 12.4s · tools 3.1s` split), so you can see whether a step spent its time in the model or in tools.
 

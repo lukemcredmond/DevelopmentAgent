@@ -759,13 +759,32 @@ def apply_plan_epics_from_po_output(po_output: str) -> Dict[str, Any]:
 def intake_feature_offline(
     title: str,
     description: str,
+    preferred_feature_id: Optional[str] = None,
 ) -> Tuple[Dict[str, Any], Dict[str, Any]]:
-    """Offline fallback: always create a new feature + child."""
+    """Offline fallback: update preferred feature when set, else create new + child."""
     child_task = {
         "title": title,
         "description": description,
         "acceptanceCriteria": [description] if description else [title],
     }
+    preferred_id = str(preferred_feature_id or "").strip() or None
+    if preferred_id and find_feature_by_id(preferred_id):
+        feature, child = update_feature(
+            preferred_id,
+            title=title,
+            description=description,
+            request_title=title,
+            request_body=description,
+            child_task=child_task,
+            po_summary="Offline fallback — Ollama unavailable (follow-up on preferred feature)",
+            source="offline",
+        )
+        add_system_log(
+            "Product Owner",
+            "warning",
+            f"Offline intake — updated feature {feature.get('id')} + child {child.get('id')}",
+        )
+        return feature, child
     feature, child = create_feature(
         title,
         description,

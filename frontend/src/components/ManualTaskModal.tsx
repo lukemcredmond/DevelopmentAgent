@@ -5,6 +5,8 @@ interface ManualTaskModalProps {
   title: string
   description: string
   loading: boolean
+  preferredFeatureId?: string | null
+  preferredFeatureTitle?: string | null
   onTitleChange: (v: string) => void
   onDescriptionChange: (v: string) => void
   onSubmit: () => void
@@ -16,11 +18,14 @@ export default function ManualTaskModal({
   title,
   description,
   loading,
+  preferredFeatureId = null,
+  preferredFeatureTitle = null,
   onTitleChange,
   onDescriptionChange,
   onSubmit,
   onClose,
 }: ManualTaskModalProps) {
+  const isFollowUp = Boolean(preferredFeatureId)
   return (
     <SlideOver
       open={open}
@@ -29,7 +34,7 @@ export default function ManualTaskModal({
       title={
         <span className="flex items-center gap-2">
           <i className="fa-solid fa-square-plus text-indigo-400" />
-          Add Feature to Brief
+          {isFollowUp ? 'Add follow-up' : 'Add Feature to Brief'}
         </span>
       }
       widthClass="w-full max-w-md"
@@ -60,6 +65,12 @@ export default function ManualTaskModal({
         }}
         className="p-4 space-y-3 text-xs"
       >
+        {isFollowUp && (
+          <p className="text-[10px] text-violet-300 bg-violet-950/40 border border-violet-500/30 rounded px-2 py-1.5 font-mono">
+            Updating feature {preferredFeatureId}
+            {preferredFeatureTitle ? ` — ${preferredFeatureTitle}` : ''}
+          </p>
+        )}
         <label className="block">
           <span className="text-[10px] text-cat-subtext block mb-1">TASK TITLE</span>
           <input
@@ -67,7 +78,11 @@ export default function ManualTaskModal({
             required
             value={title}
             onChange={(e) => onTitleChange(e.target.value)}
-            placeholder="Feature title for the Product Owner"
+            placeholder={
+              isFollowUp
+                ? 'Short title for this follow-up slice'
+                : 'Feature title for the Product Owner'
+            }
             className="w-full bg-cat-base border border-cat-surface1 rounded p-2 text-white font-medium focus:outline-none focus:border-indigo-500"
           />
         </label>
@@ -77,8 +92,13 @@ export default function ManualTaskModal({
             required
             value={description}
             onChange={(e) => onDescriptionChange(e.target.value)}
-            placeholder="What should this feature do? The PO will refine it and add to the brief."
-            className="w-full h-24 bg-cat-base border border-cat-surface1 rounded p-2 text-white font-mono focus:outline-none focus:border-indigo-500 resize-none"
+            placeholder={
+              isFollowUp
+                ? 'What should change on this existing feature? PO will spawn one new backlog child.'
+                : 'What should this feature do? The PO will refine it and add to the brief.'
+            }
+            rows={6}
+            className="w-full bg-cat-base border border-cat-surface1 rounded p-2 text-white focus:outline-none focus:border-indigo-500 min-h-[120px]"
           />
         </label>
       </form>

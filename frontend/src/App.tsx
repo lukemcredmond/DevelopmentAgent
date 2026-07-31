@@ -280,6 +280,10 @@ export default function App() {
   const [showManualTask, setShowManualTask] = useState(false)
   const [manualTitle, setManualTitle] = useState('')
   const [manualDesc, setManualDesc] = useState('')
+  const [manualPreferredFeatureId, setManualPreferredFeatureId] = useState<string | null>(null)
+  const [manualPreferredFeatureTitle, setManualPreferredFeatureTitle] = useState<string | null>(
+    null,
+  )
 
   const [showSprintSummary, setShowSprintSummary] = useState(false)
   const [ollamaOk, setOllamaOk] = useState<boolean | null>(null)
@@ -1441,7 +1445,13 @@ export default function App() {
           onBriefChange={setBrief}
           open={briefOpen}
           onOpenChange={setBriefOpen}
-          onOpenManualTask={() => setShowManualTask(true)}
+          onOpenManualTask={() => {
+            setManualPreferredFeatureId(null)
+            setManualPreferredFeatureTitle(null)
+            setManualTitle('')
+            setManualDesc('')
+            setShowManualTask(true)
+          }}
           autonomousMode={state.workflowSettings?.autonomousMode ?? false}
           planOutline={planOutline}
           onPlanOutlineChange={setPlanOutline}
@@ -2041,6 +2051,14 @@ export default function App() {
             }),
           )
         }
+        onAddFeatureFollowUp={(feature) => {
+          setManualPreferredFeatureId(feature.id)
+          setManualPreferredFeatureTitle(feature.title)
+          setManualTitle(`Follow-up: ${feature.title}`)
+          setManualDesc('')
+          setSelectedTask(null)
+          setShowManualTask(true)
+        }}
       />
 
       {fileDiffModal && (
@@ -2115,6 +2133,8 @@ export default function App() {
         title={manualTitle}
         description={manualDesc}
         loading={loading}
+        preferredFeatureId={manualPreferredFeatureId}
+        preferredFeatureTitle={manualPreferredFeatureTitle}
         onTitleChange={setManualTitle}
         onDescriptionChange={setManualDesc}
         onSubmit={() =>
@@ -2123,15 +2143,24 @@ export default function App() {
               title: manualTitle,
               description: manualDesc,
               ollama_url: ollamaUrl,
+              ...(manualPreferredFeatureId
+                ? { preferredFeatureId: manualPreferredFeatureId }
+                : {}),
             })
             handleState(data)
             setBrief(data.brief ?? brief)
             setShowManualTask(false)
             setManualTitle('')
             setManualDesc('')
+            setManualPreferredFeatureId(null)
+            setManualPreferredFeatureTitle(null)
           })
         }
-        onClose={() => setShowManualTask(false)}
+        onClose={() => {
+          setShowManualTask(false)
+          setManualPreferredFeatureId(null)
+          setManualPreferredFeatureTitle(null)
+        }}
       />
 
       {showSprintSummary && state.lastSprintSummary && (

@@ -500,6 +500,7 @@ export interface WorkflowSettings {
   enableHybridSearch?: boolean
   semanticMinScore?: number
   semanticSprintTopK?: number
+  sprintFileContextMode?: 'excerpt' | 'full' | string
   enableObservationSummaries?: boolean
   enableEpisodeSummary?: boolean
   enableStepLessonMemory?: boolean
@@ -967,6 +968,7 @@ export interface ManualTaskPayload {
   title: string
   description: string
   ollama_url?: string
+  preferredFeatureId?: string
 }
 
 export interface UpdateTaskPayload {
@@ -1056,6 +1058,7 @@ export interface WorkflowSettingsPayload {
   enableHybridSearch?: boolean
   semanticMinScore?: number
   semanticSprintTopK?: number
+  sprintFileContextMode?: 'excerpt' | 'full' | string
   enableObservationSummaries?: boolean
   enableEpisodeSummary?: boolean
   enableStepLessonMemory?: boolean
@@ -1255,7 +1258,7 @@ export const DEFAULT_WORKFLOW_SETTINGS: WorkflowSettings = {
   maxSubtaskSpawns: 8,
   enableFixVerifyLoop: false,
   maxFixVerifyRounds: 3,
-  autoExtendOnMaxIter: true,
+  autoExtendOnMaxIter: false,
   autoExtendExtraIterations: 4,
   maxInCardLintFixes: 5,
   maxLintFanoutCards: 8,
@@ -1296,7 +1299,7 @@ export const DEFAULT_WORKFLOW_SETTINGS: WorkflowSettings = {
   embedModel: 'nomic-embed-text',
   ollamaNumCtx: 32768,
   ollamaNumCtxByRole: {},
-  ollamaNumCtxAuto: false,
+  ollamaNumCtxAuto: true,
   ollamaKeepAlive: '30m',
   ollamaRequestTimeoutSec: 300,
   terminalTimeoutSec: 600,
@@ -1311,7 +1314,8 @@ export const DEFAULT_WORKFLOW_SETTINGS: WorkflowSettings = {
   enableSemanticSprintContext: true,
   enableHybridSearch: true,
   semanticMinScore: 0.35,
-  semanticSprintTopK: 5,
+  semanticSprintTopK: 3,
+  sprintFileContextMode: 'excerpt',
   enableObservationSummaries: true,
   enableEpisodeSummary: true,
   enableStepLessonMemory: true,

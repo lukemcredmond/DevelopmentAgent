@@ -48,6 +48,7 @@ class ManualTaskPayload(BaseModel):
     title: str
     description: str
     ollama_url: str = "http://localhost:11434"
+    preferredFeatureId: Optional[str] = None
 
 
 class MoveTaskPayload(BaseModel):
@@ -192,6 +193,7 @@ class WorkflowSettingsPayload(BaseModel):
     enableHybridSearch: Optional[bool] = None
     semanticMinScore: Optional[float] = None
     semanticSprintTopK: Optional[int] = None
+    sprintFileContextMode: Optional[str] = None
     enableObservationSummaries: Optional[bool] = None
     enableEpisodeSummary: Optional[bool] = None
     enableStepLessonMemory: Optional[bool] = None

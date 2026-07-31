@@ -869,17 +869,51 @@ def _collect_sprint_context_paths(task: Dict[str, Any]) -> List[str]:
     return sorted(paths)
 
 
+_EXCERPT_MAX_LINES = 40
+_EXCERPT_MAX_CHARS = 400
+
+
+def _file_body_for_sprint_context(content: str, *, mode: str) -> str:
+    """Full body, or a short path-orientation excerpt (default)."""
+    if mode == "full":
+        return content
+    lines = content.splitlines()
+    head = "\n".join(lines[:_EXCERPT_MAX_LINES])
+    if len(head) > _EXCERPT_MAX_CHARS:
+        head = head[: _EXCERPT_MAX_CHARS - 20] + "\n… [truncated]"
+    elif len(lines) > _EXCERPT_MAX_LINES:
+        head = head + "\n… [truncated]"
+    return head
+
+
 def build_sprint_file_context(
     task: Dict[str, Any],
     max_chars: int = 12000,
+    *,
+    mode: Optional[str] = None,
 ) -> tuple[str, List[str]]:
-    """Build pre-loaded file contents for sprint agent prompts."""
+    """Build pre-loaded file context for sprint agent prompts.
+
+    Default mode is ``excerpt`` (paths + short signatures) because apply_patch
+    still requires an in-step read_file — full bodies are mostly dead weight.
+    Pass mode=\"full\" or set workflow ``sprintFileContextMode`` to restore bodies.
+    """
+    if mode is None:
+        try:
+            from backend.services.workflow_settings import get_workflow_settings
+
+            mode = str(get_workflow_settings().get("sprintFileContextMode") or "excerpt")
+        except Exception:
+            mode = "excerpt"
+    mode = "full" if str(mode).lower() == "full" else "excerpt"
+
     sync_virtual_filesystem_from_disk()
     candidate_paths = _collect_sprint_context_paths(task)
     included: List[str] = []
     blocks: List[str] = []
     used = 0
-    header = "\n=== PRE-LOADED FILE CONTEXT ===\n"
+    kind = "excerpts (call read_file before apply_patch)" if mode == "excerpt" else "full bodies"
+    header = f"\n=== PRE-LOADED FILE CONTEXT ({kind}) ===\n"
 
     for raw_path in candidate_paths:
         try:
@@ -897,7 +931,8 @@ def build_sprint_file_context(
                     continue
             else:
                 continue
-        block = f"--- FILE: {safe_path} ---\n{content}\n--- END {safe_path} ---"
+        body = _file_body_for_sprint_context(content, mode=mode)
+        block = f"--- FILE: {safe_path} ---\n{body}\n--- END {safe_path} ---"
         if used + len(block) > max_chars and included:
             remaining = max_chars - used
             if remaining > 200:

@@ -183,6 +183,7 @@ interface TaskDetailModalProps {
     skipRefinement?: boolean,
   ) => void | Promise<void>
   onRunInProgressStep?: (taskId: string) => void | Promise<void>
+  onAddFeatureFollowUp?: (feature: Task) => void
 }
 
 function CollapsibleSection({
@@ -299,6 +300,7 @@ export default function TaskDetailModal({
   onEscapeSubtasks,
   onMoveToInProgress,
   onRunInProgressStep,
+  onAddFeatureFollowUp,
 }: TaskDetailModalProps) {
   const [title, setTitle] = useState('')
   const [description, setDescription] = useState('')
@@ -1317,6 +1319,21 @@ export default function TaskDetailModal({
                 Living spec and prior decisions are injected into agent prompts for this card.
               </p>
             </CollapsibleSection>
+          )}
+
+          {isFeatureEpic && (
+            <div className="flex flex-wrap gap-2">
+              {onAddFeatureFollowUp && (
+                <button
+                  type="button"
+                  onClick={() => onAddFeatureFollowUp(task)}
+                  className="text-[11px] px-2.5 py-1.5 rounded-lg bg-violet-600 hover:bg-violet-500 text-white font-semibold"
+                  data-testid="add-feature-follow-up"
+                >
+                  Add follow-up
+                </button>
+              )}
+            </div>
           )}
 
           {isFeatureEpic && featureHistory.length > 0 && (

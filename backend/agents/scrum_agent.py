@@ -288,6 +288,7 @@ class ScrumAgent:
             return
         lines = ["=== OBSERVATION ==="]
         files_touched: List[str] = []
+        hints: List[str] = []
         for tool_name, arguments, result in batch:
             ok = "ok" if getattr(result, "success", False) else "FAIL"
             if getattr(result, "duplicate_skip", False):
@@ -299,9 +300,162 @@ class ScrumAgent:
                 path = str(arguments.get("path") or "")
             if path:
                 files_touched.append(path)
+            # Fold former per-tool system nudges into this one block.
+            if getattr(result, "duplicate_skip", False):
+                hints.append(
+                    f"Already ran '{tool_name}' with identical args — change approach; do not repeat."
+                )
+            elif not getattr(result, "success", False):
+                hint = (
+                    f"Tool '{tool_name}' failed — do not repeat the same arguments."
+                )
+                if tool_name == "apply_patch":
+                    hint += (
+                        " Call read_file on the same path, then retry with exact old_text "
+                        "from that result (not preloaded context)."
+                    )
+                hints.append(hint)
+            elif tool_name == "read_file" and path:
+                path_lower = path.lower().replace("\\", "/")
+                dep = ""
+                if path_lower.endswith("pubspec.yaml") or path_lower.endswith("package.json"):
+                    dep = " Dependency file — apply_patch required next."
+                hints.append(
+                    f"read_file ok for '{path}' — apply_patch next with verbatim old_text.{dep}"
+                )
+            elif tool_name == "run_command":
+                from backend.agents.tool_outcomes import parse_run_command_exit
+                from backend.services.diagnostics_parser import parse_command_diagnostics
+
+                llm_out = str(getattr(result, "tool_output", "") or "")
+                exit_code, body = parse_run_command_exit(llm_out)
+                command = str((arguments or {}).get("command") or "")
+                diagnostics = parse_command_diagnostics(command, body or llm_out)
+                if diagnostics:
+                    try:
+                        max_keep = int(ws.get("maxInCardLintFixes", 5))
+                    except Exception:
+                        max_keep = 5
+                    hints.append(
+                        f"Command returned {len(diagnostics)} problem(s) — fix at most "
+                        f"{max_keep} highest-severity AC-relevant findings before re-running."
+                    )
+                elif exit_code is not None and exit_code > 0:
+                    hints.append(
+                        "Command non-zero exit — fix budgeted issues, then re-run once "
+                        "(do not repeat without edits)."
+                    )
         if files_touched:
             lines.append("files touched: " + ", ".join(dict.fromkeys(files_touched)))
+        for hint in dict.fromkeys(hints):
+            lines.append(f"→ {hint}")
         messages.append({"role": "system", "content": "\n".join(lines)})
+
+    def _append_tool_messages(
+        self,
+        messages: List[ChatMessage],
+        tool_name: str,
+        arguments: Dict[str, Any],
+        tool_output: str,
+        success: bool,
+        *,
+        duplicate_skip: bool = False,
+    ) -> None:
+        from backend.services.llm_context import truncate_tool_output_for_llm
+
+        llm_output = truncate_tool_output_for_llm(tool_name, tool_output)
+        messages.append(
+            {
+                "role": "tool",
+                "tool_name": tool_name,
+                "content": llm_output,
+            }
+        )
+        # When observation summaries are on, nudges live in === OBSERVATION === only.
+        ws = get_workflow_settings()
+        if ws.get("enableObservationSummaries", True):
+            return
+        if duplicate_skip:
+            messages.append(
+                {
+                    "role": "system",
+                    "content": (
+                        f"Already ran '{tool_name}' with identical args — use prior output; "
+                        "change approach or edit files. Do not repeat the same command."
+                    ),
+                }
+            )
+            return
+        if not success:
+            messages.append(
+                {
+                    "role": "system",
+                    "content": (
+                        f"Tool '{tool_name}' failed: {llm_output[:300]}. "
+                        "Do not repeat the same arguments. Try a different path, "
+                        "command, or approach to achieve the task."
+                        + (
+                            " apply_patch failed — call read_file on the same path, "
+                            "then retry with exact old_text from that result. Never use "
+                            "analyze output or pre-loaded context."
+                            if tool_name == "apply_patch"
+                            else ""
+                        )
+                    ),
+                }
+            )
+        elif tool_name == "read_file":
+            path = str(arguments.get("path") or "?")
+            path_lower = path.lower().replace("\\", "/")
+            dep_hint = ""
+            if path_lower.endswith("pubspec.yaml") or path_lower.endswith("package.json"):
+                dep_hint = (
+                    " This task requires dependency updates — call apply_patch now to add "
+                    "the required plugins/dependencies. Do not respond with text."
+                )
+            messages.append(
+                {
+                    "role": "system",
+                    "content": (
+                        f"read_file succeeded for '{path}'. Use apply_patch on this path next — "
+                        "copy old_text verbatim from the read_file output above. "
+                        "Do not stop until edits are written."
+                        f"{dep_hint}"
+                    ),
+                }
+            )
+        elif tool_name == "run_command":
+            exit_code, body = parse_run_command_exit(llm_output)
+            command = str(arguments.get("command") or "")
+            diagnostics = parse_command_diagnostics(command, body or llm_output)
+            if diagnostics:
+                try:
+                    max_keep = int(get_workflow_settings().get("maxInCardLintFixes", 5))
+                except Exception:
+                    max_keep = 5
+                messages.append(
+                    {
+                        "role": "system",
+                        "content": (
+                            f"Command returned {len(diagnostics)} problem(s). "
+                            f"Fix at most {max_keep} highest-severity findings relevant to this "
+                            "card's AC (in-card lint budget) with apply_patch/write_file before "
+                            "re-running. Do not clear the whole project on this card — leftover "
+                            "lint is split to related Backlog cards automatically."
+                        ),
+                    }
+                )
+            elif exit_code is not None and exit_code > 0:
+                messages.append(
+                    {
+                        "role": "system",
+                        "content": (
+                            "Command completed with findings (non-zero exit). "
+                            "Fix budgeted issues with apply_patch/write_file, then re-run "
+                            "the lint command once. Do not repeat the same command without making changes."
+                        ),
+                    }
+                )
 
     def _inject_ac_progress_after_write(self, messages: List[ChatMessage], task_id: Optional[str]) -> None:
         if not task_id:
@@ -684,6 +838,59 @@ class ScrumAgent:
             else:
                 record_tool_fingerprint_on_task(live, tool_name, arguments)
 
+        # Hard-skip fingerprints blocked on a prior stuck step — never call execute_tool.
+        if task_id:
+            from backend.agents.tool_fingerprints import is_tool_fingerprint_blocked
+
+            live_task = find_task_by_id(task_id)
+            if is_tool_fingerprint_blocked(live_task, tool_name, arguments):
+                cmd = str((arguments or {}).get("command") or tool_summary)[:120]
+                tool_output = (
+                    f"[blocked fingerprint] Tool '{tool_name}' with these args was blocked "
+                    "after a prior stuck step"
+                    + (f" ({cmd})" if cmd else "")
+                    + ". Change approach or edit files before retrying."
+                )
+                skip_intent = f"Blocked fingerprint {tool_name}"
+                self._publish_work_progress(
+                    task_id=task_id,
+                    intent=skip_intent,
+                    status=skip_intent,
+                    run_status="thinking",
+                    clear_tool=True,
+                    publish_activity_event=True,
+                )
+                add_system_log(self.role, "info", skip_intent)
+                with _FAILURE_LOCK:
+                    successful_tool_keys.append(key)
+                _track_fingerprint()
+                _log_duplicate_skip(
+                    agent=self.role,
+                    tool_name=tool_name,
+                    arguments=arguments,
+                    tool_output=tool_output,
+                    task_id=task_id,
+                    run_id=run_id,
+                    success=False,
+                )
+                safe_args = sanitize_tool_args_for_log(tool_name, arguments)
+                result = ToolExecutionResult(
+                    tool_name=tool_name,
+                    arguments=arguments,
+                    safe_args=safe_args,
+                    tool_output=tool_output,
+                    success=False,
+                    duration_ms=0,
+                    timestamp="",
+                    agent=self.role,
+                    agent_id=agent_id,
+                    task_id=task_id,
+                    source="agent",
+                    run_id=run_id,
+                )
+                setattr(result, "duplicate_skip", True)
+                return tool_name, arguments, result, None
+
         with _FAILURE_LOCK:
             same_success = successful_tool_keys.count(key)
 
@@ -867,110 +1074,6 @@ class ScrumAgent:
                 finish_run(status="failed", error=stop_msg)
                 return tool_name, arguments, result, stop_msg
         return tool_name, arguments, result, None
-
-    def _append_tool_messages(
-        self,
-        messages: List[ChatMessage],
-        tool_name: str,
-        arguments: Dict[str, Any],
-        tool_output: str,
-        success: bool,
-        *,
-        duplicate_skip: bool = False,
-    ) -> None:
-        from backend.services.llm_context import truncate_tool_output_for_llm
-
-        llm_output = truncate_tool_output_for_llm(tool_name, tool_output)
-        messages.append(
-            {
-                "role": "tool",
-                "tool_name": tool_name,
-                "content": llm_output,
-            }
-        )
-        if duplicate_skip:
-            messages.append(
-                {
-                    "role": "system",
-                    "content": (
-                        f"Already ran '{tool_name}' with identical args — use prior output; "
-                        "change approach or edit files. Do not repeat the same command."
-                    ),
-                }
-            )
-            return
-        if not success:
-            messages.append(
-                {
-                    "role": "system",
-                    "content": (
-                        f"Tool '{tool_name}' failed: {llm_output[:300]}. "
-                        "Do not repeat the same arguments. Try a different path, "
-                        "command, or approach to achieve the task."
-                        + (
-                            " apply_patch failed — call read_file on the same path, "
-                            "then retry with exact old_text from that result. Never use "
-                            "analyze output or pre-loaded context."
-                            if tool_name == "apply_patch"
-                            else ""
-                        )
-                    ),
-                }
-            )
-        elif tool_name == "read_file":
-            path = str(arguments.get("path") or "?")
-            path_lower = path.lower().replace("\\", "/")
-            dep_hint = ""
-            if path_lower.endswith("pubspec.yaml") or path_lower.endswith("package.json"):
-                dep_hint = (
-                    " This task requires dependency updates — call apply_patch now to add "
-                    "the required plugins/dependencies. Do not respond with text."
-                )
-            messages.append(
-                {
-                    "role": "system",
-                    "content": (
-                        f"read_file succeeded for '{path}'. Use apply_patch on this path next — "
-                        "copy old_text verbatim from the read_file output above. "
-                        "Do not stop until edits are written."
-                        f"{dep_hint}"
-                    ),
-                }
-            )
-        elif tool_name == "run_command":
-            exit_code, body = parse_run_command_exit(llm_output)
-            command = str(arguments.get("command") or "")
-            diagnostics = parse_command_diagnostics(command, body or llm_output)
-            if diagnostics:
-                try:
-                    from backend.services.workflow_settings import get_workflow_settings
-
-                    max_keep = int(get_workflow_settings().get("maxInCardLintFixes", 5))
-                except Exception:
-                    max_keep = 5
-                messages.append(
-                    {
-                        "role": "system",
-                        "content": (
-                            f"Command returned {len(diagnostics)} problem(s). "
-                            f"Fix at most {max_keep} highest-severity findings relevant to this "
-                            "card's AC (in-card lint budget) with apply_patch/write_file before "
-                            "re-running. Do not clear the whole project on this card — leftover "
-                            "lint is split to related Backlog cards automatically."
-                        ),
-                    }
-                )
-            elif exit_code is not None and exit_code > 0:
-                messages.append(
-                    {
-                        "role": "system",
-                        "content": (
-                            "Command completed with findings (non-zero exit). "
-                            "Fix budgeted issues with apply_patch/write_file, then re-run "
-                            "the lint command once. Do not repeat the same command without making changes."
-                        ),
-                    }
-                )
 
     def _process_tool_calls(
         self,

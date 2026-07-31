@@ -99,6 +99,24 @@ def seed_tool_keys_from_task(task: Dict[str, Any]) -> Tuple[List[ToolKey], List[
     return success_keys, failed_keys
 
 
+def is_tool_fingerprint_blocked(
+    task: Optional[Dict[str, Any]],
+    tool_name: str,
+    arguments: Dict[str, Any],
+) -> bool:
+    """True when this tool+args was explicitly blocked on a prior stuck step."""
+    if not task:
+        return False
+    normalize_fingerprint_fields(task)
+    key = tool_fingerprint_key(tool_name, arguments)
+    for entry in task.get("blockedToolFingerprints") or []:
+        if not isinstance(entry, dict):
+            continue
+        if (str(entry.get("tool") or ""), str(entry.get("argsJson") or "")) == key:
+            return True
+    return False
+
+
 def record_tool_fingerprint_on_task(
     task: Dict[str, Any],
     tool_name: str,

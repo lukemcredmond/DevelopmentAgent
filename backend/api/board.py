@@ -58,7 +58,12 @@ def clear_board_tasks():
 @router.post("/api/tasks/manual")
 def add_manual_task(payload: ManualTaskPayload):
     with state.STATE_LOCK:
-        run_po_add_feature(payload.title, payload.description, payload.ollama_url)
+        run_po_add_feature(
+            payload.title,
+            payload.description,
+            payload.ollama_url,
+            preferred_feature_id=payload.preferredFeatureId,
+        )
         add_system_log("System", "success", f"Feature '{payload.title}' sent to PO.")
     return build_state_response()
 

@@ -1162,6 +1162,21 @@ export default function WorkflowPanel({
         Pre-load semantic index chunks at sprint step start
       </label>
       <label className="flex items-center gap-2 text-[11px] text-cat-subtext cursor-pointer pl-5">
+        <span className="text-[10px] text-cat-overlay">Sprint file inject</span>
+        <select
+          value={settings.sprintFileContextMode === 'full' ? 'full' : 'excerpt'}
+          onChange={(e) =>
+            onSettingsChange({
+              sprintFileContextMode: e.target.value === 'full' ? 'full' : 'excerpt',
+            })
+          }
+          className="bg-cat-base border border-cat-surface1 rounded p-1 text-white font-mono text-[10px]"
+        >
+          <option value="excerpt">excerpts (default)</option>
+          <option value="full">full file bodies</option>
+        </select>
+      </label>
+      <label className="flex items-center gap-2 text-[11px] text-cat-subtext cursor-pointer pl-5">
         <input
           type="checkbox"
           checked={settings.enableHybridSearch !== false}

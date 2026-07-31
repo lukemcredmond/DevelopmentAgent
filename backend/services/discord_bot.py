@@ -309,15 +309,56 @@ def cmd_model(options: Dict[str, Any]) -> str:
 
 
 def cmd_feature(options: Dict[str, Any]) -> str:
-    from backend.services.feature_service import create_feature
+    from backend.services.feature_service import create_feature, find_feature_by_id, update_feature
+    from backend.services.sprint_service import run_po_add_feature
 
     title = str(options.get("title") or "").strip()
     if not title:
         return "title is required."
-    description = str(options.get("description") or "").strip() or title
+    description = str(options.get("description") or options.get("body") or "").strip() or title
+    feature_id = str(options.get("feature_id") or options.get("featureId") or "").strip() or None
     child_title = str(options.get("child_title") or options.get("childTitle") or "").strip()
     if not child_title:
         child_title = f"Implement: {title}"
+
+    # Follow-up on an existing epic: prefer the shared PO intake path when Ollama is up;
+    # otherwise update directly.
+    if feature_id:
+        existing = find_feature_by_id(feature_id)
+        if not existing:
+            return f"Feature not found: {feature_id}"
+        try:
+            run_po_add_feature(
+                title,
+                description,
+                str(options.get("ollama_url") or "http://localhost:11434"),
+                preferred_feature_id=feature_id,
+            )
+            return (
+                f"Follow-up for feature [{feature_id}] '{existing.get('title', title)}' "
+                "sent to PO (update preferred)."
+            )
+        except Exception:
+            feature, child = update_feature(
+                feature_id,
+                title=str(existing.get("title") or title),
+                description=str(existing.get("description") or description),
+                request_title=title,
+                request_body=description,
+                child_task={
+                    "title": child_title,
+                    "description": description,
+                    "acceptanceCriteria": [],
+                },
+                po_summary="Updated via Discord /ah-feature (feature_id)",
+                source="discord",
+            )
+            cid = str(child.get("id") or "?")
+            return (
+                f"Updated feature [{feature_id}] with backlog child [{cid}] {child_title}. "
+                "Sprint not started."
+            )
+
     feature, child = create_feature(
         title,
         description,
@@ -670,23 +711,27 @@ def _make_discord_client(guild_id: str) -> Any:
             {"preset": preset.value, "all_roles": all_roles},
         )
 
-    @tree.command(name=CMD_FEATURE, description="Create draft Feature (+ backlog child); does not start sprint")
+    @tree.command(name=CMD_FEATURE, description="Create or follow up on a Feature (+ backlog child); does not start sprint")
     @app_commands.describe(
-        title="Feature title",
+        title="Feature / follow-up title",
         description="Optional description",
         child_title="Optional first backlog child title",
+        feature_id="Optional existing Features-lane id to amend (follow-up)",
     )
     async def _feature(
         interaction: discord.Interaction,
         title: str,
         description: Optional[str] = None,
         child_title: Optional[str] = None,
+        feature_id: Optional[str] = None,
     ) -> None:
         opts: Dict[str, Any] = {"title": title}
         if description:
             opts["description"] = description
         if child_title:
             opts["child_title"] = child_title
+        if feature_id:
+            opts["feature_id"] = feature_id
         await _reply(interaction, CMD_FEATURE, opts)
 
     @tree.command(name=CMD_ANSWER, description="Answer a Needs User card")

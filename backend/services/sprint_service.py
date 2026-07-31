@@ -91,8 +91,9 @@ from backend.workspace.files import (
 )
 
 CONTEXT_INJECT_NOTE = (
-    "Pre-loaded file content may be stale or truncated — always call read_file immediately "
-    "before apply_patch on a path, even when that file appears above."
+    "Pre-loaded file context is for orientation only (often excerpts) and may be stale. "
+    "Always call read_file in this step immediately before apply_patch on a path — "
+    "apply_patch rejects preloaded text."
 )
 
 PLANNING_TASK_ID = "PLANNING"
@@ -1296,7 +1297,7 @@ def _inject_sprint_context(
                 if existing_actions.get(path) in stronger:
                     continue
                 record_task_file(task_id, path, "context", persist=True)
-    base = build_task_prompt(active_task, brief)
+    base = build_task_prompt(active_task, brief, agent_role=agent_role)
     parts = [base]
     if context_block:
         from backend.services.context_compress import maybe_compress_sprint_context_block
@@ -1960,19 +1961,40 @@ def run_po_plan(brief: str, ollama_url: str) -> None:
     )
 
 
-def run_po_add_feature(title: str, description: str, ollama_url: str) -> None:
+def run_po_add_feature(
+    title: str,
+    description: str,
+    ollama_url: str,
+    preferred_feature_id: str | None = None,
+) -> None:
     append_feature_to_brief(title, description, source="user")
     agent_po.ollama_url = ollama_url
     normalize_board_lanes(state.SHARED_BOARD)
     add_system_log("Product Owner", "info", f"Refining feature '{title}'…")
 
     existing_features = list_features()
+    preferred_id = str(preferred_feature_id or "").strip() or None
+    preferred_feature = find_feature_by_id(preferred_id) if preferred_id else None
+    if preferred_id and not preferred_feature:
+        add_system_log(
+            "Product Owner",
+            "warning",
+            f"preferredFeatureId '{preferred_id}' not found — PO will classify freely",
+        )
+        preferred_id = None
+
     feature_context = build_feature_context_for_po(
         {"title": title, "description": description},
         features=existing_features,
     )
     match_hint = ""
-    if existing_features:
+    if preferred_id and preferred_feature:
+        match_hint = (
+            f"\nPreferred feature for this follow-up: {preferred_id} "
+            f"({preferred_feature.get('title', '?')}). "
+            "Prefer action \"update\" with this featureId unless the request is clearly unrelated.\n"
+        )
+    elif existing_features:
         probe = {"title": title, "description": description}
         scored: List[tuple[float, str]] = []
         for feat in existing_features:
@@ -2003,11 +2025,18 @@ def run_po_add_feature(title: str, description: str, ollama_url: str) -> None:
     po_output = agent_po.execute_step(intake_prompt, max_iterations=_llm_iterations())
 
     if po_output == "SIMULATION_FALLBACK":
-        intake_feature_offline(title, description)
+        intake_feature_offline(title, description, preferred_feature_id=preferred_id)
     else:
         parsed_obj = extract_json_object_from_text(po_output)
         if parsed_obj:
             intake = parse_po_feature_intake(parsed_obj)
+            # When the user pinned an epic, fill missing featureId on update;
+            # honour explicit "new" if the PO judged the request unrelated.
+            if preferred_id and intake["action"] == "update" and not intake["featureId"]:
+                intake["featureId"] = preferred_id
+            elif preferred_id and intake["action"] not in ("new", "update"):
+                intake["action"] = "update"
+                intake["featureId"] = preferred_id
             child_task = intake["childTask"]
             if not child_task.get("acceptanceCriteria"):
                 child_task["acceptanceCriteria"] = [child_task.get("description") or title]
@@ -2071,18 +2100,29 @@ def run_po_add_feature(title: str, description: str, ollama_url: str) -> None:
                         if isinstance(raw.get("acceptanceCriteria"), list)
                         else [description],
                     }
-                    create_feature(
-                        title,
-                        description,
-                        request_title=title,
-                        request_body=description,
-                        child_task=child_task,
-                        po_summary="Legacy PO array response — created new feature",
-                    )
+                    if preferred_id and find_feature_by_id(preferred_id):
+                        update_feature(
+                            preferred_id,
+                            title=title,
+                            description=description,
+                            request_title=title,
+                            request_body=description,
+                            child_task=child_task,
+                            po_summary="Legacy PO array response — updated preferred feature",
+                        )
+                    else:
+                        create_feature(
+                            title,
+                            description,
+                            request_title=title,
+                            request_body=description,
+                            child_task=child_task,
+                            po_summary="Legacy PO array response — created new feature",
+                        )
                 else:
-                    intake_feature_offline(title, description)
-            except (ValueError, json.JSONDecodeError):
-                intake_feature_offline(title, description)
+                    intake_feature_offline(title, description, preferred_feature_id=preferred_id)
+            except Exception:
+                intake_feature_offline(title, description, preferred_feature_id=preferred_id)
 
     save_current_project_state()
 
