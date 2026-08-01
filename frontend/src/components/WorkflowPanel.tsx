@@ -996,6 +996,32 @@ export default function WorkflowPanel({
       <label className="flex items-center gap-2 text-[11px] text-cat-subtext cursor-pointer">
         <input
           type="checkbox"
+          checked={settings.confirmSimulationFallback !== false}
+          onChange={(e) => onSettingsChange({ confirmSimulationFallback: e.target.checked })}
+        />
+        Confirm before offline simulation
+        <SettingHint hint="When Ollama is down, show a countdown popup before applying simulated dev/PO/QA results." />
+      </label>
+      <label className="flex items-center gap-2 text-[11px] text-cat-subtext">
+        <span className="shrink-0">Simulation confirm seconds</span>
+        <input
+          type="number"
+          min={1}
+          max={60}
+          className="w-16 rounded bg-cat-crust border border-cat-surface1 px-1 py-0.5 text-xs"
+          value={settings.simulationConfirmSeconds ?? 10}
+          onChange={(e) =>
+            onSettingsChange({
+              simulationConfirmSeconds: Math.min(60, Math.max(1, Number(e.target.value) || 10)),
+            })
+          }
+        />
+        <SettingHint hint="Auto-accept simulated result after this many seconds (1–60)." />
+      </label>
+
+      <label className="flex items-center gap-2 text-[11px] text-cat-subtext cursor-pointer">
+        <input
+          type="checkbox"
           checked={settings.enableWebSearch ?? false}
           onChange={(e) => onSettingsChange({ enableWebSearch: e.target.checked })}
         />

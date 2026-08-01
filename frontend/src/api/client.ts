@@ -399,6 +399,25 @@ export async function applyDoneAudit(payload: {
   })
 }
 
+export async function confirmSimulation(payload: {
+  accept: boolean
+  overrideTarget?: string
+  overrideValue?: string
+}): Promise<AppState> {
+  return request<AppState>('/api/simulation/confirm', {
+    method: 'POST',
+    body: JSON.stringify({
+      accept: payload.accept,
+      overrideTarget: payload.overrideTarget,
+      overrideValue: payload.overrideValue,
+    }),
+  })
+}
+
+export async function dismissSimulation(): Promise<AppState> {
+  return request<AppState>('/api/simulation/dismiss', { method: 'POST', body: '{}' })
+}
+
 export async function clearChatHistory(): Promise<{ ok: boolean; deleted: number; chatMessages: [] }> {
   return request<{ ok: boolean; deleted: number; chatMessages: [] }>('/api/chat/clear', {
     method: 'POST',

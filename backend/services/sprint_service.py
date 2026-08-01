@@ -1804,26 +1804,46 @@ def run_po_plan_outline(brief: str, ollama_url: str) -> str:
         clear_active_sprint_context()
 
     if outline == "SIMULATION_FALLBACK":
-        outline = (
-            "## Summary\nOffline plan stub.\n\n## Approach\nScaffold core modules first.\n\n"
-            "## Risks\nUnknown integration points.\n\n## Open questions\n(none)\n\n"
-            "## Proposed epics\n"
-            "- Project setup — workspace, tooling, and base deps so other slices can build\n"
-            "- Core data model — entities and persistence for the main domain\n"
-            "- Primary list / browse UI — user can view the main collection\n"
-            "- Create & edit flows — add and update items with validation\n"
-            "- Detail / summary view — inspect a single item or period\n"
-            "- Export or sharing — take work out of the app (list, print, or share)\n"
+        from backend.services.simulation_gate import (
+            build_proposal,
+            preview_po_plan_outline,
+            try_defer_simulation,
         )
 
-    state.PROJECT_PLAN_OUTLINE = outline
-    for block in outline.split("\n\n"):
-        stripped = block.strip()
-        if stripped:
-            publish_event("plan_chunk", {"chunk": stripped + "\n\n"})
-    publish_event("plan_chunk", {"phase": "done", "outline": outline})
-    add_system_log("Product Owner", "success", "Plan outline ready — review before generating backlog.")
-    save_current_project_state()
+        preview = preview_po_plan_outline()
+        prop = build_proposal(
+            kind="po_plan_outline",
+            task_id="planning",
+            agent="Product Owner",
+            title="Plan outline",
+            summary="Apply offline plan outline stub to project",
+            default_preview=preview,
+            source="po_plan_outline",
+        )
+        if try_defer_simulation(prop):
+            outline = ""
+        else:
+            outline = (
+                "## Summary\nOffline plan stub.\n\n## Approach\nScaffold core modules first.\n\n"
+                "## Risks\nUnknown integration points.\n\n## Open questions\n(none)\n\n"
+                "## Proposed epics\n"
+                "- Project setup — workspace, tooling, and base deps so other slices can build\n"
+                "- Core data model — entities and persistence for the main domain\n"
+                "- Primary list / browse UI — user can view the main collection\n"
+                "- Create & edit flows — add and update items with validation\n"
+                "- Detail / summary view — inspect a single item or period\n"
+                "- Export or sharing — take work out of the app (list, print, or share)\n"
+            )
+
+    if outline:
+        state.PROJECT_PLAN_OUTLINE = outline
+        for block in outline.split("\n\n"):
+            stripped = block.strip()
+            if stripped:
+                publish_event("plan_chunk", {"chunk": stripped + "\n\n"})
+        publish_event("plan_chunk", {"phase": "done", "outline": outline})
+        add_system_log("Product Owner", "success", "Plan outline ready — review before generating backlog.")
+        save_current_project_state()
     return outline
 
 
@@ -1867,6 +1887,25 @@ def run_po_plan_backlog(brief: str, ollama_url: str, outline: Optional[str] = No
         )
     finally:
         clear_active_sprint_context()
+
+    if po_output == "SIMULATION_FALLBACK":
+        from backend.services.simulation_gate import (
+            build_proposal,
+            preview_po_backlog_stub,
+            try_defer_simulation,
+        )
+
+        prop = build_proposal(
+            kind="po_backlog",
+            task_id="planning",
+            agent="Product Owner",
+            title="Plan backlog",
+            summary="Create offline sample epics and child cards from plan",
+            default_preview=preview_po_backlog_stub(),
+            source="po_backlog",
+        )
+        if try_defer_simulation(prop):
+            return 0
 
     return _append_po_backlog_from_output(po_output, existing_set)
 
@@ -1947,6 +1986,34 @@ def run_po_plan(brief: str, ollama_url: str) -> None:
         )
         return
 
+    if po_output == "SIMULATION_FALLBACK":
+        from backend.services.simulation_gate import (
+            build_proposal,
+            preview_po_backlog_stub,
+            try_defer_simulation,
+        )
+
+        prop = build_proposal(
+            kind="po_backlog",
+            task_id="planning",
+            agent="Product Owner",
+            title="Plan & Run backlog",
+            summary="Create offline sample epics and child cards from brief",
+            default_preview=preview_po_backlog_stub(),
+            source="po_plan",
+        )
+        if try_defer_simulation(prop):
+            publish_sprint_progress(
+                phase="po_plan",
+                step=0,
+                max_steps=max_steps,
+                agent="Product Owner",
+                task_id=PLANNING_TASK_ID,
+                task_title="Waiting for offline simulation confirm…",
+                lane="Features",
+            )
+            return
+
     if po_output:
         _append_po_backlog_from_output(po_output, set(existing))
 
@@ -2025,6 +2092,24 @@ def run_po_add_feature(
     po_output = agent_po.execute_step(intake_prompt, max_iterations=_llm_iterations())
 
     if po_output == "SIMULATION_FALLBACK":
+        from backend.services.simulation_gate import build_proposal, try_defer_simulation
+
+        prop = build_proposal(
+            kind="feature_intake",
+            task_id="planning",
+            agent="Product Owner",
+            title=title,
+            summary="Offline feature intake (new/update epic + child card)",
+            default_preview={"title": title},
+            source="feature_intake",
+            context={
+                "title": title,
+                "description": description,
+                "preferredFeatureId": preferred_id,
+            },
+        )
+        if try_defer_simulation(prop):
+            return
         intake_feature_offline(title, description, preferred_feature_id=preferred_id)
     else:
         parsed_obj = extract_json_object_from_text(po_output)
@@ -2162,26 +2247,41 @@ def run_po_split_task(task_id: str, ollama_url: str, guidance: str = "") -> Dict
             added = apply_backlog_from_po_response(po_output, task_id)
             backlog_after = state.SHARED_BOARD.get("Backlog", [])
             new_task_ids = [t["id"] for t in backlog_after if t["id"] not in backlog_before_ids]
-        else:
-            added = apply_backlog_from_po_response(
-                json.dumps(
-                    [
-                        {
-                            "title": f"{task.get('title', 'Subtask')} (part 1)",
-                            "description": task.get("description", "")[:500],
-                            "acceptanceCriteria": ["Deliver first slice of the feature"],
-                        },
-                        {
-                            "title": f"{task.get('title', 'Subtask')} (part 2)",
-                            "description": task.get("description", "")[:500],
-                            "acceptanceCriteria": ["Deliver remaining scope"],
-                        },
-                    ]
-                ),
-                task_id,
+        elif po_output == "SIMULATION_FALLBACK":
+            from backend.services.simulation_gate import build_proposal, try_defer_simulation
+
+            split_stub = json.dumps(
+                [
+                    {
+                        "title": f"{task.get('title', 'Subtask')} (part 1)",
+                        "description": task.get("description", "")[:500],
+                        "acceptanceCriteria": ["Deliver first slice of the feature"],
+                    },
+                    {
+                        "title": f"{task.get('title', 'Subtask')} (part 2)",
+                        "description": task.get("description", "")[:500],
+                        "acceptanceCriteria": ["Deliver remaining scope"],
+                    },
+                ]
             )
-            backlog_after = state.SHARED_BOARD.get("Backlog", [])
-            new_task_ids = [t["id"] for t in backlog_after if t["id"] not in backlog_before_ids]
+            prop = build_proposal(
+                kind="po_split",
+                task_id=task_id,
+                agent="Product Owner",
+                title=str(task.get("title") or task_id),
+                summary="Split card into offline sample subtasks",
+                default_preview={"subtaskCount": 2},
+                source="po_split",
+                context={"poOutput": split_stub},
+            )
+            if try_defer_simulation(prop):
+                added = 0
+            else:
+                added = apply_backlog_from_po_response(split_stub, task_id)
+                backlog_after = state.SHARED_BOARD.get("Backlog", [])
+                new_task_ids = [t["id"] for t in backlog_after if t["id"] not in backlog_before_ids]
+        else:
+            added = 0
 
         save_current_project_state()
         publish_board_update(task_id, source="split")
@@ -2305,9 +2405,27 @@ def _run_refinement_dev_review(active_task: Dict[str, Any], brief: str) -> None:
         if not task:
             return
         if result == "SIMULATION_FALLBACK":
-            task["refinementDevReady"] = True
-            task["refinementStatus"] = "dev_reviewed"
-            task["refinementRoundTrips"] = int(task.get("refinementRoundTrips") or 0) + 1
+            from backend.services.simulation_gate import (
+                build_proposal,
+                mark_step_outcome_simulation_pending,
+                try_defer_simulation,
+            )
+
+            prop = build_proposal(
+                kind="refinement_dev",
+                task_id=task_id,
+                agent="Developer",
+                title=str(task.get("title") or task_id),
+                summary="Mark refinement dev-reviewed (offline)",
+                default_preview={"refinementDevReady": True},
+                source="refinement_dev",
+            )
+            if try_defer_simulation(prop):
+                mark_step_outcome_simulation_pending(task_id, "Developer", lane_before)
+            else:
+                task["refinementDevReady"] = True
+                task["refinementStatus"] = "dev_reviewed"
+                task["refinementRoundTrips"] = int(task.get("refinementRoundTrips") or 0) + 1
         else:
             record_task_decision(task_id, "Developer", "refinement_dev", result[:500], result)
             if not _apply_refinement_dev_result(task, result):
@@ -2425,15 +2543,33 @@ def _run_spike_dev(active_task: Dict[str, Any], brief: str) -> None:
         if not spike:
             return
         if result == "SIMULATION_FALLBACK":
-            spike["spikeReport"] = json.dumps(
-                {"findings": "Offline spike simulation.", "recommendations": "", "openQuestions": []}
+            from backend.services.simulation_gate import (
+                build_proposal,
+                mark_step_outcome_simulation_pending,
+                try_defer_simulation,
             )
-            spike["spikeStatus"] = "complete"
-            if parent_id:
-                parent_task = find_task_by_id(parent_id)
-                if parent_task:
-                    parent_task["needsSpike"] = False
-                    parent_task["refinementStatus"] = "pending"
+
+            prop = build_proposal(
+                kind="spike",
+                task_id=task_id,
+                agent="Developer",
+                title=str(spike.get("title") or task_id),
+                summary="Apply offline spike findings JSON to spike and parent",
+                default_preview={"findings": "Offline spike simulation."},
+                source="spike",
+            )
+            if try_defer_simulation(prop):
+                mark_step_outcome_simulation_pending(task_id, "Developer", lane_before)
+            else:
+                spike["spikeReport"] = json.dumps(
+                    {"findings": "Offline spike simulation.", "recommendations": "", "openQuestions": []}
+                )
+                spike["spikeStatus"] = "complete"
+                if parent_id:
+                    parent_task = find_task_by_id(parent_id)
+                    if parent_task:
+                        parent_task["needsSpike"] = False
+                        parent_task["refinementStatus"] = "pending"
         else:
             record_task_decision(task_id, "Developer", "spike_dev", result[:500], result)
             if not _apply_spike_result(spike, result):
@@ -2484,8 +2620,28 @@ def _run_refinement_po_update(active_task: Dict[str, Any], brief: str) -> None:
         if not task:
             return
         clarified = False
+        deferred_sim = False
         if result == "SIMULATION_FALLBACK":
-            clarified = True
+            from backend.services.simulation_gate import (
+                build_proposal,
+                mark_step_outcome_simulation_pending,
+                try_defer_simulation,
+            )
+
+            prop = build_proposal(
+                kind="refinement_po",
+                task_id=task_id,
+                agent="Product Owner",
+                title=str(task.get("title") or task_id),
+                summary="Mark refinement PO-updated (offline)",
+                default_preview={"refinementStatus": "po_updated"},
+                source="refinement_po",
+            )
+            if try_defer_simulation(prop):
+                deferred_sim = True
+                mark_step_outcome_simulation_pending(task_id, "Product Owner", lane_before)
+            else:
+                clarified = True
         else:
             record_task_decision(task_id, "Product Owner", "refinement_po", result[:500], result)
             clarified = _apply_po_clarification_result(task, result)
@@ -2494,14 +2650,15 @@ def _run_refinement_po_update(active_task: Dict[str, Any], brief: str) -> None:
                 from backend.services.subtask_service import apply_execution_plan
 
                 apply_execution_plan(task_id, obj["executionPlan"])
-        task["refinementStatus"] = "po_updated"
-        if not clarified:
-            add_system_log(
-                "Product Owner",
-                "warning",
-                f"Refinement PO update incomplete for '{task['title']}'",
-            )
-        if _task_in_lane(task_id, "Refinement") and task.get("refinementDevReady"):
+        if not deferred_sim:
+            task["refinementStatus"] = "po_updated"
+            if not clarified:
+                add_system_log(
+                    "Product Owner",
+                    "warning",
+                    f"Refinement PO update incomplete for '{task['title']}'",
+                )
+        if not deferred_sim and _task_in_lane(task_id, "Refinement") and task.get("refinementDevReady"):
             task["refinementComplete"] = True
             task["refinementStatus"] = "ready"
             move_board_stage(task_id, "Backlog")
@@ -2514,7 +2671,7 @@ def _run_refinement_po_update(active_task: Dict[str, Any], brief: str) -> None:
                 agent="Product Owner",
                 lane="Backlog",
             )
-        elif _task_in_lane(task_id, "Backlog") and task.get("refinementComplete"):
+        elif not deferred_sim and _task_in_lane(task_id, "Backlog") and task.get("refinementComplete"):
             publish_activity(
                 task_id,
                 "refinement_complete",
@@ -2550,13 +2707,33 @@ def _run_po_clarification(active_task: Dict[str, Any], brief: str) -> None:
         if not task:
             return
         clarified = False
+        deferred_sim = False
         if result == "SIMULATION_FALLBACK":
-            record_task_decision(task_id, "Product Owner", "clarification", "Offline clarification")
-            clarified = True
+            from backend.services.simulation_gate import (
+                build_proposal,
+                mark_step_outcome_simulation_pending,
+                try_defer_simulation,
+            )
+
+            prop = build_proposal(
+                kind="po_clarification",
+                task_id=task_id,
+                agent="Product Owner",
+                title=str(task.get("title") or task_id),
+                summary="Record offline PO clarification decision",
+                default_preview={"note": "Offline clarification"},
+                source="po_clarification",
+            )
+            if try_defer_simulation(prop):
+                deferred_sim = True
+                mark_step_outcome_simulation_pending(task_id, "Product Owner", lane_before)
+            else:
+                record_task_decision(task_id, "Product Owner", "clarification", "Offline clarification")
+                clarified = True
         else:
             record_task_decision(task_id, "Product Owner", "clarification", result[:500], result)
             clarified = _apply_po_clarification_result(task, result)
-        if _task_in_lane(task_id, "Needs PO"):
+        if not deferred_sim and _task_in_lane(task_id, "Needs PO"):
             if clarified:
                 ws = get_workflow_settings()
                 if (
@@ -2687,7 +2864,30 @@ def _run_developer_step(active_task: Dict[str, Any], brief: str) -> None:
                     f"'{task.get('title', task_id)}': dev step read files but made no edits — staying In Progress",
                 )
             if result == "SIMULATION_FALLBACK":
-                _simulate_dev_work(task)
+                from backend.services.simulation_gate import (
+                    build_proposal,
+                    mark_step_outcome_simulation_pending,
+                    preview_sprint_dev,
+                    try_defer_simulation,
+                )
+
+                preview = preview_sprint_dev(task)
+                prop = build_proposal(
+                    kind="sprint_dev",
+                    task_id=task_id,
+                    agent="Developer",
+                    title=str(task.get("title") or task_id),
+                    summary=(
+                        f"Offline dev: write {preview.get('fileName')} "
+                        f"and move to {preview.get('targetLane')}"
+                    ),
+                    default_preview=preview,
+                    source="sprint_dev",
+                )
+                if try_defer_simulation(prop):
+                    mark_step_outcome_simulation_pending(task_id, "Developer", lane_before)
+                else:
+                    _simulate_dev_work(task)
             else:
                 record_task_decision(task_id, "Developer", "work", result[:500], result)
                 if _task_in_lane(task_id, "In Progress"):
@@ -2839,7 +3039,27 @@ def _run_code_review_step(active_task: Dict[str, Any], brief: str) -> None:
         if result == "SIMULATION_FALLBACK":
             task = find_task_by_id(task_id)
             if task:
-                _simulate_code_review(task)
+                from backend.services.simulation_gate import (
+                    build_proposal,
+                    mark_step_outcome_simulation_pending,
+                    preview_sprint_cr,
+                    try_defer_simulation,
+                )
+
+                preview = preview_sprint_cr()
+                prop = build_proposal(
+                    kind="sprint_cr",
+                    task_id=task_id,
+                    agent="Code Reviewer",
+                    title=str(task.get("title") or task_id),
+                    summary="Offline code review: random pass to QA or fail to In Progress",
+                    default_preview=preview,
+                    source="sprint_cr",
+                )
+                if try_defer_simulation(prop):
+                    mark_step_outcome_simulation_pending(task_id, "Code Reviewer", lane_before)
+                else:
+                    _simulate_code_review(task)
         else:
             record_task_decision(task_id, "Code Reviewer", "review", result[:500], result)
             if _task_in_lane(task_id, "Code Review"):
@@ -2904,7 +3124,27 @@ def _run_qa_step(active_task: Dict[str, Any], brief: str) -> None:
             "passed": passed,
         }
         if result == "SIMULATION_FALLBACK":
-            _simulate_qa(task)
+            from backend.services.simulation_gate import (
+                build_proposal,
+                mark_step_outcome_simulation_pending,
+                preview_sprint_qa,
+                try_defer_simulation,
+            )
+
+            preview = preview_sprint_qa()
+            prop = build_proposal(
+                kind="sprint_qa",
+                task_id=task_id,
+                agent="QA Tester",
+                title=str(task.get("title") or task_id),
+                summary="Offline QA: random pass to Done or fail to In Progress",
+                default_preview=preview,
+                source="sprint_qa",
+            )
+            if try_defer_simulation(prop):
+                mark_step_outcome_simulation_pending(task_id, "QA Tester", lane_before)
+            else:
+                _simulate_qa(task)
         else:
             record_task_decision(task_id, "QA Tester", "qa", result[:500], result)
             if _task_in_lane(task_id, "QA"):

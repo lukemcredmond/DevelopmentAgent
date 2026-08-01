@@ -94,4 +94,9 @@ def build_state_response(*, include_files: bool = True) -> dict:
     recovery = get_recovery_context()
     if recovery is not None:
         response["recovery"] = recovery
+    from backend.services.simulation_gate import get_pending_simulation_public
+
+    pending_sim = get_pending_simulation_public()
+    if pending_sim is not None:
+        response["pendingSimulation"] = pending_sim
     return response

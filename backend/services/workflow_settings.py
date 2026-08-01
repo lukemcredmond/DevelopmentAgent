@@ -130,6 +130,8 @@ DEFAULT_WORKFLOW_SETTINGS: Dict[str, Any] = {
     "discordModelPresetFast": "qwen2.5-coder:7b",
     "discordModelPresetQuality": "qwen2.5-coder:14b",
     "requireAcChecklistForDone": True,
+    "confirmSimulationFallback": True,
+    "simulationConfirmSeconds": 10,
 }
 
 DEFAULT_SPRINT_SUMMARY: Dict[str, Any] = {

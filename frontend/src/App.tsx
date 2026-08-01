@@ -50,6 +50,7 @@ import AgentConsole from './components/AgentConsole'
 import BriefPanel, { readBriefOpen } from './components/BriefPanel'
 import ChatPanel, { type ChatUiMessage } from './components/ChatPanel'
 import DoneAuditModal from './components/DoneAuditModal'
+import SimulationConfirmModal from './components/SimulationConfirmModal'
 import EvidencePanel from './components/EvidencePanel'
 import GitPanel from './components/GitPanel'
 import KanbanBoard from './components/KanbanBoard'
@@ -718,6 +719,7 @@ export default function App() {
       const activeDiag = data.activeStepDiagnostics
       const ollamaFallback =
         outcome?.stopReason === 'ollama_fallback' ||
+        outcome?.stopReason === 'simulation_pending' ||
         (outcome?.message ?? '').includes('SIMULATION_FALLBACK') ||
         (outcome?.message ?? '').toLowerCase().includes('simulation fallback') ||
         diagnostics?.exitReason === 'ollama_fallback'
@@ -2235,6 +2237,12 @@ export default function App() {
         open={doneAuditOpen}
         onClose={() => setDoneAuditOpen(false)}
         onApplied={(data) => handleState(data)}
+      />
+
+      <SimulationConfirmModal
+        pending={state.pendingSimulation}
+        workflowSettings={state.workflowSettings}
+        onResolved={(data) => handleState(data)}
       />
     </div>
   )

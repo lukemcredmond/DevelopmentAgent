@@ -533,6 +533,10 @@ export interface WorkflowSettings {
   discordModelPresetFast?: string
   discordModelPresetQuality?: string
   requireAcChecklistForDone?: boolean
+  /** When Ollama returns SIMULATION_FALLBACK, wait for UI confirm before applying. */
+  confirmSimulationFallback?: boolean
+  /** Countdown seconds before auto-accepting offline simulation (1–60). */
+  simulationConfirmSeconds?: number
 }
 
 export interface RecentToolEntry {
@@ -893,6 +897,18 @@ export interface ProjectToolEvidence {
   timestamp: string
 }
 
+export interface PendingSimulation {
+  id: string
+  taskId?: string
+  agent?: string
+  kind?: string
+  title?: string
+  summary?: string
+  defaultPreview?: Record<string, unknown>
+  createdAt?: string
+  source?: string
+}
+
 export interface AppState {
   projectId: string
   projectName: string
@@ -931,6 +947,7 @@ export interface AppState {
   lastStepDiagnostics?: LastStepDiagnostics | null
   activeStepDiagnostics?: ActiveStepDiagnostics | null
   recovery?: RecoveryContext | null
+  pendingSimulation?: PendingSimulation | null
 }
 
 export interface ConfigPayload {
@@ -1089,6 +1106,10 @@ export interface WorkflowSettingsPayload {
   discordModelPresetFast?: string
   discordModelPresetQuality?: string
   requireAcChecklistForDone?: boolean
+  /** When Ollama returns SIMULATION_FALLBACK, wait for UI confirm before applying. */
+  confirmSimulationFallback?: boolean
+  /** Countdown seconds before auto-accepting offline simulation (1–60). */
+  simulationConfirmSeconds?: number
 }
 
 export interface SkillsResponse {
@@ -1155,6 +1176,7 @@ export interface ChatResponse {
   reply?: string
   messages?: unknown[]
   splitHint?: string
+  pendingSimulation?: PendingSimulation | null
   toolCalls?: Array<{
     toolName?: string
     toolArgs?: Record<string, unknown>
@@ -1361,6 +1383,8 @@ export const DEFAULT_WORKFLOW_SETTINGS: WorkflowSettings = {
   discordModelPresetFast: 'qwen2.5-coder:7b',
   discordModelPresetQuality: 'qwen2.5-coder:14b',
   requireAcChecklistForDone: true,
+  confirmSimulationFallback: true,
+  simulationConfirmSeconds: 10,
 }
 
 export const EMPTY_BOARD: Board = {

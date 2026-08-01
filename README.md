@@ -1155,4 +1155,4 @@ flowchart LR
 
 ## Offline / no-Ollama mode
 
-When Ollama is unreachable, agents return `SIMULATION_FALLBACK` and the sprint service uses deterministic offline paths (sample file writes, random QA pass/fail). The UI remains fully functional for exploring the workflow.
+When Ollama is unreachable, agents return `SIMULATION_FALLBACK`. By default the app **pauses** and shows a confirmation popup (10 seconds by default) before applying deterministic offline paths (sample file writes, random QA pass/fail). You can accept the simulation, supply a custom value and target, or disable confirmation under **Workflow → Confirm before offline simulation**. The UI remains fully functional for exploring the workflow.

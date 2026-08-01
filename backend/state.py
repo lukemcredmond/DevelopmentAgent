@@ -61,6 +61,9 @@ PROJECT_TOOL_EVIDENCE: List[Dict[str, Any]] = []
 # Interrupted sprint session context surfaced on startup (crash recovery banner).
 RECOVERY_CONTEXT: Optional[Dict[str, Any]] = None
 
+# Offline simulation awaiting user confirm (10s popup in UI).
+PENDING_SIMULATION: Optional[Dict[str, Any]] = None
+
 # Primary / backup Ollama model names per agent (primary is what we persist; agent.model may
 # temporarily switch to backup during stuck recovery).
 PRIMARY_MODELS: Dict[str, str] = {

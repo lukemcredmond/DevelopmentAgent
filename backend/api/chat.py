@@ -116,6 +116,56 @@ def _split_hint_for_response(message: str, response: str, added: int) -> str | N
     return None
 
 
+def _handle_chat_simulation_fallback(payload: ChatPayload, agent) -> tuple[str, bool]:
+    """Return (client_response, deferred). When deferred, assistant message is not saved yet."""
+    from backend.services.simulation_gate import build_proposal, try_defer_simulation
+
+    task_id = payload.task_id or "chat"
+    prop = build_proposal(
+        kind="chat",
+        task_id=task_id,
+        agent=agent.role,
+        title=f"Chat ({payload.agent})",
+        summary="Apply offline chat assistant reply",
+        default_preview={"message": "(Offline simulation — Ollama unavailable.)"},
+        source="chat",
+        context={"agentRole": agent.role, "chatAgentId": payload.agent},
+    )
+    if try_defer_simulation(prop):
+        return "", True
+    return "(Offline simulation — Ollama unavailable.)", False
+
+
+def _persist_chat_assistant(
+    payload: ChatPayload,
+    *,
+    response: str,
+    log_len_before: int,
+) -> tuple[str | None, list]:
+    """Save assistant message, PO split hints, board updates. Returns (split_hint, tool_calls)."""
+    agent = AGENT_MAP[payload.agent]
+    split_hint = None
+    with state.STATE_LOCK:
+        tool_calls = [dict(e) for e in state.TOOL_EXECUTION_LOG[log_len_before:]]
+        if response and payload.agent == "po" and payload.task_id:
+            from backend.services.sprint_service import apply_backlog_from_po_response
+
+            added = apply_backlog_from_po_response(response, payload.task_id)
+            split_hint = _split_hint_for_response(payload.message, response, added)
+        elif response and payload.agent == "po" and "add_backlog_tasks" in response.lower():
+            split_hint = _split_hint_for_response(payload.message, response, 0)
+        _finalize_chat_task_context(payload)
+        if response:
+            state.storage.save_chat_message(
+                state.CURRENT_PROJECT_ID, "assistant", response, agent=agent.role
+            )
+            publish_event("chat", {"agent": payload.agent, "response": response[:500]})
+        if payload.task_id:
+            from backend.services.board_service import publish_board_update
+
+            publish_board_update(payload.task_id, source="chat")
+    return split_hint, tool_calls
+
 @router.post("/api/chat")
 def chat_with_agent(payload: ChatPayload):
     if payload.agent not in AGENT_MAP:
@@ -140,30 +190,22 @@ def chat_with_agent(payload: ChatPayload):
     split_hint = None
     tool_calls: list = []
     response = ""
+    deferred_sim = False
     with state.STATE_LOCK:
         log_len_before = len(state.TOOL_EXECUTION_LOG)
     try:
         response = agent.execute_step(composed)
     finally:
-        with state.STATE_LOCK:
-            tool_calls = [dict(e) for e in state.TOOL_EXECUTION_LOG[log_len_before:]]
-            if response and payload.agent == "po" and payload.task_id:
-                from backend.services.sprint_service import apply_backlog_from_po_response
-
-                added = apply_backlog_from_po_response(response, payload.task_id)
-                split_hint = _split_hint_for_response(payload.message, response, added)
-            elif response and payload.agent == "po" and "add_backlog_tasks" in response.lower():
-                split_hint = _split_hint_for_response(payload.message, response, 0)
-            _finalize_chat_task_context(payload)
-            if response:
-                state.storage.save_chat_message(
-                    state.CURRENT_PROJECT_ID, "assistant", response, agent=agent.role
-                )
-                publish_event("chat", {"agent": payload.agent, "response": response[:500]})
-            if payload.task_id:
-                from backend.services.board_service import publish_board_update
-
-                publish_board_update(payload.task_id, source="chat")
+        if response == "SIMULATION_FALLBACK":
+            response, deferred_sim = _handle_chat_simulation_fallback(payload, agent)
+        if deferred_sim:
+            with state.STATE_LOCK:
+                tool_calls = [dict(e) for e in state.TOOL_EXECUTION_LOG[log_len_before:]]
+                _finalize_chat_task_context(payload)
+        else:
+            split_hint, tool_calls = _persist_chat_assistant(
+                payload, response=response or "", log_len_before=log_len_before
+            )
 
     add_system_log(
         "System",
@@ -181,6 +223,10 @@ def chat_with_agent(payload: ChatPayload):
         result["splitHint"] = split_hint
     if tool_calls:
         result["toolCalls"] = tool_calls
+    if deferred_sim:
+        from backend.services.simulation_gate import get_pending_simulation_public
+
+        result["pendingSimulation"] = get_pending_simulation_public()
     return result
 
 
@@ -215,35 +261,32 @@ def chat_stream(payload: ChatPayload):
 
         split_hint = None
         tool_calls: list = []
+        deferred_sim = False
         with state.STATE_LOCK:
             log_len_before = len(state.TOOL_EXECUTION_LOG)
         try:
             response = agent.execute_step(composed)
         finally:
-            with state.STATE_LOCK:
-                tool_calls = [dict(e) for e in state.TOOL_EXECUTION_LOG[log_len_before:]]
-                if payload.agent == "po" and payload.task_id:
-                    from backend.services.sprint_service import apply_backlog_from_po_response
-
-                    added = apply_backlog_from_po_response(response, payload.task_id)
-                    split_hint = _split_hint_for_response(payload.message, response, added)
-                elif payload.agent == "po" and "add_backlog_tasks" in response.lower():
-                    split_hint = _split_hint_for_response(payload.message, response, 0)
-                _finalize_chat_task_context(payload)
-                state.storage.save_chat_message(
-                    state.CURRENT_PROJECT_ID, "assistant", response, agent=agent.role
+            if response == "SIMULATION_FALLBACK":
+                response, deferred_sim = _handle_chat_simulation_fallback(payload, agent)
+            if deferred_sim:
+                with state.STATE_LOCK:
+                    tool_calls = [dict(e) for e in state.TOOL_EXECUTION_LOG[log_len_before:]]
+                    _finalize_chat_task_context(payload)
+            else:
+                split_hint, tool_calls = _persist_chat_assistant(
+                    payload, response=response or "", log_len_before=log_len_before
                 )
-                publish_event("chat", {"agent": payload.agent, "response": response[:500]})
-                if payload.task_id:
-                    from backend.services.board_service import publish_board_update
-
-                    publish_board_update(payload.task_id, source="chat")
 
         payload_out: dict = {"done": True, "response": response}
         if split_hint:
             payload_out["splitHint"] = split_hint
         if tool_calls:
             payload_out["toolCalls"] = tool_calls
+        if deferred_sim:
+            from backend.services.simulation_gate import get_pending_simulation_public
+
+            payload_out["pendingSimulation"] = get_pending_simulation_public()
         yield f"data: {json.dumps(payload_out)}\n\n"
 
     return StreamingResponse(generate(), media_type="text/event-stream")
