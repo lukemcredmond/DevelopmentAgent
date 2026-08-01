@@ -10,6 +10,7 @@ import type {
 } from '../types'
 import { fetchTaskFlowSummary } from '../api/client'
 import { formatAcceptanceCriteria, formatTaskText, deriveTaskFiles, sanitizeTaskForUi, formatQaPair } from '../utils/taskFormat'
+import { incompleteDevProgressLabels, taskLooksIncompleteOnDone } from '../utils/taskDoneAudit'
 import {
   formatDurationMs,
   formatTokensLine,
@@ -458,6 +459,10 @@ export default function TaskDetailModal({
     requireBacklogRefinement &&
     (taskLane === 'Refinement' || safeTask.refinementComplete === false)
 
+  const doneEvidenceGap =
+    taskLane === 'Done' && taskLooksIncompleteOnDone(safeTask)
+  const doneGapLabels = doneEvidenceGap ? incompleteDevProgressLabels(safeTask) : []
+
   return (
     <SlideOver
       open
@@ -518,6 +523,24 @@ export default function TaskDetailModal({
         </div>
 
         <div className="flex-1 overflow-y-auto px-5 py-4 space-y-3 min-h-0">
+          {doneEvidenceGap && (
+            <div
+              className="rounded-lg border border-amber-500/40 bg-amber-950/25 p-3 space-y-1"
+              data-testid="done-evidence-gap-banner"
+            >
+              <p className="text-xs font-semibold text-amber-200">Done on board — evidence may be incomplete</p>
+              <p className="text-[11px] text-amber-100/85">
+                Agent progress or acceptance criteria suggest this card was not fully verified. Use{' '}
+                <strong>Audit Done</strong> on the kanban toolbar to review all Done cards, or move this
+                card back to In Progress.
+              </p>
+              {doneGapLabels.length > 0 && (
+                <p className="text-[10px] text-amber-200/80">
+                  Pending: {doneGapLabels.join(', ')}
+                </p>
+              )}
+            </div>
+          )}
           {/* action-first: Needs User resolve */}
           {taskLane === 'Needs User' && onResolveUser && (
             <div className="bg-amber-950/20 border border-amber-500/30 rounded-lg p-3 space-y-2">

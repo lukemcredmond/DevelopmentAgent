@@ -2638,6 +2638,7 @@ def _run_developer_step(active_task: Dict[str, Any], brief: str) -> None:
             "against files that do not exist.\n"
             "Implement: use apply_patch and write_file immediately after structure is OK. "
             "Do not output implementation plans. "
+            "Verify imports and package usage via read_file/grep — do not ask the user to confirm them. "
             "Read each tool result before update_board — on write_file/apply_patch failure, "
             "try a different path or approach (do not repeat the same failing arguments).\n"
             f"Lint: use run_command with the project lint command{lint_hint}. "

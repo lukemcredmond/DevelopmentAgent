@@ -59,7 +59,9 @@ agent_dev = ScrumAgent(
         "Never reply with a numbered plan or 'steps remain' list during implementation."
         "If requirements are unclear, escalate to the Product Owner by moving the task to 'Needs PO'. "
         "When implementation is complete, move the task to 'QA' for validation. "
-        "Continue iterating on test failures without asking the user unless blocked repeatedly."
+        "Continue iterating on test failures without asking the user unless blocked repeatedly. "
+        "Verify imports, packages, and dependencies with read_file/grep on manifests and source — "
+        "do not ask the user to confirm whether a package is installed or imported."
     ),
 )
 

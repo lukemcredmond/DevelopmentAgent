@@ -55,6 +55,7 @@ interface KanbanBoardProps {
   onMoveTask: (taskId: string, fromLane: BoardLane, toLane: BoardLane) => void
   onReorderBacklog?: (taskIds: string[]) => void
   onReorderLane?: (lane: BoardLane, taskIds: string[]) => void
+  onAuditDone?: () => void
 }
 
 function getTaskFileCount(task: Task): number {
@@ -77,6 +78,7 @@ export default memo(function KanbanBoard({
   onMoveTask,
   onReorderBacklog,
   onReorderLane,
+  onAuditDone,
 }: KanbanBoardProps) {
   const [activeTask, setActiveTask] = useState<Task | null>(null)
   const [filterQuery, setFilterQuery] = useState(readBoardFilter)
@@ -229,6 +231,16 @@ export default memo(function KanbanBoard({
             <span className="text-[10px] text-indigo-300 font-mono bg-indigo-950/40 border border-indigo-500/30 px-2 py-0.5 rounded shrink-0">
               {matchCount} match{matchCount === 1 ? '' : 'es'}
             </span>
+          )}
+          {onAuditDone && (board.Done?.length ?? 0) > 0 && (
+            <button
+              type="button"
+              onClick={onAuditDone}
+              className="text-[10px] px-2 py-1 rounded border border-amber-500/40 bg-amber-950/30 text-amber-200 hover:bg-amber-950/50 shrink-0"
+              title="Find Done cards missing dev progress or unchecked AC"
+            >
+              Audit Done…
+            </button>
           )}
           <span className="text-[10px] text-cat-subtext font-mono bg-cat-base px-2 py-1 rounded hidden lg:inline truncate max-w-[14rem]">
             Workspace: {workspaceDir}

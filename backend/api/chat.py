@@ -8,11 +8,28 @@ from backend.agents.registry import AGENT_MAP
 from backend.agents.task_context import build_task_prompt, find_task_by_id, is_task_done
 from backend.api.schemas import ChatPayload
 from backend.services.brief_service import PO_SMALLEST_TASKS_GUIDANCE
+from backend.services.logs import add_system_log
 from backend.services.events import publish_event
 from backend.services.project_service import save_current_project_state
 from backend.workspace.files import build_file_context_block, expand_chat_mentions
 
 router = APIRouter()
+
+CHAT_ROLE_ADDENDUM: dict[str, str] = {
+    "dev": (
+        "CHAT MODE: Verify imports, packages, and dependencies by reading project manifests "
+        "and source (read_file, grep, glob_file_search). Do not ask the user to confirm "
+        "whether a package is imported or installed — inspect the codebase yourself."
+    ),
+    "cr": (
+        "CHAT MODE: Use read_file and grep to verify code facts; do not ask the user to "
+        "confirm imports or file contents."
+    ),
+    "qa": (
+        "CHAT MODE: Validate with read_file and run_test/run_command; do not ask the user "
+        "to confirm technical details you can inspect in the workspace."
+    ),
+}
 
 
 def _split_intent(message: str) -> bool:
@@ -29,12 +46,13 @@ def _split_intent(message: str) -> bool:
     return any(k in lower for k in keywords)
 
 
-def _compose_message(payload: ChatPayload) -> str:
+def _compose_message(payload: ChatPayload, *, agent_role: str | None = None) -> str:
     parts: list[str] = []
     if payload.task_id:
         task = find_task_by_id(payload.task_id)
         if task:
-            parts.append(build_task_prompt(task, state.PROJECT_BRIEF))
+            role = agent_role or (AGENT_MAP.get(payload.agent).role if AGENT_MAP.get(payload.agent) else None)
+            parts.append(build_task_prompt(task, state.PROJECT_BRIEF, agent_role=role))
             if payload.agent == "po":
                 parts.append(PO_SMALLEST_TASKS_GUIDANCE)
                 parts.append(
@@ -43,6 +61,9 @@ def _compose_message(payload: ChatPayload) -> str:
                     "to call add_backlog_tasks. Each subtask needs clear acceptance criteria. "
                     "If you must reply with JSON, it must be a bare array."
                 )
+    addendum = CHAT_ROLE_ADDENDUM.get(payload.agent)
+    if addendum:
+        parts.append(addendum)
     context_block = build_file_context_block(payload.context_files)
     if context_block:
         parts.append(context_block)
@@ -107,11 +128,18 @@ def chat_with_agent(payload: ChatPayload):
         state.storage.save_chat_message(
             state.CURRENT_PROJECT_ID, "user", payload.message, agent=agent.role
         )
-        composed = _compose_message(payload)
         _apply_chat_task_context(payload)
+        composed = _compose_message(payload, agent_role=agent.role)
 
+    add_system_log(
+        "System",
+        "info",
+        f"Chat start agent={payload.agent} task={payload.task_id or 'none'} "
+        f"msg_len={len(payload.message)}",
+    )
     split_hint = None
     tool_calls: list = []
+    response = ""
     with state.STATE_LOCK:
         log_len_before = len(state.TOOL_EXECUTION_LOG)
     try:
@@ -119,22 +147,30 @@ def chat_with_agent(payload: ChatPayload):
     finally:
         with state.STATE_LOCK:
             tool_calls = [dict(e) for e in state.TOOL_EXECUTION_LOG[log_len_before:]]
-            if payload.agent == "po" and payload.task_id:
+            if response and payload.agent == "po" and payload.task_id:
                 from backend.services.sprint_service import apply_backlog_from_po_response
 
                 added = apply_backlog_from_po_response(response, payload.task_id)
                 split_hint = _split_hint_for_response(payload.message, response, added)
-            elif payload.agent == "po" and "add_backlog_tasks" in response.lower():
+            elif response and payload.agent == "po" and "add_backlog_tasks" in response.lower():
                 split_hint = _split_hint_for_response(payload.message, response, 0)
             _finalize_chat_task_context(payload)
-            state.storage.save_chat_message(
-                state.CURRENT_PROJECT_ID, "assistant", response, agent=agent.role
-            )
-            publish_event("chat", {"agent": payload.agent, "response": response[:500]})
+            if response:
+                state.storage.save_chat_message(
+                    state.CURRENT_PROJECT_ID, "assistant", response, agent=agent.role
+                )
+                publish_event("chat", {"agent": payload.agent, "response": response[:500]})
             if payload.task_id:
                 from backend.services.board_service import publish_board_update
 
                 publish_board_update(payload.task_id, source="chat")
+
+    add_system_log(
+        "System",
+        "info",
+        f"Chat end agent={payload.agent} task={payload.task_id or 'none'} "
+        f"response_len={len(response or '')} tools={len(tool_calls)}",
+    )
 
     result = {
         "agent": payload.agent,
@@ -168,8 +204,14 @@ def chat_stream(payload: ChatPayload):
             state.storage.save_chat_message(
                 state.CURRENT_PROJECT_ID, "user", payload.message, agent=agent.role
             )
-            composed = _compose_message(payload)
             _apply_chat_task_context(payload)
+            composed = _compose_message(payload, agent_role=agent.role)
+
+        add_system_log(
+            "System",
+            "info",
+            f"Chat stream start agent={payload.agent} task={payload.task_id or 'none'}",
+        )
 
         split_hint = None
         tool_calls: list = []

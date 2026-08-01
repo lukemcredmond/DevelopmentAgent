@@ -64,6 +64,14 @@ class ClaimReadyPayload(BaseModel):
     limit: int = 5
 
 
+class DoneAuditApplyPayload(BaseModel):
+    model_config = ConfigDict(populate_by_name=True)
+
+    task_ids: Optional[List[str]] = Field(default=None, alias="taskIds")
+    move_to: str = Field(alias="moveTo")
+    only_incomplete: bool = Field(default=True, alias="onlyIncomplete")
+
+
 class UpdateTaskPayload(BaseModel):
     task_id: Optional[str] = None
     title: Optional[str] = None

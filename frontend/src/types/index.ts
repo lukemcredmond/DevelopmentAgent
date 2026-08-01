@@ -1130,6 +1130,23 @@ export interface ChatPayload {
   contextFiles?: string[]
   ollama_url?: string
   taskId?: string
+  allowDoneRetry?: boolean
+}
+
+export interface DoneAuditItem {
+  taskId: string
+  title?: string
+  reasons?: string[]
+  pendingDevLabels?: string[]
+  blockedDevLabels?: string[]
+  uncheckedAcCount?: number
+}
+
+export interface DoneAuditReport {
+  totalDone: number
+  incompleteCount: number
+  completeCount: number
+  items: DoneAuditItem[]
 }
 
 export interface ChatResponse {

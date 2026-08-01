@@ -1,10 +1,11 @@
-import { useMemo, useRef, useState } from 'react'
+import { useEffect, useMemo, useRef, useState } from 'react'
 import { sendChat } from '../api/client'
 import type { AgentId, AgentRunState, BoardLane, Task, ToolExecutionEvent } from '../types'
 import { AGENT_LABELS } from '../types'
 import VirtualScrollList from './VirtualScrollList'
 
 export const CLIENT_CHAT_MESSAGE_CAP = 100
+const STUCK_STREAMING_MS = 5 * 60 * 1000
 
 export interface ChatToolCallDisplay {
   toolName: string
@@ -128,9 +129,33 @@ export default function ChatPanel({
   activeRun = null,
 }: ChatPanelProps) {
   const [streaming, setStreaming] = useState(false)
+  const [chatSending, setChatSending] = useState(false)
   const [clearing, setClearing] = useState(false)
   const [showFilePicker, setShowFilePicker] = useState(false)
   const abortRef = useRef<AbortController | null>(null)
+  const streamingSinceRef = useRef<number | null>(null)
+
+  useEffect(() => {
+    if (streaming) {
+      if (streamingSinceRef.current == null) streamingSinceRef.current = Date.now()
+    } else {
+      streamingSinceRef.current = null
+      setChatSending(false)
+    }
+  }, [streaming])
+
+  useEffect(() => {
+    if (hidden || !streaming) return
+    const timer = window.setInterval(() => {
+      const since = streamingSinceRef.current
+      if (since == null) return
+      if (Date.now() - since > STUCK_STREAMING_MS && !abortRef.current) {
+        setStreaming(false)
+        streamingSinceRef.current = null
+      }
+    }, 30_000)
+    return () => window.clearInterval(timer)
+  }, [hidden, streaming])
 
   const chatTailKey = useMemo(
     () => (messages.length > 0 ? messages[messages.length - 1]?.id : 'empty'),
@@ -141,6 +166,9 @@ export default function ChatPanel({
 
   const waitingStatus = useMemo(() => {
     if (!streaming) return ''
+    if (chatSending) {
+      return 'Sending to /api/chat… (waiting for backend). Stop to cancel.'
+    }
     const runningTool = [...toolEvents].reverse().find((e) => e.status === 'running')
     const toolName = activeRun?.currentTool || runningTool?.toolName
     const iter =
@@ -159,7 +187,7 @@ export default function ChatPanel({
       return 'Working… (tools may take a few minutes). You can switch tabs — the request keeps running.'
     }
     return `Working… ${parts.join(' · ')}. You can switch tabs — the request keeps running.`
-  }, [streaming, toolEvents, activeRun])
+  }, [streaming, chatSending, toolEvents, activeRun])
 
   const setMessagesCapped = (
     update: ChatUiMessage[] | ((prev: ChatUiMessage[]) => ChatUiMessage[]),
@@ -243,17 +271,20 @@ export default function ChatPanel({
     ])
 
     abortRef.current = new AbortController()
+    const allowDoneRetry = pinnedLane === 'Done'
     const chatPayload = {
       agent,
       message: text,
       contextFiles: contextFiles.length > 0 ? contextFiles : undefined,
       ollama_url: ollamaUrl,
       taskId: pinnedTask?.id,
+      allowDoneRetry: allowDoneRetry || undefined,
     }
 
     const toolBaseline = toolEvents.length
 
     try {
+      setChatSending(true)
       const res = await sendChat(chatPayload, abortRef.current.signal)
       const content = res.response ?? res.reply ?? ''
       const fromApi = (res.toolCalls ?? []).map((e) => ({
@@ -308,6 +339,7 @@ export default function ChatPanel({
         )
       }
     } finally {
+      setChatSending(false)
       setStreaming(false)
       abortRef.current = null
     }
@@ -393,6 +425,15 @@ export default function ChatPanel({
           Tools run inline — see blocks below assistant replies
         </span>
       </div>
+
+      {taskActionMode && pinnedTask && (
+        <p className="px-4 py-1 text-[10px] text-cat-overlay bg-cat-base/80 border-b border-cat-surface1 shrink-0">
+          Type a message and press Send — chat does not start automatically when you open Discuss.
+          {pinnedLane === 'Done' && (
+            <span className="text-amber-200/90"> Done cards allow chat with allowDoneRetry.</span>
+          )}
+        </p>
+      )}
 
       {agent === 'po' && pinnedTask && (
         <p className="px-4 py-1.5 text-[10px] text-violet-300/90 bg-violet-950/20 border-b border-violet-500/20 shrink-0">

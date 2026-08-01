@@ -155,6 +155,26 @@ def test_chat_rejects_done_task_id():
     assert "Done" in resp.json()["detail"]
 
 
+def test_chat_allows_done_with_allow_done_retry():
+    initialize()
+    _empty_board()
+    task = init_new_task({"id": "T-CHAT2", "title": "Chat Done retry", "description": "d"})
+    state.SHARED_BOARD["Done"] = [task]
+    client = TestClient(app)
+    with patch.object(agent_dev, "execute_step", return_value="Hello from chat"):
+        resp = client.post(
+            "/api/chat",
+            json={
+                "message": "hello",
+                "agent": "dev",
+                "taskId": "T-CHAT2",
+                "allowDoneRetry": True,
+            },
+        )
+    assert resp.status_code == 200
+    assert resp.json().get("response") == "Hello from chat"
+
+
 def test_retry_rejects_done_without_allow():
     initialize()
     _empty_board()

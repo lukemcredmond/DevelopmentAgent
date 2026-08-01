@@ -49,7 +49,7 @@ import ActivityPanel from './components/ActivityPanel'
 import AgentConsole from './components/AgentConsole'
 import BriefPanel, { readBriefOpen } from './components/BriefPanel'
 import ChatPanel, { type ChatUiMessage } from './components/ChatPanel'
-import EditorPanel from './components/EditorPanel'
+import DoneAuditModal from './components/DoneAuditModal'
 import EvidencePanel from './components/EvidencePanel'
 import GitPanel from './components/GitPanel'
 import KanbanBoard from './components/KanbanBoard'
@@ -91,6 +91,7 @@ import type { AgentId, AppState, BoardLane, BriefCategory, ChatMessageRecord, Pe
 import { countClaimableBacklogTasks, getDisplayLanes } from './types'
 import { findTaskOnBoard } from './utils/taskFormat'
 import { buildTaskRunInfo } from './utils/taskRunInfo'
+import { chatAgentForLane } from './utils/chatAgentForLane'
 
 type BottomTab =
   | 'console'
@@ -252,6 +253,7 @@ export default function App() {
   const [fileTreeKey, setFileTreeKey] = useState(0)
 
   const [selectedTask, setSelectedTask] = useState<Task | null>(null)
+  const [doneAuditOpen, setDoneAuditOpen] = useState(false)
   const [skillModalAgent, setSkillModalAgent] = useState<AgentId | null>(null)
   const [skillSearch, setSkillSearch] = useState('')
   const [selectedSkillFiles, setSelectedSkillFiles] = useState<string[]>([])
@@ -306,14 +308,10 @@ export default function App() {
 
   const handleDiscussWithAgent = (task: Task, lane: BoardLane | null) => {
     setChatPinnedTask(task)
+    setChatAgent(chatAgentForLane(lane))
     setSelectedTask(null)
+    expandBottomPanel()
     setBottomTab('chat')
-    if (lane === 'Refinement') {
-      const status = task.refinementStatus ?? 'pending'
-      setChatAgent(status === 'dev_reviewed' ? 'po' : 'dev')
-    } else if (lane === 'Needs User' || lane === 'Needs PO') {
-      setChatAgent('po')
-    }
   }
 
   const handleInjectToolEvidence = async (
@@ -1496,6 +1494,7 @@ export default function App() {
               onReorderLane={(lane, taskIds) =>
                 void withLoading(async () => handleState(await reorderTasks(lane, taskIds)))
               }
+              onAuditDone={() => setDoneAuditOpen(true)}
             />
           </div>
         )}
@@ -2230,6 +2229,12 @@ export default function App() {
           applyState(data)
           void refreshToolHistory()
         }}
+      />
+
+      <DoneAuditModal
+        open={doneAuditOpen}
+        onClose={() => setDoneAuditOpen(false)}
+        onApplied={(data) => handleState(data)}
       />
     </div>
   )

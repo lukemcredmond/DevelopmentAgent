@@ -4,6 +4,7 @@ import type {
   BriefPayload,
   ChatPayload,
   ChatResponse,
+  DoneAuditReport,
   ConfigPayload,
   CreateProjectPayload,
   FileDiffResponse,
@@ -347,14 +348,54 @@ export async function dismissSprintRecovery(): Promise<AppState> {
   return request<AppState>('/api/sprint/recovery/dismiss', { method: 'POST' })
 }
 
+export const CHAT_REQUEST_TIMEOUT_MS = 15 * 60 * 1000
+
 export async function sendChat(
   payload: ChatPayload,
   signal?: AbortSignal,
 ): Promise<ChatResponse> {
-  return request<ChatResponse>('/api/chat', {
+  const timeoutController = new AbortController()
+  const timeoutId = window.setTimeout(() => timeoutController.abort(), CHAT_REQUEST_TIMEOUT_MS)
+  const onParentAbort = () => timeoutController.abort()
+  signal?.addEventListener('abort', onParentAbort)
+  try {
+    return await request<ChatResponse>('/api/chat', {
+      method: 'POST',
+      body: JSON.stringify(payload),
+      signal: timeoutController.signal,
+    })
+  } catch (err) {
+    if (
+      err instanceof DOMException &&
+      err.name === 'AbortError' &&
+      !signal?.aborted &&
+      timeoutController.signal.aborted
+    ) {
+      throw new Error('Chat timed out — check backend and Ollama, then try again.')
+    }
+    throw err
+  } finally {
+    window.clearTimeout(timeoutId)
+    signal?.removeEventListener('abort', onParentAbort)
+  }
+}
+
+export async function fetchDoneAudit(): Promise<DoneAuditReport> {
+  return request<DoneAuditReport>('/api/board/done-audit')
+}
+
+export async function applyDoneAudit(payload: {
+  taskIds?: string[]
+  moveTo: 'In Progress' | 'Backlog'
+  onlyIncomplete?: boolean
+}): Promise<AppState & { auditResult?: { moved?: string[]; skipped?: string[] } }> {
+  return request('/api/board/done-audit/apply', {
     method: 'POST',
-    body: JSON.stringify(payload),
-    signal,
+    body: JSON.stringify({
+      taskIds: payload.taskIds,
+      moveTo: payload.moveTo,
+      onlyIncomplete: payload.onlyIncomplete ?? true,
+    }),
   })
 }
 

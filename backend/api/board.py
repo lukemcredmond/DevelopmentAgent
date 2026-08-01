@@ -16,6 +16,7 @@ from backend.api.helpers import build_state_response
 from backend.api.schemas import (
     ClaimReadyPayload,
     DeleteTaskPayload,
+    DoneAuditApplyPayload,
     EscapeSubtaskPayload,
     InjectToolEvidencePayload,
     ManualTaskPayload,
@@ -33,6 +34,7 @@ from backend.services.board_service import (
     move_board_stage,
     publish_board_update,
 )
+from backend.services.done_audit import apply_done_audit_actions, audit_done_tasks
 from backend.services.logs import add_system_log
 from backend.services.needs_user_guard import append_user_resolution, set_needs_user_cooldown
 from backend.services.project_service import save_current_project_state
@@ -396,6 +398,36 @@ def clear_task_transcript_route(task_id: str):
 @router.delete("/api/tasks/{task_id}")
 def delete_task_by_id(task_id: str):
     return delete_task(DeleteTaskPayload(task_id=task_id))
+
+
+@router.get("/api/board/done-audit")
+def get_done_audit():
+    with state.STATE_LOCK:
+        report = audit_done_tasks(state.SHARED_BOARD)
+    return report
+
+
+@router.post("/api/board/done-audit/apply")
+def apply_done_audit(payload: DoneAuditApplyPayload):
+    with state.STATE_LOCK:
+        task_ids = list(payload.task_ids or [])
+        if not task_ids:
+            report = audit_done_tasks(state.SHARED_BOARD)
+            task_ids = [str(i["taskId"]) for i in (report.get("items") or []) if i.get("taskId")]
+    result = apply_done_audit_actions(
+        task_ids,
+        payload.move_to,
+        only_incomplete=payload.only_incomplete,
+    )
+    if not result.get("ok"):
+        raise HTTPException(status_code=400, detail=result.get("error") or "Apply failed")
+    with state.STATE_LOCK:
+        add_system_log(
+            "System",
+            "info",
+            f"Done audit: moved {len(result.get('moved') or [])} card(s) to {payload.move_to}",
+        )
+    return {**build_state_response(), "auditResult": result}
 
 
 @router.post("/api/tasks/delete")

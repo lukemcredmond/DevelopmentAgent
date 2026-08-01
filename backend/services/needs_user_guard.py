@@ -44,6 +44,19 @@ def question_similarity(a: str, b: str) -> float:
     return difflib.SequenceMatcher(None, na, nb).ratio()
 
 
+def is_import_check_shaped(msg: str) -> bool:
+    """Questions about imports/packages that dev should resolve via tools."""
+    lower = str(msg or "").lower()
+    patterns = (
+        r"\bis .+ (imported|installed|available)\b",
+        r"\bcorrectly imported\b",
+        r"\bpackage.+(installed|present|added)\b",
+        r"\bdo you have .+ installed\b",
+        r"\bis the import (correct|valid)\b",
+    )
+    return any(re.search(p, lower) for p in patterns)
+
+
 def is_clarification_shaped(msg: str) -> bool:
     lower = str(msg or "").lower()
     if any(p in lower for p in CLARIFICATION_PHRASES):
@@ -177,6 +190,9 @@ def should_escalate_to_needs_user(
         return False, "same_reason_hash"
 
     if is_clarification_shaped(text) and not dev_explicit_needs_user(text):
+        return False, "clarification_use_po"
+
+    if is_import_check_shaped(text) and not dev_explicit_needs_user(text):
         return False, "clarification_use_po"
 
     task["needsUserDuplicate"] = False

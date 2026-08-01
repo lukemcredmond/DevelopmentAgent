@@ -4,6 +4,7 @@ import type { BoardLane, Task } from '../types'
 import type { TaskRunInfo } from '../utils/taskRunInfo'
 import { formatCardProgressBrief, formatRunStatus } from '../utils/taskRunInfo'
 import { deriveTaskFiles, formatTaskText } from '../utils/taskFormat'
+import { taskLooksIncompleteOnDone } from '../utils/taskDoneAudit'
 import { formatAgentUsageBrief } from '../utils/agentUsageFormat'
 
 interface TaskCardProps {
@@ -44,6 +45,7 @@ export default function TaskCard({
   const relatedCount = (task.relatedTaskIds ?? []).length
   const hasCommit = Boolean(task.gitCommit?.hash)
   const isDone = task.status === 'Done'
+  const doneIncomplete = isDone && taskLooksIncompleteOnDone(task)
   const needsUser = lane === 'Needs User' || task.status === 'Needs User'
   const duplicateQuestion = task.needsUserDuplicate === true
   const filePaths = deriveTaskFiles(task).map((f) => f.path).slice(0, 2)
@@ -164,6 +166,14 @@ export default function TaskCard({
           {task.priority != null && task.priority < 100 && (
             <span className="text-[9px] bg-amber-950/50 text-amber-300 px-1 py-0.5 rounded" title="Priority">
               P{task.priority}
+            </span>
+          )}
+          {doneIncomplete && (
+            <span
+              className="text-[9px] bg-amber-950/60 text-amber-200 px-1 py-0.5 rounded"
+              title="Done but agent progress or AC may be incomplete — use Audit Done"
+            >
+              Incomplete
             </span>
           )}
           {blocked && (
