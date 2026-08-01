@@ -255,6 +255,7 @@ export default function App() {
 
   const [selectedTask, setSelectedTask] = useState<Task | null>(null)
   const [doneAuditOpen, setDoneAuditOpen] = useState(false)
+  const [simulationFocusNonce, setSimulationFocusNonce] = useState(0)
   const [skillModalAgent, setSkillModalAgent] = useState<AgentId | null>(null)
   const [skillSearch, setSkillSearch] = useState('')
   const [selectedSkillFiles, setSelectedSkillFiles] = useState<string[]>([])
@@ -412,7 +413,14 @@ export default function App() {
   )
 
   const { autoSprint, setAutoSprint, autoSprintPaused, sprintRunning, stopAutoSprint, startAutoSprint } =
-    useAutoSprint(brief, ollamaUrl, state.board, state.workflowSettings, handleState)
+    useAutoSprint(
+      brief,
+      ollamaUrl,
+      state.board,
+      state.workflowSettings,
+      handleState,
+      state.pendingSimulation,
+    )
 
   const orchestratedActive = sprintRunning || planRunActive || sprintBusy
 
@@ -1188,6 +1196,23 @@ export default function App() {
         ),
       })
     }
+    if (state.pendingSimulation?.id) {
+      items.push({
+        id: 'simulation-pending',
+        tone: 'warning',
+        summary: `Offline simulation waiting — ${state.pendingSimulation.summary ?? state.pendingSimulation.title ?? 'confirm in popup'}`,
+        actions: (
+          <button
+            type="button"
+            className="underline text-xs"
+            data-testid="review-offline-simulation"
+            onClick={() => setSimulationFocusNonce((n) => n + 1)}
+          >
+            Review offline simulation
+          </button>
+        ),
+      })
+    }
     if (pendingTools.length > 0) {
       items.push({
         id: 'pending-tools',
@@ -1211,6 +1236,7 @@ export default function App() {
     actionNotice,
     state.recovery,
     state.lastStepOutcome,
+    state.pendingSimulation,
     extendingStep,
     ollamaOk,
     pendingTools,
@@ -2243,6 +2269,7 @@ export default function App() {
         pending={state.pendingSimulation}
         workflowSettings={state.workflowSettings}
         onResolved={(data) => handleState(data)}
+        focusNonce={simulationFocusNonce}
       />
     </div>
   )

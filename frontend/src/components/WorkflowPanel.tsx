@@ -1016,7 +1016,16 @@ export default function WorkflowPanel({
             })
           }
         />
-        <SettingHint hint="Auto-accept simulated result after this many seconds (1–60)." />
+        <SettingHint hint="Auto-accept simulated result after this many seconds (1–60) when auto-accept is enabled." />
+      </label>
+      <label className="flex items-center gap-2 text-[11px] text-cat-subtext cursor-pointer">
+        <input
+          type="checkbox"
+          checked={settings.simulationAutoAccept === true}
+          onChange={(e) => onSettingsChange({ simulationAutoAccept: e.target.checked })}
+        />
+        Auto-accept offline simulation after countdown
+        <SettingHint hint="When off, the sprint waits until you confirm or choose Continue with new value." />
       </label>
 
       <label className="flex items-center gap-2 text-[11px] text-cat-subtext cursor-pointer">

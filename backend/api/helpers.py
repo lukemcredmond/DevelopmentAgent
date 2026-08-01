@@ -99,4 +99,5 @@ def build_state_response(*, include_files: bool = True) -> dict:
     pending_sim = get_pending_simulation_public()
     if pending_sim is not None:
         response["pendingSimulation"] = pending_sim
+        response["sprintPausedForSimulation"] = True
     return response

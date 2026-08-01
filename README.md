@@ -1155,4 +1155,4 @@ flowchart LR
 
 ## Offline / no-Ollama mode
 
-When Ollama is unreachable, agents return `SIMULATION_FALLBACK`. By default the app **pauses** and shows a confirmation popup (10 seconds by default) before applying deterministic offline paths (sample file writes, random QA pass/fail). You can accept the simulation, supply a custom value and target, or disable confirmation under **Workflow → Confirm before offline simulation**. The UI remains fully functional for exploring the workflow.
+When Ollama is unreachable, agents return `SIMULATION_FALLBACK`. By default the app **pauses** the sprint and shows a confirmation popup before applying deterministic offline paths. Use **Provide alternative value** → **Continue with new value** to paste your own outcome, or **Use existing workspace file** when the dev target file is already on disk (no stub overwrite). Auto-accept after N seconds is optional (**Workflow → Auto-accept offline simulation after countdown**; default is off). Disable confirmation entirely with **Confirm before offline simulation**.

@@ -537,6 +537,8 @@ export interface WorkflowSettings {
   confirmSimulationFallback?: boolean
   /** Countdown seconds before auto-accepting offline simulation (1–60). */
   simulationConfirmSeconds?: number
+  /** When true, auto-accept after countdown (with 3s grace). Default false = wait for explicit confirm. */
+  simulationAutoAccept?: boolean
 }
 
 export interface RecentToolEntry {
@@ -683,7 +685,7 @@ export interface SprintSummary {
   blocked: string[]
   needsPo: number
   needsUser: number
-  status?: 'completed' | 'idle' | 'cancelled' | 'max_steps'
+  status?: 'completed' | 'idle' | 'cancelled' | 'max_steps' | 'simulation_pending'
 }
 
 export interface CardWorkProgress {
@@ -948,6 +950,7 @@ export interface AppState {
   activeStepDiagnostics?: ActiveStepDiagnostics | null
   recovery?: RecoveryContext | null
   pendingSimulation?: PendingSimulation | null
+  sprintPausedForSimulation?: boolean
 }
 
 export interface ConfigPayload {
@@ -1110,6 +1113,8 @@ export interface WorkflowSettingsPayload {
   confirmSimulationFallback?: boolean
   /** Countdown seconds before auto-accepting offline simulation (1–60). */
   simulationConfirmSeconds?: number
+  /** When true, auto-accept after countdown (with 3s grace). Default false = wait for explicit confirm. */
+  simulationAutoAccept?: boolean
 }
 
 export interface SkillsResponse {
@@ -1385,6 +1390,7 @@ export const DEFAULT_WORKFLOW_SETTINGS: WorkflowSettings = {
   requireAcChecklistForDone: true,
   confirmSimulationFallback: true,
   simulationConfirmSeconds: 10,
+  simulationAutoAccept: false,
 }
 
 export const EMPTY_BOARD: Board = {

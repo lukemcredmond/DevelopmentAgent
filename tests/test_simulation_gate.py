@@ -146,6 +146,100 @@ def test_second_propose_replaces_pending():
     assert pending["kind"] == "sprint_cr"
 
 
+def test_confirm_with_existing_file_does_not_overwrite_stub():
+    initialize()
+    from backend.workspace.files import write_workspace_file
+    from backend.agents.task_context import get_task_lane
+
+    state.PENDING_SIMULATION = None
+    save_workflow_settings({"confirmSimulationFallback": True})
+    task = _dev_task()
+    original = "// user-authored existing file\nmodule.exports = {};\n"
+    write_workspace_file("index.js", original)
+    preview = preview_sprint_dev(task)
+    assert preview.get("workspaceFileExists") is True
+    prop = build_proposal(
+        kind="sprint_dev",
+        task_id="T-SIM",
+        agent="Developer",
+        title=task["title"],
+        summary="dev",
+        default_preview=preview,
+        source="sprint_dev",
+    )
+    try_defer_simulation(prop)
+    result = apply_simulation_confirmation(accept=True)
+    assert result["ok"] is True
+    assert read_workspace_file("index.js") == original
+    assert get_task_lane("T-SIM") != "In Progress"
+
+
+def test_use_workspace_file_override_advances_without_overwrite():
+    initialize()
+    from backend.workspace.files import write_workspace_file
+    from backend.agents.task_context import get_task_lane
+
+    state.PENDING_SIMULATION = None
+    save_workflow_settings({"confirmSimulationFallback": True})
+    task = _dev_task()
+    original = "existing content only\n"
+    write_workspace_file("index.js", original)
+    preview = preview_sprint_dev(task)
+    prop = build_proposal(
+        kind="sprint_dev",
+        task_id="T-SIM",
+        agent="Developer",
+        title=task["title"],
+        summary="dev",
+        default_preview=preview,
+        source="sprint_dev",
+    )
+    try_defer_simulation(prop)
+    result = apply_simulation_confirmation(accept=False, override_target="use_workspace_file")
+    assert result["ok"] is True
+    assert read_workspace_file("index.js") == original
+    assert get_task_lane("T-SIM") != "In Progress"
+
+
+def test_auto_sprint_stops_when_simulation_pending(monkeypatch):
+    initialize()
+    from backend.services.sprint_service import run_auto_sprint, run_sprint_step as real_step
+
+    state.PENDING_SIMULATION = None
+    save_workflow_settings({"confirmSimulationFallback": True})
+    _dev_task()
+    step_calls = {"n": 0}
+
+    def fake_step(brief: str, ollama_url: str) -> None:
+        step_calls["n"] += 1
+        if step_calls["n"] == 1:
+            task = find_task_by_id("T-SIM")
+            preview = preview_sprint_dev(task)
+            prop = build_proposal(
+                kind="sprint_dev",
+                task_id="T-SIM",
+                agent="Developer",
+                title="Build index page",
+                summary="dev",
+                default_preview=preview,
+                source="sprint_dev",
+            )
+            try_defer_simulation(prop)
+
+    monkeypatch.setattr(
+        "backend.services.sprint_service.run_sprint_step",
+        fake_step,
+    )
+    monkeypatch.setattr(
+        "backend.services.sprint_service.has_sprint_work",
+        lambda: step_calls["n"] < 1 or not get_pending_simulation_public(),
+    )
+
+    summary = run_auto_sprint("brief", "http://localhost:11434", max_steps=5)
+    assert summary.get("status") == "simulation_pending"
+    assert step_calls["n"] == 1
+
+
 def get_task_lane(task: dict) -> str:
     from backend.agents.task_context import get_task_lane as _lane
 

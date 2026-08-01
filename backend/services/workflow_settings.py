@@ -132,6 +132,7 @@ DEFAULT_WORKFLOW_SETTINGS: Dict[str, Any] = {
     "requireAcChecklistForDone": True,
     "confirmSimulationFallback": True,
     "simulationConfirmSeconds": 10,
+    "simulationAutoAccept": False,
 }
 
 DEFAULT_SPRINT_SUMMARY: Dict[str, Any] = {

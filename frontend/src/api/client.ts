@@ -488,6 +488,12 @@ export async function fetchFileTree(): Promise<FileTreeNode[]> {
   return Array.isArray(res) ? res : (res.tree ?? [])
 }
 
+export async function readWorkspaceFile(path: string): Promise<{ path: string; content: string }> {
+  return request<{ path: string; content: string }>(
+    `/api/files/read?path=${encodeURIComponent(path)}`,
+  )
+}
+
 export async function saveFile(
   path: string,
   content: string,

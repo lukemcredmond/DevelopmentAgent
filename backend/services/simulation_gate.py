@@ -16,6 +16,7 @@ VALID_OVERRIDE_TARGETS = frozenset(
     {
         "agent_text",
         "dev_file_content",
+        "use_workspace_file",
         "board_lane",
         "qa_pass",
         "qa_fail",
@@ -62,15 +63,76 @@ def _dev_offline_file(title: str) -> tuple[str, str]:
     return "index.js", "function init() { console.log('init'); }\ninit();"
 
 
+def _task_file_candidates(task: Dict[str, Any]) -> List[str]:
+    paths: List[str] = []
+    seen: set[str] = set()
+    for f in task.get("files") or []:
+        if isinstance(f, dict) and f.get("path"):
+            p = str(f["path"]).strip()
+            if p and p not in seen:
+                seen.add(p)
+                paths.append(p)
+    for entry in reversed(task.get("transcript") or []):
+        if not isinstance(entry, dict):
+            continue
+        if str(entry.get("toolName") or "") != "read_file":
+            continue
+        if entry.get("toolSuccess") is False:
+            continue
+        args = entry.get("toolArgs") if isinstance(entry.get("toolArgs"), dict) else {}
+        p = str(args.get("path") or args.get("file_path") or "").strip()
+        if p and p not in seen:
+            seen.add(p)
+            paths.append(p)
+    heuristic, _ = _dev_offline_file(str(task.get("title") or ""))
+    if heuristic not in seen:
+        paths.append(heuristic)
+    return paths
+
+
+def dev_simulation_target(task: Dict[str, Any]) -> tuple[str, str, Optional[str]]:
+    """Return (path, stub_content, existing_disk_content or None)."""
+    from backend.workspace.files import read_workspace_file
+
+    stub_path, stub_content = _dev_offline_file(str(task.get("title") or ""))
+    for path in _task_file_candidates(task):
+        raw = read_workspace_file(path)
+        if raw and not str(raw).startswith("Error:"):
+            return path, stub_content, str(raw)
+    return stub_path, stub_content, None
+
+
 def preview_sprint_dev(task: Dict[str, Any]) -> Dict[str, Any]:
-    file_name, content = _dev_offline_file(str(task.get("title") or ""))
+    file_name, stub, existing = dev_simulation_target(task)
     from backend.services.sprint_service import _dev_complete_lane
 
-    return {
+    preview: Dict[str, Any] = {
         "fileName": file_name,
-        "fileContent": content[:500],
+        "fileContent": (existing if existing is not None else stub)[:500],
         "targetLane": _dev_complete_lane(),
+        "workspaceFileExists": existing is not None,
     }
+    if existing is not None:
+        preview["note"] = "File already exists in workspace"
+    return preview
+
+
+def dev_simulation_summary(task: Dict[str, Any]) -> str:
+    file_name, _, existing = dev_simulation_target(task)
+    from backend.services.sprint_service import _dev_complete_lane
+
+    lane = _dev_complete_lane()
+    if existing is not None:
+        return (
+            f"File '{file_name}' already exists in workspace — confirm to advance to {lane} "
+            "without overwriting, or provide an alternative value."
+        )
+    return f"Offline dev: write {file_name} and move to {lane}"
+
+
+def has_pending_simulation() -> bool:
+    raw = getattr(state, "PENDING_SIMULATION", None)
+    return isinstance(raw, dict) and bool(raw.get("id"))
 
 
 def preview_sprint_cr() -> Dict[str, Any]:
@@ -362,9 +424,24 @@ def _apply_override(proposal: Dict[str, Any], target: str, value: str) -> None:
                 val,
             )
         return
+    if t == "use_workspace_file":
+        preview = proposal.get("defaultPreview") if isinstance(proposal.get("defaultPreview"), dict) else {}
+        path = str(preview.get("fileName") or "index.js")
+        task = find_task_by_id(task_id) if task_id else None
+        if task:
+            from backend.services.sprint_service import complete_dev_offline_simulation
+
+            complete_dev_offline_simulation(task, path, write_content=None)
+        return
     if t == "dev_file_content":
         preview = proposal.get("defaultPreview") if isinstance(proposal.get("defaultPreview"), dict) else {}
         path = str(preview.get("fileName") or "index.js")
+        if not val.strip():
+            from backend.workspace.files import read_workspace_file
+
+            val = read_workspace_file(path)
+            if str(val).startswith("Error:"):
+                raise ValueError(f"Cannot read workspace file: {val}")
         write_workspace_file(path, val)
         if task_id:
             record_task_decision(task_id, "Developer", "completion", f"User override wrote {path}")
@@ -421,7 +498,7 @@ def apply_simulation_confirmation(
             target = str(override_target or "").strip()
             if target not in VALID_OVERRIDE_TARGETS:
                 return {"ok": False, "error": f"Invalid overrideTarget: {target}"}
-            if target != "skip_step" and not str(override_value or "").strip():
+            if target not in ("skip_step", "use_workspace_file") and not str(override_value or "").strip():
                 return {"ok": False, "error": "overrideValue required when declining default simulation."}
             _apply_override(proposal, target, str(override_value or ""))
     except ValueError as e:

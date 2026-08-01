@@ -1718,18 +1718,30 @@ def _commit_on_done(task: Dict[str, Any]) -> None:
         add_system_log("System", "info", f"Git commit skipped/failed: {result.get('stderr', '')[:200]}")
 
 
-def _simulate_dev_work(active_task: Dict[str, Any]) -> None:
-    title = active_task["title"].lower()
-    if "meal" in title or "recipe" in title or "api" in title:
-        file_name, content = "meal_service.js", "module.exports = function fetchMealsQuery(q) { return { success: true, meals: [] }; };"
-    elif "auth" in title or "secure" in title:
-        file_name, content = "auth.js", "module.exports = function authenticateUser(u) { return 'token'; };"
+def complete_dev_offline_simulation(
+    active_task: Dict[str, Any],
+    file_path: str,
+    *,
+    write_content: Optional[str] = None,
+) -> None:
+    if write_content is not None:
+        write_workspace_file(file_path, write_content)
+        msg = f"Offline fallback wrote {file_path}"
     else:
-        file_name, content = "index.js", "function init() { console.log('init'); }\ninit();"
-    write_workspace_file(file_name, content)
+        msg = f"Used existing workspace file {file_path}"
     clear_qa_failure(active_task["id"])
     move_board_stage(active_task["id"], _dev_complete_lane())
-    record_task_decision(active_task["id"], "Developer", "completion", f"Offline fallback wrote {file_name}")
+    record_task_decision(active_task["id"], "Developer", "completion", msg)
+
+
+def _simulate_dev_work(active_task: Dict[str, Any]) -> None:
+    from backend.services.simulation_gate import dev_simulation_target
+
+    file_name, stub, existing = dev_simulation_target(active_task)
+    if existing is not None:
+        complete_dev_offline_simulation(active_task, file_name, write_content=None)
+    else:
+        complete_dev_offline_simulation(active_task, file_name, write_content=stub)
 
 
 def _simulate_code_review(active_task: Dict[str, Any]) -> None:
@@ -2866,6 +2878,7 @@ def _run_developer_step(active_task: Dict[str, Any], brief: str) -> None:
             if result == "SIMULATION_FALLBACK":
                 from backend.services.simulation_gate import (
                     build_proposal,
+                    dev_simulation_summary,
                     mark_step_outcome_simulation_pending,
                     preview_sprint_dev,
                     try_defer_simulation,
@@ -2877,10 +2890,7 @@ def _run_developer_step(active_task: Dict[str, Any], brief: str) -> None:
                     task_id=task_id,
                     agent="Developer",
                     title=str(task.get("title") or task_id),
-                    summary=(
-                        f"Offline dev: write {preview.get('fileName')} "
-                        f"and move to {preview.get('targetLane')}"
-                    ),
+                    summary=dev_simulation_summary(task),
                     default_preview=preview,
                     source="sprint_dev",
                 )
@@ -3693,6 +3703,16 @@ def run_auto_sprint(brief: str, ollama_url: str, max_steps: int | None = None) -
         state.SPRINT_PROGRESS_STEP = steps + 1
         run_sprint_step(brief, ollama_url)
         steps += 1
+        from backend.services.simulation_gate import has_pending_simulation
+
+        if has_pending_simulation():
+            status = "simulation_pending"
+            add_system_log(
+                "System",
+                "info",
+                "Auto sprint paused — waiting for offline simulation confirm in the UI.",
+            )
+            break
 
     if state.SPRINT_CANCEL:
         status = "cancelled"

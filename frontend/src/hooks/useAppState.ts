@@ -1046,6 +1046,7 @@ export function useAutoSprint(
   board: AppState['board'],
   workflowSettings: AppState['workflowSettings'],
   onState: (s: AppState) => void,
+  pendingSimulation?: AppState['pendingSimulation'],
 ) {
   const [autoSprint, setAutoSprint] = useState(false)
   const [autoSprintPaused, setAutoSprintPaused] = useState(false)
@@ -1053,7 +1054,17 @@ export function useAutoSprint(
   const cancelRef = useRef<AbortController | null>(null)
   const backlogLenRef = useRef(board.Backlog?.length ?? 0)
 
+  useEffect(() => {
+    if (pendingSimulation?.id) {
+      setAutoSprintPaused(true)
+    }
+  }, [pendingSimulation?.id])
+
   const startAutoSprint = useCallback(async () => {
+    if (pendingSimulation?.id) {
+      setAutoSprintPaused(true)
+      return
+    }
     if (!hasSprintWork(board, workflowSettings)) {
       setAutoSprintPaused(true)
       return
@@ -1071,7 +1082,9 @@ export function useAutoSprint(
         max_steps: workflowSettings?.maxSprintSteps ?? 20,
       })
       onState(data)
-      if (data.lastSprintSummary?.status === 'idle') {
+      if (data.pendingSimulation?.id || data.lastSprintSummary?.status === 'simulation_pending') {
+        setAutoSprintPaused(true)
+      } else if (data.lastSprintSummary?.status === 'idle') {
         setAutoSprintPaused(true)
       }
     } catch {
@@ -1079,7 +1092,7 @@ export function useAutoSprint(
     } finally {
       setSprintRunning(false)
     }
-  }, [brief, ollamaUrl, board, workflowSettings, onState])
+  }, [brief, ollamaUrl, board, workflowSettings, onState, pendingSimulation?.id])
 
   const stopAutoSprint = useCallback(async () => {
     setAutoSprint(false)
@@ -1094,7 +1107,7 @@ export function useAutoSprint(
   }, [])
 
   useEffect(() => {
-    if (!autoSprint || autoSprintPaused) return
+    if (!autoSprint || autoSprintPaused || pendingSimulation?.id) return
 
     const interval = window.setInterval(() => {
       if (!sprintRunning && hasSprintWork(board, workflowSettings)) {
@@ -1103,7 +1116,7 @@ export function useAutoSprint(
     }, 5000)
 
     return () => window.clearInterval(interval)
-  }, [autoSprint, autoSprintPaused, sprintRunning, board, workflowSettings, startAutoSprint])
+  }, [autoSprint, autoSprintPaused, sprintRunning, board, workflowSettings, startAutoSprint, pendingSimulation?.id])
 
   useEffect(() => {
     const currentLen = board.Backlog?.length ?? 0
