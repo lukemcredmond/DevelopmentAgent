@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import json
 import random
+import re
 import uuid
 from datetime import datetime
 from typing import Any, Dict, List, Optional
@@ -63,30 +64,69 @@ def _dev_offline_file(title: str) -> tuple[str, str]:
     return "index.js", "function init() { console.log('init'); }\ninit();"
 
 
+def _add_path(paths: List[str], seen: set[str], raw: str) -> None:
+    p = str(raw or "").strip().replace("\\", "/")
+    if not p or p in seen:
+        return
+    seen.add(p)
+    paths.append(p)
+
+
+def _paths_from_text(text: str) -> List[str]:
+    if not text:
+        return []
+    found: List[str] = []
+    for m in re.finditer(
+        r"(?<![\w./-])([\w.-]+(?:/[\w.-]+)+\.(?:py|js|ts|tsx|jsx|java|cs|go|rs|md|json|yaml|yml|html|css|vue|dart))(?![\w.-])",
+        text,
+        re.IGNORECASE,
+    ):
+        found.append(m.group(1))
+    return found
+
+
 def _task_file_candidates(task: Dict[str, Any]) -> List[str]:
     paths: List[str] = []
     seen: set[str] = set()
     for f in task.get("files") or []:
         if isinstance(f, dict) and f.get("path"):
-            p = str(f["path"]).strip()
-            if p and p not in seen:
-                seen.add(p)
-                paths.append(p)
+            _add_path(paths, seen, str(f["path"]))
+    text_blob = " ".join(
+        [
+            str(task.get("title") or ""),
+            str(task.get("description") or ""),
+        ]
+    )
+    for p in _paths_from_text(text_blob):
+        _add_path(paths, seen, p)
     for entry in reversed(task.get("transcript") or []):
         if not isinstance(entry, dict):
             continue
-        if str(entry.get("toolName") or "") != "read_file":
+        tool = str(entry.get("toolName") or "")
+        if tool not in ("read_file", "write_file", "apply_patch"):
             continue
         if entry.get("toolSuccess") is False:
             continue
         args = entry.get("toolArgs") if isinstance(entry.get("toolArgs"), dict) else {}
-        p = str(args.get("path") or args.get("file_path") or "").strip()
-        if p and p not in seen:
-            seen.add(p)
-            paths.append(p)
+        for key in ("path", "file_path", "fileName", "file_name"):
+            if args.get(key):
+                _add_path(paths, seen, str(args[key]))
+    referenced = set(paths)
+    if referenced:
+        try:
+            from backend.workspace.files import list_workspace_file_paths
+
+            ws_paths = list_workspace_file_paths()
+            for wp in ws_paths:
+                if len(paths) >= 40:
+                    break
+                norm = str(wp).replace("\\", "/")
+                if norm in referenced or any(norm.endswith(r) or r.endswith(norm) for r in referenced):
+                    _add_path(paths, seen, norm)
+        except Exception:
+            pass
     heuristic, _ = _dev_offline_file(str(task.get("title") or ""))
-    if heuristic not in seen:
-        paths.append(heuristic)
+    _add_path(paths, seen, heuristic)
     return paths
 
 
@@ -167,6 +207,52 @@ def mark_step_outcome_simulation_pending(task_id: str, agent: str, lane_before: 
         "message": "Ollama unavailable — confirm simulated result in the popup (10s).",
         "stopReason": "simulation_pending",
     }
+
+
+def mark_step_outcome_used_existing_file(task_id: str, agent: str, lane_before: str, path: str) -> None:
+    from backend.agents.task_context import get_task_lane
+
+    lane_after = get_task_lane(task_id) or lane_before
+    state.LAST_STEP_OUTCOME = {
+        "taskId": task_id,
+        "agent": agent,
+        "laneBefore": lane_before,
+        "laneAfter": lane_after,
+        "toolFailures": 0,
+        "ok": True,
+        "message": f"Ollama offline — used existing workspace file '{path}' (no simulation stub).",
+        "stopReason": "used_existing_file",
+    }
+
+
+def apply_dev_offline_if_file_exists(
+    task: Dict[str, Any],
+    *,
+    task_id: str,
+    lane_before: str,
+) -> bool:
+    """When Ollama fails but target file exists on disk, complete dev step without popup."""
+    ws = get_workflow_settings()
+    if ws.get("simulationAutoUseExistingFile", True) is False:
+        return False
+    path, _, existing = dev_simulation_target(task)
+    if existing is None:
+        return False
+    from backend.services.sprint_service import complete_dev_offline_simulation
+
+    complete_dev_offline_simulation(task, path, write_content=None)
+    add_system_log(
+        "Developer",
+        "success",
+        f"Ollama offline — used existing workspace file '{path}' (auto, no confirm popup).",
+    )
+    mark_step_outcome_used_existing_file(task_id, "Developer", lane_before, path)
+    from backend.services.board_service import publish_board_update
+    from backend.services.project_service import save_current_project_state
+
+    save_current_project_state()
+    publish_board_update(task_id, source="simulation_auto_file")
+    return True
 
 
 def propose_simulation(proposal: Dict[str, Any]) -> str:

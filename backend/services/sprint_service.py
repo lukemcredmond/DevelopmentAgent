@@ -2877,6 +2877,7 @@ def _run_developer_step(active_task: Dict[str, Any], brief: str) -> None:
                 )
             if result == "SIMULATION_FALLBACK":
                 from backend.services.simulation_gate import (
+                    apply_dev_offline_if_file_exists,
                     build_proposal,
                     dev_simulation_summary,
                     mark_step_outcome_simulation_pending,
@@ -2884,20 +2885,23 @@ def _run_developer_step(active_task: Dict[str, Any], brief: str) -> None:
                     try_defer_simulation,
                 )
 
-                preview = preview_sprint_dev(task)
-                prop = build_proposal(
-                    kind="sprint_dev",
-                    task_id=task_id,
-                    agent="Developer",
-                    title=str(task.get("title") or task_id),
-                    summary=dev_simulation_summary(task),
-                    default_preview=preview,
-                    source="sprint_dev",
-                )
-                if try_defer_simulation(prop):
-                    mark_step_outcome_simulation_pending(task_id, "Developer", lane_before)
+                if apply_dev_offline_if_file_exists(task, task_id=task_id, lane_before=lane_before):
+                    result = "Used existing workspace file (Ollama offline)"
                 else:
-                    _simulate_dev_work(task)
+                    preview = preview_sprint_dev(task)
+                    prop = build_proposal(
+                        kind="sprint_dev",
+                        task_id=task_id,
+                        agent="Developer",
+                        title=str(task.get("title") or task_id),
+                        summary=dev_simulation_summary(task),
+                        default_preview=preview,
+                        source="sprint_dev",
+                    )
+                    if try_defer_simulation(prop):
+                        mark_step_outcome_simulation_pending(task_id, "Developer", lane_before)
+                    else:
+                        _simulate_dev_work(task)
             else:
                 record_task_decision(task_id, "Developer", "work", result[:500], result)
                 if _task_in_lane(task_id, "In Progress"):

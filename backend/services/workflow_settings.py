@@ -133,6 +133,7 @@ DEFAULT_WORKFLOW_SETTINGS: Dict[str, Any] = {
     "confirmSimulationFallback": True,
     "simulationConfirmSeconds": 10,
     "simulationAutoAccept": False,
+    "simulationAutoUseExistingFile": True,
 }
 
 DEFAULT_SPRINT_SUMMARY: Dict[str, Any] = {

@@ -1027,6 +1027,15 @@ export default function WorkflowPanel({
         Auto-accept offline simulation after countdown
         <SettingHint hint="When off, the sprint waits until you confirm or choose Continue with new value." />
       </label>
+      <label className="flex items-center gap-2 text-[11px] text-cat-subtext cursor-pointer">
+        <input
+          type="checkbox"
+          checked={settings.simulationAutoUseExistingFile !== false}
+          onChange={(e) => onSettingsChange({ simulationAutoUseExistingFile: e.target.checked })}
+        />
+        Auto-use existing workspace file when Ollama is offline (dev)
+        <SettingHint hint="Skips the popup and advances the card using the file on disk when found." />
+      </label>
 
       <label className="flex items-center gap-2 text-[11px] text-cat-subtext cursor-pointer">
         <input

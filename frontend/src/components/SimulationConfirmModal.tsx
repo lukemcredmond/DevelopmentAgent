@@ -43,8 +43,9 @@ export default function SimulationConfirmModal({
 }: SimulationConfirmModalProps) {
   const seconds = Math.min(60, Math.max(1, workflowSettings?.simulationConfirmSeconds ?? 10))
   const autoAcceptEnabled = workflowSettings?.simulationAutoAccept === true
+  const autoUseExisting =
+    workflowSettings?.simulationAutoUseExistingFile !== false
   const [remaining, setRemaining] = useState(seconds)
-  const [overrideOpen, setOverrideOpen] = useState(false)
   const [userEngaged, setUserEngaged] = useState(false)
   const [overrideValue, setOverrideValue] = useState('')
   const [overrideTarget, setOverrideTarget] = useState('agent_text')
@@ -52,6 +53,7 @@ export default function SimulationConfirmModal({
   const [error, setError] = useState<string | null>(null)
   const [prefillLoading, setPrefillLoading] = useState(false)
   const acceptedRef = useRef(false)
+  const autoExistingRef = useRef(false)
   const dialogRef = useRef<HTMLDivElement>(null)
 
   const open = Boolean(pending?.id)
@@ -64,13 +66,32 @@ export default function SimulationConfirmModal({
   useEffect(() => {
     if (!open) return
     acceptedRef.current = false
+    autoExistingRef.current = false
     setRemaining(seconds)
-    setOverrideOpen(false)
     setUserEngaged(false)
     setOverrideValue('')
     setOverrideTarget(devKind ? 'dev_file_content' : 'agent_text')
     setError(null)
   }, [open, pending?.id, seconds, devKind])
+
+  useEffect(() => {
+    if (!open || !devKind || !fileName) return
+    let cancelled = false
+    setPrefillLoading(true)
+    void readWorkspaceFile(fileName)
+      .then((res) => {
+        if (!cancelled) setOverrideValue(res.content)
+      })
+      .catch(() => {
+        /* optional prefill */
+      })
+      .finally(() => {
+        if (!cancelled) setPrefillLoading(false)
+      })
+    return () => {
+      cancelled = true
+    }
+  }, [open, pending?.id, devKind, fileName])
 
   useEffect(() => {
     if (!open || !autoAcceptEnabled) return
@@ -100,7 +121,7 @@ export default function SimulationConfirmModal({
     }
   }, [busy, onResolved])
 
-  const useExistingFile = async () => {
+  const useExistingFile = useCallback(async () => {
     if (busy) return
     setBusy(true)
     setError(null)
@@ -115,10 +136,25 @@ export default function SimulationConfirmModal({
     } finally {
       setBusy(false)
     }
-  }
+  }, [busy, onResolved])
 
   useEffect(() => {
-    if (!open || overrideOpen || busy || !autoAcceptEnabled) return
+    if (
+      !open ||
+      busy ||
+      autoExistingRef.current ||
+      !autoUseExisting ||
+      !workspaceFileExists ||
+      !devKind
+    ) {
+      return
+    }
+    autoExistingRef.current = true
+    void useExistingFile()
+  }, [open, busy, autoUseExisting, workspaceFileExists, devKind, useExistingFile])
+
+  useEffect(() => {
+    if (!open || busy || !autoAcceptEnabled) return
     if (!userEngaged) return
     if (remaining <= 0) {
       void accept()
@@ -126,27 +162,11 @@ export default function SimulationConfirmModal({
     }
     const t = window.setTimeout(() => setRemaining((r) => r - 1), 1000)
     return () => window.clearTimeout(t)
-  }, [open, overrideOpen, busy, remaining, accept, autoAcceptEnabled, userEngaged])
-
-  const openAlternative = async () => {
-    setUserEngaged(true)
-    setOverrideOpen(true)
-    if (devKind && fileName && !overrideValue) {
-      setPrefillLoading(true)
-      try {
-        const res = await readWorkspaceFile(fileName)
-        setOverrideValue(res.content)
-        setOverrideTarget('dev_file_content')
-      } catch {
-        /* prefill optional */
-      } finally {
-        setPrefillLoading(false)
-      }
-    }
-  }
+  }, [open, busy, remaining, accept, autoAcceptEnabled, userEngaged])
 
   const submitOverride = async () => {
     if (busy) return
+    setUserEngaged(true)
     setBusy(true)
     setError(null)
     try {
@@ -191,18 +211,18 @@ export default function SimulationConfirmModal({
     >
       <div
         ref={dialogRef}
-        className="bg-cat-mantle border border-amber-500/40 rounded-xl max-w-lg w-full shadow-xl"
+        className="bg-cat-mantle border border-amber-500/40 rounded-xl max-w-lg w-full max-h-[90vh] flex flex-col shadow-xl"
       >
-        <div className="px-4 py-3 border-b border-cat-surface1">
+        <div className="px-4 py-3 border-b border-cat-surface1 shrink-0">
           <h2 id="simulation-confirm-title" className="text-sm font-bold text-amber-100">
             Offline simulation
           </h2>
           <p className="text-[11px] text-cat-subtext mt-1">
-            Ollama is unavailable. The sprint is paused until you confirm or provide an alternative
-            value.
+            Ollama is unavailable. The sprint is paused until you confirm or enter an alternative
+            value below.
           </p>
         </div>
-        <div className="px-4 py-3 space-y-2 text-[11px] text-cat-text">
+        <div className="px-4 py-3 space-y-2 text-[11px] text-cat-text overflow-y-auto flex-1 min-h-0">
           <p>
             <span className="text-cat-overlay">Task:</span> {pending.taskId ?? '—'}{' '}
             <span className="text-cat-overlay ml-2">Agent:</span> {pending.agent ?? '—'}
@@ -214,69 +234,31 @@ export default function SimulationConfirmModal({
               {hints.join('\n')}
             </pre>
           )}
-          {!overrideOpen && autoAcceptEnabled && userEngaged && (
+          {autoAcceptEnabled && userEngaged && (
             <p className="text-amber-200/90">
-              Auto-accept in <strong>{remaining}</strong>s
+              Auto-accept simulated result in <strong>{remaining}</strong>s
             </p>
           )}
-          {!overrideOpen && !autoAcceptEnabled && (
-            <p className="text-cat-subtext">Choose an action below — no auto-accept.</p>
+          {!autoAcceptEnabled && (
+            <p className="text-cat-subtext">No auto-accept — choose an action or enter a value below.</p>
           )}
           {error && <p className="text-rose-300">{error}</p>}
-        </div>
-        {!overrideOpen ? (
-          <div className="px-4 py-3 border-t border-cat-surface1 flex flex-wrap gap-2 justify-end">
-            {workspaceFileExists && devKind && (
-              <button
-                type="button"
-                disabled={busy}
-                onClick={() => void useExistingFile()}
-                className="px-3 py-1.5 rounded text-xs bg-emerald-700 hover:bg-emerald-600 text-white disabled:opacity-50"
-                data-testid="simulation-use-existing-file"
-              >
-                Use existing workspace file
-              </button>
-            )}
-            <button
-              type="button"
-              disabled={busy}
-              onClick={() => void openAlternative()}
-              className="px-3 py-1.5 rounded text-xs border border-cat-surface2 hover:bg-cat-surface0 disabled:opacity-50"
-              data-testid="simulation-provide-alternative"
-            >
-              Provide alternative value
-            </button>
-            <button
-              type="button"
-              disabled={busy}
-              onClick={() => {
-                setUserEngaged(true)
-                void accept()
-              }}
-              className="px-3 py-1.5 rounded text-xs bg-amber-600 hover:bg-amber-500 text-white disabled:opacity-50"
-            >
-              Use simulated result
-            </button>
-            <button
-              type="button"
-              disabled={busy}
-              onClick={() => void dismiss()}
-              className="px-3 py-1.5 rounded text-xs text-cat-overlay hover:text-white disabled:opacity-50"
-            >
-              Dismiss
-            </button>
-          </div>
-        ) : (
-          <div className="px-4 py-3 border-t border-cat-surface1 space-y-2">
+
+          <div className="border-t border-cat-surface1 pt-3 mt-2 space-y-2">
+            <h3 className="text-[11px] font-semibold text-white">Or enter an alternative value</h3>
             <label className="block text-[11px] text-cat-subtext">
-              What should be used instead?
+              Value to use
               {prefillLoading && (
                 <span className="ml-2 text-cat-overlay">Loading from workspace…</span>
               )}
               <textarea
                 value={overrideValue}
-                onChange={(e) => setOverrideValue(e.target.value)}
-                rows={6}
+                onChange={(e) => {
+                  setUserEngaged(true)
+                  setOverrideValue(e.target.value)
+                }}
+                rows={5}
+                placeholder="Paste or edit the outcome (file content, agent text, PO JSON, lane name, …)"
                 className="mt-1 w-full rounded bg-cat-crust border border-cat-surface1 px-2 py-1 text-xs text-white"
                 disabled={overrideTarget === 'skip_step' || prefillLoading}
                 data-testid="simulation-override-value"
@@ -296,15 +278,7 @@ export default function SimulationConfirmModal({
                 ))}
               </select>
             </label>
-            <div className="flex gap-2 justify-end pt-1">
-              <button
-                type="button"
-                disabled={busy}
-                onClick={() => setOverrideOpen(false)}
-                className="px-3 py-1.5 rounded text-xs border border-cat-surface2 hover:bg-cat-surface0"
-              >
-                Back
-              </button>
+            <div className="flex justify-end">
               <button
                 type="button"
                 disabled={busy || (overrideTarget !== 'skip_step' && !overrideValue.trim())}
@@ -316,7 +290,39 @@ export default function SimulationConfirmModal({
               </button>
             </div>
           </div>
-        )}
+        </div>
+        <div className="px-4 py-3 border-t border-cat-surface1 flex flex-wrap gap-2 justify-end shrink-0">
+          {workspaceFileExists && devKind && (
+            <button
+              type="button"
+              disabled={busy}
+              onClick={() => void useExistingFile()}
+              className="px-3 py-1.5 rounded text-xs bg-emerald-700 hover:bg-emerald-600 text-white disabled:opacity-50"
+              data-testid="simulation-use-existing-file"
+            >
+              Use existing workspace file
+            </button>
+          )}
+          <button
+            type="button"
+            disabled={busy}
+            onClick={() => {
+              setUserEngaged(true)
+              void accept()
+            }}
+            className="px-3 py-1.5 rounded text-xs bg-amber-600 hover:bg-amber-500 text-white disabled:opacity-50"
+          >
+            Use simulated result
+          </button>
+          <button
+            type="button"
+            disabled={busy}
+            onClick={() => void dismiss()}
+            className="px-3 py-1.5 rounded text-xs text-cat-overlay hover:text-white disabled:opacity-50"
+          >
+            Dismiss
+          </button>
+        </div>
       </div>
     </div>
   )

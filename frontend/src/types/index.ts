@@ -539,6 +539,8 @@ export interface WorkflowSettings {
   simulationConfirmSeconds?: number
   /** When true, auto-accept after countdown (with 3s grace). Default false = wait for explicit confirm. */
   simulationAutoAccept?: boolean
+  /** When true (default), dev offline steps use an existing workspace file without showing the popup. */
+  simulationAutoUseExistingFile?: boolean
 }
 
 export interface RecentToolEntry {
@@ -1115,6 +1117,8 @@ export interface WorkflowSettingsPayload {
   simulationConfirmSeconds?: number
   /** When true, auto-accept after countdown (with 3s grace). Default false = wait for explicit confirm. */
   simulationAutoAccept?: boolean
+  /** When true (default), dev offline steps use an existing workspace file without showing the popup. */
+  simulationAutoUseExistingFile?: boolean
 }
 
 export interface SkillsResponse {
@@ -1391,6 +1395,7 @@ export const DEFAULT_WORKFLOW_SETTINGS: WorkflowSettings = {
   confirmSimulationFallback: true,
   simulationConfirmSeconds: 10,
   simulationAutoAccept: false,
+  simulationAutoUseExistingFile: true,
 }
 
 export const EMPTY_BOARD: Board = {
