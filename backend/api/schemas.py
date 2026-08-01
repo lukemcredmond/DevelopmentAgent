@@ -205,6 +205,10 @@ class WorkflowSettingsPayload(BaseModel):
     enableObservationSummaries: Optional[bool] = None
     enableEpisodeSummary: Optional[bool] = None
     enableStepLessonMemory: Optional[bool] = None
+    enableLlmContextCompress: Optional[bool] = None
+    contextCompressMinChars: Optional[int] = None
+    contextCompressMaxChars: Optional[int] = None
+    contextCompressModel: Optional[str] = None
     pauseSprintOnNeedsUser: Optional[bool] = None
     autoFormatAfterEdit: Optional[bool] = None
     phoneNotifyEnabled: Optional[bool] = None
@@ -225,6 +229,10 @@ class WorkflowSettingsPayload(BaseModel):
     discordModelPresetFast: Optional[str] = None
     discordModelPresetQuality: Optional[str] = None
     requireAcChecklistForDone: Optional[bool] = None
+    confirmSimulationFallback: Optional[bool] = None
+    simulationConfirmSeconds: Optional[int] = None
+    simulationAutoAccept: Optional[bool] = None
+    simulationAutoUseExistingFile: Optional[bool] = None
 
 
 class DiagnoseTaskPayload(BaseModel):

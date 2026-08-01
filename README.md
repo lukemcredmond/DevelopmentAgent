@@ -387,6 +387,8 @@ Persisted per project. Update via sidebar **Workflow** or `POST /api/workflow/se
 | ollamaCooldownRetrySec | 15 | Cooldown wait between busy retries |
 | ollamaCooldownRetryAttempts | 2 | Max cooldown retry attempts |
 
+**Context size vs LLM compress:** Use **ollamaNumCtx** as the global default window; set **ollamaNumCtxByRole** when PO needs a longer brief/backlog than Dev (Dev can stay lower if most work is tool-driven). On 8–12GB VRAM with 7B–14B models, try **8192–16384** global ctx before chasing timeouts. **ollamaNumCtxAuto** halves Dev ctx on low VRAM tiers. **enableLlmContextCompress** does not replace lowering ctx—it runs an **extra Ollama call** when sprint inject exceeds **contextCompressMinChars** to shrink toward **contextCompressMaxChars**; turn it on for huge prompts, not as the first fix for VRAM or slow Ollama.
+
 #### MCP and other
 
 | Setting | Default | Purpose |

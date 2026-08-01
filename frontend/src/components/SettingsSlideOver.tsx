@@ -45,6 +45,7 @@ interface SettingsSlideOverProps {
   onOpenSkillModal: (agent: AgentId) => void
   onRemoveSkill: (agent: AgentId, skill: string) => void
   onWorkflowSettingsChange: (partial: Partial<WorkflowSettings>) => void
+  workflowSettingsSaveError?: string | null
   onExportProject: () => void
   onImportProject: (file: File) => void
   onDeleteProject: () => void
@@ -104,6 +105,7 @@ export default function SettingsSlideOver({
   onOpenSkillModal,
   onRemoveSkill,
   onWorkflowSettingsChange,
+  workflowSettingsSaveError = null,
   onExportProject,
   onImportProject,
   onDeleteProject,
@@ -664,7 +666,13 @@ export default function SettingsSlideOver({
           )}
 
           {tab === 'workflow' && (
-            <WorkflowPanel
+            <>
+              {workflowSettingsSaveError ? (
+                <p className="mb-3 text-xs text-amber-400/90 border border-amber-500/30 bg-amber-950/30 rounded px-2 py-1.5">
+                  {workflowSettingsSaveError}
+                </p>
+              ) : null}
+              <WorkflowPanel
               settings={ws}
               changelog={state.briefChangelog ?? []}
               notifications={notifications}
@@ -675,6 +683,7 @@ export default function SettingsSlideOver({
               onOpenCustomTools={onOpenCustomTools}
               discordBotStatus={state.discordBotStatus ?? null}
             />
+            </>
           )}
         </div>
       </div>

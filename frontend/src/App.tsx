@@ -93,6 +93,13 @@ import { countClaimableBacklogTasks, getDisplayLanes } from './types'
 import { findTaskOnBoard } from './utils/taskFormat'
 import { buildTaskRunInfo } from './utils/taskRunInfo'
 import { chatAgentForLane } from './utils/chatAgentForLane'
+import {
+  queuePendingWorkflowSettings,
+  requeuePendingWorkflowPayload,
+  setWorkflowSaveTimerActive,
+  takePendingWorkflowPayload,
+  peekPendingWorkflowSettings,
+} from './workflowSettingsPending'
 
 type BottomTab =
   | 'console'
@@ -871,17 +878,19 @@ export default function App() {
     toggleBottomPanelCollapse,
   ])
 
-  const pendingWorkflowRef = useRef<Partial<WorkflowSettings>>({})
   const workflowSaveTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null)
+  const [workflowSettingsSaveError, setWorkflowSettingsSaveError] = useState<string | null>(null)
 
   useEffect(() => {
     return () => {
       if (workflowSaveTimerRef.current) clearTimeout(workflowSaveTimerRef.current)
+      setWorkflowSaveTimerActive(false)
     }
   }, [])
 
   const handleWorkflowSettingsChange = useCallback(
     (partial: Partial<WorkflowSettings>) => {
+      setWorkflowSettingsSaveError(null)
       setState((prev) => ({
         ...prev,
         workflowSettings: {
@@ -889,24 +898,30 @@ export default function App() {
           ...partial,
         } as WorkflowSettings,
       }))
-      pendingWorkflowRef.current = { ...pendingWorkflowRef.current, ...partial }
+      queuePendingWorkflowSettings(partial)
       if (workflowSaveTimerRef.current) clearTimeout(workflowSaveTimerRef.current)
+      setWorkflowSaveTimerActive(true)
       workflowSaveTimerRef.current = setTimeout(() => {
         workflowSaveTimerRef.current = null
-        const payload = pendingWorkflowRef.current
-        pendingWorkflowRef.current = {}
+        setWorkflowSaveTimerActive(false)
+        const payload = takePendingWorkflowPayload()
         void updateWorkflowSettings(payload)
           .then((data) => {
+            setWorkflowSettingsSaveError(null)
             setState((prev) => ({
               ...prev,
-              workflowSettings: data.workflowSettings,
+              workflowSettings: {
+                ...data.workflowSettings,
+                ...peekPendingWorkflowSettings(),
+              },
               activeLanes: data.activeLanes,
               notifications: data.notifications,
               board: data.board,
             }))
           })
           .catch(() => {
-            pendingWorkflowRef.current = { ...payload, ...pendingWorkflowRef.current }
+            requeuePendingWorkflowPayload(payload)
+            setWorkflowSettingsSaveError('Could not save workflow settings. Will retry when you change a setting.')
           })
       }, 350)
     },
@@ -1436,6 +1451,7 @@ export default function App() {
           )
         }
         onWorkflowSettingsChange={handleWorkflowSettingsChange}
+        workflowSettingsSaveError={workflowSettingsSaveError}
         onOpenCustomTools={() => {
           setSettingsOpen(false)
           expandBottomPanel()

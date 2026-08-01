@@ -12,6 +12,7 @@ import {
   stopBackgroundTerminal,
   subscribeEvents,
 } from '../api/client'
+import { mergePendingWorkflowSettings } from '../workflowSettingsPending'
 import { mergeToolHistory } from '../utils/mergeToolHistory'
 import type {
   ActivityEvent,
@@ -576,6 +577,9 @@ export function useAppState() {
         ...data,
         board,
         files: includeFiles ? data.files : prev.files,
+        workflowSettings: mergePendingWorkflowSettings(
+          data.workflowSettings ?? prev.workflowSettings,
+        ),
       }))
       if (data.projectPlanOutline != null) {
         setPlanOutline(String(data.projectPlanOutline))
@@ -595,8 +599,17 @@ export function useAppState() {
 
   const applyState = useCallback(
     (data: AppState) => {
-      const trimmed = { ...data, board: trimBoardHistory(data.board) }
-      setState(trimmed)
+      const trimmed = {
+        ...data,
+        board: trimBoardHistory(data.board),
+        workflowSettings: mergePendingWorkflowSettings(data.workflowSettings),
+      }
+      setState((prev) => ({
+        ...trimmed,
+        workflowSettings: mergePendingWorkflowSettings(
+          trimmed.workflowSettings ?? prev.workflowSettings,
+        ),
+      }))
       if (trimmed.projectPlanOutline != null) {
         setPlanOutline(String(trimmed.projectPlanOutline))
       }
@@ -841,7 +854,13 @@ export function useAppState() {
       if (event.type === 'state' && event.data) {
         const data = event.data as AppState
         const board = trimBoardHistory(data.board)
-        setState({ ...data, board })
+        setState((prev) => ({
+          ...data,
+          board,
+          workflowSettings: mergePendingWorkflowSettings(
+            data.workflowSettings ?? prev.workflowSettings,
+          ),
+        }))
         if (data.projectPlanOutline != null) {
           setPlanOutline(String(data.projectPlanOutline))
         }
