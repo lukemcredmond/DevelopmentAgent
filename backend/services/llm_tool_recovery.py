@@ -5,7 +5,7 @@ from __future__ import annotations
 import json
 import re
 from dataclasses import dataclass
-from typing import Any, Dict, Iterable, List, Optional, Sequence, Set
+from typing import Any, Dict, Iterable, List, Optional, Sequence, Set, Tuple
 
 MAX_RECOVERED_TOOL_CALLS = 8
 
@@ -197,6 +197,23 @@ def recover_tool_calls_from_content(
     return calls[:MAX_RECOVERED_TOOL_CALLS]
 
 
+def ollama_tool_calls_from_recovered(
+    recovered: Sequence[RecoveredToolCall],
+) -> List[Any]:
+    """Build Ollama pydantic ToolCall instances (required for Message validation)."""
+    from ollama._types import Message as OllamaMessage
+
+    return [
+        OllamaMessage.ToolCall(
+            function=OllamaMessage.ToolCall.Function(
+                name=c.function.name,
+                arguments=dict(c.function.arguments),
+            )
+        )
+        for c in recovered
+    ]
+
+
 def normalize_existing_tool_call_arguments(message: Any) -> None:
     """In-place: unwrap/normalize argument strings on native Ollama tool_calls."""
     tool_calls = getattr(message, "tool_calls", None) or []
@@ -208,33 +225,88 @@ def normalize_existing_tool_call_arguments(message: Any) -> None:
         if isinstance(raw, str):
             normalized = normalize_tool_arguments(raw)
             try:
-                fn.arguments = json.dumps(normalized)
+                fn.arguments = normalized
             except Exception:
-                fn.arguments = json.dumps(normalized, default=str)
+                pass
 
 
-def apply_tool_call_recovery(message: Any, allowed_tool_names: Iterable[str]) -> List[str]:
+def assistant_message_to_chat_dict(message: Any) -> Dict[str, Any]:
+    """Serialize assistant message for chat history (dicts only — avoids pydantic ERR)."""
+    if isinstance(message, dict):
+        return dict(message)
+    content = getattr(message, "content", None) or ""
+    role = getattr(message, "role", None) or "assistant"
+    tool_calls = getattr(message, "tool_calls", None) or []
+    if not tool_calls:
+        return {"role": role, "content": content}
+    serialized: List[Dict[str, Any]] = []
+    for tc in tool_calls:
+        if isinstance(tc, dict):
+            fn = tc.get("function") or {}
+            name = fn.get("name")
+            args = fn.get("arguments")
+        else:
+            fn = getattr(tc, "function", None)
+            name = getattr(fn, "name", None) if fn else None
+            args = getattr(fn, "arguments", None) if fn else None
+        if not name:
+            continue
+        if isinstance(args, str):
+            args = normalize_tool_arguments(args)
+        elif not isinstance(args, dict):
+            args = normalize_tool_arguments(args)
+        serialized.append({"function": {"name": name, "arguments": args or {}}})
+    out: Dict[str, Any] = {"role": role, "content": content}
+    if serialized:
+        out["tool_calls"] = serialized
+    return out
+
+
+def apply_tool_call_recovery(
+    message: Any,
+    allowed_tool_names: Iterable[str],
+) -> Tuple[List[str], Any]:
     """
     Normalize native tool args; recover tool_calls from content when missing.
-    Returns names of recovered tools (empty if none).
+    Returns (tool names, message) — message may be replaced via model_copy.
     """
     normalize_existing_tool_call_arguments(message)
     existing = getattr(message, "tool_calls", None) or []
     if existing:
-        return []
+        return [], message
 
     content = getattr(message, "content", None) or ""
     recovered = recover_tool_calls_from_content(content, allowed_tool_names)
     if not recovered:
-        return []
+        return [], message
 
-    try:
-        message.tool_calls = recovered  # type: ignore[attr-defined]
-    except Exception:
-        setattr(message, "tool_calls", recovered)
-    try:
-        message.content = ""  # type: ignore[attr-defined]
-    except Exception:
-        setattr(message, "content", "")
+    ollama_calls = ollama_tool_calls_from_recovered(recovered)
+    names = [c.function.name for c in recovered]
 
-    return [c.function.name for c in recovered]
+    model_copy = getattr(message, "model_copy", None)
+    if callable(model_copy):
+        message = model_copy(update={"tool_calls": ollama_calls, "content": ""})
+    elif isinstance(message, dict):
+        message = {
+            **message,
+            "role": message.get("role") or "assistant",
+            "content": "",
+            "tool_calls": [
+                {
+                    "function": {
+                        "name": c.function.name,
+                        "arguments": dict(c.function.arguments),
+                    }
+                }
+                for c in recovered
+            ],
+        }
+    else:
+        try:
+            message.tool_calls = ollama_calls  # type: ignore[attr-defined]
+            message.content = ""  # type: ignore[attr-defined]
+        except Exception:
+            setattr(message, "tool_calls", ollama_calls)
+            setattr(message, "content", "")
+
+    return names, message

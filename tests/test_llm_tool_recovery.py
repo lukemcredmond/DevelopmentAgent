@@ -5,6 +5,7 @@ from __future__ import annotations
 import json
 
 from backend.services.llm_tool_recovery import (
+    assistant_message_to_chat_dict,
     normalize_tool_arguments,
     recover_tool_calls_from_content,
     unwrap_llm_text,
@@ -64,8 +65,16 @@ def test_recover_rejects_unknown_tool():
     assert calls == []
 
 
-def test_recover_shorthand_single_tool_key():
-    payload = {"read_file": {"path": "pubspec.yaml"}}
-    calls = recover_tool_calls_from_content(json.dumps(payload), {"read_file"})
-    assert len(calls) == 1
-    assert calls[0].function.arguments == {"path": "pubspec.yaml"}
+def test_apply_recovery_produces_valid_ollama_message():
+    from ollama._types import Message as OllamaMessage
+
+    from backend.services.llm_tool_recovery import apply_tool_call_recovery
+
+    payload = {"name": "read_file", "arguments": {"path": "lib/main.dart"}}
+    text = f"'''{json.dumps(payload)}'''"
+    msg = OllamaMessage(role="assistant", content=text)
+    names, updated = apply_tool_call_recovery(msg, {"read_file", "apply_patch"})
+    assert names == ["read_file"]
+    OllamaMessage.model_validate(updated.model_dump())
+    hist = assistant_message_to_chat_dict(updated)
+    assert hist["tool_calls"][0]["function"]["name"] == "read_file"

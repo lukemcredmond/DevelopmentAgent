@@ -30,6 +30,7 @@ from backend.services.diagnostics_parser import parse_command_diagnostics
 from backend.services.parallel_tools import partition_tool_calls
 from backend.services.llm_tool_recovery import (
     apply_tool_call_recovery,
+    assistant_message_to_chat_dict,
     normalize_tool_arguments,
     unwrap_llm_text,
 )
@@ -1083,7 +1084,7 @@ class ScrumAgent:
         tools_used: set[str],
     ) -> Optional[str]:
         """Process tool calls; return early-stop message when limits exceeded."""
-        messages.append(message)
+        messages.append(assistant_message_to_chat_dict(message))
         run = get_active_run()
         task_id = state.ACTIVE_SPRINT_TASK_ID
         from backend.agents.registry import AGENT_MAP
@@ -1358,7 +1359,7 @@ class ScrumAgent:
                     return "SIMULATION_FALLBACK"
 
                 message = response.message
-                recovered_tool_names = apply_tool_call_recovery(
+                recovered_tool_names, message = apply_tool_call_recovery(
                     message, self.registry.tool_names()
                 )
                 if recovered_tool_names:
