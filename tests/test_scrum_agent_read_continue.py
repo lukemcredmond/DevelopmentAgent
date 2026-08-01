@@ -363,3 +363,61 @@ def test_last_step_outcome_includes_why_card_stayed(tmp_path, monkeypatch):
     assert outcome.get("suggestedAction")
     assert outcome["planRejections"] >= 0
     assert "read_file" in outcome.get("toolsUsed", [])
+
+
+def test_fenced_content_read_file_recovered_and_executed():
+    initialize()
+    state.SHARED_BOARD.clear()
+    for lane in ("Backlog", "In Progress", "Needs User", "Needs PO", "QA", "Done", "Refinement", "Code Review"):
+        state.SHARED_BOARD[lane] = []
+
+    task = init_new_task({"id": "T-FENCE", "title": "Fence recovery", "description": "d", "status": "In Progress"})
+    state.SHARED_BOARD["In Progress"] = [task]
+    state.VIRTUAL_FILESYSTEM["lib/main.dart"] = "void main() {}\n"
+
+    payload = {"name": "read_file", "arguments": {"path": "lib/main.dart"}}
+    fenced = f"'''{json.dumps(payload)}'''"
+    chat_calls = {"count": 0}
+    tools_seen = []
+
+    def fake_chat(messages, **kwargs):
+        chat_calls["count"] += 1
+        if chat_calls["count"] == 1:
+            return _FakeResponse(_FakeMessage(content=fenced))
+        if chat_calls["count"] == 2:
+            return _FakeResponse(
+                _FakeMessage(tool_calls=[_FakeToolCall("apply_patch", {
+                    "path": "lib/main.dart",
+                    "old_text": "void main() {}",
+                    "new_text": "void main() { print('ok'); }",
+                })])
+            )
+        return _FakeResponse(_FakeMessage(content="done"))
+
+    set_active_sprint_context("T-FENCE", "Developer")
+    state.STEP_FILE_READS.clear()
+
+    def fake_exec(agent_id, tool_name, arguments, **kwargs):
+        tools_seen.append(tool_name)
+        from backend.workspace.files import record_step_file_read
+
+        if tool_name == "read_file":
+            record_step_file_read(str(arguments.get("path") or ""), "void main() {}\n")
+        return type(
+            "R",
+            (),
+            {
+                "tool_name": tool_name,
+                "tool_output": "void main() {}\n" if tool_name == "read_file" else "ok",
+                "success": True,
+                "pending_approval": False,
+            },
+        )()
+
+    with patch.object(agent_dev, "_chat", side_effect=fake_chat):
+        with patch("backend.agents.scrum_agent.execute_tool", side_effect=fake_exec):
+            with patch("backend.services.llm_context.prune_messages_if_needed", lambda m: m):
+                agent_dev.execute_step("Implement lib/main.dart", max_iterations=4)
+
+    assert "read_file" in tools_seen
+    assert chat_calls["count"] >= 2

@@ -28,6 +28,11 @@ from backend.services.logs import add_system_log
 from backend.agents.tool_outcomes import parse_run_command_exit
 from backend.services.diagnostics_parser import parse_command_diagnostics
 from backend.services.parallel_tools import partition_tool_calls
+from backend.services.llm_tool_recovery import (
+    apply_tool_call_recovery,
+    normalize_tool_arguments,
+    unwrap_llm_text,
+)
 from backend.services.tool_execution_service import ToolExecutionResult, execute_tool
 from backend.services.workflow_settings import get_workflow_settings
 from backend.storage.memory_engine import create_memory_engine
@@ -64,18 +69,6 @@ def _log_duplicate_skip(
         )
     except Exception:
         pass
-
-
-def _normalize_tool_arguments(raw: Any) -> Dict[str, Any]:
-    if isinstance(raw, str):
-        try:
-            parsed = json.loads(raw)
-            return dict(parsed) if isinstance(parsed, dict) else {}
-        except json.JSONDecodeError:
-            return {}
-    if isinstance(raw, dict):
-        return dict(raw)
-    return {}
 
 
 def _dev_step_needs_more_tools(tools_used: set[str], task_id: Optional[str]) -> bool:
@@ -816,7 +809,7 @@ class ScrumAgent:
         from backend.services.step_diagnostics import build_live_intent
 
         tool_name = call.function.name
-        arguments = _normalize_tool_arguments(call.function.arguments)
+        arguments = normalize_tool_arguments(call.function.arguments)
         tool_summary = summarize_tool_args(tool_name, arguments)
         key = (tool_name, json.dumps(arguments, sort_keys=True, default=str))
 
@@ -1365,6 +1358,19 @@ class ScrumAgent:
                     return "SIMULATION_FALLBACK"
 
                 message = response.message
+                recovered_tool_names = apply_tool_call_recovery(
+                    message, self.registry.tool_names()
+                )
+                if recovered_tool_names:
+                    add_system_log(
+                        self.role,
+                        "info",
+                        f"Recovered tool calls from fenced/quoted content: {recovered_tool_names}",
+                    )
+                    log_event(
+                        "tool_calls_recovered_from_content",
+                        ", ".join(recovered_tool_names),
+                    )
                 tool_call_names = (
                     [tc.function.name for tc in message.tool_calls]
                     if message.tool_calls
@@ -1426,7 +1432,7 @@ class ScrumAgent:
                         return stop_msg
                     continue
 
-                content = (message.content or "").strip()
+                content = unwrap_llm_text((message.content or "")).strip()
                 if content and _dev_step_needs_more_tools(tools_used, task_id):
                     if task_id and is_task_done(task_id) and not state.ALLOW_DONE_RETRY:
                         stop_msg = "Stopped: task already Done"

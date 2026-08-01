@@ -9,16 +9,7 @@ from typing import Any, Dict, List, Optional
 from backend.services.tool_probe import build_model_hints, should_skip_probe
 
 
-def _normalize_tool_arguments(raw: Any) -> Dict[str, Any]:
-    if isinstance(raw, str):
-        try:
-            parsed = json.loads(raw)
-            return dict(parsed) if isinstance(parsed, dict) else {}
-        except json.JSONDecodeError:
-            return {}
-    if isinstance(raw, dict):
-        return dict(raw)
-    return {}
+from backend.services.llm_tool_recovery import normalize_tool_arguments
 
 
 def _resolve_agent_model(agent_id: str, model: Optional[str] = None) -> tuple[Any, str]:

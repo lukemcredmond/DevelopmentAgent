@@ -1150,6 +1150,7 @@ flowchart LR
 | Unknown Tool for `write_file` | Usually refinement or wrong agent — **Dismiss**, do not map to itself. Wait for implementation mode. |
 | Too few / coarse epics | Expand outline **Proposed epics**; re-run **Generate Features**. Check Console for under-decomposition warnings. |
 | Context overflow / slow | Lower `ollamaNumCtx` or use smaller models; reduce `maxLlmIterationsPerStep`. |
+| Model returns fenced tool JSON as text | In **Model Debug**, empty `responseToolCalls` with `'''…'''` or ` ```json ` tool blobs means the model did not use native Ollama tool calling. AllHands attempts to **recover** registered tools from that content before rejecting text-only replies; prefer tool-capable models (e.g. Qwen Coder) and Dev prompt guidance. |
 | Patch failures | Dev must `read_file` before `apply_patch`; check Console for "old_text not found". |
 | Custom SQL tool fails | Use `sqlite:///…` under the workspace; only read-only `SELECT`/`WITH` when `readOnly` is true. |
 
