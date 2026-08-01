@@ -403,3 +403,28 @@ def is_tool_linked_item(item: Dict[str, Any]) -> bool:
     """False for board-state items (subtasks/gates) that never map to tool nodes."""
     fm = item.get("flowMatch") if isinstance(item.get("flowMatch"), dict) else {}
     return bool(fm.get("toolNames") or fm.get("stopReasons"))
+
+
+def suggested_focus_work_item_id(items: List[Dict[str, Any]]) -> Optional[str]:
+    """First pending checklist row, else first blocked — hint for where work likely remains."""
+    for item in items:
+        if isinstance(item, dict) and item.get("id") and str(item.get("status") or "") == "pending":
+            return str(item["id"])
+    for item in items:
+        if isinstance(item, dict) and item.get("id") and str(item.get("status") or "") == "blocked":
+            return str(item["id"])
+    return None
+
+
+def primary_work_item_id(items: List[Dict[str, Any]], matched_ids: List[str]) -> Optional[str]:
+    """Single primary tag: earliest checklist row present in matched_ids."""
+    if not matched_ids:
+        return None
+    matched_set = {str(x) for x in matched_ids if x}
+    for item in items:
+        if not isinstance(item, dict) or not item.get("id"):
+            continue
+        wid = str(item["id"])
+        if wid in matched_set:
+            return wid
+    return None

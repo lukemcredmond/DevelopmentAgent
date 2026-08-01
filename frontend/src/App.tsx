@@ -2059,6 +2059,13 @@ export default function App() {
           setSelectedTask(null)
           setShowManualTask(true)
         }}
+        isAgentRunningOnTask={Boolean(
+          selectedTask &&
+            activeRun?.taskId === selectedTask.id &&
+            activeRun.status !== 'idle' &&
+            activeRun.status !== 'completed' &&
+            activeRun.status !== 'failed',
+        )}
       />
 
       {fileDiffModal && (

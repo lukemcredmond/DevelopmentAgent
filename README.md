@@ -583,8 +583,8 @@ During sprint steps, the **Agent Run bar** above the bottom panel shows live too
 ### Task detail modal
 
 - View/edit title, description, acceptance criteria
-- **Agent progress** — derived done/pending/blocked checklist for Dev/CR/PO process work (reads, edits, verify, lane gates). Separate from **Acceptance Criteria (QA)** checkboxes
-- **Flow** — on-demand ordered LLM↔tool graph with full prompt/response/tool text from persisted logs + step diagnostics (not stored in board/page memory). `GET /api/tasks/{id}/flow`
+- **Agent progress** — derived done/pending/blocked checklist for Dev/CR/PO process work (reads, edits, verify, lane gates). Separate from **Acceptance Criteria (QA)** checkboxes. Status reflects evidence on the card (not a live “current step”). While a step runs, the first pending/blocked row is a **suggested focus** hint only.
+- **Flow** — on-demand ordered LLM↔tool graph with full prompt/response/tool text from persisted logs + step diagnostics (not stored in board/page memory). Tags each call **by tool type**; one LLM turn can match multiple progress rows. Filtering by a progress row shows tagged nodes (primary row used for highlight when a call matches several). `GET /api/tasks/{id}/flow`
 - Compact agent checklist also on the kanban **card** (`agentWorkItems`)
 - **Feature epic hub** — children, rolled-up files, recent decisions (`featureRollup`)
 - **Approve** (Pending Approval)
@@ -1008,7 +1008,7 @@ Chat and sprint steps run through the same `execute_step` and neither streams to
 | Model switching | Auto-sprint chains PO → Dev → CR → QA with different models, and each switch can reload weights | Use one model across roles; `ollamaKeepAlive` |
 | Extra LLM passes | Context compress, auto-extend on max iterations, fix-verify | `enableLlmContextCompress` (off by default), `autoExtendOnMaxIter` (off by default) |
 
-Per-card evidence lives in **Task Detail → Agent progress** (LLM/tool counts per checklist item) and the **Flow** tab (`LLM 12.4s · tools 3.1s` split), so you can see whether a step spent its time in the model or in tools.
+Per-card evidence lives in **Task Detail → Agent progress** (LLM/tool counts per checklist item) and the **Flow** tab (`LLM 12.4s · tools 3.1s` split), so you can see whether a step spent its time in the model or in tools. Progress rows are derived after the fact; Flow links calls by tool type, not strict top-to-bottom execution order.
 
 ### Embeddings, RAG, and memory
 

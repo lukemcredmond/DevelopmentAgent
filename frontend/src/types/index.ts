@@ -123,6 +123,7 @@ export interface TaskFlowNode {
   exitReason?: string
   duplicateSkip?: boolean
   workItemIds?: string[]
+  primaryWorkItemId?: string
 }
 
 export interface TaskFlowWorkItemIndexEntry {
@@ -170,6 +171,7 @@ export interface TaskFlowResponse {
   workItemIndex?: Record<string, TaskFlowWorkItemIndexEntry>
   totals?: TaskFlowTotals
   agentWorkItems?: AgentWorkItem[]
+  suggestedFocusWorkItemId?: string | null
 }
 
 export interface TaskFlowSummaryResponse {
@@ -179,6 +181,7 @@ export interface TaskFlowSummaryResponse {
   totals?: TaskFlowTotals
   count?: number
   totalCount?: number
+  suggestedFocusWorkItemId?: string | null
 }
 
 export interface Task {

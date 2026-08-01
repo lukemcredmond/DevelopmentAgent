@@ -14,21 +14,37 @@ interface TaskFlowPanelProps {
   onHighlightWorkItem?: (workItemId: string | null) => void
 }
 
+function flowNodeHighlightMode(
+  node: TaskFlowNode,
+  highlightWorkItemId: string | null | undefined,
+): 'strong' | 'soft' | 'dim' | 'none' {
+  if (!highlightWorkItemId) return 'none'
+  const ids = node.workItemIds ?? []
+  if (!ids.includes(highlightWorkItemId)) return 'dim'
+  const primary = node.primaryWorkItemId
+  if (!primary || primary === highlightWorkItemId) return 'strong'
+  return 'soft'
+}
+
 function FlowNode({
   node,
   highlighted,
+  highlightSoft,
   workItemIndex,
   onSelectWorkItem,
 }: {
   node: TaskFlowNode
   highlighted: boolean
+  highlightSoft?: boolean
   workItemIndex?: Record<string, TaskFlowWorkItemIndexEntry>
   onSelectWorkItem?: (workItemId: string) => void
 }) {
   const [open, setOpen] = useState(false)
   const isLlm = node.kind === 'llm'
   const border = highlighted
-    ? 'border-sky-400 ring-2 ring-sky-400/50 bg-sky-950/30'
+    ? highlightSoft
+      ? 'border-sky-500/40 ring-1 ring-sky-400/30 bg-sky-950/15'
+      : 'border-sky-400 ring-2 ring-sky-400/50 bg-sky-950/30'
     : isLlm
       ? 'border-indigo-500/30 bg-indigo-950/20'
       : node.success === false
@@ -209,6 +225,12 @@ export default function TaskFlowPanel({
 
   const activeEntry = highlightWorkItemId ? data?.workItemIndex?.[highlightWorkItemId] : undefined
   const matchedCount = activeEntry?.nodeIds?.length ?? 0
+  const multiTagInFilter =
+    Boolean(highlightWorkItemId) &&
+    (data?.nodes ?? []).some((node) => {
+      const mode = flowNodeHighlightMode(node, highlightWorkItemId)
+      return (mode === 'strong' || mode === 'soft') && (node.workItemIds?.length ?? 0) > 1
+    })
   const activeCounts = formatWorkItemCounts(activeEntry)
   const activeBreakdown = formatToolBreakdown(activeEntry)
   const activeTiming = formatTimeSplit(activeEntry)
@@ -219,7 +241,9 @@ export default function TaskFlowPanel({
     <div className="space-y-2" data-testid="task-flow-panel">
       <p className="text-[10px] text-cat-overlay leading-relaxed">
         Loaded on demand from persisted LLM/tool logs and step diagnostics — not kept in board memory.
-        Expand a node for full prompt / response / tool output. Click an agent-progress chip to filter.
+        Expand a node for full prompt / response / tool output. Agent progress rows are derived from card
+        evidence; Flow tags each call by tool type (one turn can match multiple rows). Click a progress
+        row to filter nodes tagged with that item.
       </p>
       {highlightWorkItemId && (
         <div
@@ -229,11 +253,16 @@ export default function TaskFlowPanel({
           <span className="text-sky-200">
             Filtered: {activeEntry?.label || highlightWorkItemId}
             {matchedCount > 0
-              ? ` (${matchedCount} node${matchedCount === 1 ? '' : 's'})`
+              ? ` (${matchedCount} node${matchedCount === 1 ? '' : 's'} tagged)`
               : activeEntry?.toolLinked === false
                 ? ' (board state, no tools)'
                 : ' (no Flow tools yet)'}
           </span>
+          {multiTagInFilter && (
+            <span className="text-cat-overlay italic">
+              Some nodes also match other progress rows.
+            </span>
+          )}
           {activeCounts && (
             <span className="text-cat-subtext" title={activeBreakdown || undefined}>
               {activeCounts}
@@ -265,25 +294,38 @@ export default function TaskFlowPanel({
               <p className="text-[11px] text-cat-overlay italic">No LLM/tool events for this card yet.</p>
             ) : (
               data.nodes.map((node) => {
-                const highlighted = Boolean(
-                  highlightWorkItemId && (node.workItemIds || []).includes(highlightWorkItemId),
-                )
-                if (highlightWorkItemId && !highlighted) {
-                  // Dim non-matching but keep visible for context
-                }
+                const mode = flowNodeHighlightMode(node, highlightWorkItemId)
+                const highlighted = mode === 'strong' || mode === 'soft'
+                const soft = mode === 'soft'
+                const primaryOther =
+                  soft && node.primaryWorkItemId
+                    ? data.workItemIndex?.[node.primaryWorkItemId]?.label || node.primaryWorkItemId
+                    : null
                 return (
                   <div
                     key={node.id}
-                    className={`relative ${highlightWorkItemId && !highlighted ? 'opacity-35' : ''}`}
+                    className={`relative ${
+                      mode === 'dim' ? 'opacity-35' : mode === 'soft' ? 'opacity-80' : ''
+                    }`}
+                    title={
+                      primaryOther
+                        ? `Primary progress row: ${primaryOther}. Also tagged with this filter.`
+                        : undefined
+                    }
                   >
                     <span
                       className={`absolute -left-3 top-3 h-2 w-2 rounded-full ${
-                        highlighted ? 'bg-sky-400' : 'bg-cat-overlay/80'
+                        mode === 'strong'
+                          ? 'bg-sky-400'
+                          : mode === 'soft'
+                            ? 'bg-sky-400/50'
+                            : 'bg-cat-overlay/80'
                       }`}
                     />
                     <FlowNode
                       node={node}
                       highlighted={highlighted}
+                      highlightSoft={soft}
                       workItemIndex={data.workItemIndex}
                       onSelectWorkItem={(wid) => onHighlightWorkItem?.(wid)}
                     />

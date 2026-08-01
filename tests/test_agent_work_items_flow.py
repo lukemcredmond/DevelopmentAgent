@@ -6,8 +6,13 @@ from unittest.mock import patch
 
 from backend.agents.task_context import init_new_task, normalize_task
 from backend.bootstrap import initialize
-from backend.services.agent_work_items import derive_agent_work_items, refresh_agent_work_items
-from backend.services.task_flow import build_task_flow
+from backend.services.agent_work_items import (
+    derive_agent_work_items,
+    primary_work_item_id,
+    refresh_agent_work_items,
+    suggested_focus_work_item_id,
+)
+from backend.services.task_flow import build_task_flow, build_task_flow_summary
 
 
 def test_derive_pending_then_done_after_write_and_verify():
@@ -139,6 +144,46 @@ def test_build_task_flow_attaches_work_item_ids():
     assert tool_read["id"] in flow["workItemIndex"]["read:files"]["nodeIds"]
     llm = next(n for n in flow["nodes"] if n["kind"] == "llm")
     assert "read:files" in (llm.get("workItemIds") or [])
+    assert llm.get("primaryWorkItemId") == "read:files"
+    assert flow.get("suggestedFocusWorkItemId") == "read:files"
+
+
+def test_primary_work_item_prefers_earlier_checklist_row():
+    initialize()
+    from backend import state
+
+    task = init_new_task({"id": "T-PRIM", "title": "t", "description": "d"})
+    state.SHARED_BOARD = {"In Progress": [task]}
+    items = derive_agent_work_items(task)
+    matched = ["write:implement", "read:files"]
+    assert primary_work_item_id(items, matched) == "read:files"
+
+
+def test_suggested_focus_pending_before_blocked():
+    initialize()
+    from backend import state
+    from backend.agents.tool_fingerprints import block_tool_fingerprint_on_task
+
+    task = init_new_task({"id": "T-FOC", "title": "t", "description": "d"})
+    state.SHARED_BOARD = {"In Progress": [task]}
+    items = derive_agent_work_items(task)
+    assert suggested_focus_work_item_id(items) == "read:files"
+    block_tool_fingerprint_on_task(task, "run_command", {"command": "x"})
+    items2 = derive_agent_work_items(task)
+    assert suggested_focus_work_item_id(items2) == "read:files"
+
+
+def test_flow_summary_includes_suggested_focus():
+    initialize()
+    from backend import state
+
+    task = init_new_task({"id": "T-SUM", "title": "t", "description": "d"})
+    state.SHARED_BOARD = {"In Progress": [task]}
+    state.LLM_DEBUG_LOG.clear()
+    state.TOOL_EXECUTION_LOG.clear()
+    with patch("backend.services.task_flow.list_step_traces_for_task", return_value=[]):
+        summary = build_task_flow_summary("T-SUM", limit=40)
+    assert summary.get("suggestedFocusWorkItemId") == "read:files"
 
 
 def test_build_task_flow_filters_by_task_id():

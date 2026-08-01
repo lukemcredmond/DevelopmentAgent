@@ -288,10 +288,20 @@ def build_task_flow(
     except Exception:
         work_item_ids_for_node = None  # type: ignore[assignment]
 
+    try:
+        from backend.services.agent_work_items import primary_work_item_id, suggested_focus_work_item_id
+    except Exception:
+        primary_work_item_id = None  # type: ignore[assignment]
+        suggested_focus_work_item_id = None  # type: ignore[assignment]
+
     for n in filtered:
-        n["workItemIds"] = work_item_ids_for_node(work_items, n) if work_item_ids_for_node else []
+        ids = work_item_ids_for_node(work_items, n) if work_item_ids_for_node else []
+        n["workItemIds"] = ids
+        if primary_work_item_id:
+            n["primaryWorkItemId"] = primary_work_item_id(work_items, ids)
 
     work_item_index = _aggregate_work_items(work_items, filtered, trimmed)
+    focus_id = suggested_focus_work_item_id(work_items) if suggested_focus_work_item_id else None
 
     return {
         "taskId": tid,
@@ -303,6 +313,7 @@ def build_task_flow(
         "workItemIndex": work_item_index,
         "totals": _flow_totals(filtered),
         "agentWorkItems": work_items,
+        "suggestedFocusWorkItemId": focus_id,
     }
 
 
@@ -409,4 +420,5 @@ def build_task_flow_summary(task_id: str, *, limit: int = 80) -> Dict[str, Any]:
         "totals": flow.get("totals") or {},
         "count": flow.get("count", 0),
         "totalCount": flow.get("totalCount", 0),
+        "suggestedFocusWorkItemId": flow.get("suggestedFocusWorkItemId"),
     }
