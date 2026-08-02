@@ -151,6 +151,7 @@ interface TaskDetailModalProps {
       scope?: string
       outOfScope?: string
       testPlan?: string
+      actualSummary?: string
     },
   ) => void
   onAcChecklistChange?: (taskId: string, acChecklist: boolean[]) => void
@@ -319,6 +320,7 @@ export default function TaskDetailModal({
   const [scope, setScope] = useState('')
   const [outOfScope, setOutOfScope] = useState('')
   const [testPlan, setTestPlan] = useState('')
+  const [actualSummary, setActualSummary] = useState('')
   const [editing, setEditing] = useState(false)
   const [userAnswer, setUserAnswer] = useState('')
   const [injectCommand, setInjectCommand] = useState(defaultInjectCommand)
@@ -348,6 +350,7 @@ export default function TaskDetailModal({
     setScope(formatTaskText(task.scope ?? ''))
     setOutOfScope(formatTaskText(task.outOfScope ?? ''))
     setTestPlan(formatTaskText(task.testPlan ?? ''))
+    setActualSummary(formatTaskText(task.actualSummary ?? ''))
     setEditing(false)
     setShowAllTranscript(false)
     setShowFailuresOnly(false)
@@ -684,6 +687,12 @@ export default function TaskDetailModal({
           </CollapsibleSection>
 
           <CollapsibleSection title="Specification (SDD)" defaultOpen={editing}>
+            {(safeTask.sddInheritedFromFeature?.length ?? 0) > 0 && (
+              <p className="text-[10px] text-violet-300/90 mb-2 font-mono">
+                Inherited from feature {safeTask.featureId}:{' '}
+                {safeTask.sddInheritedFromFeature!.join(', ')}
+              </p>
+            )}
             <p className="text-[10px] text-cat-overlay mb-2">
               Card fields generate <code className="text-cat-subtext">docs/tasks/…-spec.md</code> for
               agents and review. Working notes stay in the Q&A doc.
@@ -944,6 +953,68 @@ export default function TaskDetailModal({
             ) : (
               <p className="text-[11px] text-cat-overlay italic">None defined</p>
             )}
+          </CollapsibleSection>
+
+          <CollapsibleSection
+            title="Expected vs actual"
+            badge={
+              safeTask.acVerification?.length
+                ? String(safeTask.acVerification.length)
+                : undefined
+            }
+            defaultOpen
+          >
+            <div className="space-y-2 text-[11px]">
+              <div>
+                <p className="text-[10px] text-cat-overlay uppercase mb-0.5">Expected</p>
+                <p className="text-cat-subtext whitespace-pre-wrap max-h-24 overflow-y-auto">
+                  {formatTaskText(safeTask.expectedSummary) || '—'}
+                </p>
+              </div>
+              <div>
+                <p className="text-[10px] text-cat-overlay uppercase mb-0.5">Actual</p>
+                {editing ? (
+                  <textarea
+                    value={actualSummary}
+                    onChange={(e) => setActualSummary(e.target.value)}
+                    placeholder="Optional override of rolled-up actual result"
+                    className="w-full text-xs font-mono bg-cat-base border border-cat-surface1 rounded p-2 min-h-[48px] max-h-28 overflow-y-auto"
+                  />
+                ) : (
+                  <p className="text-cat-subtext whitespace-pre-wrap max-h-24 overflow-y-auto">
+                    {formatTaskText(safeTask.actualSummary) || '—'}
+                  </p>
+                )}
+              </div>
+              {(safeTask.acVerification?.length ?? 0) > 0 ? (
+                <div className="overflow-x-auto">
+                  <table className="w-full text-[10px] border border-cat-surface1 rounded">
+                    <thead>
+                      <tr className="text-cat-overlay bg-cat-base">
+                        <th className="text-left p-1">Criterion</th>
+                        <th className="text-left p-1">Met</th>
+                        <th className="text-left p-1">Actual</th>
+                      </tr>
+                    </thead>
+                    <tbody>
+                      {safeTask.acVerification!.map((row, i) => (
+                        <tr key={i} className="border-t border-cat-surface1">
+                          <td className="p-1 text-cat-subtext align-top">{row.criterion}</td>
+                          <td className="p-1 align-top">
+                            {row.met === true ? 'yes' : row.met === false ? 'no' : '—'}
+                          </td>
+                          <td className="p-1 text-cat-overlay align-top whitespace-pre-wrap">
+                            {row.actual || '—'}
+                          </td>
+                        </tr>
+                      ))}
+                    </tbody>
+                  </table>
+                </div>
+              ) : (
+                <p className="text-cat-overlay italic">Add acceptance criteria to track per-row verification.</p>
+              )}
+            </div>
           </CollapsibleSection>
 
           <div id="task-flow-section">
@@ -1868,6 +1939,7 @@ export default function TaskDetailModal({
                       scope: scope.trim(),
                       outOfScope: outOfScope.trim(),
                       testPlan: testPlan.trim(),
+                      actualSummary: actualSummary.trim(),
                     },
                   )
                   setEditing(false)

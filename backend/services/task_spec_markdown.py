@@ -92,6 +92,37 @@ def build_task_spec_markdown(task: Dict[str, Any]) -> str:
     lines.append(test_plan if test_plan else "_Not set — add verify steps or commands._")
     lines.append("")
 
+    expected = coerce_task_text(task.get("expectedSummary")).strip()
+    lines.append("## Expected result")
+    lines.append(expected if expected else "_Not set — derived from title, description, and AC._")
+    lines.append("")
+
+    lines.append("## Acceptance verification")
+    ver_rows = task.get("acVerification") or []
+    if ver_rows:
+        for row in ver_rows:
+            if not isinstance(row, dict):
+                continue
+            crit = humanize_field(row.get("criterion"), max_len=200)
+            exp = humanize_field(row.get("expected") or crit, max_len=200)
+            act = humanize_field(row.get("actual"), max_len=300) or "—"
+            met = row.get("met")
+            mark = "?" if met is None else ("yes" if met else "no")
+            lines.append(f"- [{mark}] **{crit}**")
+            lines.append(f"  - Expected: {exp}")
+            lines.append(f"  - Actual: {act}")
+    elif ac:
+        for i, item in enumerate(ac, start=1):
+            lines.append(f"- [ ] {i}. {item}")
+    else:
+        lines.append("_No acceptance criteria._")
+    lines.append("")
+
+    actual = coerce_task_text(task.get("actualSummary")).strip()
+    lines.append("## Actual result")
+    lines.append(actual if actual else "_Not recorded yet — updated after QA / verification._")
+    lines.append("")
+
     blocked = [str(b) for b in (task.get("blockedBy") or []) if b]
     lines.append("## Dependencies")
     if blocked:
@@ -162,6 +193,9 @@ def update_task_spec_markdown(task_id: str) -> Optional[str]:
     if not task:
         return None
     normalize_task(task)
+    from backend.services.card_delivery import sync_card_delivery_fields
+
+    sync_card_delivery_fields(task)
     content = build_task_spec_markdown(task)
     content_hash = hashlib.sha256(content.encode("utf-8")).hexdigest()[:16]
     prev_hash = str(task.get("_specContentHash") or "")

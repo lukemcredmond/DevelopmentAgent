@@ -3137,6 +3137,14 @@ def _run_qa_step(active_task: Dict[str, Any], brief: str) -> None:
             "commands": playbook["commands"],
             "passed": passed,
         }
+        from backend.services.card_delivery import update_ac_verification_from_qa
+
+        update_ac_verification_from_qa(
+            task,
+            passed=passed,
+            commands=list(playbook.get("commands") or []),
+            failure_reason=fail_reason if not passed else "",
+        )
         if result == "SIMULATION_FALLBACK":
             from backend.services.simulation_gate import (
                 build_proposal,
@@ -3699,6 +3707,8 @@ def _build_sprint_summary(steps: int, status: str = "completed") -> Dict[str, An
 
 
 def run_auto_sprint(brief: str, ollama_url: str, max_steps: int | None = None) -> Dict[str, Any]:
+    import time
+
     from backend.services.sprint_session import set_sprint_mode
 
     set_sprint_mode("auto")
@@ -3710,6 +3720,10 @@ def run_auto_sprint(brief: str, ollama_url: str, max_steps: int | None = None) -
     state.SPRINT_PROGRESS_MAX = limit
     steps = 0
     status = "completed"
+    session_start = time.monotonic()
+    refresh_enabled = bool(ws.get("autoSprintSessionRefreshEnabled", True))
+    refresh_minutes = int(ws.get("autoSprintSessionRefreshMinutes") or 60)
+    refresh_sec = max(60, refresh_minutes * 60)
 
     while steps < limit and not state.SPRINT_CANCEL:
         with state.STATE_LOCK:
@@ -3719,6 +3733,15 @@ def run_auto_sprint(brief: str, ollama_url: str, max_steps: int | None = None) -
         state.SPRINT_PROGRESS_STEP = steps + 1
         run_sprint_step(brief, ollama_url)
         steps += 1
+        if refresh_enabled and (time.monotonic() - session_start) >= refresh_sec:
+            status = "session_refresh"
+            add_system_log(
+                "System",
+                "info",
+                f"Auto sprint session refresh after {refresh_minutes} minute(s) — "
+                "finished current step; UI will reload and resume.",
+            )
+            break
         from backend.services.simulation_gate import has_pending_simulation
 
         if has_pending_simulation():
@@ -3743,6 +3766,12 @@ def run_auto_sprint(brief: str, ollama_url: str, max_steps: int | None = None) -
     elif status != "idle" and steps >= limit:
         status = "max_steps"
         add_system_log("System", "info", f"Auto sprint finished after {steps} step(s) (max steps).")
+    elif status == "session_refresh":
+        add_system_log(
+            "System",
+            "info",
+            f"Auto sprint paused for session refresh after {steps} step(s).",
+        )
     elif status == "idle":
         add_system_log("System", "info", "Auto sprint paused — no backlog work remaining.")
     else:

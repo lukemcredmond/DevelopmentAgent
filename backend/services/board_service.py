@@ -396,6 +396,12 @@ def append_backlog_tasks(
             task["status"] = lane
             if lane == "Refinement":
                 init_refinement_fields(task)
+            from backend.services.task_sdd_inherit import apply_feature_sdd_defaults
+
+            apply_feature_sdd_defaults(task)
+            from backend.services.card_delivery import sync_card_delivery_fields
+
+            sync_card_delivery_fields(task)
             state.SHARED_BOARD[lane].append(task)
             added_tasks.append(task)
             from backend.services.task_spec_validation import spec_readiness

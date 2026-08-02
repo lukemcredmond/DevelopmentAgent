@@ -47,6 +47,14 @@ export interface TaskTranscriptEntry {
   toolOutput?: string
 }
 
+export interface AcVerificationRow {
+  criterion: string
+  expected?: string
+  actual?: string
+  met?: boolean | null
+  updatedAt?: string
+}
+
 export interface QaFailure {
   reason: string
   output?: string
@@ -262,6 +270,10 @@ export interface Task {
   testPlan?: string
   specMarkdownPath?: string | null
   specVersion?: number
+  expectedSummary?: string
+  actualSummary?: string
+  acVerification?: AcVerificationRow[]
+  sddInheritedFromFeature?: string[]
   agentUsage?: Record<string, AgentUsageEntry> | null
 }
 
@@ -549,6 +561,9 @@ export interface WorkflowSettings {
   simulationAutoUseExistingFile?: boolean
   duplicateToolPolicy?: string
   duplicateToolHardStopExclude?: string[]
+  autoSprintSessionRefreshEnabled?: boolean
+  autoSprintSessionRefreshMinutes?: number
+  autoSprintHardReload?: boolean
 }
 
 export interface RecentToolEntry {
@@ -695,7 +710,7 @@ export interface SprintSummary {
   blocked: string[]
   needsPo: number
   needsUser: number
-  status?: 'completed' | 'idle' | 'cancelled' | 'max_steps' | 'simulation_pending'
+  status?: 'completed' | 'idle' | 'cancelled' | 'max_steps' | 'simulation_pending' | 'session_refresh'
 }
 
 export interface CardWorkProgress {
@@ -1015,6 +1030,7 @@ export interface UpdateTaskPayload {
   scope?: string
   outOfScope?: string
   testPlan?: string
+  actualSummary?: string
   status?: BoardLane
 }
 
@@ -1131,6 +1147,9 @@ export interface WorkflowSettingsPayload {
   simulationAutoAccept?: boolean
   /** When true (default), dev offline steps use an existing workspace file without showing the popup. */
   simulationAutoUseExistingFile?: boolean
+  autoSprintSessionRefreshEnabled?: boolean
+  autoSprintSessionRefreshMinutes?: number
+  autoSprintHardReload?: boolean
 }
 
 export interface SkillsResponse {
@@ -1410,6 +1429,9 @@ export const DEFAULT_WORKFLOW_SETTINGS: WorkflowSettings = {
   simulationAutoUseExistingFile: true,
   duplicateToolPolicy: 'strict',
   duplicateToolHardStopExclude: ['run_command'],
+  autoSprintSessionRefreshEnabled: true,
+  autoSprintSessionRefreshMinutes: 60,
+  autoSprintHardReload: true,
 }
 
 export const EMPTY_BOARD: Board = {

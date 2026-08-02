@@ -147,6 +147,27 @@ def _apply_task_update(task: dict, payload: UpdateTaskPayload) -> None:
     if payload.testPlan is not None:
         task["testPlan"] = payload.testPlan
     normalize_task(task)
+    from backend.services.card_delivery import (
+        build_expected_summary,
+        sync_card_delivery_fields,
+        update_ac_verification_from_checklist,
+    )
+
+    rebuild_expected = (
+        payload.title is not None
+        or payload.description is not None
+        or payload.acceptanceCriteria is not None
+        or payload.testPlan is not None
+    )
+    if payload.actualSummary is not None:
+        task["actualSummary"] = payload.actualSummary
+    if rebuild_expected:
+        task["expectedSummary"] = build_expected_summary(task)
+    if payload.acChecklist is not None:
+        update_ac_verification_from_checklist(task, note="User checklist update")
+    else:
+        sync_card_delivery_fields(task, rebuild_expected=rebuild_expected)
+    normalize_task(task)
 
 
 @router.post("/api/tasks/update")

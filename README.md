@@ -730,6 +730,11 @@ After a crash or power loss mid-sprint, a **recovery banner** shows the interrup
 
 Generated docs: **`*-spec.md`** is the human-readable spec (from card JSON). **`*-qa.md`** is operational working notes (Q&A, decisions, recent actions).
 
+**Epic vs card (SDD):** Feature cards in the Features lane hold the living epic context. Child backlog cards link via `featureId`; empty `userStory` / `scope` may be auto-filled from the epic (story template + this card’s title/description/AC slice). `acceptanceCriteria` and `testPlan` stay per card.
+
+| `expectedSummary`, `actualSummary` | string | Card-level expected/actual delivery rollup |
+| `acVerification` | array | Per-AC `{ criterion, expected, actual, met }` rows |
+
 ---
 
 ## State API (`GET /api/state`)

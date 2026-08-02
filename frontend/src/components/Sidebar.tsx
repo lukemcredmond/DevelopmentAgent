@@ -1,4 +1,4 @@
-import { memo } from 'react'
+import { memo, useEffect, useState } from 'react'
 import type { AppState } from '../types'
 
 interface SidebarProps {
@@ -8,6 +8,8 @@ interface SidebarProps {
   autoSprint: boolean
   autoSprintPaused?: boolean
   sprintRunning: boolean
+  autoSprintSessionStartedAt?: number | null
+  autoSprintSessionRefreshMinutes?: number
   isDark: boolean
   onOpenSettings: () => void
   onLoadProject: (id: string) => void
@@ -36,6 +38,8 @@ export default memo(function Sidebar({
   autoSprint,
   autoSprintPaused = false,
   sprintRunning,
+  autoSprintSessionStartedAt = null,
+  autoSprintSessionRefreshMinutes = 60,
   isDark,
   onOpenSettings,
   onLoadProject,
@@ -69,6 +73,26 @@ export default memo(function Sidebar({
     pendingApproval: 0,
     qaFailures: 0,
   }
+
+  const [refreshCountdown, setRefreshCountdown] = useState('')
+
+  useEffect(() => {
+    if (!autoSprint || !autoSprintSessionStartedAt) {
+      setRefreshCountdown('')
+      return
+    }
+    const tick = () => {
+      const end =
+        autoSprintSessionStartedAt + autoSprintSessionRefreshMinutes * 60 * 1000
+      const left = Math.max(0, end - Date.now())
+      const m = Math.floor(left / 60000)
+      const s = Math.floor((left % 60000) / 1000)
+      setRefreshCountdown(`${m}:${s.toString().padStart(2, '0')}`)
+    }
+    tick()
+    const id = window.setInterval(tick, 1000)
+    return () => window.clearInterval(id)
+  }, [autoSprint, autoSprintSessionStartedAt, autoSprintSessionRefreshMinutes])
 
   return (
     <aside className="w-full lg:w-52 xl:w-56 bg-cat-mantle dark:bg-cat-mantle border-b lg:border-b-0 lg:border-r border-cat-surface1 p-3 flex flex-col justify-between overflow-y-auto shrink-0">
@@ -242,6 +266,11 @@ export default memo(function Sidebar({
             </div>
             {sprintRunning && (
               <p className="text-[9px] text-violet-300/90 italic">Sprint active</p>
+            )}
+            {autoSprint && autoSprintSessionStartedAt && refreshCountdown && (
+              <p className="text-[9px] text-cat-overlay font-mono">
+                Session refresh in {refreshCountdown}
+              </p>
             )}
             {autoSprint && autoSprintPaused && !sprintRunning && (
               <p className="text-[9px] text-amber-400/90 italic">Paused — waiting for backlog</p>

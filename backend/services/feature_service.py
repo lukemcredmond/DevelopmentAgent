@@ -133,10 +133,6 @@ def _spawn_child_task(feature_id: str, child_raw: Dict[str, Any]) -> Dict[str, A
     child_payload.setdefault("requiresDev", True)
     child_payload.setdefault("requiresQa", True)
     child_payload.setdefault("workType", "implementation")
-    if not child_payload.get("scope") and feature:
-        epic_desc = str(feature.get("description") or "").strip()
-        if epic_desc:
-            child_payload["scope"] = epic_desc[:800]
 
     # Prefer reusing an existing same-request child (or any board card)
     child_ids = set(str(c) for c in (feature.get("childTaskIds") or []) if feature) if feature else set()

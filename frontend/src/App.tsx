@@ -420,7 +420,7 @@ export default function App() {
     [applyState, workspaceOpen, selectedFile],
   )
 
-  const { autoSprint, setAutoSprint, autoSprintPaused, sprintRunning, stopAutoSprint, startAutoSprint } =
+  const { autoSprint, setAutoSprint, autoSprintPaused, sprintRunning, stopAutoSprint, startAutoSprint, autoSprintSessionStartedAt } =
     useAutoSprint(
       brief,
       ollamaUrl,
@@ -428,6 +428,11 @@ export default function App() {
       state.workflowSettings,
       handleState,
       state.pendingSimulation,
+      async () => {
+        clearToolEvents()
+        clearActivity()
+        await refresh({ includeFiles: false })
+      },
     )
 
   const orchestratedActive = sprintRunning || planRunActive || sprintBusy
@@ -1273,6 +1278,10 @@ export default function App() {
         autoSprint={autoSprint}
         autoSprintPaused={autoSprintPaused}
         sprintRunning={orchestratedActive}
+        autoSprintSessionStartedAt={autoSprintSessionStartedAt}
+        autoSprintSessionRefreshMinutes={
+          state.workflowSettings?.autoSprintSessionRefreshMinutes ?? 60
+        }
         isDark={isDark}
         onOpenSettings={() => setSettingsOpen(true)}
         onLoadProject={(id) =>

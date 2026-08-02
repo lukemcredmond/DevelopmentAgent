@@ -564,6 +564,36 @@ def normalize_task(task: Dict[str, Any]) -> Dict[str, Any]:
         task["specVersion"] = int(task.get("specVersion") or 0)
     except (TypeError, ValueError):
         task["specVersion"] = 0
+
+    task.setdefault("expectedSummary", "")
+    task["expectedSummary"] = coerce_task_text(task.get("expectedSummary")).strip()
+    task.setdefault("actualSummary", "")
+    task["actualSummary"] = coerce_task_text(task.get("actualSummary")).strip()
+    if "acVerification" not in task or not isinstance(task.get("acVerification"), list):
+        task["acVerification"] = []
+    else:
+        norm_rows: List[Dict[str, Any]] = []
+        for row in task["acVerification"]:
+            if not isinstance(row, dict):
+                continue
+            norm_rows.append(
+                {
+                    "criterion": coerce_task_text(row.get("criterion")).strip(),
+                    "expected": coerce_task_text(row.get("expected")).strip(),
+                    "actual": coerce_task_text(row.get("actual")).strip(),
+                    "met": row.get("met") if row.get("met") is None else bool(row.get("met")),
+                    "updatedAt": coerce_task_text(row.get("updatedAt", "")),
+                }
+            )
+        task["acVerification"] = norm_rows
+    if "sddInheritedFromFeature" not in task or not isinstance(
+        task.get("sddInheritedFromFeature"), list
+    ):
+        task.setdefault("sddInheritedFromFeature", [])
+    else:
+        task["sddInheritedFromFeature"] = [
+            str(x) for x in task["sddInheritedFromFeature"] if x
+        ]
     return task
 
 

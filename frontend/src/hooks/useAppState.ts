@@ -1066,12 +1066,27 @@ export function useAutoSprint(
   workflowSettings: AppState['workflowSettings'],
   onState: (s: AppState) => void,
   pendingSimulation?: AppState['pendingSimulation'],
+  onSessionRefresh?: () => void | Promise<void>,
 ) {
   const [autoSprint, setAutoSprint] = useState(false)
   const [autoSprintPaused, setAutoSprintPaused] = useState(false)
   const [sprintRunning, setSprintRunning] = useState(false)
   const cancelRef = useRef<AbortController | null>(null)
   const backlogLenRef = useRef(board.Backlog?.length ?? 0)
+  const sessionStartedRef = useRef<number | null>(null)
+  const [sessionStartedAt, setSessionStartedAt] = useState<number | null>(null)
+
+  useEffect(() => {
+    try {
+      if (sessionStorage.getItem('autoSprintResume') === '1') {
+        sessionStorage.removeItem('autoSprintResume')
+        setAutoSprint(true)
+        setAutoSprintPaused(false)
+      }
+    } catch {
+      /* ignore */
+    }
+  }, [])
 
   useEffect(() => {
     if (pendingSimulation?.id) {
@@ -1091,6 +1106,10 @@ export function useAutoSprint(
 
     setAutoSprintPaused(false)
     setSprintRunning(true)
+    if (sessionStartedRef.current == null) {
+      sessionStartedRef.current = Date.now()
+      setSessionStartedAt(sessionStartedRef.current)
+    }
     cancelRef.current = new AbortController()
 
     try {
@@ -1101,7 +1120,22 @@ export function useAutoSprint(
         max_steps: workflowSettings?.maxSprintSteps ?? 20,
       })
       onState(data)
-      if (data.pendingSimulation?.id || data.lastSprintSummary?.status === 'simulation_pending') {
+      if (data.lastSprintSummary?.status === 'session_refresh') {
+        try {
+          sessionStorage.setItem('autoSprintResume', '1')
+        } catch {
+          /* ignore */
+        }
+        setAutoSprintPaused(true)
+        await onSessionRefresh?.()
+        sessionStartedRef.current = null
+        setSessionStartedAt(null)
+        if (workflowSettings?.autoSprintHardReload !== false) {
+          window.location.reload()
+          return
+        }
+        setAutoSprintPaused(false)
+      } else if (data.pendingSimulation?.id || data.lastSprintSummary?.status === 'simulation_pending') {
         setAutoSprintPaused(true)
       } else if (data.lastSprintSummary?.status === 'idle') {
         setAutoSprintPaused(true)
@@ -1111,11 +1145,13 @@ export function useAutoSprint(
     } finally {
       setSprintRunning(false)
     }
-  }, [brief, ollamaUrl, board, workflowSettings, onState, pendingSimulation?.id])
+  }, [brief, ollamaUrl, board, workflowSettings, onState, pendingSimulation?.id, onSessionRefresh])
 
   const stopAutoSprint = useCallback(async () => {
     setAutoSprint(false)
     setAutoSprintPaused(false)
+    sessionStartedRef.current = null
+    setSessionStartedAt(null)
     cancelRef.current?.abort()
     try {
       await cancelSprint()
@@ -1158,5 +1194,6 @@ export function useAutoSprint(
     sprintRunning,
     startAutoSprint,
     stopAutoSprint,
+    autoSprintSessionStartedAt: sessionStartedAt,
   }
 }

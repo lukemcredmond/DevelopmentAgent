@@ -84,6 +84,7 @@ class UpdateTaskPayload(BaseModel):
     scope: Optional[str] = None
     outOfScope: Optional[str] = None
     testPlan: Optional[str] = None
+    actualSummary: Optional[str] = None
 
 
 class ReorderTasksPayload(BaseModel):
@@ -239,6 +240,9 @@ class WorkflowSettingsPayload(BaseModel):
     simulationAutoUseExistingFile: Optional[bool] = None
     duplicateToolPolicy: Optional[str] = None
     duplicateToolHardStopExclude: Optional[List[str]] = None
+    autoSprintSessionRefreshEnabled: Optional[bool] = None
+    autoSprintSessionRefreshMinutes: Optional[int] = None
+    autoSprintHardReload: Optional[bool] = None
 
 
 class DiagnoseTaskPayload(BaseModel):
