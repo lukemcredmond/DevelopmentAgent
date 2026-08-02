@@ -833,7 +833,9 @@ class ScrumAgent:
                 record_tool_fingerprint_on_task(live, tool_name, arguments)
 
         # Hard-skip fingerprints blocked on a prior stuck step — never call execute_tool.
-        if task_id:
+        from backend.services.duplicate_tool_policy import duplicate_cross_step_block_applies
+
+        if task_id and duplicate_cross_step_block_applies(tool_name):
             from backend.agents.tool_fingerprints import is_tool_fingerprint_blocked
 
             live_task = find_task_by_id(task_id)
@@ -888,7 +890,12 @@ class ScrumAgent:
         with _FAILURE_LOCK:
             same_success = successful_tool_keys.count(key)
 
-        if same_success >= SAME_ARGS_SUCCESS_LIMIT - 1:
+        from backend.services.duplicate_tool_policy import (
+            duplicate_in_step_hard_stop_applies,
+            duplicate_in_step_soft_skip_applies,
+        )
+
+        if duplicate_in_step_hard_stop_applies(tool_name) and same_success >= SAME_ARGS_SUCCESS_LIMIT - 1:
             # Already succeeded once and skipped once (count >= 2) → stop like failure stuck-loop
             cmd_hint = ""
             if tool_name == "run_command" and isinstance(arguments, dict):
@@ -935,7 +942,7 @@ class ScrumAgent:
             )
             return tool_name, arguments, result, stop_msg
 
-        if same_success >= 1:
+        if duplicate_in_step_soft_skip_applies(tool_name) and same_success >= 1:
             from backend.services.tool_cache import get_cached_result
 
             cached = get_cached_result(tool_name, arguments)
@@ -1133,6 +1140,35 @@ class ScrumAgent:
             if early_stop:
                 return early_stop
             tools_used.add(tool_name)
+            live_task = find_task_by_id(task_id) if task_id else None
+            if live_task:
+                from backend.services.task_working_context import (
+                    record_tool_working_context,
+                    save_task_fact_memory,
+                )
+
+                record_tool_working_context(
+                    live_task,
+                    tool_name=tool_name,
+                    arguments=arguments,
+                    tool_output=result.tool_output,
+                    success=result.success,
+                )
+                if tool_name == "run_command":
+                    cmd = str(arguments.get("command") or "")[:160]
+                    save_task_fact_memory(
+                        task_id=str(task_id),
+                        agent_role=self.role,
+                        content=f"{cmd} → {'ok' if result.success else 'FAIL'}: {(result.tool_output or '')[:300]}",
+                        category="fact",
+                    )
+                elif self.role == "QA Tester" and tool_name in ("run_test", "run_command"):
+                    save_task_fact_memory(
+                        task_id=str(task_id),
+                        agent_role=self.role,
+                        content=f"QA {tool_name}: {'pass' if result.success else 'fail'} — {(result.tool_output or '')[:300]}",
+                        category="verification",
+                    )
             self._append_tool_messages(
                 messages,
                 tool_name,

@@ -319,6 +319,9 @@ def normalize_task(task: Dict[str, Any]) -> Dict[str, Any]:
         task["decisions"] = []
     if "transcript" not in task or not isinstance(task["transcript"], list):
         task["transcript"] = []
+    from backend.services.task_working_context import normalize_working_context_fields
+
+    normalize_working_context_fields(task)
     if "acceptanceCriteria" not in task or not isinstance(task["acceptanceCriteria"], list):
         task["acceptanceCriteria"] = []
     else:
@@ -1270,6 +1273,13 @@ def build_task_prompt(task: Dict[str, Any], brief: str, *, agent_role: Optional[
     prompt = (
         f"Project brief:\n{brief}\n"
         f"{build_dod_block()}\n"
+    )
+    from backend.services.task_working_context import format_working_context_for_prompt
+
+    wc = format_working_context_for_prompt(task)
+    if wc:
+        prompt += wc + "\n"
+    prompt += (
         f"Task ID: {task['id']}\n"
         f"Title: {task['title']}\n"
         f"Description: {task['description']}\n"

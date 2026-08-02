@@ -169,18 +169,18 @@ def test_same_args_success_limit_skips_then_stops():
     agent._log_step_exit = MagicMock()
 
     call = MagicMock()
-    call.function.name = "run_command"
-    call.function.arguments = {"command": "flutter --version"}
+    call.function.name = "read_file"
+    call.function.arguments = {"path": "pubspec.yaml"}
 
     failed: list = []
     successful: list = []
     total_failures = [0]
 
     clear_tool_cache()
-    args = {"command": "flutter --version"}
-    store_cached_result("run_command", args, "Flutter 3.22.0", True)
+    args = {"path": "pubspec.yaml"}
+    store_cached_result("read_file", args, "name: app\n", True)
 
-    key = ("run_command", json.dumps(args, sort_keys=True, default=str))
+    key = ("read_file", json.dumps(args, sort_keys=True, default=str))
     successful.append(key)
 
     with patch("backend.agents.scrum_agent.finish_run"), patch(

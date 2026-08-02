@@ -541,6 +541,8 @@ export interface WorkflowSettings {
   simulationAutoAccept?: boolean
   /** When true (default), dev offline steps use an existing workspace file without showing the popup. */
   simulationAutoUseExistingFile?: boolean
+  duplicateToolPolicy?: string
+  duplicateToolHardStopExclude?: string[]
 }
 
 export interface RecentToolEntry {
@@ -1396,6 +1398,8 @@ export const DEFAULT_WORKFLOW_SETTINGS: WorkflowSettings = {
   simulationConfirmSeconds: 10,
   simulationAutoAccept: false,
   simulationAutoUseExistingFile: true,
+  duplicateToolPolicy: 'strict',
+  duplicateToolHardStopExclude: ['run_command'],
 }
 
 export const EMPTY_BOARD: Board = {

@@ -233,6 +233,8 @@ class WorkflowSettingsPayload(BaseModel):
     simulationConfirmSeconds: Optional[int] = None
     simulationAutoAccept: Optional[bool] = None
     simulationAutoUseExistingFile: Optional[bool] = None
+    duplicateToolPolicy: Optional[str] = None
+    duplicateToolHardStopExclude: Optional[List[str]] = None
 
 
 class DiagnoseTaskPayload(BaseModel):

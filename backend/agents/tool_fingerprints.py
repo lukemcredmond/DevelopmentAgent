@@ -6,6 +6,7 @@ import json
 from typing import Any, Dict, List, Optional, Set, Tuple
 
 from backend.agents.tool_outcomes import summarize_tool_args
+from backend.services.duplicate_tool_policy import duplicate_cross_step_block_applies
 
 ToolKey = Tuple[str, str]
 
@@ -171,6 +172,8 @@ def finalize_step_tool_fingerprints(
                 args = json.loads(key[1]) if key[1] else {}
             except json.JSONDecodeError:
                 args = {}
+            if not duplicate_cross_step_block_applies(key[0], stop_reason=reason):
+                continue
             block_tool_fingerprint_on_task(task, key[0], args if isinstance(args, dict) else {})
     if reason in ("duplicate_tool", "tool_failure_stop") and step_keys:
         last = step_keys[-1]
@@ -179,7 +182,8 @@ def finalize_step_tool_fingerprints(
                 args = json.loads(last[1]) if last[1] else {}
             except json.JSONDecodeError:
                 args = {}
-            block_tool_fingerprint_on_task(task, last[0], args if isinstance(args, dict) else {})
+            if duplicate_cross_step_block_applies(last[0], stop_reason=reason):
+                block_tool_fingerprint_on_task(task, last[0], args if isinstance(args, dict) else {})
 
 
 def fingerprint_overlap_ratio(a: List[str], b: List[str]) -> float:

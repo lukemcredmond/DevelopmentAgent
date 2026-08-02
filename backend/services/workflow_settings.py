@@ -134,6 +134,8 @@ DEFAULT_WORKFLOW_SETTINGS: Dict[str, Any] = {
     "simulationConfirmSeconds": 10,
     "simulationAutoAccept": False,
     "simulationAutoUseExistingFile": True,
+    "duplicateToolPolicy": "strict",
+    "duplicateToolHardStopExclude": ["run_command"],
 }
 
 DEFAULT_SPRINT_SUMMARY: Dict[str, Any] = {

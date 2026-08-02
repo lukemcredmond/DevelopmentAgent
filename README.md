@@ -323,6 +323,8 @@ Persisted per project. Update via sidebar **Workflow** or `POST /api/workflow/se
 | enableSplitOnStuck | On | After backup attempts fail at `maxStuckSteps`, auto-split once via PO before Needs PO |
 | enableVramAwareModelSwap | On | Unload primary before loading backup when GPU VRAM &gt;85% full |
 | maxToolFailuresPerStep | 5 | Stop agent loop after N tool failures (Settings → Workflow) |
+| duplicateToolPolicy | strict | `strict` = in-step duplicate skip/hard-stop; `cache_only` same as strict but pair with exclude list; `off` = allow identical tool repeats (spin risk) |
+| duplicateToolHardStopExclude | run_command | Tools exempt from in-step duplicate skip/stop and from cross-step block except after `tool_failure_stop` |
 | pauseSprintOnNeedsUser | Off | Idle sprint while Needs User cards exist |
 
 #### Autonomous behavior
@@ -981,6 +983,8 @@ Key code: `backend/services/sprint_service.py`, `backend/api/sprint.py`, `backen
 | **Parallel safe tools** | Read/search-style tools may run in one batch |
 | **Stop reasons** | Max iterations, timeouts, duplicate tools, tool-failure caps, duration limits |
 | **Cross-step fingerprints** | Blocked/recent `(tool, args)` keys persist on the card; next step soft-skips repeats and escalates sooner when consecutive steps overlap |
+| **duplicateToolPolicy** | `strict` (default): in-step soft-skip + hard-stop on identical successful tools; `cache_only` / default exclude list treats **`run_command`** like Cursor (re-run allowed; cache at execute layer only); `off` disables in-step duplicate skip/stop |
+| **duplicateToolHardStopExclude** | `["run_command"]` default — no in-step hard-stop, soft-skip, or cross-step block for those tools except after **`tool_failure_stop`** |
 | **Continuation** | Manual/auto **Extend** restarts with a continuation prompt (not an infinite in-memory chat) |
 | **Observation / reflect nudges** | Short guidance after tool batches to steer the next LLM turn |
 
@@ -1151,6 +1155,7 @@ flowchart LR
 | Too few / coarse epics | Expand outline **Proposed epics**; re-run **Generate Features**. Check Console for under-decomposition warnings. |
 | Context overflow / slow | Lower `ollamaNumCtx` or use smaller models; reduce `maxLlmIterationsPerStep`. |
 | Model returns fenced tool JSON as text | In **Model Debug**, empty `responseToolCalls` with `'''…'''` or ` ```json ` tool blobs means the model did not use native Ollama tool calling. AllHands attempts to **recover** registered tools from that content before rejecting text-only replies; prefer tool-capable models (e.g. Qwen Coder) and Dev prompt guidance. |
+| Agent retries same test/analyze command | Default **`duplicateToolHardStopExclude`** includes `run_command` so steps are not stopped for repeated identical shell commands; use **`duplicateToolPolicy: off`** only if you accept spin loops. Working context on the card (`workingContext` / **WORKING CONTEXT** in prompts) shares recent command outcomes across PO/Dev/CR/QA. |
 | Patch failures | Dev must `read_file` before `apply_patch`; check Console for "old_text not found". |
 | Custom SQL tool fails | Use `sqlite:///…` under the workspace; only read-only `SELECT`/`WITH` when `readOnly` is true. |
 
