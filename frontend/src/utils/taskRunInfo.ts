@@ -15,6 +15,8 @@ export interface TaskRunInfo {
   currentToolDetail?: string | null
   iteration?: number
   maxIterations?: number
+  fixVerifyRound?: number | null
+  fixVerifyMaxRounds?: number | null
   lastEvent?: string
   phase?: SprintProgress['phase']
   lane?: string
@@ -73,6 +75,8 @@ export function buildTaskRunInfo(args: {
     currentToolDetail: activeRun?.currentToolDetail ?? null,
     iteration: activeRun?.iteration,
     maxIterations: activeRun?.maxIterations,
+    fixVerifyRound: activeRun?.fixVerifyRound ?? null,
+    fixVerifyMaxRounds: activeRun?.fixVerifyMaxRounds ?? null,
     lastEvent: activeStepDiagnostics?.lastEvent,
     phase: sprintProgress?.phase,
     lane: sprintProgress?.lane,
@@ -96,4 +100,18 @@ export function formatRunStatus(info: TaskRunInfo): string {
 
 export function formatCardProgressBrief(info: TaskRunInfo): string | null {
   return formatCardProgressLine(info.cardProgress)
+}
+
+export function formatFixVerifyHint(info: {
+  fixVerifyRound?: number | null
+  fixVerifyMaxRounds?: number | null
+  iteration?: number
+  maxIterations?: number
+}): string | null {
+  if (info.fixVerifyRound == null || info.fixVerifyMaxRounds == null) return null
+  const iterPart =
+    info.iteration != null && info.maxIterations != null
+      ? ` · LLM iter ${info.iteration}/${info.maxIterations}`
+      : ''
+  return `Fix-verify round ${info.fixVerifyRound}/${info.fixVerifyMaxRounds}${iterPart}`
 }

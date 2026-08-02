@@ -35,16 +35,28 @@ class AgentRunState:
     intent: Optional[str] = None
     card_progress: Optional[Dict[str, Any]] = None
     current_tool_detail: Optional[str] = None
+    fix_verify_round: Optional[int] = None
+    fix_verify_max_rounds: Optional[int] = None
 
     def to_dict(self) -> Dict[str, Any]:
         data = asdict(self)
         data["cardProgress"] = data.pop("card_progress", None)
         data["currentToolDetail"] = data.pop("current_tool_detail", None)
+        data["fixVerifyRound"] = data.pop("fix_verify_round", None)
+        data["fixVerifyMaxRounds"] = data.pop("fix_verify_max_rounds", None)
         return data
+
+
+def _sync_fix_verify_from_state(run: AgentRunState) -> None:
+    fr = getattr(state, "FIX_VERIFY_ROUND", None)
+    fm = getattr(state, "FIX_VERIFY_MAX_ROUNDS", None)
+    run.fix_verify_round = int(fr) if fr is not None else None
+    run.fix_verify_max_rounds = int(fm) if fm is not None else None
 
 
 def _publish_run(run: Optional[AgentRunState]) -> None:
     if run:
+        _sync_fix_verify_from_state(run)
         publish_event("agent_run", run.to_dict())
 
 

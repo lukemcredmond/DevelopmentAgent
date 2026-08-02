@@ -89,4 +89,8 @@ STEP_FILE_READS: Dict[str, str] = {}
 # apply_patch failure counts per path within current sprint step.
 STEP_PATCH_FAILURES: Dict[str, int] = {}
 
+# Set during run_fix_verify_loop so SSE agent_run can show fix-verify round.
+FIX_VERIFY_ROUND: Optional[int] = None
+FIX_VERIFY_MAX_ROUNDS: Optional[int] = None
+
 storage = ProjectStorage()

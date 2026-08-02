@@ -223,13 +223,36 @@ All settings live in sidebar **Workflow** and persist per project in SQLite. Def
 | Dev model | qwen2.5-coder:7b |
 | ollamaNumCtx | 16384 |
 | enableSemanticSearch | OFF if Qdrant unavailable |
-| maxLlmIterationsPerStep | 6 |
+| maxLlmIterationsPerStep | 6 *(tuning suggestion — product default is 8)* |
 
 ---
 
 ## Agent workflow
 
 The core loop is **Brief → Features (epics) → Dev → QA → Done**, with escalation lanes when agents need help.
+
+### Sprint steps vs LLM iterations
+
+If you are new to the board, these counters show up in different places and mean different things:
+
+| Term | Meaning |
+|------|---------|
+| **Sprint step** | One orchestrator tick: the sprint picks **one lane/card** (PO, Dev, QA, …) and runs **one agent visit**. **Auto Sprint** runs many steps per batch, up to **Max sprint steps** (`maxSprintSteps`). This is **not** “this card is 2/20 complete.” |
+| **LLM iteration (Iter)** | Inside that visit: think → tools → observe, up to **Max LLM iter/step** (`maxLlmIterationsPerStep`, default **8**). Shown as **Iter 3/12** on the active card strip and agent run bar. |
+| **Fix-verify** | Optional Dev mode when **Enable fix-verify loop** or **Require clean lint** is on and a lint command exists: edit → run lint → repeat for up to **Max fix-verify rounds** (`maxFixVerifyRounds`). Each round uses the **full** configured LLM iter cap (same as a normal Dev step). The UI shows **Fix-verify round 2/3 · LLM iter 3/12** while that mode is active. |
+| **Extend / max iterations** | The agent hit the iter cap but may have more work; use **Extend** on the agent bar to add rounds (see Workflow **Auto extend on max iter**). |
+| **Lanes (brief)** | **Backlog** → **Refinement** (optional) → **In Progress** → **Code Review** (optional) → **QA** → **Done**. **Needs PO** and **Needs User** when the agent is blocked. |
+
+Configure sprint behavior under sidebar **Workflow**: `maxSprintSteps`, `maxLlmIterationsPerStep`, `enableFixVerifyLoop`, `requireCleanLint`, `maxFixVerifyRounds`.
+
+```mermaid
+flowchart LR
+  batch[Auto sprint batch]
+  step[Sprint step N of maxSprintSteps]
+  visit[One agent visit on one card]
+  iter[LLM iterations up to maxLlmIterationsPerStep]
+  batch --> step --> visit --> iter
+```
 
 ### Typical paths
 

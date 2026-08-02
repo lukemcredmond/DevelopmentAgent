@@ -226,6 +226,14 @@ function mapAgentRun(raw: Record<string, unknown>): AgentRunState {
       raw.currentToolDetail != null || raw.current_tool_detail != null
         ? String(raw.currentToolDetail ?? raw.current_tool_detail)
         : null,
+    fixVerifyRound:
+      raw.fixVerifyRound != null || raw.fix_verify_round != null
+        ? Number(raw.fixVerifyRound ?? raw.fix_verify_round) || undefined
+        : undefined,
+    fixVerifyMaxRounds:
+      raw.fixVerifyMaxRounds != null || raw.fix_verify_max_rounds != null
+        ? Number(raw.fixVerifyMaxRounds ?? raw.fix_verify_max_rounds) || undefined
+        : undefined,
   }
 }
 

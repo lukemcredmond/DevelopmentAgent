@@ -5,6 +5,7 @@ import type {
   LastStepOutcome,
   StepProgress,
 } from '../types'
+import { formatFixVerifyHint } from '../utils/taskRunInfo'
 
 interface AgentRunBarProps {
   activeRun: AgentRunState | null
@@ -112,6 +113,9 @@ export default function AgentRunBar({
     (activeRun?.error ?? '').startsWith('Max tool iterations') ||
     lastStepDiagnostics?.exitReason === 'max_iterations'
 
+  const fixVerifyHint =
+    activeRun != null ? formatFixVerifyHint(activeRun) : null
+
   const showMaxIterPanel =
     isMaxIter &&
     (isDone || !hasActiveRun || activeRun?.status === 'failed') &&
@@ -188,6 +192,11 @@ export default function AgentRunBar({
           {activeRun.iteration != null && activeRun.maxIterations != null && (
             <span className="text-cat-subtext">
               iteration {activeRun.iteration}/{activeRun.maxIterations}
+            </span>
+          )}
+          {fixVerifyHint && isRunning && (
+            <span className="text-emerald-200/90" title={fixVerifyHint}>
+              {fixVerifyHint}
             </span>
           )}
           <span className={isWaitingApproval ? 'text-amber-300' : 'text-cat-subtext'}>

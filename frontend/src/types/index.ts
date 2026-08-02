@@ -683,6 +683,8 @@ export interface AgentRunState {
   intent?: string | null
   cardProgress?: CardWorkProgress | null
   currentToolDetail?: string | null
+  fixVerifyRound?: number | null
+  fixVerifyMaxRounds?: number | null
 }
 
 export interface PendingToolApproval {
@@ -1150,6 +1152,8 @@ export interface WorkflowSettingsPayload {
   autoSprintSessionRefreshEnabled?: boolean
   autoSprintSessionRefreshMinutes?: number
   autoSprintHardReload?: boolean
+  duplicateToolPolicy?: string
+  duplicateToolHardStopExclude?: string[]
 }
 
 export interface SkillsResponse {

@@ -886,11 +886,13 @@ export default function App() {
 
   const workflowSaveTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null)
   const [workflowSettingsSaveError, setWorkflowSettingsSaveError] = useState<string | null>(null)
+  const [workflowSettingsSaving, setWorkflowSettingsSaving] = useState(false)
 
   useEffect(() => {
     return () => {
       if (workflowSaveTimerRef.current) clearTimeout(workflowSaveTimerRef.current)
       setWorkflowSaveTimerActive(false)
+      setWorkflowSettingsSaving(false)
     }
   }, [])
 
@@ -907,6 +909,7 @@ export default function App() {
       queuePendingWorkflowSettings(partial)
       if (workflowSaveTimerRef.current) clearTimeout(workflowSaveTimerRef.current)
       setWorkflowSaveTimerActive(true)
+      setWorkflowSettingsSaving(true)
       workflowSaveTimerRef.current = setTimeout(() => {
         workflowSaveTimerRef.current = null
         setWorkflowSaveTimerActive(false)
@@ -914,6 +917,7 @@ export default function App() {
         void updateWorkflowSettings(payload)
           .then((data) => {
             setWorkflowSettingsSaveError(null)
+            setWorkflowSettingsSaving(false)
             setState((prev) => ({
               ...prev,
               workflowSettings: {
@@ -927,6 +931,7 @@ export default function App() {
           })
           .catch(() => {
             requeuePendingWorkflowPayload(payload)
+            setWorkflowSettingsSaving(false)
             setWorkflowSettingsSaveError('Could not save workflow settings. Will retry when you change a setting.')
           })
       }, 350)
@@ -1462,6 +1467,7 @@ export default function App() {
         }
         onWorkflowSettingsChange={handleWorkflowSettingsChange}
         workflowSettingsSaveError={workflowSettingsSaveError}
+        workflowSettingsSaving={workflowSettingsSaving}
         onOpenCustomTools={() => {
           setSettingsOpen(false)
           expandBottomPanel()

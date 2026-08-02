@@ -2,7 +2,7 @@ import { useSortable } from '@dnd-kit/sortable'
 import { CSS } from '@dnd-kit/utilities'
 import type { BoardLane, Task } from '../types'
 import type { TaskRunInfo } from '../utils/taskRunInfo'
-import { formatCardProgressBrief, formatRunStatus } from '../utils/taskRunInfo'
+import { formatCardProgressBrief, formatFixVerifyHint, formatRunStatus } from '../utils/taskRunInfo'
 import { deriveTaskFiles, formatTaskText } from '../utils/taskFormat'
 import { taskLooksIncompleteOnDone } from '../utils/taskDoneAudit'
 import { formatAgentUsageBrief } from '../utils/agentUsageFormat'
@@ -60,6 +60,7 @@ export default function TaskCard({
   const isActiveRun = runInfo != null && runInfo.taskId === task.id
   const statusLabel = isActiveRun ? formatRunStatus(runInfo) : ''
   const progressBrief = isActiveRun ? formatCardProgressBrief(runInfo) : null
+  const fixVerifyHint = isActiveRun ? formatFixVerifyHint(runInfo) : null
 
   return (
     <button
@@ -103,6 +104,11 @@ export default function TaskCard({
           {runInfo.iteration != null && runInfo.maxIterations != null && (
             <p className="text-[9px] text-cat-subtext font-mono">
               LLM iteration {runInfo.iteration}/{runInfo.maxIterations}
+            </p>
+          )}
+          {fixVerifyHint && (
+            <p className="text-[9px] text-emerald-200/90 font-mono truncate" title={fixVerifyHint}>
+              {fixVerifyHint}
             </p>
           )}
           {progressBrief && (
