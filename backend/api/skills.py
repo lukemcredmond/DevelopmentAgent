@@ -80,11 +80,17 @@ def combine_skills(payload: CombineSkillsPayload):
 
 @router.post("/api/skills/save-built")
 def save_built_skill_route(payload: SaveBuiltSkillPayload):
-    from backend.services.skill_combiner import save_built_skill
+    from backend.services.skill_combiner import BuiltSkillPathExistsError, save_built_skill
 
     with state.STATE_LOCK:
         try:
-            save_built_skill(skill_rel=payload.skillRel, markdown=payload.markdown)
+            save_built_skill(
+                skill_rel=payload.skillRel,
+                markdown=payload.markdown,
+                replace_existing=payload.replaceExisting,
+            )
+        except BuiltSkillPathExistsError as e:
+            raise HTTPException(status_code=409, detail=str(e)) from e
         except ValueError as e:
             raise HTTPException(status_code=400, detail=str(e)) from e
         save_current_project_state()

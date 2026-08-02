@@ -1024,11 +1024,15 @@ export interface CombineSkillsResponse {
   sources: string[]
   warning?: string | null
   mergeRounds?: number
+  suggestedBasename?: string
+  fileExists?: boolean
+  requestedSkillRel?: string
 }
 
 export interface SaveBuiltSkillPayload {
   skillRel: string
   markdown: string
+  replaceExisting?: boolean
 }
 
 export interface CreateProjectPayload {

@@ -1,4 +1,4 @@
-import { useState } from 'react'
+import { useEffect, useState } from 'react'
 import type { AgentId, AppState, BriefCategory, Skill, SkillSuggestion } from '../types'
 import { AGENT_LABELS } from '../types'
 import {
@@ -61,8 +61,17 @@ export default function SkillModal({
   const [buildBudget, setBuildBudget] = useState(0)
   const [buildWarning, setBuildWarning] = useState<string | null>(null)
   const [buildMergeRounds, setBuildMergeRounds] = useState<number | null>(null)
-  const [outputName, setOutputName] = useState('combined-skill')
+  const [outputName, setOutputName] = useState('dev-combined')
+  const [buildFileExists, setBuildFileExists] = useState(false)
+  const [buildRequestedSkillRel, setBuildRequestedSkillRel] = useState<string | null>(null)
+  const [replaceExistingBuilt, setReplaceExistingBuilt] = useState(false)
   const [removeSourcesAfterAssign, setRemoveSourcesAfterAssign] = useState(false)
+
+  useEffect(() => {
+    if (agent) {
+      setOutputName(`${agent}-combined`)
+    }
+  }, [agent])
 
   if (!agent) return null
 
@@ -98,6 +107,11 @@ export default function SkillModal({
       setBuildBudget(result.skillsContextMaxChars)
       setBuildWarning(result.warning ?? null)
       setBuildMergeRounds(result.mergeRounds ?? 1)
+      setBuildFileExists(Boolean(result.fileExists))
+      setBuildRequestedSkillRel(result.requestedSkillRel ?? null)
+      setReplaceExistingBuilt(false)
+      const base = result.skillRel.replace(/^built\//, '')
+      setOutputName(base.replace(/\.md$/i, '').replace(/\.txt$/i, ''))
       setView('build')
     } catch (e) {
       setCombineError(e instanceof Error ? e.message : 'Combine failed')
@@ -111,12 +125,15 @@ export default function SkillModal({
     setSavingBuilt(true)
     setCombineError(null)
     try {
+      const saveRel =
+        replaceExistingBuilt && buildRequestedSkillRel ? buildRequestedSkillRel : buildSkillRel
       let data = await saveBuiltSkill({
-        skillRel: buildSkillRel,
+        skillRel: saveRel,
         markdown: buildMarkdown,
+        replaceExisting: replaceExistingBuilt,
       })
       onAppState(data)
-      data = await assignSkill({ agent, skillFile: buildSkillRel })
+      data = await assignSkill({ agent, skillFile: saveRel })
       onAppState(data)
       if (removeSourcesAfterAssign) {
         for (const src of buildSources) {
@@ -257,13 +274,39 @@ export default function SkillModal({
                 <span className="text-amber-300 block mt-1">{buildWarning}</span>
               ) : null}
             </p>
-            <label className="flex items-center gap-2 text-[10px] text-cat-subtext cursor-pointer">
+            {buildFileExists && buildRequestedSkillRel && (
+              <div className="rounded border border-amber-500/35 bg-amber-950/25 px-2 py-1.5 space-y-1.5">
+                <p className="text-[10px] text-amber-200/90">
+                  <span className="font-mono">{buildRequestedSkillRel}</span> already exists. Saving
+                  will write to <span className="font-mono">{buildSkillRel}</span> unless you
+                  replace the existing file.
+                </p>
+                <label className="flex items-center gap-2 text-[10px] text-cat-subtext cursor-pointer">
+                  <input
+                    type="checkbox"
+                    checked={replaceExistingBuilt}
+                    onChange={(e) => setReplaceExistingBuilt(e.target.checked)}
+                  />
+                  Replace existing built skill file
+                </label>
+              </div>
+            )}
+            <label className="flex items-start gap-2 text-[10px] text-cat-subtext cursor-pointer">
               <input
                 type="checkbox"
+                className="mt-0.5 shrink-0"
                 checked={removeSourcesAfterAssign}
                 onChange={(e) => setRemoveSourcesAfterAssign(e.target.checked)}
               />
-              Remove source skills from this agent after assign
+              <span>
+                Unassign source skills from this agent after assign
+                <span className="block text-[9px] text-cat-overlay mt-0.5 leading-snug">
+                  Does not delete files in your global skills library — they stay available to
+                  re-assign. Workspace copies under{' '}
+                  <span className="font-mono">skills/</span> are removed when no agent uses that
+                  skill anymore.
+                </span>
+              </span>
             </label>
             <textarea
               value={buildMarkdown}
@@ -291,7 +334,7 @@ export default function SkillModal({
                   value={outputName}
                   onChange={(e) => setOutputName(e.target.value)}
                   className="flex-1 bg-cat-base border border-cat-surface1 rounded px-2 py-1 font-mono text-xs"
-                  placeholder="combined-skill"
+                  placeholder={`${agent}-combined`}
                 />
               </div>
             )}

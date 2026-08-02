@@ -11,8 +11,10 @@ from backend import state
 from backend.agents.registry import agent_dev
 from backend.bootstrap import initialize
 from backend.services.skill_combiner import (
+    BuiltSkillPathExistsError,
     build_combined_skill_markdown,
     combine_skills_preview,
+    resolve_built_skill_slug,
     save_built_skill,
 )
 from backend.services.skills import (
@@ -170,6 +172,92 @@ def test_combine_skills_preview_mock_llm(tmp_path, monkeypatch):
     assert "sources:" in result["markdown"]
     assert result["sources"] == ["a.md", "b.md"]
     assert result.get("mergeRounds") == 1
+
+
+def test_default_built_skill_name_dev_combined(tmp_path, monkeypatch):
+    initialize()
+    ws = tmp_path / "ws"
+    lib = tmp_path / "lib"
+    ws.mkdir()
+    lib.mkdir()
+    monkeypatch.setattr(state, "WORKSPACE_DIR", str(ws))
+    monkeypatch.setattr(state, "SKILLS_DIR", str(lib))
+    (lib / "a.md").write_text("# a\n", encoding="utf-8")
+    (lib / "b.md").write_text("# b\n", encoding="utf-8")
+
+    with patch("backend.services.skill_combiner._merge_with_llm", return_value="# M\n"):
+        result = combine_skills_preview(agent_key="dev", skill_files=["a.md", "b.md"])
+
+    assert result["skillRel"] == "built/dev-combined.md"
+    assert result["suggestedBasename"] == "dev-combined"
+    assert result["fileExists"] is False
+
+
+def test_default_built_skill_auto_suffix_when_exists(tmp_path, monkeypatch):
+    initialize()
+    ws = tmp_path / "ws"
+    lib = tmp_path / "lib"
+    ws.mkdir()
+    lib.mkdir()
+    monkeypatch.setattr(state, "WORKSPACE_DIR", str(ws))
+    monkeypatch.setattr(state, "SKILLS_DIR", str(lib))
+    (lib / "a.md").write_text("# a\n", encoding="utf-8")
+    (lib / "b.md").write_text("# b\n", encoding="utf-8")
+    existing = workspace_skill_path("built/dev-combined.md")
+    os.makedirs(os.path.dirname(existing), exist_ok=True)
+    with open(existing, "w", encoding="utf-8") as f:
+        f.write("old\n")
+
+    with patch("backend.services.skill_combiner._merge_with_llm", return_value="# M\n"):
+        result = combine_skills_preview(agent_key="dev", skill_files=["a.md", "b.md"])
+
+    assert result["skillRel"] == "built/dev-combined-2.md"
+    assert result["fileExists"] is True
+    assert result["requestedSkillRel"] == "built/dev-combined.md"
+
+
+def test_save_built_skill_replace_existing(tmp_path, monkeypatch):
+    initialize()
+    ws = tmp_path / "ws"
+    lib = tmp_path / "lib"
+    ws.mkdir()
+    lib.mkdir()
+    monkeypatch.setattr(state, "WORKSPACE_DIR", str(ws))
+    monkeypatch.setattr(state, "SKILLS_DIR", str(lib))
+
+    dest = workspace_skill_path("built/dev-combined.md")
+    os.makedirs(os.path.dirname(dest), exist_ok=True)
+    with open(dest, "w", encoding="utf-8") as f:
+        f.write("old content\n")
+
+    with pytest.raises(BuiltSkillPathExistsError):
+        save_built_skill(
+            skill_rel="built/dev-combined.md",
+            markdown="# new\n",
+            replace_existing=False,
+        )
+
+    save_built_skill(
+        skill_rel="built/dev-combined.md",
+        markdown="# new\n",
+        replace_existing=True,
+    )
+    with open(dest, encoding="utf-8") as f:
+        assert "new" in f.read()
+
+
+def test_resolve_built_skill_slug_explicit_name(tmp_path, monkeypatch):
+    initialize()
+    ws = tmp_path / "ws"
+    ws.mkdir()
+    monkeypatch.setattr(state, "WORKSPACE_DIR", str(ws))
+    monkeypatch.setattr(state, "SKILLS_DIR", str(ws / "lib"))
+
+    slug, requested, exists, suggested = resolve_built_skill_slug("dev", "my-stack")
+    assert slug == "my-stack.md"
+    assert requested == "my-stack.md"
+    assert exists is False
+    assert suggested == "dev-combined"
 
 
 def test_chained_merge_seven_sources(tmp_path, monkeypatch):

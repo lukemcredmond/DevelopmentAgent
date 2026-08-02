@@ -83,13 +83,63 @@ def _merge_skills_chained(
     return partial, total_rounds
 
 
-def _slugify_output_name(name: str) -> str:
+def _slugify_output_name(name: str, *, empty_fallback: str = "combined-skill") -> str:
     base = re.sub(r"[^a-zA-Z0-9._-]+", "-", (name or "").strip()).strip("-").lower()
     if not base:
-        base = "combined-skill"
+        base = empty_fallback
     if not base.endswith((".md", ".txt")):
         base = f"{base}.md"
     return base
+
+
+def default_built_skill_basename(agent_key: str) -> str:
+    return f"{agent_key}-combined"
+
+
+def _slug_stem(slug: str) -> str:
+    if slug.endswith(".txt"):
+        return slug[:-4]
+    if slug.endswith(".md"):
+        return slug[:-3]
+    return slug
+
+
+def _built_skill_file_exists(slug: str) -> bool:
+    s = normalize_skill_rel(slug)
+    rel = s if s.startswith("built/") else f"built/{s}"
+    return os.path.isfile(workspace_skill_path(rel))
+
+
+def resolve_built_skill_slug(
+    agent_key: str,
+    output_name: Optional[str] = None,
+    *,
+    allow_replace: bool = False,
+) -> tuple[str, str, bool, str]:
+    """Return (final_slug, requested_slug, requested_path_exists, suggested_basename)."""
+    suggested = default_built_skill_basename(agent_key)
+    if output_name and str(output_name).strip():
+        requested = _slugify_output_name(output_name, empty_fallback=suggested)
+    else:
+        requested = _slugify_output_name(suggested, empty_fallback=suggested)
+
+    file_exists = _built_skill_file_exists(requested)
+    slug = requested
+
+    if file_exists and not allow_replace:
+        stem = _slug_stem(requested)
+        ext = ".txt" if requested.endswith(".txt") else ".md"
+        for i in range(2, 100):
+            candidate = f"{stem}-{i}{ext}"
+            if not _built_skill_file_exists(candidate):
+                slug = candidate
+                break
+
+    return slug, requested, file_exists, suggested
+
+
+class BuiltSkillPathExistsError(Exception):
+    """Raised when saving would overwrite an existing built skill without consent."""
 
 
 def _agent_role_for_key(agent_key: str) -> str:
@@ -216,8 +266,13 @@ def combine_skills_preview(
     )
     markdown = build_combined_skill_markdown(agent_key=agent_key, skill_files=rels, body=merged_body)
 
-    slug = _slugify_output_name(output_name or "combined-skill")
+    slug, requested_slug, file_exists, suggested_basename = resolve_built_skill_slug(
+        agent_key,
+        output_name,
+        allow_replace=False,
+    )
     skill_rel = f"built/{slug}"
+    requested_skill_rel = f"built/{requested_slug}"
     num_ctx = resolve_ollama_num_ctx(agent_key)
     budget = skills_context_max_chars(num_ctx)
     char_count = len(markdown)
@@ -236,10 +291,18 @@ def combine_skills_preview(
         "sources": rels,
         "warning": warning,
         "mergeRounds": merge_rounds,
+        "suggestedBasename": suggested_basename,
+        "fileExists": file_exists,
+        "requestedSkillRel": requested_skill_rel,
     }
 
 
-def save_built_skill(*, skill_rel: str, markdown: str) -> Dict[str, Any]:
+def save_built_skill(
+    *,
+    skill_rel: str,
+    markdown: str,
+    replace_existing: bool = False,
+) -> Dict[str, Any]:
     rel = normalize_skill_rel(skill_rel)
     if not rel.startswith("built/"):
         raise ValueError("Built skills must live under built/")
@@ -248,6 +311,11 @@ def save_built_skill(*, skill_rel: str, markdown: str) -> Dict[str, Any]:
     dest_real = os.path.realpath(dest_path)
     if not (dest_real.startswith(ws_root + os.sep) or dest_real == ws_root):
         raise ValueError("Invalid built skill path")
+
+    if os.path.isfile(dest_path) and not replace_existing:
+        raise BuiltSkillPathExistsError(
+            f"Built skill already exists at '{rel}'. Check replace existing to overwrite."
+        )
 
     os.makedirs(os.path.dirname(dest_path), exist_ok=True)
     with open(dest_path, "w", encoding="utf-8") as f:

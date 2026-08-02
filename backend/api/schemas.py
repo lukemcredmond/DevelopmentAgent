@@ -49,6 +49,7 @@ class CombineSkillsPayload(BaseModel):
 class SaveBuiltSkillPayload(BaseModel):
     skillRel: str
     markdown: str
+    replaceExisting: bool = False
 
 
 class CreateProjectPayload(BaseModel):
