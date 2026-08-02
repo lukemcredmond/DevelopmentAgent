@@ -1009,6 +1009,27 @@ export interface BulkSkillPayload {
   skillFiles: string[]
 }
 
+export interface CombineSkillsPayload {
+  agent: AgentId
+  skillFiles: string[]
+  outputName?: string
+  ollamaUrl?: string
+}
+
+export interface CombineSkillsResponse {
+  skillRel: string
+  markdown: string
+  charCount: number
+  skillsContextMaxChars: number
+  sources: string[]
+  warning?: string | null
+}
+
+export interface SaveBuiltSkillPayload {
+  skillRel: string
+  markdown: string
+}
+
 export interface CreateProjectPayload {
   projectName: string
   workspaceDir: string

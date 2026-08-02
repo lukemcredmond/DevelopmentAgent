@@ -1,0 +1,201 @@
+"""Merge multiple library skills into one project-built skill via LLM."""
+
+from __future__ import annotations
+
+import os
+import re
+from datetime import datetime, timezone
+from typing import Any, Dict, List, Optional
+
+from backend import state
+from backend.agents.registry import AGENT_LABELS, AGENT_MAP
+from backend.services.logs import add_system_log
+from backend.services.prompt_budget import resolve_ollama_num_ctx, skills_context_max_chars
+from backend.services.skills import (
+    library_skill_path,
+    normalize_skill_rel,
+    read_skill_text,
+    workspace_skill_path,
+)
+
+MAX_COMBINE_SOURCES = 5
+_MAX_SOURCE_CHARS_EACH = 12000
+
+
+def _slugify_output_name(name: str) -> str:
+    base = re.sub(r"[^a-zA-Z0-9._-]+", "-", (name or "").strip()).strip("-").lower()
+    if not base:
+        base = "combined-skill"
+    if not base.endswith((".md", ".txt")):
+        base = f"{base}.md"
+    return base
+
+
+def _agent_role_for_key(agent_key: str) -> str:
+    return AGENT_LABELS.get(agent_key, agent_key)
+
+
+def _model_for_agent(agent_key: str, ollama_url: str) -> str:
+    agent = AGENT_MAP.get(agent_key)
+    if agent and getattr(agent, "model", None):
+        if ollama_url:
+            agent.ollama_url = ollama_url
+        return str(agent.model)
+    return "qwen2.5-coder:7b"
+
+
+def _load_library_sources(skill_files: List[str]) -> List[Dict[str, str]]:
+    loaded: List[Dict[str, str]] = []
+    for raw in skill_files:
+        rel = normalize_skill_rel(raw)
+        path = library_skill_path(rel)
+        if not os.path.isfile(path):
+            raise FileNotFoundError(f"Skill not found in library: {rel}")
+        with open(path, "r", encoding="utf-8") as f:
+            text = f.read()
+        if len(text) > _MAX_SOURCE_CHARS_EACH:
+            text = text[: _MAX_SOURCE_CHARS_EACH - 40] + "\n...[source truncated for merge]\n"
+        loaded.append({"rel": rel, "text": text})
+    return loaded
+
+
+def _merge_with_llm(
+    *,
+    agent_key: str,
+    sources: List[Dict[str, str]],
+    ollama_url: str,
+) -> str:
+    from backend.services.ollama_warmup import _ollama_host
+    from backend.services.workflow_settings import get_workflow_settings
+
+    ws = get_workflow_settings()
+    timeout = min(180.0, float(ws.get("ollamaRequestTimeoutSec") or 300))
+    model = _model_for_agent(agent_key, ollama_url)
+    role = _agent_role_for_key(agent_key)
+
+    blocks = []
+    for s in sources:
+        blocks.append(f"--- SOURCE: {s['rel']} ---\n{s['text']}\n")
+    corpus = "\n".join(blocks)
+
+    system = (
+        "You merge agent skill documents into one markdown skill file. "
+        "Preserve imperative rules and concrete commands. "
+        "Remove duplicate and near-duplicate bullets. "
+        "Do not invent new technologies, tools, or requirements. "
+        "Do not drop safety or validation rules present in any source. "
+        "Output ONLY the merged markdown body starting with a single # title line. "
+        "Do not wrap in code fences."
+    )
+    user = (
+        f"Target agent role: {role}\n\n"
+        "Merge these skills into one coherent skill for that agent:\n\n"
+        f"{corpus}"
+    )
+
+    from ollama import Client
+
+    host = _ollama_host()
+    if ollama_url and ollama_url.strip():
+        host = ollama_url.replace("/v1", "").rstrip("/")
+    client = Client(host=host, timeout=timeout)
+    resp = client.chat(
+        model=model,
+        messages=[
+            {"role": "system", "content": system},
+            {"role": "user", "content": user},
+        ],
+        options={"temperature": 0.2, "num_predict": 4096},
+    )
+    content = (resp.message.content or "").strip() if resp and resp.message else ""
+    if not content:
+        raise RuntimeError("Skill merge returned empty content from the model.")
+    return content
+
+
+def _build_frontmatter(*, agent_key: str, sources: List[str]) -> str:
+    ts = datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")
+    lines = ["---", "sources:"]
+    for src in sources:
+        lines.append(f"  - {src}")
+    lines.extend([f"builtForAgent: {agent_key}", f"builtAt: {ts}", "---", ""])
+    return "\n".join(lines) + "\n"
+
+
+def build_combined_skill_markdown(
+    *,
+    agent_key: str,
+    skill_files: List[str],
+    body: str,
+) -> str:
+    rels = [normalize_skill_rel(s) for s in skill_files]
+    body = body.strip()
+    if body.startswith("---"):
+        return body
+    return _build_frontmatter(agent_key=agent_key, sources=rels) + body
+
+
+def combine_skills_preview(
+    *,
+    agent_key: str,
+    skill_files: List[str],
+    output_name: Optional[str] = None,
+    ollama_url: str = "http://localhost:11434",
+) -> Dict[str, Any]:
+    if agent_key not in AGENT_MAP:
+        raise ValueError("Invalid agent")
+    rels = [normalize_skill_rel(s) for s in skill_files if s and str(s).strip()]
+    if len(rels) < 2:
+        raise ValueError("Select at least two skills to combine")
+    if len(rels) > MAX_COMBINE_SOURCES:
+        raise ValueError(f"At most {MAX_COMBINE_SOURCES} skills can be combined at once")
+
+    sources = _load_library_sources(rels)
+    merged_body = _merge_with_llm(agent_key=agent_key, sources=sources, ollama_url=ollama_url)
+    markdown = build_combined_skill_markdown(agent_key=agent_key, skill_files=rels, body=merged_body)
+
+    slug = _slugify_output_name(output_name or "combined-skill")
+    skill_rel = f"built/{slug}"
+    num_ctx = resolve_ollama_num_ctx(agent_key)
+    budget = skills_context_max_chars(num_ctx)
+    char_count = len(markdown)
+    warning = None
+    if char_count > budget:
+        warning = (
+            f"Merged skill is {char_count} chars; skills budget for this agent is ~{budget} chars. "
+            "Edit before saving or assign fewer library skills."
+        )
+
+    return {
+        "skillRel": skill_rel,
+        "markdown": markdown,
+        "charCount": char_count,
+        "skillsContextMaxChars": budget,
+        "sources": rels,
+        "warning": warning,
+    }
+
+
+def save_built_skill(*, skill_rel: str, markdown: str) -> Dict[str, Any]:
+    rel = normalize_skill_rel(skill_rel)
+    if not rel.startswith("built/"):
+        raise ValueError("Built skills must live under built/")
+    dest_path = workspace_skill_path(rel)
+    ws_root = os.path.realpath(state.WORKSPACE_DIR)
+    dest_real = os.path.realpath(dest_path)
+    if not (dest_real.startswith(ws_root + os.sep) or dest_real == ws_root):
+        raise ValueError("Invalid built skill path")
+
+    os.makedirs(os.path.dirname(dest_path), exist_ok=True)
+    with open(dest_path, "w", encoding="utf-8") as f:
+        f.write(markdown)
+
+    vfs_key = f"skills/{rel}".replace("\\", "/")
+    state.VIRTUAL_FILESYSTEM[vfs_key] = markdown
+
+    add_system_log(
+        "System",
+        "success",
+        f"Saved project-built skill '{rel}' ({len(markdown)} chars).",
+    )
+    return {"skillRel": rel, "charCount": len(markdown)}

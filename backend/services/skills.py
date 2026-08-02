@@ -1,5 +1,5 @@
 import os
-from typing import Any, Dict, List
+from typing import Any, Dict, List, Optional
 
 from backend import state
 
@@ -49,6 +49,52 @@ _SKILL_METADATA: Dict[str, Dict[str, Any]] = {
 _DEFAULT_SKILL_AGENTS = ["dev"]
 _PO_ONLY_SKILLS = {"product_owner.md"}
 _CR_ONLY_SKILLS = {"code_auditor.md"}
+
+
+def normalize_skill_rel(skill_rel: str) -> str:
+    return skill_rel.replace("\\", "/").lstrip("/")
+
+
+def _path_under_root(path: str, root: str) -> bool:
+    try:
+        rp = os.path.realpath(path)
+        rr = os.path.realpath(root)
+        return rp.startswith(rr + os.sep) or rp == rr
+    except Exception:
+        return False
+
+
+def workspace_skill_path(skill_rel: str) -> str:
+    rel = normalize_skill_rel(skill_rel)
+    return os.path.join(state.WORKSPACE_DIR, "skills", rel.replace("/", os.sep))
+
+
+def library_skill_path(skill_rel: str) -> str:
+    return os.path.normpath(os.path.join(state.SKILLS_DIR, normalize_skill_rel(skill_rel)))
+
+
+def resolve_skill_read_path(skill_rel: str) -> Optional[str]:
+    """Prefer project workspace copy, then global skills library."""
+    rel = normalize_skill_rel(skill_rel)
+    ws_path = workspace_skill_path(rel)
+    if _path_under_root(ws_path, state.WORKSPACE_DIR) and os.path.isfile(ws_path):
+        return ws_path
+    lib_path = library_skill_path(rel)
+    skills_root = os.path.realpath(state.SKILLS_DIR)
+    if _path_under_root(lib_path, skills_root) and os.path.isfile(lib_path):
+        return lib_path
+    return None
+
+
+def read_skill_text(skill_rel: str) -> Optional[str]:
+    path = resolve_skill_read_path(skill_rel)
+    if not path:
+        return None
+    try:
+        with open(path, "r", encoding="utf-8") as f:
+            return f.read()
+    except Exception:
+        return None
 
 
 def get_skill_metadata(filename: str) -> Dict[str, Any]:

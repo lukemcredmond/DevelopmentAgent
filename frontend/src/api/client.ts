@@ -19,6 +19,9 @@ import type {
   SkillsResponse,
   SkillPayload,
   BulkSkillPayload,
+  CombineSkillsPayload,
+  CombineSkillsResponse,
+  SaveBuiltSkillPayload,
   SprintRunPayload,
   TerminalRunPayload,
   TerminalRunResponse,
@@ -211,6 +214,25 @@ export async function assignSkill(payload: SkillPayload): Promise<AppState> {
 
 export async function assignSkills(payload: BulkSkillPayload): Promise<AppState> {
   return request<AppState>('/api/assign-skills', {
+    method: 'POST',
+    body: JSON.stringify(payload),
+  })
+}
+
+export async function combineSkills(
+  payload: CombineSkillsPayload,
+): Promise<CombineSkillsResponse> {
+  return request<CombineSkillsResponse>('/api/skills/combine', {
+    method: 'POST',
+    body: JSON.stringify({
+      ...payload,
+      ollamaUrl: payload.ollamaUrl ?? 'http://localhost:11434',
+    }),
+  })
+}
+
+export async function saveBuiltSkill(payload: SaveBuiltSkillPayload): Promise<AppState> {
+  return request<AppState>('/api/skills/save-built', {
     method: 'POST',
     body: JSON.stringify(payload),
   })

@@ -2148,6 +2148,7 @@ export default function App() {
           skillModalAgent ? (state.assignedSkills[skillModalAgent] ?? []) : []
         }
         skillsDir={modalSkillsDir}
+        ollamaUrl={ollamaUrl}
         loading={skillModalLoading}
         search={skillSearch}
         selectedFiles={selectedSkillFiles}
@@ -2175,6 +2176,11 @@ export default function App() {
             void refreshSkillSuggestionCounts()
           })
         }
+        onAppState={handleState}
+        onAfterAssign={() => {
+          setSelectedSkillFiles([])
+          void refreshSkillSuggestionCounts()
+        }}
         onClose={() => setSkillModalAgent(null)}
       />
 

@@ -39,6 +39,18 @@ class BulkSkillPayload(BaseModel):
     skillFiles: List[str] = Field(default_factory=list)
 
 
+class CombineSkillsPayload(BaseModel):
+    agent: str
+    skillFiles: List[str] = Field(default_factory=list)
+    outputName: Optional[str] = None
+    ollamaUrl: str = "http://localhost:11434"
+
+
+class SaveBuiltSkillPayload(BaseModel):
+    skillRel: str
+    markdown: str
+
+
 class CreateProjectPayload(BaseModel):
     projectName: str
     workspaceDir: str

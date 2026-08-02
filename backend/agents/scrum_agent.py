@@ -171,9 +171,11 @@ class ScrumAgent:
         skills_context = "\n=== SPECIALIZED AGENT SKILLS ===\n"
         used = len(skills_context)
         truncated = False
+        from backend.services.skills import resolve_skill_read_path
+
         for skill_file in self.assigned_skills:
-            skill_path = os.path.join(state.SKILLS_DIR, skill_file)
-            if os.path.exists(skill_path):
+            skill_path = resolve_skill_read_path(skill_file)
+            if skill_path:
                 try:
                     with open(skill_path, "r", encoding="utf-8") as f:
                         block = f"\n[Skill: {skill_file}]\n{f.read()}\n"

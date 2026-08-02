@@ -905,6 +905,8 @@ Live updates: `GET /api/events` (SSE).
 |--------|------|-------------|
 | GET | `/api/skills` | Scan skills directory |
 | GET | `/api/skills/suggestions` | Suggested skills per agent |
+| POST | `/api/skills/combine` | LLM merge preview for multi-select skills |
+| POST | `/api/skills/save-built` | Write project-built skill under `workspace/skills/built/` |
 | POST | `/api/assign-skill` | Assign skill to agent |
 | POST | `/api/assign-skills` | Batch assign skills |
 | POST | `/api/remove-skill` | Remove skill from agent |
@@ -939,6 +941,8 @@ See [backend/api/](backend/api/) for implementation details.
 ### Skills directory
 
 Place markdown skill files under `global_skills/` (or your configured path). Use **Add Skill** on an agent to copy into the workspace and assign. Skills are injected into that agent's system prompt.
+
+**Project-built skills:** When several library skills overlap, select **2+** skills in the Add Skills modal and click **Build combined skill…**. The app uses your local Ollama model to dedupe and merge them into one markdown file under `workspace/skills/built/` (with YAML frontmatter listing source files). Review the preview, then **Save & assign** so the agent loads the merged skill from the workspace copy (workspace paths take precedence over the global library at prompt time). Batch **Assign** without combining still attaches each file separately until the skills context budget truncates extras.
 
 ### Workflow settings
 
