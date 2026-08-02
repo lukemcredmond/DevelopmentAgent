@@ -804,7 +804,6 @@ class ScrumAgent:
         update_run(**update_kwargs)
 
         if task_id and state.SPRINT_PROGRESS_MAX:
-            from backend.agents.task_context import find_task_by_id, get_task_lane
             from backend.services.sprint_service import publish_sprint_progress
 
             active = find_task_by_id(task_id) or {}
