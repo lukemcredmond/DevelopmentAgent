@@ -1,4 +1,8 @@
-"""Optional Repomix / code2prompt CLI wrappers for codebase_pack prompt section."""
+"""Optional Repomix / code2prompt CLI wrappers for codebase_pack prompt section.
+
+Install: see README § "Installing Repomix or code2prompt".
+Extension point: add modes (e.g. caveman) with the same run_context_pack contract.
+"""
 
 from __future__ import annotations
 
@@ -11,8 +15,6 @@ from backend import state
 from backend.services.workflow_settings import get_workflow_settings
 
 logger = logging.getLogger(__name__)
-
-# Extension point: add modes (e.g. caveman) with the same run_context_pack contract.
 
 
 def run_context_pack(

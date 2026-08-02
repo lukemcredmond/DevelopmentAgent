@@ -252,9 +252,53 @@ For implementation cards with **≥2 acceptance criteria**, Dev sprint steps can
 - **Micro-step:** each sprint Dev visit targets **one AC** (or subtask) until all criteria are satisfied or `maxFocusStepsPerCard` is reached. The card stays **In Progress** between slices; the task detail modal shows **Focus: AC 2/5** and **Next focus slice** / **Reset focus**.
 - **Prompt sections:** sprint prompts are composed from named sections (`ac_focus`, `related_cards`, …) instead of always injecting the full card history. **QA** and **Code Review** still receive the full prompt stack.
 - **In-step rotation:** each **LLM iteration** within a Dev visit can emphasize a different section bundle (`enablePromptSectionRotation`). The agent run bar may show `promptSection: bundle_1` for debugging.
-- **Codebase packer:** optional `contextPacker` = `repomix` or `code2prompt` (CLI on PATH) adds a `codebase_pack` section scoped to card paths. Default is **off**. Install [Repomix](https://github.com/yamadashy/repomix) or [code2prompt](https://github.com/mufeedvh/code2prompt) locally, then set mode under **Workflow**.
+- **Codebase packer:** optional `contextPacker` = `repomix` or `code2prompt` adds a `codebase_pack` section scoped to card paths. Default is **off**. See [Installing Repomix or code2prompt](#installing-repomix-or-code2prompt) below, then set mode under **Workflow**.
 
 PO guidance targets **≤3 AC per implementation card**; warnings appear when AC count exceeds `splitCardWhenAcOver` (default 5).
+
+#### Installing Repomix or code2prompt
+
+The backend runs the packer as a **subprocess in your project workspace** (`WORKSPACE_DIR`). The executable must be on **PATH** for the user account that runs AllHands (or set `repomixCommand` / `code2promptCommand` in Workflow to the full path).
+
+**Repomix** ([GitHub](https://github.com/yamadashy/repomix) · [docs](https://repomix.com/guide/installation))
+
+- Requires **Node.js ≥ 22** (and Git if you use remote-repo features).
+- One-off (no global install): `npx repomix@latest --stdout --include .` in a repo folder.
+- Global CLI (recommended for sprint use):
+
+  ```bash
+  npm install -g repomix
+  ```
+
+  Alternatives: `yarn global add repomix`, `pnpm add -g repomix`, `bun add -g repomix`, or on macOS/Linux `brew install repomix`.
+
+- Verify: `repomix --version` (must succeed in the same shell / service environment as the backend).
+- In **Workflow**, set **Codebase packer** to `repomix`. AllHands invokes roughly `repomix --stdout --include <card paths>` from the workspace root.
+
+**code2prompt** ([GitHub](https://github.com/mufeedvh/code2prompt) · [install docs](https://code2prompt.dev/docs/how_to/install/))
+
+- Rust toolchain (for build-from-source) or a **release binary** from [GitHub Releases](https://github.com/mufeedvh/code2prompt/releases).
+- Common installs:
+
+  ```bash
+  cargo install code2prompt
+  ```
+
+  or `brew install code2prompt` (macOS/Linux).
+
+- Optional Python bindings (not used by AllHands directly): `pip install code2prompt-rs`.
+- Verify: `code2prompt --help` on PATH.
+- In **Workflow**, set **Codebase packer** to `code2prompt`. AllHands passes the workspace path plus `--include` globs from the card; optional `--filter` uses the active AC + title as a hint.
+
+**Windows notes**
+
+- After `npm install -g repomix`, ensure `%AppData%\npm` (or your npm global prefix) is on PATH, then open a **new** terminal before starting the backend.
+- For code2prompt, download the Windows `.exe` from Releases and either add its folder to PATH or set **code2promptCommand** in Workflow to the full path (e.g. `C:\Tools\code2prompt.exe`).
+
+**If the CLI is missing or fails**
+
+- Packer output is omitted; the sprint step continues (check backend logs for `context_packer` warnings).
+- Tune size with `contextPackerMaxChars` (default 12000). Timeout follows `terminalTimeoutSec`.
 
 ```mermaid
 flowchart LR

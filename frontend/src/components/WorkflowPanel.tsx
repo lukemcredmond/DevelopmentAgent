@@ -1250,7 +1250,10 @@ export default function WorkflowPanel({
         </label>
       </div>
       <label className="flex flex-col gap-1 text-[11px] text-cat-subtext pl-5">
-        <span className="text-[10px] text-cat-overlay">Codebase packer (Repomix / code2prompt)</span>
+        <span className="text-[10px] text-cat-overlay inline-flex items-center gap-1">
+          Codebase packer (Repomix / code2prompt)
+          <SettingHint hint="Install a CLI on PATH, then enable a packer. Repomix: npm install -g repomix (Node ≥22). code2prompt: cargo install code2prompt or brew install code2prompt. See README § Installing Repomix or code2prompt. On failure, Dev steps still run without the pack section." />
+        </span>
         <select
           value={settings.contextPacker ?? 'off'}
           onChange={(e) => onSettingsChange({ contextPacker: e.target.value })}
@@ -1260,7 +1263,82 @@ export default function WorkflowPanel({
           <option value="repomix">repomix</option>
           <option value="code2prompt">code2prompt</option>
         </select>
+        {settings.contextPacker && settings.contextPacker !== 'off' && (
+          <p className="text-[10px] text-cat-overlay leading-snug">
+            Install:{' '}
+            {settings.contextPacker === 'repomix' ? (
+              <>
+                <code className="text-cat-subtext">npm install -g repomix</code> —{' '}
+                <a
+                  href="https://repomix.com/guide/installation"
+                  target="_blank"
+                  rel="noreferrer"
+                  className="text-indigo-300 hover:underline"
+                >
+                  Repomix docs
+                </a>
+              </>
+            ) : (
+              <>
+                <code className="text-cat-subtext">cargo install code2prompt</code> or{' '}
+                <code className="text-cat-subtext">brew install code2prompt</code> —{' '}
+                <a
+                  href="https://code2prompt.dev/docs/how_to/install/"
+                  target="_blank"
+                  rel="noreferrer"
+                  className="text-indigo-300 hover:underline"
+                >
+                  code2prompt install
+                </a>
+              </>
+            )}
+            . CLI must be on PATH (or set command override in saved workflow JSON).
+          </p>
+        )}
       </label>
+      {(settings.contextPacker === 'repomix' || settings.contextPacker === 'code2prompt') && (
+        <div className="grid grid-cols-1 gap-2 pl-5 text-[11px]">
+          {settings.contextPacker === 'repomix' && (
+            <label>
+              <span className="text-[10px] text-cat-overlay">repomixCommand</span>
+              <input
+                type="text"
+                value={settings.repomixCommand ?? 'repomix'}
+                onChange={(e) => onSettingsChange({ repomixCommand: e.target.value || 'repomix' })}
+                placeholder="repomix"
+                className="w-full bg-cat-base border border-cat-surface1 rounded p-1 text-white font-mono text-[10px]"
+              />
+            </label>
+          )}
+          {settings.contextPacker === 'code2prompt' && (
+            <label>
+              <span className="text-[10px] text-cat-overlay">code2promptCommand</span>
+              <input
+                type="text"
+                value={settings.code2promptCommand ?? 'code2prompt'}
+                onChange={(e) =>
+                  onSettingsChange({ code2promptCommand: e.target.value || 'code2prompt' })
+                }
+                placeholder="code2prompt"
+                className="w-full bg-cat-base border border-cat-surface1 rounded p-1 text-white font-mono text-[10px]"
+              />
+            </label>
+          )}
+          <label>
+            <span className="text-[10px] text-cat-overlay">contextPackerMaxChars</span>
+            <input
+              type="number"
+              min={2000}
+              max={100000}
+              value={settings.contextPackerMaxChars ?? 12000}
+              onChange={(e) =>
+                onSettingsChange({ contextPackerMaxChars: Number(e.target.value) || 12000 })
+              }
+              className="w-full bg-cat-base border border-cat-surface1 rounded p-1 text-white font-mono text-[10px]"
+            />
+          </label>
+        </div>
+      )}
       <label className="flex items-center gap-2 text-[11px] text-cat-subtext cursor-pointer pl-5">
         <span className="text-[10px] text-cat-overlay">Sprint file inject</span>
         <select
