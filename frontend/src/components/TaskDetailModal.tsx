@@ -146,6 +146,12 @@ interface TaskDetailModalProps {
     title: string,
     description: string,
     acceptanceCriteria: string[],
+    specFields?: {
+      userStory?: string
+      scope?: string
+      outOfScope?: string
+      testPlan?: string
+    },
   ) => void
   onAcChecklistChange?: (taskId: string, acChecklist: boolean[]) => void
   onDelete: (taskId: string) => void
@@ -309,6 +315,10 @@ export default function TaskDetailModal({
   const [title, setTitle] = useState('')
   const [description, setDescription] = useState('')
   const [acceptanceCriteria, setAcceptanceCriteria] = useState('')
+  const [userStory, setUserStory] = useState('')
+  const [scope, setScope] = useState('')
+  const [outOfScope, setOutOfScope] = useState('')
+  const [testPlan, setTestPlan] = useState('')
   const [editing, setEditing] = useState(false)
   const [userAnswer, setUserAnswer] = useState('')
   const [injectCommand, setInjectCommand] = useState(defaultInjectCommand)
@@ -334,6 +344,10 @@ export default function TaskDetailModal({
     setTitle(formatTaskText(task.title))
     setDescription(formatTaskText(task.description))
     setAcceptanceCriteria(formatAcceptanceCriteria(task.acceptanceCriteria).join('\n'))
+    setUserStory(formatTaskText(task.userStory ?? ''))
+    setScope(formatTaskText(task.scope ?? ''))
+    setOutOfScope(formatTaskText(task.outOfScope ?? ''))
+    setTestPlan(formatTaskText(task.testPlan ?? ''))
     setEditing(false)
     setShowAllTranscript(false)
     setShowFailuresOnly(false)
@@ -666,6 +680,128 @@ export default function TaskDetailModal({
               <p className="text-xs text-cat-subtext max-h-32 overflow-y-auto whitespace-pre-wrap">
                 {formatTaskText(task.description)}
               </p>
+            )}
+          </CollapsibleSection>
+
+          <CollapsibleSection title="Specification (SDD)" defaultOpen={editing}>
+            <p className="text-[10px] text-cat-overlay mb-2">
+              Card fields generate <code className="text-cat-subtext">docs/tasks/…-spec.md</code> for
+              agents and review. Working notes stay in the Q&A doc.
+            </p>
+            {(() => {
+              const wt = (safeTask.workType ?? 'implementation').toLowerCase()
+              const acN = acList.length
+              const missing: string[] = []
+              const warnings: string[] = []
+              if (!formatTaskText(safeTask.description).trim()) missing.push('description')
+              if (!wt) missing.push('workType')
+              const minAc = wt === 'planning' || wt === 'spike' ? 0 : wt === 'implementation' ? 2 : 1
+              if (acN < minAc && wt !== 'planning' && wt !== 'spike') {
+                missing.push(`acceptanceCriteria (need ≥${minAc})`)
+              }
+              if (wt === 'implementation' && !formatTaskText(safeTask.userStory).trim()) {
+                warnings.push('userStory recommended')
+              }
+              if (wt === 'implementation' && !formatTaskText(safeTask.scope).trim()) {
+                warnings.push('scope recommended')
+              }
+              if (wt === 'implementation' && !formatTaskText(safeTask.testPlan).trim()) {
+                warnings.push('testPlan recommended')
+              }
+              if (missing.length || warnings.length) {
+                return (
+                  <div className="mb-2 text-[10px] space-y-1">
+                    {missing.length > 0 && (
+                      <p className="text-amber-200/90 bg-amber-950/30 border border-amber-500/30 rounded px-2 py-1">
+                        Spec gaps: {missing.join(', ')}
+                      </p>
+                    )}
+                    {warnings.map((w) => (
+                      <p
+                        key={w}
+                        className="text-cat-overlay bg-cat-base border border-cat-surface1 rounded px-2 py-0.5"
+                      >
+                        {w}
+                      </p>
+                    ))}
+                  </div>
+                )
+              }
+              return (
+                <p className="text-[10px] text-emerald-200/80 mb-2">Spec readiness: OK for Dev</p>
+              )
+            })()}
+            {editing ? (
+              <div className="space-y-2">
+                <label className="block">
+                  <span className="text-[10px] text-cat-overlay">User story</span>
+                  <input
+                    type="text"
+                    value={userStory}
+                    onChange={(e) => setUserStory(e.target.value)}
+                    placeholder="As a … I want … so that …"
+                    className="w-full text-xs bg-cat-base border border-cat-surface1 rounded p-2 mt-0.5"
+                  />
+                </label>
+                <label className="block">
+                  <span className="text-[10px] text-cat-overlay">Scope (one bullet per line)</span>
+                  <textarea
+                    value={scope}
+                    onChange={(e) => setScope(e.target.value)}
+                    className="w-full text-xs font-mono bg-cat-base border border-cat-surface1 rounded p-2 min-h-[48px] max-h-28 overflow-y-auto mt-0.5"
+                  />
+                </label>
+                <label className="block">
+                  <span className="text-[10px] text-cat-overlay">Out of scope</span>
+                  <textarea
+                    value={outOfScope}
+                    onChange={(e) => setOutOfScope(e.target.value)}
+                    className="w-full text-xs font-mono bg-cat-base border border-cat-surface1 rounded p-2 min-h-[40px] max-h-24 overflow-y-auto mt-0.5"
+                  />
+                </label>
+                <label className="block">
+                  <span className="text-[10px] text-cat-overlay">Test plan</span>
+                  <textarea
+                    value={testPlan}
+                    onChange={(e) => setTestPlan(e.target.value)}
+                    placeholder="Commands or manual verify steps"
+                    className="w-full text-xs font-mono bg-cat-base border border-cat-surface1 rounded p-2 min-h-[48px] max-h-28 overflow-y-auto mt-0.5"
+                  />
+                </label>
+              </div>
+            ) : (
+              <div className="text-[11px] text-cat-subtext space-y-2 max-h-40 overflow-y-auto">
+                <p>
+                  <span className="text-cat-overlay">Story: </span>
+                  {formatTaskText(safeTask.userStory) || '—'}
+                </p>
+                <p className="whitespace-pre-wrap">
+                  <span className="text-cat-overlay">Scope: </span>
+                  {formatTaskText(safeTask.scope) || '—'}
+                </p>
+                <p className="whitespace-pre-wrap">
+                  <span className="text-cat-overlay">Out of scope: </span>
+                  {formatTaskText(safeTask.outOfScope) || '—'}
+                </p>
+                <p className="whitespace-pre-wrap">
+                  <span className="text-cat-overlay">Test plan: </span>
+                  {formatTaskText(safeTask.testPlan) || '—'}
+                </p>
+                {(safeTask.specMarkdownPath || safeTask.id) && (
+                  <button
+                    type="button"
+                    className="text-indigo-300 hover:text-indigo-200 underline text-[10px]"
+                    onClick={() =>
+                      onOpenFile(
+                        safeTask.specMarkdownPath ||
+                          `docs/tasks/${safeTask.id}-spec.md`,
+                      )
+                    }
+                  >
+                    Open spec markdown
+                  </button>
+                )}
+              </div>
             )}
           </CollapsibleSection>
 
@@ -1727,6 +1863,12 @@ export default function TaskDetailModal({
                       .split('\n')
                       .map((s) => s.trim())
                       .filter(Boolean),
+                    {
+                      userStory: userStory.trim(),
+                      scope: scope.trim(),
+                      outOfScope: outOfScope.trim(),
+                      testPlan: testPlan.trim(),
+                    },
                   )
                   setEditing(false)
                 }}

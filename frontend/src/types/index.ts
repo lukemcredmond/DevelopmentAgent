@@ -256,6 +256,12 @@ export interface Task {
   lastStepProgress?: StepProgress | null
   agentWorkItems?: AgentWorkItem[]
   qaMarkdownPath?: string | null
+  userStory?: string
+  scope?: string
+  outOfScope?: string
+  testPlan?: string
+  specMarkdownPath?: string | null
+  specVersion?: number
   agentUsage?: Record<string, AgentUsageEntry> | null
 }
 
@@ -1005,6 +1011,10 @@ export interface UpdateTaskPayload {
   acChecklist?: boolean[]
   blockedBy?: string[]
   priority?: number
+  userStory?: string
+  scope?: string
+  outOfScope?: string
+  testPlan?: string
   status?: BoardLane
 }
 

@@ -200,6 +200,13 @@ def _enrich_task_from_po(raw: Dict[str, Any]) -> Dict[str, Any]:
         task["requiresQa"] = task.pop("requires_qa")
     if "createdBy" not in task and "created_by" in task:
         task["createdBy"] = task.pop("created_by")
+    for snake, camel in (
+        ("user_story", "userStory"),
+        ("test_plan", "testPlan"),
+        ("out_of_scope", "outOfScope"),
+    ):
+        if camel not in task and snake in task:
+            task[camel] = task.pop(snake)
     if "workType" not in task:
         combined = f"{task.get('title', '')} {task.get('description', '')}".lower()
         planning_kw = ("decompose", "backlog", "split", "clarify", "plan", "epic", "user stor")
@@ -391,6 +398,31 @@ def append_backlog_tasks(
                 init_refinement_fields(task)
             state.SHARED_BOARD[lane].append(task)
             added_tasks.append(task)
+            from backend.services.task_spec_validation import spec_readiness
+
+            readiness = spec_readiness(task)
+            if not readiness.get("ok"):
+                missing = ", ".join(readiness.get("missing") or [])
+                record_task_decision(
+                    str(task["id"]),
+                    state.ACTIVE_SPRINT_AGENT or "Product Owner",
+                    "spec",
+                    "Spec not dev-ready",
+                    missing,
+                )
+                add_system_log(
+                    "System",
+                    "warning",
+                    f"Task {task['id']} spec gaps: {missing}",
+                )
+            for warn in readiness.get("warnings") or []:
+                record_task_decision(
+                    str(task["id"]),
+                    "System",
+                    "spec",
+                    "Spec recommendation",
+                    warn,
+                )
 
         if lane == "Backlog":
             sort_backlog()
@@ -428,6 +460,21 @@ def append_backlog_tasks(
 
         save_current_project_state()
         publish_board_update(source="append_tasks")
+
+        for t in added_tasks:
+            try:
+                from backend.services.task_spec_markdown import sync_task_spec_docs
+
+                sync_task_spec_docs(str(t["id"]))
+            except Exception:
+                pass
+        if source_id:
+            try:
+                from backend.services.task_spec_markdown import sync_task_spec_docs
+
+                sync_task_spec_docs(source_id)
+            except Exception:
+                pass
 
         parts: List[str] = []
         if added_tasks:

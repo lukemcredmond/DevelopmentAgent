@@ -138,6 +138,15 @@ def _apply_task_update(task: dict, payload: UpdateTaskPayload) -> None:
         task["blockedBy"] = payload.blockedBy
     if payload.priority is not None:
         task["priority"] = payload.priority
+    if payload.userStory is not None:
+        task["userStory"] = payload.userStory
+    if payload.scope is not None:
+        task["scope"] = payload.scope
+    if payload.outOfScope is not None:
+        task["outOfScope"] = payload.outOfScope
+    if payload.testPlan is not None:
+        task["testPlan"] = payload.testPlan
+    normalize_task(task)
 
 
 @router.post("/api/tasks/update")
@@ -149,6 +158,12 @@ def update_task(payload: UpdateTaskPayload):
         if not task:
             raise HTTPException(status_code=404, detail="Task not found")
         _apply_task_update(task, payload)
+        try:
+            from backend.services.task_spec_markdown import sync_task_spec_docs
+
+            sync_task_spec_docs(payload.task_id)
+        except Exception:
+            pass
         save_current_project_state()
         add_system_log("System", "info", f"Updated task {payload.task_id}")
     return build_state_response()

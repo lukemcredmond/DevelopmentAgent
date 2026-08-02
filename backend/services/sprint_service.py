@@ -3538,6 +3538,12 @@ def run_sprint_step(brief: str, ollama_url: str) -> None:
                     update_task_qa_markdown(str(active_task["id"]))
                 except Exception:
                     pass
+                try:
+                    from backend.services.task_spec_markdown import update_task_spec_markdown
+
+                    update_task_spec_markdown(str(active_task["id"]))
+                except Exception:
+                    pass
             save_current_project_state()
             if active_task and active_task.get("id"):
                 publish_board_delta(str(active_task["id"]), source="sprint_step")
@@ -3629,6 +3635,12 @@ def run_in_progress_step(
                 from backend.services.task_qa_markdown import update_task_qa_markdown
 
                 update_task_qa_markdown(tid)
+            except Exception:
+                pass
+            try:
+                from backend.services.task_spec_markdown import update_task_spec_markdown
+
+                update_task_spec_markdown(tid)
             except Exception:
                 pass
             save_current_project_state()

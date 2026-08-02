@@ -4,11 +4,13 @@ interface ManualTaskModalProps {
   open: boolean
   title: string
   description: string
+  acceptanceCriteria?: string
   loading: boolean
   preferredFeatureId?: string | null
   preferredFeatureTitle?: string | null
   onTitleChange: (v: string) => void
   onDescriptionChange: (v: string) => void
+  onAcceptanceCriteriaChange?: (v: string) => void
   onSubmit: () => void
   onClose: () => void
 }
@@ -17,11 +19,13 @@ export default function ManualTaskModal({
   open,
   title,
   description,
+  acceptanceCriteria = '',
   loading,
   preferredFeatureId = null,
   preferredFeatureTitle = null,
   onTitleChange,
   onDescriptionChange,
+  onAcceptanceCriteriaChange,
   onSubmit,
   onClose,
 }: ManualTaskModalProps) {
@@ -101,6 +105,20 @@ export default function ManualTaskModal({
             className="w-full bg-cat-base border border-cat-surface1 rounded p-2 text-white focus:outline-none focus:border-indigo-500 min-h-[120px]"
           />
         </label>
+        {onAcceptanceCriteriaChange ? (
+          <label className="block">
+            <span className="text-[10px] text-cat-subtext block mb-1">
+              ACCEPTANCE CRITERIA (optional)
+            </span>
+            <textarea
+              value={acceptanceCriteria ?? ''}
+              onChange={(e) => onAcceptanceCriteriaChange(e.target.value)}
+              placeholder="One testable criterion per line — PO can refine"
+              rows={4}
+              className="w-full bg-cat-base border border-cat-surface1 rounded p-2 text-white font-mono text-[11px] focus:outline-none focus:border-indigo-500"
+            />
+          </label>
+        ) : null}
       </form>
     </SlideOver>
   )

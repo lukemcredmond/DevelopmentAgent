@@ -534,6 +534,36 @@ def normalize_task(task: Dict[str, Any]) -> Dict[str, Any]:
                 }
             )
         task["dependencyOutcomes"] = normalized_outcomes
+
+    def _scope_to_text(value: Any) -> str:
+        if value is None:
+            return ""
+        if isinstance(value, list):
+            return "\n".join(
+                coerce_task_text(v).strip() for v in value if coerce_task_text(v).strip()
+            )
+        return coerce_task_text(value).strip()
+
+    task.setdefault("userStory", "")
+    task["userStory"] = coerce_task_text(task.get("userStory")).strip()
+    if "scope" in task:
+        task["scope"] = _scope_to_text(task.get("scope"))
+    else:
+        task.setdefault("scope", "")
+    if "outOfScope" in task:
+        task["outOfScope"] = _scope_to_text(task.get("outOfScope"))
+    else:
+        task.setdefault("outOfScope", "")
+    task.setdefault("testPlan", "")
+    task["testPlan"] = coerce_task_text(task.get("testPlan")).strip()
+    if task.get("specMarkdownPath") is not None:
+        task["specMarkdownPath"] = str(task["specMarkdownPath"]).strip() or None
+    else:
+        task.setdefault("specMarkdownPath", None)
+    try:
+        task["specVersion"] = int(task.get("specVersion") or 0)
+    except (TypeError, ValueError):
+        task["specVersion"] = 0
     return task
 
 
@@ -574,6 +604,12 @@ def init_new_task(task: Dict[str, Any]) -> Dict[str, Any]:
     task.setdefault("requiresDev", True)
     task.setdefault("requiresQa", True)
     task.setdefault("createdBy", "po")
+    task.setdefault("userStory", "")
+    task.setdefault("scope", "")
+    task.setdefault("outOfScope", "")
+    task.setdefault("testPlan", "")
+    task.setdefault("specMarkdownPath", None)
+    task.setdefault("specVersion", 0)
     if get_workflow_settings().get("requireBacklogRefinement") and task.get("status") == "Refinement":
         init_refinement_fields(task)
     return normalize_task(task)
@@ -1437,6 +1473,18 @@ def build_task_prompt(task: Dict[str, Any], brief: str, *, agent_role: Optional[
             )
             if d.get("detail") and not slim:
                 prompt += f"  Detail: {d['detail'][:300]}\n"
+
+    try:
+        from backend.services.task_spec_markdown import read_task_spec_markdown_for_prompt
+
+        spec_doc = read_task_spec_markdown_for_prompt(task)
+        if spec_doc:
+            prompt += (
+                "\n=== TASK SPEC (authoritative — implement and verify against this) ===\n"
+                f"{spec_doc}\n"
+            )
+    except Exception:
+        pass
 
     if task["transcript"]:
         prompt += "\n=== TASK TRANSCRIPT ===\n"

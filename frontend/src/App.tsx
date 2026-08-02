@@ -291,6 +291,7 @@ export default function App() {
   const [showManualTask, setShowManualTask] = useState(false)
   const [manualTitle, setManualTitle] = useState('')
   const [manualDesc, setManualDesc] = useState('')
+  const [manualAc, setManualAc] = useState('')
   const [manualPreferredFeatureId, setManualPreferredFeatureId] = useState<string | null>(null)
   const [manualPreferredFeatureTitle, setManualPreferredFeatureTitle] = useState<string | null>(
     null,
@@ -1923,10 +1924,15 @@ export default function App() {
         sprintRunning={orchestratedActive}
         onClose={() => setSelectedTask(null)}
         onOpenFile={handleOpenFile}
-        onUpdate={(taskId, title, description, acceptanceCriteria) =>
+        onUpdate={(taskId, title, description, acceptanceCriteria, specFields) =>
           void withLoading(async () => {
             handleState(
-              await updateTask(taskId, { title, description, acceptanceCriteria }),
+              await updateTask(taskId, {
+                title,
+                description,
+                acceptanceCriteria,
+                ...specFields,
+              }),
             )
             setSelectedTask(null)
           })
@@ -2182,16 +2188,26 @@ export default function App() {
         open={showManualTask}
         title={manualTitle}
         description={manualDesc}
+        acceptanceCriteria={manualAc}
         loading={loading}
         preferredFeatureId={manualPreferredFeatureId}
         preferredFeatureTitle={manualPreferredFeatureTitle}
         onTitleChange={setManualTitle}
         onDescriptionChange={setManualDesc}
+        onAcceptanceCriteriaChange={setManualAc}
         onSubmit={() =>
           void withLoading(async () => {
+            const acLines = manualAc
+              .split('\n')
+              .map((s) => s.trim())
+              .filter(Boolean)
+            const desc =
+              acLines.length > 0
+                ? `${manualDesc.trim()}\n\nSuggested acceptance criteria:\n${acLines.map((l) => `- ${l}`).join('\n')}`
+                : manualDesc
             const data = await addManualTask({
               title: manualTitle,
-              description: manualDesc,
+              description: desc,
               ollama_url: ollamaUrl,
               ...(manualPreferredFeatureId
                 ? { preferredFeatureId: manualPreferredFeatureId }
@@ -2202,6 +2218,7 @@ export default function App() {
             setShowManualTask(false)
             setManualTitle('')
             setManualDesc('')
+            setManualAc('')
             setManualPreferredFeatureId(null)
             setManualPreferredFeatureTitle(null)
           })

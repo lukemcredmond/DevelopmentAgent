@@ -422,7 +422,8 @@ tool_add_backlog_tasks = Tool(
     name="add_backlog_tasks",
     description=(
         "Add one or more new tasks to the Backlog. When breaking a large card into subtasks, "
-        "set split_from_task_id to the source task ID — the source moves to Done with a split note."
+        "set split_from_task_id to the source task ID — the source moves to Done with a split note. "
+        "Include userStory, scope, testPlan, and acceptanceCriteria (≥2 for implementation) on each card."
     ),
     parameters={
         "type": "object",
@@ -434,9 +435,14 @@ tool_add_backlog_tasks = Tool(
                     "properties": {
                         "title": {"type": "string"},
                         "description": {"type": "string"},
+                        "userStory": {"type": "string"},
+                        "scope": {"type": "string"},
+                        "outOfScope": {"type": "string"},
+                        "testPlan": {"type": "string"},
                         "acceptanceCriteria": {
                             "type": "array",
                             "items": {"type": "string"},
+                            "minItems": 1,
                         },
                         "blockedBy": {"type": "array", "items": {"type": "string"}},
                         "priority": {"type": "number"},
@@ -448,6 +454,20 @@ tool_add_backlog_tasks = Tool(
                         "requiresQa": {"type": "boolean"},
                     },
                     "required": ["title", "description"],
+                    "allOf": [
+                        {
+                            "if": {
+                                "properties": {"workType": {"const": "implementation"}},
+                                "required": ["workType"],
+                            },
+                            "then": {
+                                "properties": {
+                                    "acceptanceCriteria": {"minItems": 2},
+                                },
+                                "required": ["acceptanceCriteria"],
+                            },
+                        }
+                    ],
                 },
             },
             "split_from_task_id": {"type": "string"},

@@ -722,6 +722,13 @@ After a crash or power loss mid-sprint, a **recovery banner** shows the interrup
 | `transcript` | array | Full LLM + tool audit trail |
 | `agentUsage` | object | Per-role rollup: duration, Ollama/tool ms, prompt/eval tokens, call/step counts |
 | `qaMarkdownPath` | string \| null | Path to summarized working-notes markdown (`docs/tasks/…-qa.md`) |
+| `userStory` | string | Optional one-line user story (As a … I want … so that …) |
+| `scope`, `outOfScope` | string | In-scope / out-of-scope bullets (newline-separated on the card) |
+| `testPlan` | string | How Dev/QA verify (commands, manual steps) |
+| `specMarkdownPath` | string \| null | Generated spec markdown (`docs/tasks/…-spec.md`) — authoritative SDD view of the card |
+| `specVersion` | number | Bumped when spec-relevant card fields change |
+
+Generated docs: **`*-spec.md`** is the human-readable spec (from card JSON). **`*-qa.md`** is operational working notes (Q&A, decisions, recent actions).
 
 ---
 

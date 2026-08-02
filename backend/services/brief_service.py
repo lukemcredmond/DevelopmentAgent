@@ -24,7 +24,10 @@ PO_SMALLEST_TASKS_GUIDANCE = (
     "request, do NOT create a duplicate — reuse that card and its outcomes. "
     "On every add_backlog_tasks entry set workType (planning|implementation|review|qa|user_action), "
     "requiresDev (true/false), and requiresQa (true/false). "
-    "Planning/decomposition cards must have workType=planning and requiresDev=false."
+    "Planning/decomposition cards must have workType=planning and requiresDev=false. "
+    "For workType=implementation include ≥2 testable acceptanceCriteria, a one-line userStory "
+    "(As a … I want … so that …), scope (in-scope bullets), and testPlan (verify commands or steps). "
+    "Planning/spike cards may omit AC when the deliverable is a plan or report."
 )
 
 PO_EPIC_DECOMPOSITION_GUIDANCE = (

@@ -80,6 +80,10 @@ class UpdateTaskPayload(BaseModel):
     acChecklist: Optional[List[bool]] = None
     blockedBy: Optional[List[str]] = None
     priority: Optional[int] = None
+    userStory: Optional[str] = None
+    scope: Optional[str] = None
+    outOfScope: Optional[str] = None
+    testPlan: Optional[str] = None
 
 
 class ReorderTasksPayload(BaseModel):
