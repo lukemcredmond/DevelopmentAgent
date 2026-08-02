@@ -146,6 +146,20 @@ def _apply_task_update(task: dict, payload: UpdateTaskPayload) -> None:
         task["outOfScope"] = payload.outOfScope
     if payload.testPlan is not None:
         task["testPlan"] = payload.testPlan
+    if payload.focusMode is not None:
+        mode = str(payload.focusMode).strip().lower()
+        if mode in ("ac", "subtask", "whole"):
+            task["focusMode"] = mode
+    if payload.focusAcIndex is not None:
+        task["focusAcIndex"] = int(payload.focusAcIndex)
+    if payload.focusSubtaskId is not None:
+        task["focusSubtaskId"] = str(payload.focusSubtaskId).strip() or None
+    if payload.focusPackPaths is not None:
+        task["focusPackPaths"] = [str(p).strip() for p in payload.focusPackPaths if str(p).strip()]
+    if payload.recommendedSkillFiles is not None:
+        task["recommendedSkillFiles"] = [
+            str(s).strip() for s in payload.recommendedSkillFiles if str(s).strip()
+        ]
     normalize_task(task)
     from backend.services.card_delivery import (
         build_expected_summary,
@@ -193,6 +207,36 @@ def update_task(payload: UpdateTaskPayload):
 @router.patch("/api/tasks/{task_id}")
 def patch_task(task_id: str, payload: UpdateTaskPayload):
     return update_task(UpdateTaskPayload(task_id=task_id, **payload.model_dump(exclude={"task_id"}, exclude_none=True)))
+
+
+@router.post("/api/tasks/{task_id}/focus-advance")
+def focus_advance_task(task_id: str):
+    with state.STATE_LOCK:
+        task = find_task_by_id(task_id)
+        if not task:
+            raise HTTPException(status_code=404, detail="Task not found")
+        from backend.services.focus_slice import advance_focus, ensure_focus_initialized
+
+        ensure_focus_initialized(task)
+        if not advance_focus(task):
+            raise HTTPException(status_code=400, detail="No further focus slice")
+        save_current_project_state()
+        add_system_log("System", "info", f"Advanced focus slice on {task_id}")
+    return build_state_response()
+
+
+@router.post("/api/tasks/{task_id}/focus-reset")
+def focus_reset_task(task_id: str):
+    with state.STATE_LOCK:
+        task = find_task_by_id(task_id)
+        if not task:
+            raise HTTPException(status_code=404, detail="Task not found")
+        from backend.services.focus_slice import reset_focus
+
+        reset_focus(task)
+        save_current_project_state()
+        add_system_log("System", "info", f"Reset focus on {task_id}")
+    return build_state_response()
 
 
 @router.post("/api/tasks/{task_id}/approve")

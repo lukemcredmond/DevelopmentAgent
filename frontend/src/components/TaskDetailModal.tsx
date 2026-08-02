@@ -192,6 +192,8 @@ interface TaskDetailModalProps {
   ) => void | Promise<void>
   onRunInProgressStep?: (taskId: string) => void | Promise<void>
   onAddFeatureFollowUp?: (feature: Task) => void
+  onFocusAdvance?: (taskId: string) => void | Promise<void>
+  onFocusReset?: (taskId: string) => void | Promise<void>
   /** True while an agent step is actively running on this card (for suggested focus highlight). */
   isAgentRunningOnTask?: boolean
 }
@@ -311,6 +313,8 @@ export default function TaskDetailModal({
   onMoveToInProgress,
   onRunInProgressStep,
   onAddFeatureFollowUp,
+  onFocusAdvance,
+  onFocusReset,
   isAgentRunningOnTask = false,
 }: TaskDetailModalProps) {
   const [title, setTitle] = useState('')
@@ -1076,6 +1080,47 @@ export default function TaskDetailModal({
               </div>
             </div>
           )}
+
+          {(safeTask.focusMode === 'ac' || safeTask.focusMode === 'subtask') &&
+            (safeTask.acceptanceCriteria?.length ?? 0) > 0 && (
+              <div className="bg-violet-950/25 border border-violet-500/35 rounded-lg p-3 space-y-2">
+                <h4 className="text-xs font-bold text-violet-200">Dev focus slice</h4>
+                <p className="text-[11px] text-cat-subtext">
+                  {safeTask.focusMode === 'ac' && safeTask.acceptanceCriteria
+                    ? `AC ${(safeTask.focusAcIndex ?? 0) + 1}/${safeTask.acceptanceCriteria.length}: ${
+                        safeTask.acceptanceCriteria[safeTask.focusAcIndex ?? 0] ?? '—'
+                      }`
+                    : safeTask.focusSubtaskId
+                      ? `Subtask: ${safeTask.focusSubtaskId}`
+                      : 'Whole card'}
+                  {safeTask.focusStepsRun != null && safeTask.focusStepsRun > 0
+                    ? ` · ${safeTask.focusStepsRun} focus step(s) run`
+                    : ''}
+                </p>
+                <div className="flex flex-wrap gap-2">
+                  {onFocusAdvance && (
+                    <button
+                      type="button"
+                      disabled={sprintRunning}
+                      onClick={() => void onFocusAdvance(safeTask.id)}
+                      className="text-[10px] px-2 py-0.5 rounded border border-violet-400/50 text-violet-100 hover:bg-violet-950/50 disabled:opacity-40"
+                    >
+                      Next focus slice
+                    </button>
+                  )}
+                  {onFocusReset && (
+                    <button
+                      type="button"
+                      disabled={sprintRunning}
+                      onClick={() => void onFocusReset(safeTask.id)}
+                      className="text-[10px] px-2 py-0.5 rounded border border-cat-surface1 text-cat-subtext hover:bg-cat-surface0 disabled:opacity-40"
+                    >
+                      Reset focus
+                    </button>
+                  )}
+                </div>
+              </div>
+            )}
 
           {(() => {
             const lsp = safeTask.lastStepProgress

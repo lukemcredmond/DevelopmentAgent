@@ -123,6 +123,9 @@ def publish_sprint_progress(
     status: Optional[str] = None,
     intent: Optional[str] = None,
     card_progress: Optional[Dict[str, Any]] = None,
+    focus_ac_index: Optional[int] = None,
+    focus_subtask_id: Optional[str] = None,
+    prompt_section: Optional[str] = None,
 ) -> None:
     """Broadcast live Plan & Run / sprint step progress to SSE clients."""
     payload: Dict[str, Any] = {
@@ -140,6 +143,12 @@ def publish_sprint_progress(
         payload["intent"] = intent
     if card_progress:
         payload["cardProgress"] = card_progress
+    if focus_ac_index is not None:
+        payload["focusAcIndex"] = focus_ac_index
+    if focus_subtask_id:
+        payload["focusSubtaskId"] = focus_subtask_id
+    if prompt_section:
+        payload["promptSection"] = prompt_section
     publish_event("sprint_progress", payload)
 
 
@@ -1243,6 +1252,7 @@ def _inject_sprint_context(
     from backend.storage.code_index import build_semantic_sprint_context
 
     task_id = active_task["id"]
+    normalize_task(active_task)
     num_ctx = resolve_ollama_num_ctx(agent_role)
     total_budget = sprint_file_context_max_chars(num_ctx)
     semantic_block, sem_paths = build_semantic_sprint_context(
@@ -1297,7 +1307,68 @@ def _inject_sprint_context(
                 if existing_actions.get(path) in stronger:
                     continue
                 record_task_file(task_id, path, "context", persist=True)
+
+    codebase_pack = ""
+    if agent_role == "Developer":
+        try:
+            from backend.services.context_packer import run_context_pack
+            from backend.services.focus_slice import default_pack_paths
+
+            acs = active_task.get("acceptanceCriteria") or []
+            idx = int(active_task.get("focusAcIndex") or 0)
+            hint = str(active_task.get("title") or "")
+            if acs and idx < len(acs):
+                hint = f"{hint} {acs[idx]}"
+            codebase_pack = run_context_pack(default_pack_paths(active_task), query_hint=hint)
+        except Exception:
+            codebase_pack = ""
+
     base = build_task_prompt(active_task, brief, agent_role=agent_role)
+    use_focus_compose = False
+    if agent_role == "Developer":
+        from backend.services.focus_slice import (
+            dev_micro_steps_enabled,
+            focus_context_from_task,
+            prepare_in_step_rotation_blocks,
+            sections_for_focus,
+        )
+        from backend.services.prompt_sections import compose_prompt
+
+        if dev_micro_steps_enabled(active_task):
+            focus = focus_context_from_task(active_task, agent_role)
+            section_ids = sections_for_focus(focus, phase="micro_step")
+            base = compose_prompt(
+                active_task,
+                brief,
+                section_ids,
+                focus,
+                agent_role=agent_role,
+                codebase_pack=codebase_pack,
+            )
+            use_focus_compose = True
+            label = ""
+            try:
+                from backend.services.focus_slice import focus_log_label
+
+                label = focus_log_label(active_task)
+            except Exception:
+                pass
+            if label:
+                add_system_log("Developer", "info", label)
+            rot_blocks, rot_names = prepare_in_step_rotation_blocks(
+                active_task,
+                brief,
+                agent_role=agent_role,
+                codebase_pack=codebase_pack,
+            )
+            state.SPRINT_PROMPT_ROTATION_ENABLED = bool(rot_blocks)
+            state.SPRINT_PROMPT_ROTATION_BLOCKS = rot_blocks
+            state.SPRINT_PROMPT_ROTATION_NAMES = rot_names
+        else:
+            state.SPRINT_PROMPT_ROTATION_ENABLED = False
+            state.SPRINT_PROMPT_ROTATION_BLOCKS = []
+            state.SPRINT_PROMPT_ROTATION_NAMES = []
+
     parts = [base]
     if context_block:
         from backend.services.context_compress import maybe_compress_sprint_context_block
@@ -1305,6 +1376,7 @@ def _inject_sprint_context(
         context_block = maybe_compress_sprint_context_block(context_block, agent_role=agent_role)
         parts.append(context_block)
         parts.append(CONTEXT_INJECT_NOTE)
+    structure_audit = ""
     if agent_role == "Developer":
         try:
             from backend.services.workspace_structure_audit import (
@@ -1312,11 +1384,21 @@ def _inject_sprint_context(
                 format_structure_audit,
             )
 
-            parts.append(format_structure_audit(audit_workspace_structure()))
+            structure_audit = format_structure_audit(audit_workspace_structure())
         except Exception:
-            pass
+            structure_audit = ""
+    if structure_audit:
+        parts.append(structure_audit)
+
+    if use_focus_compose and state.SPRINT_PROMPT_ROTATION_ENABLED:
+        state.SPRINT_PROMPT_FIXED_PREFIX = "\n\n".join(parts)
+        state.SPRINT_PROMPT_FIXED_SUFFIX = instructions
+        rot0 = state.SPRINT_PROMPT_ROTATION_BLOCKS[0] if state.SPRINT_PROMPT_ROTATION_BLOCKS else ""
+        return "\n\n".join([state.SPRINT_PROMPT_FIXED_PREFIX, rot0, state.SPRINT_PROMPT_FIXED_SUFFIX])
+    state.SPRINT_PROMPT_FIXED_PREFIX = ""
+    state.SPRINT_PROMPT_FIXED_SUFFIX = ""
     parts.append(instructions)
-    return "\n".join(parts)
+    return "\n\n".join(parts)
 
 
 def _qa_result_indicates_failure(result: str) -> bool:
@@ -2804,6 +2886,18 @@ def _run_developer_step(active_task: Dict[str, Any], brief: str) -> None:
         pass
     _ensure_dev_step_trace(task_id, title, lane_before)
     try:
+        from backend.services.focus_slice import ensure_focus_initialized, focus_log_label
+
+        ensure_focus_initialized(active_task)
+        fresh_focus = find_task_by_id(task_id) or active_task
+        if fresh_focus:
+            ensure_focus_initialized(fresh_focus)
+            fl = focus_log_label(fresh_focus)
+            if fl:
+                add_system_log("Developer", "info", fl)
+    except Exception:
+        pass
+    try:
         model_note = f" [{model_in_use}]" if model_in_use else ""
         add_system_log(
             "Developer",
@@ -2953,8 +3047,23 @@ def _run_developer_step(active_task: Dict[str, Any], brief: str) -> None:
                             if blocked:
                                 add_system_log("Developer", "warning", f"{task_id}: {reason}")
                             else:
-                                clear_qa_failure(task_id)
-                                move_board_stage(task_id, target)
+                                from backend.services.focus_slice import (
+                                    focus_advance_after_step,
+                                    should_block_lane_advance_for_focus,
+                                )
+                                from backend.services.project_service import save_current_project_state
+
+                                if should_block_lane_advance_for_focus(fresh):
+                                    focus_advance_after_step(fresh, result)
+                                    save_current_project_state()
+                                    add_system_log(
+                                        "Developer",
+                                        "info",
+                                        f"{task_id}: focus slice advanced — staying In Progress for next criterion",
+                                    )
+                                else:
+                                    clear_qa_failure(task_id)
+                                    move_board_stage(task_id, target)
                         elif fresh:
                             add_system_log(
                                 "Developer",

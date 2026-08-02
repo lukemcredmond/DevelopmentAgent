@@ -275,6 +275,12 @@ export interface Task {
   acVerification?: AcVerificationRow[]
   sddInheritedFromFeature?: string[]
   agentUsage?: Record<string, AgentUsageEntry> | null
+  focusMode?: 'ac' | 'subtask' | 'whole'
+  focusAcIndex?: number
+  focusSubtaskId?: string | null
+  focusPackPaths?: string[]
+  focusStepsRun?: number
+  recommendedSkillFiles?: string[]
 }
 
 export interface AgentUsageEntry {
@@ -561,6 +567,14 @@ export interface WorkflowSettings {
   simulationAutoUseExistingFile?: boolean
   duplicateToolPolicy?: string
   duplicateToolHardStopExclude?: string[]
+  enableFocusMicroSteps?: boolean
+  maxFocusStepsPerCard?: number
+  enablePromptSectionRotation?: boolean
+  splitCardWhenAcOver?: number
+  contextPacker?: 'off' | 'repomix' | 'code2prompt' | string
+  contextPackerMaxChars?: number
+  repomixCommand?: string
+  code2promptCommand?: string
   autoSprintSessionRefreshEnabled?: boolean
   autoSprintSessionRefreshMinutes?: number
   autoSprintHardReload?: boolean
@@ -685,6 +699,9 @@ export interface AgentRunState {
   currentToolDetail?: string | null
   fixVerifyRound?: number | null
   fixVerifyMaxRounds?: number | null
+  promptSection?: string | null
+  focusAcIndex?: number | null
+  focusSubtaskId?: string | null
 }
 
 export interface PendingToolApproval {
@@ -1059,6 +1076,11 @@ export interface UpdateTaskPayload {
   outOfScope?: string
   testPlan?: string
   actualSummary?: string
+  focusMode?: string
+  focusAcIndex?: number
+  focusSubtaskId?: string | null
+  focusPackPaths?: string[]
+  recommendedSkillFiles?: string[]
   status?: BoardLane
 }
 
@@ -1180,6 +1202,14 @@ export interface WorkflowSettingsPayload {
   autoSprintHardReload?: boolean
   duplicateToolPolicy?: string
   duplicateToolHardStopExclude?: string[]
+  enableFocusMicroSteps?: boolean
+  maxFocusStepsPerCard?: number
+  enablePromptSectionRotation?: boolean
+  splitCardWhenAcOver?: number
+  contextPacker?: string
+  contextPackerMaxChars?: number
+  repomixCommand?: string
+  code2promptCommand?: string
 }
 
 export interface SkillsResponse {
@@ -1459,6 +1489,14 @@ export const DEFAULT_WORKFLOW_SETTINGS: WorkflowSettings = {
   simulationAutoUseExistingFile: true,
   duplicateToolPolicy: 'strict',
   duplicateToolHardStopExclude: ['run_command'],
+  enableFocusMicroSteps: true,
+  maxFocusStepsPerCard: 8,
+  enablePromptSectionRotation: true,
+  splitCardWhenAcOver: 5,
+  contextPacker: 'off',
+  contextPackerMaxChars: 12000,
+  repomixCommand: 'repomix',
+  code2promptCommand: 'code2prompt',
   autoSprintSessionRefreshEnabled: true,
   autoSprintSessionRefreshMinutes: 60,
   autoSprintHardReload: true,

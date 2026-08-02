@@ -116,6 +116,13 @@ export default function AgentRunBar({
   const fixVerifyHint =
     activeRun != null ? formatFixVerifyHint(activeRun) : null
 
+  const focusHint =
+    activeRun?.focusAcIndex != null
+      ? `Focus AC ${activeRun.focusAcIndex + 1}${
+          activeRun.promptSection ? ` · ${activeRun.promptSection}` : ''
+        }`
+      : activeRun?.promptSection ?? null
+
   const showMaxIterPanel =
     isMaxIter &&
     (isDone || !hasActiveRun || activeRun?.status === 'failed') &&
@@ -197,6 +204,11 @@ export default function AgentRunBar({
           {fixVerifyHint && isRunning && (
             <span className="text-emerald-200/90" title={fixVerifyHint}>
               {fixVerifyHint}
+            </span>
+          )}
+          {focusHint && isRunning && (
+            <span className="text-violet-200/90" title={focusHint}>
+              {focusHint}
             </span>
           )}
           <span className={isWaitingApproval ? 'text-amber-300' : 'text-cat-subtext'}>

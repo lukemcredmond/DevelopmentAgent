@@ -20,6 +20,7 @@ from backend.agents.task_context import (
     find_task_by_id,
     get_task_lane,
     is_task_done,
+    normalize_task,
     record_task_transcript,
     sync_task_files_from_transcript,
 )
@@ -167,13 +168,31 @@ class ScrumAgent:
 
         from backend.services.prompt_budget import resolve_ollama_num_ctx, skills_context_max_chars
 
+        skill_files = list(self.assigned_skills)
+        task_id = state.ACTIVE_SPRINT_TASK_ID
+        if task_id:
+            task = find_task_by_id(task_id)
+            if task:
+                normalize_task(task)
+                rec = [s for s in (task.get("recommendedSkillFiles") or []) if s]
+                if rec:
+                    allowed = set(self.assigned_skills)
+                    skill_files = [s for s in rec if s in allowed]
+                elif str(task.get("focusMode") or "whole") != "whole":
+                    skill_files = list(self.assigned_skills)[:2]
+                elif self.role in ("Code Reviewer", "QA Tester"):
+                    skill_files = list(self.assigned_skills)
+
+        if not skill_files:
+            return ""
+
         max_chars = skills_context_max_chars(resolve_ollama_num_ctx(self.role))
         skills_context = "\n=== SPECIALIZED AGENT SKILLS ===\n"
         used = len(skills_context)
         truncated = False
         from backend.services.skills import resolve_skill_read_path
 
-        for skill_file in self.assigned_skills:
+        for skill_file in skill_files:
             skill_path = resolve_skill_read_path(skill_file)
             if skill_path:
                 try:
@@ -741,15 +760,33 @@ class ScrumAgent:
         current_tool_detail: Optional[str] = None,
         clear_tool: bool = False,
         publish_activity_event: bool = False,
+        prompt_section: Optional[str] = None,
     ) -> None:
         """Emit intent + cardProgress on agent_run and sprint_progress."""
         from backend.services.step_diagnostics import build_card_work_snapshot
 
         card = build_card_work_snapshot(task_id=task_id) if task_id else None
+        focus_ac: Optional[int] = None
+        focus_sub: Optional[str] = None
+        if task_id:
+            active = find_task_by_id(task_id) or {}
+            if active.get("focusMode") == "ac" and active.get("focusAcIndex") is not None:
+                try:
+                    focus_ac = int(active.get("focusAcIndex"))
+                except (TypeError, ValueError):
+                    pass
+            if active.get("focusSubtaskId"):
+                focus_sub = str(active.get("focusSubtaskId"))
         update_kwargs: Dict[str, Any] = {
             "intent": intent,
             "card_progress": card,
         }
+        if prompt_section is not None:
+            update_kwargs["prompt_section"] = prompt_section
+        if focus_ac is not None:
+            update_kwargs["focus_ac_index"] = focus_ac
+        if focus_sub:
+            update_kwargs["focus_subtask_id"] = focus_sub
         if run_status is not None:
             update_kwargs["status"] = run_status
         if iteration is not None:
@@ -782,6 +819,9 @@ class ScrumAgent:
                 status=status or intent,
                 intent=intent,
                 card_progress=card,
+                focus_ac_index=focus_ac,
+                focus_subtask_id=focus_sub,
+                prompt_section=prompt_section,
             )
         if publish_activity_event and task_id and intent:
             from backend.agents.task_context import publish_activity
@@ -1237,6 +1277,22 @@ class ScrumAgent:
             {"role": "system", "content": self._build_system_content()},
             {"role": "user", "content": self._build_user_content(user_prompt)},
         ]
+        rotation_enabled = bool(getattr(state, "SPRINT_PROMPT_ROTATION_ENABLED", False))
+        rotation_blocks: List[str] = list(getattr(state, "SPRINT_PROMPT_ROTATION_BLOCKS", None) or [])
+        rotation_names: List[str] = list(getattr(state, "SPRINT_PROMPT_ROTATION_NAMES", None) or [])
+        fixed_prefix = str(getattr(state, "SPRINT_PROMPT_FIXED_PREFIX", "") or "")
+        fixed_suffix = str(getattr(state, "SPRINT_PROMPT_FIXED_SUFFIX", "") or "")
+
+        def _apply_rotation_for_iteration(iteration: int) -> Optional[str]:
+            if not rotation_enabled or not rotation_blocks or not fixed_prefix:
+                return None
+            idx = (iteration - 1) % len(rotation_blocks)
+            bundle_name = rotation_names[idx] if idx < len(rotation_names) else f"bundle_{idx}"
+            rot = rotation_blocks[idx]
+            messages[1]["content"] = "\n\n".join(
+                part for part in (fixed_prefix, rot, fixed_suffix) if part
+            )
+            return bundle_name
 
         failed_tool_keys: List[Tuple[str, str]] = []
         successful_tool_keys: List[Tuple[str, str]] = []
@@ -1299,6 +1355,7 @@ class ScrumAgent:
                     iteration=iteration,
                     max_iterations=max_iterations,
                 )
+                bundle_name = _apply_rotation_for_iteration(iteration)
                 self._publish_work_progress(
                     task_id=task_id,
                     intent=intent,
@@ -1308,6 +1365,7 @@ class ScrumAgent:
                     run_status="thinking",
                     clear_tool=True,
                     publish_activity_event=True,
+                    prompt_section=bundle_name,
                 )
                 add_system_log(
                     self.role,

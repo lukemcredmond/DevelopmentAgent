@@ -37,6 +37,9 @@ class AgentRunState:
     current_tool_detail: Optional[str] = None
     fix_verify_round: Optional[int] = None
     fix_verify_max_rounds: Optional[int] = None
+    prompt_section: Optional[str] = None
+    focus_ac_index: Optional[int] = None
+    focus_subtask_id: Optional[str] = None
 
     def to_dict(self) -> Dict[str, Any]:
         data = asdict(self)
@@ -44,6 +47,9 @@ class AgentRunState:
         data["currentToolDetail"] = data.pop("current_tool_detail", None)
         data["fixVerifyRound"] = data.pop("fix_verify_round", None)
         data["fixVerifyMaxRounds"] = data.pop("fix_verify_max_rounds", None)
+        data["promptSection"] = data.pop("prompt_section", None)
+        data["focusAcIndex"] = data.pop("focus_ac_index", None)
+        data["focusSubtaskId"] = data.pop("focus_subtask_id", None)
         return data
 
 
@@ -89,6 +95,9 @@ def update_run(
     card_progress: Optional[Dict[str, Any]] = None,
     current_tool_detail: Optional[str] = None,
     clear_tool_detail: bool = False,
+    prompt_section: Optional[str] = None,
+    focus_ac_index: Optional[int] = None,
+    focus_subtask_id: Optional[str] = None,
 ) -> None:
     run = state.ACTIVE_AGENT_RUN
     if not run:
@@ -114,6 +123,12 @@ def update_run(
         run.intent = intent
     if card_progress is not None:
         run.card_progress = card_progress
+    if prompt_section is not None:
+        run.prompt_section = prompt_section
+    if focus_ac_index is not None:
+        run.focus_ac_index = focus_ac_index
+    if focus_subtask_id is not None:
+        run.focus_subtask_id = focus_subtask_id
     _publish_run(run)
 
 

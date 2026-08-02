@@ -1206,6 +1206,62 @@ export default function WorkflowPanel({
         Pre-load semantic index chunks at sprint step start
       </label>
       <label className="flex items-center gap-2 text-[11px] text-cat-subtext cursor-pointer pl-5">
+        <input
+          type="checkbox"
+          checked={settings.enableFocusMicroSteps !== false}
+          onChange={(e) => onSettingsChange({ enableFocusMicroSteps: e.target.checked })}
+        />
+        Dev focus micro-steps (one AC per sprint tick when ≥2 AC)
+      </label>
+      <label className="flex items-center gap-2 text-[11px] text-cat-subtext cursor-pointer pl-5">
+        <input
+          type="checkbox"
+          checked={settings.enablePromptSectionRotation !== false}
+          onChange={(e) => onSettingsChange({ enablePromptSectionRotation: e.target.checked })}
+        />
+        Rotate prompt section bundles each LLM iteration (within a step)
+      </label>
+      <div className="grid grid-cols-2 gap-2 pl-5 text-[11px]">
+        <label>
+          <span className="text-[10px] text-cat-overlay">Max focus steps / card</span>
+          <input
+            type="number"
+            min={1}
+            max={32}
+            value={settings.maxFocusStepsPerCard ?? 8}
+            onChange={(e) =>
+              onSettingsChange({ maxFocusStepsPerCard: Number(e.target.value) || 8 })
+            }
+            className="w-full bg-cat-base border border-cat-surface1 rounded p-1 text-white font-mono text-[10px]"
+          />
+        </label>
+        <label>
+          <span className="text-[10px] text-cat-overlay">PO split hint when AC &gt;</span>
+          <input
+            type="number"
+            min={3}
+            max={20}
+            value={settings.splitCardWhenAcOver ?? 5}
+            onChange={(e) =>
+              onSettingsChange({ splitCardWhenAcOver: Number(e.target.value) || 5 })
+            }
+            className="w-full bg-cat-base border border-cat-surface1 rounded p-1 text-white font-mono text-[10px]"
+          />
+        </label>
+      </div>
+      <label className="flex flex-col gap-1 text-[11px] text-cat-subtext pl-5">
+        <span className="text-[10px] text-cat-overlay">Codebase packer (Repomix / code2prompt)</span>
+        <select
+          value={settings.contextPacker ?? 'off'}
+          onChange={(e) => onSettingsChange({ contextPacker: e.target.value })}
+          className="bg-cat-base border border-cat-surface1 rounded p-1 text-white font-mono text-[10px]"
+        >
+          <option value="off">off (default)</option>
+          <option value="repomix">repomix</option>
+          <option value="code2prompt">code2prompt</option>
+        </select>
+      </label>
+      <label className="flex items-center gap-2 text-[11px] text-cat-subtext cursor-pointer pl-5">
         <span className="text-[10px] text-cat-overlay">Sprint file inject</span>
         <select
           value={settings.sprintFileContextMode === 'full' ? 'full' : 'excerpt'}

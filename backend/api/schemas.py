@@ -98,6 +98,11 @@ class UpdateTaskPayload(BaseModel):
     outOfScope: Optional[str] = None
     testPlan: Optional[str] = None
     actualSummary: Optional[str] = None
+    focusMode: Optional[str] = None
+    focusAcIndex: Optional[int] = None
+    focusSubtaskId: Optional[str] = None
+    focusPackPaths: Optional[List[str]] = None
+    recommendedSkillFiles: Optional[List[str]] = None
 
 
 class ReorderTasksPayload(BaseModel):
@@ -253,6 +258,14 @@ class WorkflowSettingsPayload(BaseModel):
     simulationAutoUseExistingFile: Optional[bool] = None
     duplicateToolPolicy: Optional[str] = None
     duplicateToolHardStopExclude: Optional[List[str]] = None
+    enableFocusMicroSteps: Optional[bool] = None
+    maxFocusStepsPerCard: Optional[int] = None
+    enablePromptSectionRotation: Optional[bool] = None
+    splitCardWhenAcOver: Optional[int] = None
+    contextPacker: Optional[str] = None
+    contextPackerMaxChars: Optional[int] = None
+    repomixCommand: Optional[str] = None
+    code2promptCommand: Optional[str] = None
     autoSprintSessionRefreshEnabled: Optional[bool] = None
     autoSprintSessionRefreshMinutes: Optional[int] = None
     autoSprintHardReload: Optional[bool] = None

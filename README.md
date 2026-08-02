@@ -245,6 +245,17 @@ If you are new to the board, these counters show up in different places and mean
 
 Configure sprint behavior under sidebar **Workflow**: `maxSprintSteps`, `maxLlmIterationsPerStep`, `enableFixVerifyLoop`, `requireCleanLint`, `maxFixVerifyRounds`.
 
+### Focus micro-steps and prompt sections
+
+For implementation cards with **≥2 acceptance criteria**, Dev sprint steps can run in **focus mode** (default **on** via `enableFocusMicroSteps`):
+
+- **Micro-step:** each sprint Dev visit targets **one AC** (or subtask) until all criteria are satisfied or `maxFocusStepsPerCard` is reached. The card stays **In Progress** between slices; the task detail modal shows **Focus: AC 2/5** and **Next focus slice** / **Reset focus**.
+- **Prompt sections:** sprint prompts are composed from named sections (`ac_focus`, `related_cards`, …) instead of always injecting the full card history. **QA** and **Code Review** still receive the full prompt stack.
+- **In-step rotation:** each **LLM iteration** within a Dev visit can emphasize a different section bundle (`enablePromptSectionRotation`). The agent run bar may show `promptSection: bundle_1` for debugging.
+- **Codebase packer:** optional `contextPacker` = `repomix` or `code2prompt` (CLI on PATH) adds a `codebase_pack` section scoped to card paths. Default is **off**. Install [Repomix](https://github.com/yamadashy/repomix) or [code2prompt](https://github.com/mufeedvh/code2prompt) locally, then set mode under **Workflow**.
+
+PO guidance targets **≤3 AC per implementation card**; warnings appear when AC count exceeds `splitCardWhenAcOver` (default 5).
+
 ```mermaid
 flowchart LR
   batch[Auto sprint batch]

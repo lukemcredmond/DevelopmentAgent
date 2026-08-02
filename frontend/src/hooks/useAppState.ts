@@ -234,6 +234,18 @@ function mapAgentRun(raw: Record<string, unknown>): AgentRunState {
       raw.fixVerifyMaxRounds != null || raw.fix_verify_max_rounds != null
         ? Number(raw.fixVerifyMaxRounds ?? raw.fix_verify_max_rounds) || undefined
         : undefined,
+    promptSection:
+      raw.promptSection != null || raw.prompt_section != null
+        ? String(raw.promptSection ?? raw.prompt_section)
+        : null,
+    focusAcIndex:
+      raw.focusAcIndex != null || raw.focus_ac_index != null
+        ? Number(raw.focusAcIndex ?? raw.focus_ac_index)
+        : undefined,
+    focusSubtaskId:
+      raw.focusSubtaskId != null || raw.focus_subtask_id != null
+        ? String(raw.focusSubtaskId ?? raw.focus_subtask_id)
+        : null,
   }
 }
 

@@ -42,6 +42,8 @@ import {
   triggerStep,
   updateConfig,
   updateTask,
+  focusAdvanceTask,
+  focusResetTask,
   updateWorkflowSettings,
   reindexCodebase,
 } from './api/client'
@@ -1955,6 +1957,22 @@ export default function App() {
         onAcChecklistChange={(taskId, acChecklist) =>
           void withLoading(async () => {
             const data = await updateTask(taskId, { acChecklist })
+            handleState(data)
+            const next = findTaskOnBoard(data.board, taskId)
+            if (next) setSelectedTask(next)
+          })
+        }
+        onFocusAdvance={(taskId) =>
+          void withLoading(async () => {
+            const data = await focusAdvanceTask(taskId)
+            handleState(data)
+            const next = findTaskOnBoard(data.board, taskId)
+            if (next) setSelectedTask(next)
+          })
+        }
+        onFocusReset={(taskId) =>
+          void withLoading(async () => {
+            const data = await focusResetTask(taskId)
             handleState(data)
             const next = findTaskOnBoard(data.board, taskId)
             if (next) setSelectedTask(next)

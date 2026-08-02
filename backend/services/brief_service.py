@@ -15,9 +15,12 @@ WORKFLOW_LANES = [
 ]
 
 PO_SMALLEST_TASKS_GUIDANCE = (
-    "Always break work into the smallest achievable backlog items ASAP — each card must be "
-    "one focused change, completable in a single focused dev pass, with a few testable "
-    "acceptance criteria (prefer ≤5). Prefer many small cards over few large ones. "
+    "Always break work into the smallest achievable backlog items ASAP — each implementation card "
+    "must be one focused change with ≤3 testable acceptance criteria (hard target). "
+    "If a card needs more than 3 AC, use add_subtasks or split via add_backlog_tasks with "
+    "relatedTaskIds — never dump 6+ AC on one dev card. "
+    "Warn yourself when AC count exceeds 5; prefer splitting before moving to In Progress. "
+    "Prefer many small cards over few large ones. "
     "If scope spans multiple files, concerns, or action verbs, emit multiple cards or a "
     "workType=planning card (requiresDev=false) that then calls add_backlog_tasks for children. "
     "Before adding a card, check existing board work: if another card already covers the same "

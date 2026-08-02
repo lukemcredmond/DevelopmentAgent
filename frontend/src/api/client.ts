@@ -264,6 +264,18 @@ export async function updateTask(
   })
 }
 
+export async function focusAdvanceTask(taskId: string): Promise<AppState> {
+  return request<AppState>(`/api/tasks/${encodeURIComponent(taskId)}/focus-advance`, {
+    method: 'POST',
+  })
+}
+
+export async function focusResetTask(taskId: string): Promise<AppState> {
+  return request<AppState>(`/api/tasks/${encodeURIComponent(taskId)}/focus-reset`, {
+    method: 'POST',
+  })
+}
+
 export async function deleteTask(taskId: string): Promise<AppState> {
   return request<AppState>(`/api/tasks/${encodeURIComponent(taskId)}`, {
     method: 'DELETE',

@@ -55,5 +55,14 @@ def spec_readiness(task: Dict[str, Any]) -> Dict[str, Any]:
     if work_type == "implementation" and not coerce_task_text(task.get("testPlan")).strip():
         warnings.append("testPlan empty (recommended: verify commands or steps)")
 
+    if work_type == "implementation" and len(ac) > 5:
+        warnings.append(
+            f"acceptanceCriteria count {len(ac)} > 5 — split card or add_subtasks before Dev"
+        )
+    if work_type == "implementation" and len(ac) > 3:
+        warnings.append(
+            f"acceptanceCriteria count {len(ac)} > 3 — prefer ≤3 AC per implementation card"
+        )
+
     ok = len(missing) == 0
     return {"ok": ok, "missing": missing, "warnings": warnings}

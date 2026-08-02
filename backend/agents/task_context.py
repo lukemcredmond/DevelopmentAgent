@@ -594,6 +594,34 @@ def normalize_task(task: Dict[str, Any]) -> Dict[str, Any]:
         task["sddInheritedFromFeature"] = [
             str(x) for x in task["sddInheritedFromFeature"] if x
         ]
+    if task.get("recommendedSkillFiles") is not None:
+        if isinstance(task.get("recommendedSkillFiles"), list):
+            task["recommendedSkillFiles"] = [
+                str(s).strip() for s in task["recommendedSkillFiles"] if str(s).strip()
+            ]
+        else:
+            task["recommendedSkillFiles"] = []
+    else:
+        task.setdefault("recommendedSkillFiles", [])
+    if task.get("focusSpecSummary") is not None:
+        task["focusSpecSummary"] = coerce_task_text(task.get("focusSpecSummary")).strip() or None
+    mode = str(task.get("focusMode") or "").strip().lower()
+    if mode and mode not in ("ac", "subtask", "whole"):
+        task["focusMode"] = ""
+    if task.get("focusAcIndex") is not None:
+        try:
+            task["focusAcIndex"] = int(task["focusAcIndex"])
+        except (TypeError, ValueError):
+            task["focusAcIndex"] = 0
+    if task.get("focusSubtaskId") is not None:
+        task["focusSubtaskId"] = str(task["focusSubtaskId"]).strip() or None
+    if task.get("focusPackPaths") is not None and isinstance(task.get("focusPackPaths"), list):
+        task["focusPackPaths"] = [str(p).strip() for p in task["focusPackPaths"] if str(p).strip()]
+    if task.get("focusStepsRun") is not None:
+        try:
+            task["focusStepsRun"] = max(0, int(task["focusStepsRun"]))
+        except (TypeError, ValueError):
+            task["focusStepsRun"] = 0
     return task
 
 
@@ -642,6 +670,12 @@ def init_new_task(task: Dict[str, Any]) -> Dict[str, Any]:
     task.setdefault("specVersion", 0)
     if get_workflow_settings().get("requireBacklogRefinement") and task.get("status") == "Refinement":
         init_refinement_fields(task)
+    if str(task.get("workType") or "implementation").lower() == "implementation":
+        from backend.services.focus_slice import default_focus_mode
+
+        task.setdefault("focusMode", default_focus_mode(task))
+        task.setdefault("focusAcIndex", 0)
+        task.setdefault("focusStepsRun", 0)
     return normalize_task(task)
 
 
@@ -1271,11 +1305,12 @@ def build_dod_block() -> str:
 
 
 def build_task_prompt(task: Dict[str, Any], brief: str, *, agent_role: Optional[str] = None) -> str:
-    """Builds a structured prompt for sprint agents.
+    """Builds a structured prompt for sprint agents (full stack for chat and QA/CR)."""
+    return build_task_prompt_legacy(task, brief, agent_role=agent_role)
 
-    Code Reviewer / QA get a lighter stack (fewer decisions/transcript lines) —
-    they keep AC, files, and last outcome without the full Dev history.
-    """
+
+def build_task_prompt_legacy(task: Dict[str, Any], brief: str, *, agent_role: Optional[str] = None) -> str:
+    """Legacy monolithic prompt builder."""
     from backend.services.prompt_budget import resolve_ollama_num_ctx, truncate_brief, workspace_file_list_cap
 
     role = (agent_role or state.ACTIVE_SPRINT_AGENT or "").strip()

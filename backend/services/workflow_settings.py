@@ -139,6 +139,15 @@ DEFAULT_WORKFLOW_SETTINGS: Dict[str, Any] = {
     "simulationAutoUseExistingFile": True,
     "duplicateToolPolicy": "strict",
     "duplicateToolHardStopExclude": ["run_command"],
+    # Focus micro-steps: one AC/subtask per Dev sprint tick; rotate prompt sections per LLM iter.
+    "enableFocusMicroSteps": True,
+    "maxFocusStepsPerCard": 8,
+    "enablePromptSectionRotation": True,
+    "splitCardWhenAcOver": 5,
+    "contextPacker": "off",
+    "contextPackerMaxChars": 12000,
+    "repomixCommand": "repomix",
+    "code2promptCommand": "code2prompt",
 }
 
 DEFAULT_SPRINT_SUMMARY: Dict[str, Any] = {
