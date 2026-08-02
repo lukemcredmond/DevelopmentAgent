@@ -2181,6 +2181,12 @@ export default function App() {
           setSelectedSkillFiles([])
           void refreshSkillSuggestionCounts()
         }}
+        onSelectAllAssigned={() =>
+          skillModalAgent &&
+          setSelectedSkillFiles((prev) => [
+            ...new Set([...prev, ...(state.assignedSkills[skillModalAgent] ?? [])]),
+          ])
+        }
         onClose={() => setSkillModalAgent(null)}
       />
 

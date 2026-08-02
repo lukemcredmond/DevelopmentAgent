@@ -26,6 +26,7 @@ interface SkillModalProps {
   onAssign: () => void
   onAppState: (state: AppState) => void
   onAfterAssign?: () => void
+  onSelectAllAssigned?: () => void
   onClose: () => void
 }
 
@@ -46,6 +47,7 @@ export default function SkillModal({
   onAssign,
   onAppState,
   onAfterAssign,
+  onSelectAllAssigned,
   onClose,
 }: SkillModalProps) {
   const [view, setView] = useState<'list' | 'build'>('list')
@@ -72,6 +74,7 @@ export default function SkillModal({
       s.folder.toLowerCase().includes(q),
   )
   const selectedSet = new Set(selectedFiles)
+  const libraryFilenames = new Set(skills.map((s) => s.filename))
   const suggestedNotAssigned = suggestions.filter(
     (s) => !assignedSkills.includes(s.filename),
   )
@@ -273,6 +276,67 @@ export default function SkillModal({
                   className="flex-1 bg-cat-base border border-cat-surface1 rounded px-2 py-1 font-mono text-xs"
                   placeholder="combined-skill"
                 />
+              </div>
+            )}
+
+            {assignedSkills.length > 0 && (
+              <div className="space-y-1.5 border border-emerald-500/25 rounded-lg p-3 bg-emerald-950/20">
+                <div className="flex items-center justify-between gap-2">
+                  <div className="text-[10px] uppercase tracking-wider text-emerald-200/90">
+                    Already assigned to {AGENT_LABELS[agent]}
+                  </div>
+                  {assignedSkills.length >= 2 && onSelectAllAssigned && (
+                    <button
+                      type="button"
+                      disabled={busy}
+                      onClick={onSelectAllAssigned}
+                      className="text-[10px] font-semibold text-emerald-300 hover:text-emerald-200 underline"
+                    >
+                      Select all assigned
+                    </button>
+                  )}
+                </div>
+                <div className="space-y-1">
+                  {assignedSkills.map((filename) => {
+                    const isSelected = selectedSet.has(filename)
+                    const projectOnly = !libraryFilenames.has(filename)
+                    const title =
+                      filename.split('/').pop()?.replace(/\.md$/i, '').replace(/_/g, ' ') ?? filename
+                    return (
+                      <button
+                        key={filename}
+                        type="button"
+                        onClick={() => onToggleFile(filename)}
+                        className={`w-full text-left p-2 rounded-lg border text-xs flex items-center gap-2 transition-colors ${
+                          isSelected
+                            ? 'bg-indigo-950/40 border-indigo-500/60'
+                            : 'border-cat-surface1 hover:border-emerald-500/40'
+                        }`}
+                      >
+                        <input
+                          type="checkbox"
+                          readOnly
+                          checked={isSelected}
+                          className="shrink-0 pointer-events-none"
+                        />
+                        <div className="flex-1 min-w-0">
+                          <div className="font-semibold text-indigo-300 truncate">{title}</div>
+                          <div className="text-[10px] text-cat-subtext font-mono truncate">
+                            {filename}
+                          </div>
+                        </div>
+                        {projectOnly && (
+                          <span className="text-[9px] bg-violet-950/50 text-violet-300 border border-violet-500/30 px-1.5 py-0.5 rounded shrink-0">
+                            Project
+                          </span>
+                        )}
+                      </button>
+                    )
+                  })}
+                </div>
+                <p className="text-[9px] text-cat-overlay italic">
+                  Combine uses the workspace copy of each skill when present (same as the agent prompt).
+                </p>
               </div>
             )}
 

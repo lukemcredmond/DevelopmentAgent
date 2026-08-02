@@ -79,6 +79,67 @@ def test_get_skills_context_loads_workspace_built_skill(tmp_path, monkeypatch):
     agent_dev.assigned_skills = []
 
 
+def test_combine_uses_workspace_when_library_missing(tmp_path, monkeypatch):
+    initialize()
+    ws = tmp_path / "ws"
+    lib = tmp_path / "lib"
+    ws.mkdir()
+    lib.mkdir()
+    monkeypatch.setattr(state, "WORKSPACE_DIR", str(ws))
+    monkeypatch.setattr(state, "SKILLS_DIR", str(lib))
+
+    (lib / "a.md").write_text("# A\nlib\n", encoding="utf-8")
+    ws_only = ws / "skills" / "built" / "only-ws.md"
+    ws_only.parent.mkdir(parents=True)
+    ws_only.write_text("# WS only\nworkspace rule\n", encoding="utf-8")
+
+    captured: list = []
+
+    def fake_merge(*, sources, **_kwargs):
+        captured.extend(sources)
+        return "# Merged\nok\n"
+
+    with patch("backend.services.skill_combiner._merge_with_llm", side_effect=fake_merge):
+        combine_skills_preview(
+            agent_key="dev",
+            skill_files=["a.md", "built/only-ws.md"],
+        )
+
+    by_rel = {s["rel"]: s["text"] for s in captured}
+    assert "built/only-ws.md" in by_rel
+    assert "workspace rule" in by_rel["built/only-ws.md"]
+
+
+def test_combine_prefers_workspace_text_over_library(tmp_path, monkeypatch):
+    initialize()
+    ws = tmp_path / "ws"
+    lib = tmp_path / "lib"
+    ws.mkdir()
+    lib.mkdir()
+    monkeypatch.setattr(state, "WORKSPACE_DIR", str(ws))
+    monkeypatch.setattr(state, "SKILLS_DIR", str(lib))
+
+    rel = "edited.md"
+    (lib / rel).write_text("# Lib\nlibrary text\n", encoding="utf-8")
+    ws_file = ws / "skills" / rel
+    ws_file.parent.mkdir(parents=True)
+    ws_file.write_text("# WS\nworkspace edited text\n", encoding="utf-8")
+    (lib / "other.md").write_text("# O\nother\n", encoding="utf-8")
+
+    captured: list = []
+
+    def fake_merge(*, sources, **_kwargs):
+        captured.extend(sources)
+        return "# M\n"
+
+    with patch("backend.services.skill_combiner._merge_with_llm", side_effect=fake_merge):
+        combine_skills_preview(agent_key="dev", skill_files=[rel, "other.md"])
+
+    edited = next(s for s in captured if s["rel"] == rel)
+    assert "workspace edited text" in edited["text"]
+    assert "library text" not in edited["text"]
+
+
 def test_combine_skills_preview_mock_llm(tmp_path, monkeypatch):
     initialize()
     ws = tmp_path / "ws"

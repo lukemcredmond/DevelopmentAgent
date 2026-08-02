@@ -1,4 +1,4 @@
-"""Merge multiple library skills into one project-built skill via LLM."""
+"""Merge multiple agent skills (workspace or library) into one project-built skill via LLM."""
 
 from __future__ import annotations
 
@@ -12,7 +12,6 @@ from backend.agents.registry import AGENT_LABELS, AGENT_MAP
 from backend.services.logs import add_system_log
 from backend.services.prompt_budget import resolve_ollama_num_ctx, skills_context_max_chars
 from backend.services.skills import (
-    library_skill_path,
     normalize_skill_rel,
     read_skill_text,
     workspace_skill_path,
@@ -44,15 +43,14 @@ def _model_for_agent(agent_key: str, ollama_url: str) -> str:
     return "qwen2.5-coder:7b"
 
 
-def _load_library_sources(skill_files: List[str]) -> List[Dict[str, str]]:
+def _load_skill_sources(skill_files: List[str]) -> List[Dict[str, str]]:
+    """Load skill bodies using workspace copy first, then global library (same as prompts)."""
     loaded: List[Dict[str, str]] = []
     for raw in skill_files:
         rel = normalize_skill_rel(raw)
-        path = library_skill_path(rel)
-        if not os.path.isfile(path):
-            raise FileNotFoundError(f"Skill not found in library: {rel}")
-        with open(path, "r", encoding="utf-8") as f:
-            text = f.read()
+        text = read_skill_text(rel)
+        if text is None:
+            raise FileNotFoundError(f"Skill not found in workspace or library: {rel}")
         if len(text) > _MAX_SOURCE_CHARS_EACH:
             text = text[: _MAX_SOURCE_CHARS_EACH - 40] + "\n...[source truncated for merge]\n"
         loaded.append({"rel": rel, "text": text})
@@ -150,7 +148,7 @@ def combine_skills_preview(
     if len(rels) > MAX_COMBINE_SOURCES:
         raise ValueError(f"At most {MAX_COMBINE_SOURCES} skills can be combined at once")
 
-    sources = _load_library_sources(rels)
+    sources = _load_skill_sources(rels)
     merged_body = _merge_with_llm(agent_key=agent_key, sources=sources, ollama_url=ollama_url)
     markdown = build_combined_skill_markdown(agent_key=agent_key, skill_files=rels, body=merged_body)
 

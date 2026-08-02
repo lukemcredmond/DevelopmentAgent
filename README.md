@@ -942,7 +942,7 @@ See [backend/api/](backend/api/) for implementation details.
 
 Place markdown skill files under `global_skills/` (or your configured path). Use **Add Skill** on an agent to copy into the workspace and assign. Skills are injected into that agent's system prompt.
 
-**Project-built skills:** When several library skills overlap, select **2+** skills in the Add Skills modal and click **Build combined skill…**. The app uses your local Ollama model to dedupe and merge them into one markdown file under `workspace/skills/built/` (with YAML frontmatter listing source files). Review the preview, then **Save & assign** so the agent loads the merged skill from the workspace copy (workspace paths take precedence over the global library at prompt time). Batch **Assign** without combining still attaches each file separately until the skills context budget truncates extras.
+**Project-built skills:** When several skills overlap, select **2+** skills in the Add Skills modal and click **Build combined skill…** — including skills **already assigned** to the agent (use **Select all assigned**). Merge input uses each skill’s **workspace copy first**, then the global library (same order as the agent prompt), so edited workspace files and `built/…` project-only skills are included. The app uses your local Ollama model to dedupe and merge them into one markdown file under `workspace/skills/built/` (with YAML frontmatter listing source files). Review the preview, then **Save & assign** so the agent loads the merged skill from the workspace copy (workspace paths take precedence over the global library at prompt time). Batch **Assign** without combining still attaches each file separately until the skills context budget truncates extras.
 
 ### Workflow settings
 
