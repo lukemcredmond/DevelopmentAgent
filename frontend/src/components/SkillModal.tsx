@@ -60,6 +60,7 @@ export default function SkillModal({
   const [buildCharCount, setBuildCharCount] = useState(0)
   const [buildBudget, setBuildBudget] = useState(0)
   const [buildWarning, setBuildWarning] = useState<string | null>(null)
+  const [buildMergeRounds, setBuildMergeRounds] = useState<number | null>(null)
   const [outputName, setOutputName] = useState('combined-skill')
   const [removeSourcesAfterAssign, setRemoveSourcesAfterAssign] = useState(false)
 
@@ -96,6 +97,7 @@ export default function SkillModal({
       setBuildCharCount(result.charCount)
       setBuildBudget(result.skillsContextMaxChars)
       setBuildWarning(result.warning ?? null)
+      setBuildMergeRounds(result.mergeRounds ?? 1)
       setView('build')
     } catch (e) {
       setCombineError(e instanceof Error ? e.message : 'Combine failed')
@@ -196,7 +198,11 @@ export default function SkillModal({
                   onClick={() => void startCombinePreview()}
                   className="bg-cat-base border border-violet-500/50 hover:bg-violet-950/40 text-violet-200 font-semibold py-1.5 px-3 rounded-lg text-xs disabled:opacity-40"
                 >
-                  {combining ? 'Merging…' : 'Build combined skill…'}
+                  {combining
+                    ? selectedFiles.length > 5
+                      ? 'Merging… (may take a while for many skills)'
+                      : 'Merging…'
+                    : 'Build combined skill…'}
                 </button>
               )}
               <button
@@ -237,9 +243,14 @@ export default function SkillModal({
               Review and edit the merged skill. It will be saved under{' '}
               <span className="font-mono text-indigo-200">workspace/skills/{buildSkillRel}</span>.
             </p>
-            <p className="text-[10px] text-cat-overlay">
+            <p className="text-[10px] text-cat-subtext">
               Sources: {buildSources.join(', ') || '—'}
             </p>
+            {buildMergeRounds != null && buildMergeRounds > 1 && (
+              <p className="text-[10px] text-violet-200/90">
+                Combined in {buildMergeRounds} merge rounds (up to 5 sources per LLM call).
+              </p>
+            )}
             <p className="text-[10px] font-mono text-cat-subtext">
               Size {buildCharCount} chars · budget ~{buildBudget} chars
               {buildWarning ? (
@@ -266,6 +277,12 @@ export default function SkillModal({
           </div>
         ) : (
           <>
+            {selectedFiles.length > 15 && (
+              <p className="text-xs text-amber-300/90 border border-amber-500/30 bg-amber-950/25 rounded px-2 py-1.5">
+                Large merge: {selectedFiles.length} skills selected. This may take several minutes
+                and multiple LLM rounds (5 skills per round).
+              </p>
+            )}
             {selectedFiles.length >= 2 && (
               <div className="flex items-center gap-2 text-[10px]">
                 <label className="text-cat-subtext shrink-0">Output name</label>

@@ -169,6 +169,68 @@ def test_combine_skills_preview_mock_llm(tmp_path, monkeypatch):
     assert "Merged Skill" in result["markdown"]
     assert "sources:" in result["markdown"]
     assert result["sources"] == ["a.md", "b.md"]
+    assert result.get("mergeRounds") == 1
+
+
+def test_chained_merge_seven_sources(tmp_path, monkeypatch):
+    initialize()
+    ws = tmp_path / "ws"
+    lib = tmp_path / "lib"
+    ws.mkdir()
+    lib.mkdir()
+    monkeypatch.setattr(state, "WORKSPACE_DIR", str(ws))
+    monkeypatch.setattr(state, "SKILLS_DIR", str(lib))
+
+    names = [f"s{i}.md" for i in range(7)]
+    for n in names:
+        (lib / n).write_text(f"# {n}\n", encoding="utf-8")
+
+    calls: list[list[str]] = []
+
+    def fake_merge(*, sources, **_kwargs):
+        calls.append([s["rel"] for s in sources])
+        return "# merged\n"
+
+    with patch("backend.services.skill_combiner._merge_with_llm", side_effect=fake_merge):
+        result = combine_skills_preview(agent_key="dev", skill_files=names)
+
+    assert len(calls) == 2
+    assert len(calls[0]) == 5
+    assert calls[1][0] == "_partial_merge_"
+    assert len(calls[1]) == 3
+    assert result["mergeRounds"] == 2
+    assert result["sources"] == names
+    for n in names:
+        assert f"  - {n}" in result["markdown"]
+
+
+def test_chained_merge_twelve_sources(tmp_path, monkeypatch):
+    initialize()
+    ws = tmp_path / "ws"
+    lib = tmp_path / "lib"
+    ws.mkdir()
+    lib.mkdir()
+    monkeypatch.setattr(state, "WORKSPACE_DIR", str(ws))
+    monkeypatch.setattr(state, "SKILLS_DIR", str(lib))
+
+    names = [f"t{i}.md" for i in range(12)]
+    for n in names:
+        (lib / n).write_text(f"# {n}\n", encoding="utf-8")
+
+    calls: list[list[str]] = []
+
+    def fake_merge(*, sources, **_kwargs):
+        calls.append([s["rel"] for s in sources])
+        return "# merged\n"
+
+    with patch("backend.services.skill_combiner._merge_with_llm", side_effect=fake_merge):
+        result = combine_skills_preview(agent_key="dev", skill_files=names)
+
+    assert len(calls) == 3
+    assert result["mergeRounds"] == 3
+    assert result["sources"] == names
+    assert calls[1][0] == "_partial_merge_"
+    assert calls[2][0] == "_partial_merge_"
 
 
 def test_save_built_skill_writes_workspace(tmp_path, monkeypatch):

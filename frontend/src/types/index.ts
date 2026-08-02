@@ -1023,6 +1023,7 @@ export interface CombineSkillsResponse {
   skillsContextMaxChars: number
   sources: string[]
   warning?: string | null
+  mergeRounds?: number
 }
 
 export interface SaveBuiltSkillPayload {

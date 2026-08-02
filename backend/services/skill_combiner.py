@@ -17,8 +17,70 @@ from backend.services.skills import (
     workspace_skill_path,
 )
 
-MAX_COMBINE_SOURCES = 5
+MAX_COMBINE_SOURCES_PER_ROUND = 5
+_PARTIAL_MERGE_REL = "_partial_merge_"
 _MAX_SOURCE_CHARS_EACH = 12000
+
+
+def _merge_round_count(source_count: int) -> int:
+    if source_count <= MAX_COMBINE_SOURCES_PER_ROUND:
+        return 1
+    rounds = 1
+    remaining = source_count - MAX_COMBINE_SOURCES_PER_ROUND
+    while remaining > 0:
+        rounds += 1
+        remaining -= min(MAX_COMBINE_SOURCES_PER_ROUND - 1, remaining)
+    return rounds
+
+
+def _merge_skills_chained(
+    *,
+    agent_key: str,
+    sources: List[Dict[str, str]],
+    ollama_url: str,
+) -> tuple[str, int]:
+    """Merge many skills in batches of up to 5 per LLM call."""
+    n = len(sources)
+    total_rounds = _merge_round_count(n)
+    agent_label = _agent_role_for_key(agent_key)
+
+    if n <= MAX_COMBINE_SOURCES_PER_ROUND:
+        add_system_log(
+            agent_label,
+            "info",
+            f"Skill combine round 1/{total_rounds} ({n} source(s))",
+        )
+        body = _merge_with_llm(agent_key=agent_key, sources=sources, ollama_url=ollama_url)
+        return body, total_rounds
+
+    partial = _merge_with_llm(
+        agent_key=agent_key,
+        sources=sources[:MAX_COMBINE_SOURCES_PER_ROUND],
+        ollama_url=ollama_url,
+    )
+    add_system_log(
+        agent_label,
+        "info",
+        f"Skill combine round 1/{total_rounds} ({MAX_COMBINE_SOURCES_PER_ROUND} source(s))",
+    )
+
+    idx = MAX_COMBINE_SOURCES_PER_ROUND
+    round_num = 2
+    chunk_size = MAX_COMBINE_SOURCES_PER_ROUND - 1
+    while idx < n:
+        chunk = sources[idx : idx + chunk_size]
+        idx += chunk_size
+        batch = [{"rel": _PARTIAL_MERGE_REL, "text": partial}] + chunk
+        partial = _merge_with_llm(agent_key=agent_key, sources=batch, ollama_url=ollama_url)
+        add_system_log(
+            agent_label,
+            "info",
+            f"Skill combine round {round_num}/{total_rounds} "
+            f"({len(chunk)} new source(s) + prior merge)",
+        )
+        round_num += 1
+
+    return partial, total_rounds
 
 
 def _slugify_output_name(name: str) -> str:
@@ -145,11 +207,13 @@ def combine_skills_preview(
     rels = [normalize_skill_rel(s) for s in skill_files if s and str(s).strip()]
     if len(rels) < 2:
         raise ValueError("Select at least two skills to combine")
-    if len(rels) > MAX_COMBINE_SOURCES:
-        raise ValueError(f"At most {MAX_COMBINE_SOURCES} skills can be combined at once")
 
     sources = _load_skill_sources(rels)
-    merged_body = _merge_with_llm(agent_key=agent_key, sources=sources, ollama_url=ollama_url)
+    merged_body, merge_rounds = _merge_skills_chained(
+        agent_key=agent_key,
+        sources=sources,
+        ollama_url=ollama_url,
+    )
     markdown = build_combined_skill_markdown(agent_key=agent_key, skill_files=rels, body=merged_body)
 
     slug = _slugify_output_name(output_name or "combined-skill")
@@ -171,6 +235,7 @@ def combine_skills_preview(
         "skillsContextMaxChars": budget,
         "sources": rels,
         "warning": warning,
+        "mergeRounds": merge_rounds,
     }
 
 
