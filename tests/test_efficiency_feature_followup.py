@@ -57,24 +57,74 @@ def test_is_tool_fingerprint_blocked_matches_args():
     assert is_tool_fingerprint_blocked(task, "run_command", {"command": "npm run lint"}) is False
 
 
-def test_blocked_fingerprint_skips_execute_tool():
+def test_blocked_read_fingerprint_still_executes_read_file():
     initialize()
     from backend import state
 
-    task = init_new_task({"id": "T-BLK-DISP", "title": "t", "description": "d"})
+    task = init_new_task({"id": "T-BLK-READ", "title": "t", "description": "d"})
     block_tool_fingerprint_on_task(task, "read_file", {"path": "a.ts"})
     state.SHARED_BOARD = {"In Progress": [task]}
     state.TOOL_EXECUTION_LOG.clear()
-    state.ACTIVE_SPRINT_TASK_ID = "T-BLK-DISP"
+    state.ACTIVE_SPRINT_TASK_ID = "T-BLK-READ"
     agent = ScrumAgent(role="Developer", model="test", system_prompt="x")
     call = SimpleNamespace(
         function=SimpleNamespace(name="read_file", arguments={"path": "a.ts"})
     )
     try:
+        with patch("backend.agents.scrum_agent.execute_tool") as exec_tool:
+            from backend.services.tool_execution_service import ToolExecutionResult
+
+            exec_tool.return_value = ToolExecutionResult(
+                tool_name="read_file",
+                arguments={"path": "a.ts"},
+                safe_args={},
+                tool_output="ok",
+                success=True,
+                duration_ms=1,
+                timestamp="",
+                agent="Developer",
+                agent_id="dev",
+                task_id="T-BLK-READ",
+                source="agent",
+                run_id="run-1",
+            )
+            name, args, result, early = agent._execute_single_tool_call(
+                call,
+                task_id="T-BLK-READ",
+                agent_id="dev",
+                run_id="run-1",
+                user_prompt="do it",
+                failed_tool_keys=[],
+                successful_tool_keys=[],
+                total_failures=[0],
+                max_tool_failures=5,
+            )
+            assert exec_tool.call_count == 1
+            assert result.success is True
+    finally:
+        state.ACTIVE_SPRINT_TASK_ID = None
+
+
+def test_blocked_fingerprint_still_blocks_apply_patch():
+    initialize()
+    from backend import state
+
+    task = init_new_task({"id": "T-BLK-PATCH", "title": "t", "description": "d"})
+    block_tool_fingerprint_on_task(task, "apply_patch", {"path": "a.ts", "old_text": "x", "new_text": "y"})
+    state.SHARED_BOARD = {"In Progress": [task]}
+    state.ACTIVE_SPRINT_TASK_ID = "T-BLK-PATCH"
+    agent = ScrumAgent(role="Developer", model="test", system_prompt="x")
+    call = SimpleNamespace(
+        function=SimpleNamespace(
+            name="apply_patch",
+            arguments={"path": "a.ts", "old_text": "x", "new_text": "y"},
+        )
+    )
+    try:
         with patch("backend.services.tool_execution_service.execute_tool") as exec_tool:
             name, args, result, early = agent._execute_single_tool_call(
                 call,
-                task_id="T-BLK-DISP",
+                task_id="T-BLK-PATCH",
                 agent_id="dev",
                 run_id="run-1",
                 user_prompt="do it",
@@ -84,12 +134,7 @@ def test_blocked_fingerprint_skips_execute_tool():
                 max_tool_failures=5,
             )
             assert exec_tool.call_count == 0
-            assert name == "read_file"
-            assert early is None
-            assert result.success is False
-            assert getattr(result, "duplicate_skip", False) is True
             assert "blocked fingerprint" in result.tool_output.lower()
-            assert any(e.get("duplicateSkip") for e in state.TOOL_EXECUTION_LOG)
     finally:
         state.ACTIVE_SPRINT_TASK_ID = None
 

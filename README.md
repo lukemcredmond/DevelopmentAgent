@@ -274,6 +274,7 @@ The backend runs the packer as a **subprocess in your project workspace** (`WORK
 
 - Verify: `repomix --version` (must succeed in the same shell / service environment as the backend).
 - In **Workflow**, set **Codebase packer** to `repomix`. AllHands invokes roughly `repomix --stdout --include <card paths>` from the workspace root.
+- After a Dev step starts with the packer enabled, confirm in **Console**: `Codebase packer (repomix): N chars for <task-id>`.
 
 **code2prompt** ([GitHub](https://github.com/mufeedvh/code2prompt) · [install docs](https://code2prompt.dev/docs/how_to/install/))
 

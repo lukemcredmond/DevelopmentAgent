@@ -239,6 +239,20 @@ def focus_reset_task(task_id: str):
     return build_state_response()
 
 
+@router.post("/api/tasks/{task_id}/clear-tool-fingerprints")
+def clear_tool_fingerprints_task(task_id: str):
+    with state.STATE_LOCK:
+        task = find_task_by_id(task_id)
+        if not task:
+            raise HTTPException(status_code=404, detail="Task not found")
+        from backend.agents.tool_fingerprints import clear_fingerprint_escalation_state
+
+        clear_fingerprint_escalation_state(task)
+        save_current_project_state()
+        add_system_log("System", "info", f"Cleared blocked tool fingerprints on {task_id}")
+    return build_state_response()
+
+
 @router.post("/api/tasks/{task_id}/approve")
 def approve_task(task_id: str):
     with state.STATE_LOCK:

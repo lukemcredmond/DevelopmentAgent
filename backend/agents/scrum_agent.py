@@ -607,6 +607,8 @@ class ScrumAgent:
                     eval_tokens=eval_tokens,
                     total_tokens=total_tokens,
                     tokens_reported=tokens_reported,
+                    prompt_unchanged_inject=getattr(self, "_prompt_unchanged_inject", False),
+                    prompt_section=getattr(self, "_current_prompt_section", None),
                 )
             return result, None, None, duration_ms
         except Exception as exc:
@@ -627,6 +629,8 @@ class ScrumAgent:
                 error_type=error_type,
                 memories_used=getattr(self, "_last_memories_used", None),
                 decisions_included=getattr(self, "_decisions_in_prompt", None),
+                prompt_unchanged_inject=getattr(self, "_prompt_unchanged_inject", False),
+                prompt_section=getattr(self, "_current_prompt_section", None),
             )
             return None, last_error, error_type, duration_ms
 
@@ -1281,8 +1285,31 @@ class ScrumAgent:
         rotation_names: List[str] = list(getattr(state, "SPRINT_PROMPT_ROTATION_NAMES", None) or [])
         fixed_prefix = str(getattr(state, "SPRINT_PROMPT_FIXED_PREFIX", "") or "")
         fixed_suffix = str(getattr(state, "SPRINT_PROMPT_FIXED_SUFFIX", "") or "")
+        bundle_msg_index: Optional[int] = None
+        from backend.services.llm_context import format_prompt_bundle_system_content
+
+        if rotation_enabled and rotation_blocks and fixed_prefix:
+            stable_user = "\n\n".join(part for part in (fixed_prefix, fixed_suffix) if part)
+            messages[1] = {"role": "user", "content": self._build_user_content(stable_user)}
+            b0 = rotation_blocks[0]
+            bname0 = rotation_names[0] if rotation_names else "bundle_0"
+            messages.append(
+                {
+                    "role": "system",
+                    "content": format_prompt_bundle_system_content(bname0, b0),
+                }
+            )
+            bundle_msg_index = 2
 
         def _apply_rotation_for_iteration(iteration: int) -> Optional[str]:
+            if bundle_msg_index is not None:
+                idx = (iteration - 1) % len(rotation_blocks)
+                bundle_name = rotation_names[idx] if idx < len(rotation_names) else f"bundle_{idx}"
+                rot = rotation_blocks[idx]
+                messages[bundle_msg_index]["content"] = format_prompt_bundle_system_content(
+                    bundle_name, rot
+                )
+                return bundle_name
             if not rotation_enabled or not rotation_blocks or not fixed_prefix:
                 return None
             idx = (iteration - 1) % len(rotation_blocks)
@@ -1292,6 +1319,9 @@ class ScrumAgent:
                 part for part in (fixed_prefix, rot, fixed_suffix) if part
             )
             return bundle_name
+
+        last_llm_fingerprint = ""
+        self._prompt_unchanged_inject = False
 
         failed_tool_keys: List[Tuple[str, str]] = []
         successful_tool_keys: List[Tuple[str, str]] = []
@@ -1355,6 +1385,21 @@ class ScrumAgent:
                     max_iterations=max_iterations,
                 )
                 bundle_name = _apply_rotation_for_iteration(iteration)
+                from backend.services.llm_context import maybe_inject_unchanged_prompt_progress
+
+                last_llm_fingerprint, injected = maybe_inject_unchanged_prompt_progress(
+                    messages,
+                    iteration=iteration,
+                    last_fingerprint=last_llm_fingerprint,
+                )
+                self._prompt_unchanged_inject = injected
+                if injected:
+                    add_system_log(
+                        self.role,
+                        "info",
+                        f"Prompt unchanged vs iter {iteration - 1} — injected step progress summary",
+                    )
+                self._current_prompt_section = bundle_name
                 self._publish_work_progress(
                     task_id=task_id,
                     intent=intent,

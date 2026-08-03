@@ -1309,19 +1309,34 @@ def _inject_sprint_context(
                 record_task_file(task_id, path, "context", persist=True)
 
     codebase_pack = ""
+    pack_mode = "off"
     if agent_role == "Developer":
-        try:
-            from backend.services.context_packer import run_context_pack
-            from backend.services.focus_slice import default_pack_paths
+        pack_mode = str(get_workflow_settings().get("contextPacker") or "off").strip().lower()
+        if pack_mode not in ("", "off", "none", "false"):
+            try:
+                from backend.services.context_packer import run_context_pack
+                from backend.services.focus_slice import default_pack_paths
 
-            acs = active_task.get("acceptanceCriteria") or []
-            idx = int(active_task.get("focusAcIndex") or 0)
-            hint = str(active_task.get("title") or "")
-            if acs and idx < len(acs):
-                hint = f"{hint} {acs[idx]}"
-            codebase_pack = run_context_pack(default_pack_paths(active_task), query_hint=hint)
-        except Exception:
-            codebase_pack = ""
+                acs = active_task.get("acceptanceCriteria") or []
+                idx = int(active_task.get("focusAcIndex") or 0)
+                hint = str(active_task.get("title") or "")
+                if acs and idx < len(acs):
+                    hint = f"{hint} {acs[idx]}"
+                codebase_pack = run_context_pack(default_pack_paths(active_task), query_hint=hint)
+                if codebase_pack:
+                    add_system_log(
+                        "Developer",
+                        "info",
+                        f"Codebase packer ({pack_mode}): {len(codebase_pack)} chars for {task_id}",
+                    )
+                else:
+                    add_system_log(
+                        "Developer",
+                        "warning",
+                        f"Codebase packer ({pack_mode}) returned no output for {task_id} — check CLI on PATH (see README)",
+                    )
+            except Exception:
+                codebase_pack = ""
 
     base = build_task_prompt(active_task, brief, agent_role=agent_role)
     use_focus_compose = False
@@ -1368,6 +1383,25 @@ def _inject_sprint_context(
             state.SPRINT_PROMPT_ROTATION_ENABLED = False
             state.SPRINT_PROMPT_ROTATION_BLOCKS = []
             state.SPRINT_PROMPT_ROTATION_NAMES = []
+        if (
+            pack_mode not in ("", "off", "none", "false")
+            and codebase_pack
+            and not dev_micro_steps_enabled(active_task)
+        ):
+            from backend.services.prompt_sections import FocusContext, build_section, _limits_for_role
+
+            focus = focus_context_from_task(active_task, agent_role)
+            limits = _limits_for_role(agent_role)
+            pack_block = build_section(
+                "codebase_pack",
+                active_task,
+                brief,
+                focus=focus,
+                limits=limits,
+                codebase_pack=codebase_pack,
+            )
+            if pack_block:
+                base = base + "\n\n" + pack_block.strip()
 
     parts = [base]
     if context_block:

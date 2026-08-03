@@ -76,6 +76,8 @@ def append_llm_log_entry(
     eval_tokens: int = 0,
     total_tokens: int = 0,
     tokens_reported: bool = False,
+    prompt_unchanged_inject: bool = False,
+    prompt_section: Optional[str] = None,
 ) -> Dict[str, Any]:
     entry: Dict[str, Any] = {
         "id": uuid.uuid4().hex[:12],
@@ -110,6 +112,10 @@ def append_llm_log_entry(
         ]
     if decisions_included is not None:
         entry["decisionsIncluded"] = decisions_included
+    if prompt_unchanged_inject:
+        entry["promptUnchangedInject"] = True
+    if prompt_section:
+        entry["promptSection"] = prompt_section
     with state.STATE_LOCK:
         state.LLM_DEBUG_LOG.append(entry)
         overflow = len(state.LLM_DEBUG_LOG) - MAX_LLM_LOG_ENTRIES

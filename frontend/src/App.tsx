@@ -44,6 +44,7 @@ import {
   updateTask,
   focusAdvanceTask,
   focusResetTask,
+  clearToolFingerprintsTask,
   updateWorkflowSettings,
   reindexCodebase,
 } from './api/client'
@@ -1973,6 +1974,14 @@ export default function App() {
         onFocusReset={(taskId) =>
           void withLoading(async () => {
             const data = await focusResetTask(taskId)
+            handleState(data)
+            const next = findTaskOnBoard(data.board, taskId)
+            if (next) setSelectedTask(next)
+          })
+        }
+        onClearToolFingerprints={(taskId) =>
+          void withLoading(async () => {
+            const data = await clearToolFingerprintsTask(taskId)
             handleState(data)
             const next = findTaskOnBoard(data.board, taskId)
             if (next) setSelectedTask(next)

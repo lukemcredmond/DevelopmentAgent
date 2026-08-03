@@ -29,6 +29,14 @@ def test_run_command_excluded_from_hard_stop_and_soft_skip():
     assert duplicate_in_step_soft_skip_applies("read_file") is True
 
 
+def test_readonly_tools_exempt_from_cross_step_block():
+    assert duplicate_cross_step_block_applies("read_file") is False
+    assert duplicate_cross_step_block_applies("list_dir") is False
+    assert duplicate_cross_step_block_applies("grep") is False
+    assert duplicate_cross_step_block_applies("glob_file_search") is False
+    assert duplicate_cross_step_block_applies("apply_patch") is True
+
+
 def test_run_command_cross_block_skipped_for_duplicate_tool_reason():
     assert duplicate_cross_step_block_applies("run_command", stop_reason="duplicate_tool") is False
     assert duplicate_cross_step_block_applies("run_command", stop_reason="tool_failure_stop") is True

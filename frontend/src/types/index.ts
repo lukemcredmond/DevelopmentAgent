@@ -130,6 +130,8 @@ export interface TaskFlowNode {
   textChars?: number
   exitReason?: string
   duplicateSkip?: boolean
+  promptUnchangedInject?: boolean
+  promptSection?: string
   workItemIds?: string[]
   primaryWorkItemId?: string
 }

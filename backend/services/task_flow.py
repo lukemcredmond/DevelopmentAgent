@@ -142,6 +142,8 @@ def build_task_flow(
                 "responseContent": _cap_text(entry.get("responseContent"), include_full=include_full),
                 "toolCalls": entry.get("responseToolCalls") or [],
                 "toolNames": entry.get("toolNames") or [],
+                "promptUnchangedInject": bool(entry.get("promptUnchangedInject")),
+                "promptSection": entry.get("promptSection"),
                 "memoriesUsed": entry.get("memoriesUsed") or [],
                 "decisionsIncluded": entry.get("decisionsIncluded"),
                 "source": "llm_log",

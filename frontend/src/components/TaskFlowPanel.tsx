@@ -80,6 +80,14 @@ function FlowNode({
               skipped duplicate
             </span>
           )}
+          {isLlm && node.promptUnchangedInject && (
+            <span className="text-violet-300/90 border border-violet-500/40 rounded px-1">
+              unchanged prompt + progress inject
+            </span>
+          )}
+          {isLlm && node.promptSection && (
+            <span className="text-cat-overlay font-mono">{node.promptSection}</span>
+          )}
           {node.exitReason && (
             <span className="text-sky-300/90 border border-sky-500/40 rounded px-1 font-mono">
               {node.exitReason}

@@ -276,6 +276,13 @@ export async function focusResetTask(taskId: string): Promise<AppState> {
   })
 }
 
+export async function clearToolFingerprintsTask(taskId: string): Promise<AppState> {
+  return request<AppState>(
+    `/api/tasks/${encodeURIComponent(taskId)}/clear-tool-fingerprints`,
+    { method: 'POST' },
+  )
+}
+
 export async function deleteTask(taskId: string): Promise<AppState> {
   return request<AppState>(`/api/tasks/${encodeURIComponent(taskId)}`, {
     method: 'DELETE',

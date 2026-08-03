@@ -8,6 +8,11 @@ from backend.services.workflow_settings import get_workflow_settings
 
 DEFAULT_HARD_STOP_EXCLUDE = ("run_command",)
 
+# Never cross-step block read-only exploration tools after a stuck step.
+READONLY_CROSS_STEP_BLOCK_EXEMPT = frozenset(
+    {"read_file", "list_dir", "grep", "glob_file_search"}
+)
+
 
 def get_duplicate_settings(ws: dict | None = None) -> Tuple[str, List[str]]:
     settings = ws if ws is not None else get_workflow_settings()
@@ -47,6 +52,8 @@ def duplicate_cross_step_block_applies(
     stop_reason: str = "",
     ws: dict | None = None,
 ) -> bool:
+    if tool_name in READONLY_CROSS_STEP_BLOCK_EXEMPT:
+        return False
     policy, exclude = get_duplicate_settings(ws)
     if policy == "off":
         return False

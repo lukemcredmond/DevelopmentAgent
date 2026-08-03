@@ -1645,6 +1645,68 @@ def test_inject_sprint_context_records_task_files(monkeypatch):
     )
 
 
+def test_inject_sprint_context_codebase_pack_when_micro_steps_off(monkeypatch):
+    from backend import state
+    from backend.agents.task_context import init_new_task
+    from backend.services.sprint_service import _inject_sprint_context
+
+    initialize()
+    task = init_new_task({"id": "T-PACK", "title": "Pack task", "description": "d"})
+    task["acceptanceCriteria"] = ["Single AC"]
+
+    base_ws = dict(get_workflow_settings())
+    base_ws["contextPacker"] = "repomix"
+    base_ws["enableFocusMicroSteps"] = False
+
+    def _ws():
+        return base_ws
+
+    monkeypatch.setattr("backend.services.sprint_service.get_workflow_settings", _ws)
+    monkeypatch.setattr("backend.services.context_packer.get_workflow_settings", _ws)
+    monkeypatch.setattr("backend.services.focus_slice.get_workflow_settings", _ws)
+    monkeypatch.setattr(
+        "backend.services.context_packer.run_context_pack",
+        lambda *a, **k: "PACK_BODY_FROM_REPOMIX",
+    )
+    monkeypatch.setattr(
+        "backend.storage.code_index.build_semantic_sprint_context",
+        lambda *a, **k: ("", []),
+    )
+    monkeypatch.setattr(
+        "backend.workspace.files.build_sprint_file_context",
+        lambda *a, **k: ("", []),
+    )
+
+    prompt = _inject_sprint_context(task, state.PROJECT_BRIEF, "Developer", "Implement.")
+    assert "PACK_BODY_FROM_REPOMIX" in prompt
+
+
+def test_clear_tool_fingerprints_api():
+    from backend import state
+    from backend.agents.task_context import init_new_task
+    from backend.agents.tool_fingerprints import block_tool_fingerprint_on_task, is_tool_fingerprint_blocked
+
+    initialize()
+    task = init_new_task({"id": "T-FP", "title": "FP", "description": "d"})
+    state.SHARED_BOARD = {
+        "In Progress": [task],
+        "Backlog": [],
+        "Done": [],
+        "Needs PO": [],
+        "Needs User": [],
+        "Code Review": [],
+        "QA": [],
+    }
+    block_tool_fingerprint_on_task(task, "apply_patch", {"path": "x"})
+
+    client = TestClient(app)
+    resp = client.post("/api/tasks/T-FP/clear-tool-fingerprints")
+    assert resp.status_code == 200
+    stored = state.SHARED_BOARD["In Progress"][0]
+
+    assert not is_tool_fingerprint_blocked(stored, "apply_patch", {"path": "x"})
+
+
 def test_build_state_response_syncs_transcript_files():
     from backend import state
     from backend.agents.task_context import init_new_task

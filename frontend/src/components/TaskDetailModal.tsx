@@ -194,6 +194,7 @@ interface TaskDetailModalProps {
   onAddFeatureFollowUp?: (feature: Task) => void
   onFocusAdvance?: (taskId: string) => void | Promise<void>
   onFocusReset?: (taskId: string) => void | Promise<void>
+  onClearToolFingerprints?: (taskId: string) => void | Promise<void>
   /** True while an agent step is actively running on this card (for suggested focus highlight). */
   isAgentRunningOnTask?: boolean
 }
@@ -315,6 +316,7 @@ export default function TaskDetailModal({
   onAddFeatureFollowUp,
   onFocusAdvance,
   onFocusReset,
+  onClearToolFingerprints,
   isAgentRunningOnTask = false,
 }: TaskDetailModalProps) {
   const [title, setTitle] = useState('')
@@ -1116,6 +1118,16 @@ export default function TaskDetailModal({
                       className="text-[10px] px-2 py-0.5 rounded border border-cat-surface1 text-cat-subtext hover:bg-cat-surface0 disabled:opacity-40"
                     >
                       Reset focus
+                    </button>
+                  )}
+                  {onClearToolFingerprints && (
+                    <button
+                      type="button"
+                      disabled={sprintRunning}
+                      onClick={() => void onClearToolFingerprints(safeTask.id)}
+                      className="text-[10px] px-2 py-0.5 rounded border border-amber-500/40 text-amber-100 hover:bg-amber-950/40 disabled:opacity-40"
+                    >
+                      Clear blocked tool fingerprints
                     </button>
                   )}
                 </div>
