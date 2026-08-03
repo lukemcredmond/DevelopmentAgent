@@ -6,6 +6,7 @@ import {
   formatTimeSplit,
   formatWorkItemCounts,
 } from '../utils/flowCounts'
+import { llmCollapsedPreview, llmToolCallCount } from '../utils/flowLlmPreview'
 
 interface TaskFlowPanelProps {
   taskId: string
@@ -52,6 +53,9 @@ function FlowNode({
         : 'border-amber-500/30 bg-amber-950/15'
 
   const linkedIds = node.workItemIds ?? []
+  const llmPreview = isLlm ? llmCollapsedPreview(node) : ''
+  const llmToolCount = isLlm ? llmToolCallCount(node) : 0
+  const llmTextOnly = isLlm && Boolean(node.responseContent?.trim())
 
   return (
     <div
@@ -73,7 +77,16 @@ function FlowNode({
           {node.timestamp && <span className="text-cat-overlay">{node.timestamp}</span>}
           {node.iteration != null && <span className="text-cat-overlay">iter {node.iteration}</span>}
           {node.durationMs != null && <span className="text-cat-overlay">{node.durationMs}ms</span>}
-          {node.error && <span className="text-rose-400">ERR</span>}
+          {node.error && (
+            <span className="text-rose-400" title={node.error}>
+              ERR
+            </span>
+          )}
+          {isLlm && llmToolCount > 0 && !llmTextOnly && (
+            <span className="text-amber-300/90 border border-amber-500/30 rounded px-1">
+              {llmToolCount} tool{llmToolCount === 1 ? '' : 's'}
+            </span>
+          )}
           {!isLlm && node.success === false && <span className="text-rose-400">failed</span>}
           {node.duplicateSkip && (
             <span className="text-amber-300/90 border border-amber-500/40 rounded px-1">
@@ -96,8 +109,14 @@ function FlowNode({
           {node.source && <span className="text-cat-overlay font-mono">{node.source}</span>}
           <span className="text-cat-overlay ml-auto">{open ? '▾' : '▸'}</span>
         </div>
-        {!open && isLlm && node.responseContent && (
-          <p className="text-[10px] text-cat-subtext truncate">{node.responseContent}</p>
+        {!open && isLlm && (
+          <p
+            className={`text-[10px] truncate ${
+              node.error ? 'text-rose-300/90' : llmTextOnly ? 'text-cat-subtext' : 'text-amber-200/80 font-mono'
+            }`}
+          >
+            {llmPreview}
+          </p>
         )}
         {!open && !isLlm && (
           <p className="text-[10px] text-cat-subtext font-mono truncate">
@@ -143,11 +162,23 @@ function FlowNode({
               </pre>
             </div>
           )}
-          {isLlm && node.responseContent && (
+          {isLlm && node.error && (
+            <div>
+              <div className="text-[9px] uppercase text-rose-400 mb-1">LLM error</div>
+              <pre className="text-[10px] text-rose-200/90 whitespace-pre-wrap max-h-40 overflow-y-auto bg-rose-950/30 rounded p-2 border border-rose-500/20">
+                {node.error}
+              </pre>
+            </div>
+          )}
+          {isLlm && (
             <div>
               <div className="text-[9px] uppercase text-cat-overlay mb-1">Model response</div>
               <pre className="text-[10px] text-cat-subtext whitespace-pre-wrap max-h-48 overflow-y-auto bg-black/30 rounded p-2">
-                {node.responseContent}
+                {node.responseContent?.trim()
+                  ? node.responseContent
+                  : llmToolCount > 0
+                    ? '(No assistant text — tool call(s) only; see below.)'
+                    : '(Empty assistant content.)'}
               </pre>
             </div>
           )}
