@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 import re
-from typing import List, Tuple
+from typing import Any, Dict, List, Optional, Tuple
 
 from backend.services.workflow_settings import get_workflow_settings
 
@@ -13,6 +13,18 @@ DEFAULT_HARD_STOP_EXCLUDE: Tuple[str, ...] = ()
 READONLY_CROSS_STEP_BLOCK_EXEMPT = frozenset(
     {"read_file", "list_dir", "grep", "glob_file_search"}
 )
+
+
+def in_step_duplicate_seed_exempt_tools() -> frozenset[str]:
+    """Read/cache tools: do not pre-seed successful_tool_keys from task fingerprints."""
+    from backend.services.tool_cache import CACHEABLE_READ_TOOLS
+
+    return CACHEABLE_READ_TOOLS
+
+
+def filter_tool_keys_for_in_step_seed(keys: List[tuple[str, str]]) -> List[tuple[str, str]]:
+    exempt = in_step_duplicate_seed_exempt_tools()
+    return [k for k in keys if k[0] not in exempt]
 
 
 def normalize_run_command_for_duplicate(command: str) -> str:

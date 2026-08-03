@@ -101,6 +101,101 @@ def workspace_fingerprint() -> str:
     return _FINGERPRINT
 
 
+def tool_arguments_equal(a: Dict[str, Any], b: Dict[str, Any]) -> bool:
+    return json.dumps(a or {}, sort_keys=True, default=str) == json.dumps(
+        b or {}, sort_keys=True, default=str
+    )
+
+
+def find_prior_tool_output_for_task(
+    task: Dict[str, Any],
+    tool_name: str,
+    arguments: Dict[str, Any],
+) -> Optional[str]:
+    """Last successful tool output for matching tool+args (transcript / tool log)."""
+    args = arguments if isinstance(arguments, dict) else {}
+    skip_markers = ("[skipped duplicate]", "[blocked fingerprint]", "[cached")
+
+    def _accept_output(text: str) -> bool:
+        head = (text or "").strip()[:120].lower()
+        return bool(text) and not any(m in head for m in skip_markers)
+
+    for entry in reversed(task.get("transcript") or []):
+        if not isinstance(entry, dict):
+            continue
+        if str(entry.get("toolName") or "") != tool_name:
+            continue
+        if entry.get("toolSuccess") is False:
+            continue
+        entry_args = entry.get("toolArgs")
+        if not isinstance(entry_args, dict):
+            entry_args = {}
+        if not tool_arguments_equal(entry_args, args):
+            continue
+        for field in ("toolOutput", "content"):
+            out = str(entry.get(field) or "")
+            if _accept_output(out):
+                return out
+
+    task_id = str(task.get("id") or "")
+    if task_id:
+        try:
+            from backend.services.tool_execution_service import get_tool_history
+
+            for ev in reversed(get_tool_history() or []):
+                if str(ev.get("toolName") or "") != tool_name:
+                    continue
+                if ev.get("success") is False:
+                    continue
+                if str(ev.get("taskId") or "") != task_id:
+                    continue
+                ev_args = ev.get("toolArgs") or ev.get("arguments") or {}
+                if not isinstance(ev_args, dict):
+                    ev_args = {}
+                if not tool_arguments_equal(ev_args, args):
+                    continue
+                out = str(ev.get("toolOutput") or "")
+                if _accept_output(out):
+                    return out
+        except Exception:
+            pass
+    return None
+
+
+def format_duplicate_skip_output(
+    tool_name: str,
+    *,
+    arguments: Dict[str, Any],
+    task: Optional[Dict[str, Any]],
+    fallback_summary: str,
+) -> str:
+    """Build tool message for in-step duplicate skip (replay prior output when possible)."""
+    from backend.services.llm_context import truncate_tool_output_for_llm
+
+    replay: Optional[str] = None
+    if task and tool_name in CACHEABLE_READ_TOOLS:
+        replay = find_prior_tool_output_for_task(task, tool_name, arguments)
+    if replay:
+        body = truncate_tool_output_for_llm(tool_name, replay)
+        return (
+            "[skipped duplicate — prior result replayed; do not call again with identical args]\n"
+            + body
+        )
+    if tool_name == "run_command":
+        cmd = str((arguments or {}).get("command") or fallback_summary)[:120]
+        return (
+            f"[skipped duplicate] Command already succeeded in this step"
+            + (f" ({cmd})" if cmd else "")
+            + ". Do not re-run — proceed to verification (lint/analyze/build) "
+            "or update_board when acceptance criteria are met."
+        )
+    return (
+        f"[skipped duplicate] Already ran '{tool_name}' with identical args"
+        + (f" ({fallback_summary[:120]})" if fallback_summary else "")
+        + ". Use prior output in the conversation; change approach or edit files."
+    )
+
+
 def _cache_key(tool_name: str, arguments: Dict[str, Any]) -> str:
     payload = f"{workspace_fingerprint()}|{tool_name}|{json.dumps(arguments, sort_keys=True, default=str)}"
     return hashlib.sha256(payload.encode()).hexdigest()

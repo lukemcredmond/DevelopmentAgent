@@ -310,7 +310,16 @@ class ScrumAgent:
             if getattr(result, "duplicate_skip", False):
                 ok = "skip"
             raw_out = str(getattr(result, "tool_output", "") or "")
-            cap = obs_cmd_cap if tool_name == "run_command" else 120
+            cap = obs_cmd_cap if tool_name == "run_command" else 400
+            if tool_name in (
+                "read_file",
+                "list_dir",
+                "grep",
+                "glob_file_search",
+                "search_code",
+                "semantic_search",
+            ):
+                cap = max(cap, 400)
             out = raw_out.replace("\n", " ")[:cap]
             lines.append(f"- {tool_name}: {ok} — {out}")
             path = ""
@@ -325,9 +334,14 @@ class ScrumAgent:
                         "Command already succeeded this step — do not re-run; "
                         "run verification (lint/analyze/build) or update_board when AC are met."
                     )
+                elif tool_name == "read_file":
+                    hints.append(
+                        "read_file duplicate skipped — use replayed content above or earlier messages; "
+                        "call apply_patch next with verbatim old_text."
+                    )
                 else:
                     hints.append(
-                        f"Already ran '{tool_name}' with identical args — change approach; do not repeat."
+                        f"Already ran '{tool_name}' with identical args — use replayed output; do not repeat."
                     )
             elif not getattr(result, "success", False):
                 hint = (
@@ -1031,20 +1045,15 @@ class ScrumAgent:
             if cached:
                 tool_output, success = cached
             else:
-                cmd = str((arguments or {}).get("command") or tool_summary)[:120]
-                if tool_name == "run_command":
-                    tool_output = (
-                        f"[skipped duplicate] Command already succeeded in this step"
-                        + (f" ({cmd})" if cmd else "")
-                        + ". Do not re-run — proceed to verification (lint/analyze/build) "
-                        "or update_board when acceptance criteria are met."
-                    )
-                else:
-                    tool_output = (
-                        f"[skipped duplicate] Already ran '{tool_name}' with identical args"
-                        + (f" ({cmd})" if cmd else "")
-                        + ". Use prior output; change approach or edit files."
-                    )
+                live_task = find_task_by_id(task_id) if task_id else None
+                from backend.services.tool_cache import format_duplicate_skip_output
+
+                tool_output = format_duplicate_skip_output(
+                    tool_name,
+                    arguments=arguments,
+                    task=live_task,
+                    fallback_summary=tool_summary,
+                )
                 success = True
             skip_intent = f"Skipped duplicate {tool_name}"
             if tool_name == "run_command":
@@ -1404,7 +1413,9 @@ class ScrumAgent:
                 from backend.agents.tool_fingerprints import seed_tool_keys_from_task
 
                 seeded_success, seeded_fail = seed_tool_keys_from_task(active_task)
-                successful_tool_keys.extend(seeded_success)
+                from backend.services.duplicate_tool_policy import filter_tool_keys_for_in_step_seed
+
+                successful_tool_keys.extend(filter_tool_keys_for_in_step_seed(seeded_success))
                 failed_tool_keys.extend(seeded_fail)
             start_run(task_id, self.role, max_iterations=max_iterations)
 

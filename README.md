@@ -247,6 +247,8 @@ Configure sprint behavior under sidebar **Workflow**: `maxSprintSteps`, `maxLlmI
 
 **Duplicate `run_command`:** With default `duplicateRunCommandPolicy=strict`, the Developer agent soft-skips identical successful shell commands within one step (e.g. repeated `flutter clean`) and nudges toward verification (`flutter analyze` / project lint) instead. Set `duplicateRunCommandPolicy=off` and add `run_command` to `duplicateToolHardStopExclude` to restore the old permissive behavior.
 
+**Duplicate read tools (`read_file`, `list_dir`, `grep`, etc.):** Prior-step fingerprints no longer cause an immediate in-step skip on the first call of a new Dev visit. When the same read is skipped again, the model receives a **replay** of the last successful output from the card transcript (when available), not only a “already ran” line.
+
 **Auto sprint session refresh:** When **Auto Sprint** is on, the sidebar timer counts down to a browser reload that frees memory. Refresh runs **after the current sprint step finishes** on the server (not mid-step). If the timer hits `0:00` while idle, the UI reloads and resumes auto sprint via `sessionStorage`. After a backend-driven refresh, the countdown resets and sprint continues without toggling Auto Sprint off.
 
 ### Focus micro-steps and prompt sections
