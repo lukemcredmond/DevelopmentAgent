@@ -245,6 +245,10 @@ If you are new to the board, these counters show up in different places and mean
 
 Configure sprint behavior under sidebar **Workflow**: `maxSprintSteps`, `maxLlmIterationsPerStep`, `enableFixVerifyLoop`, `requireCleanLint`, `maxFixVerifyRounds`.
 
+**Duplicate `run_command`:** With default `duplicateRunCommandPolicy=strict`, the Developer agent soft-skips identical successful shell commands within one step (e.g. repeated `flutter clean`) and nudges toward verification (`flutter analyze` / project lint) instead. Set `duplicateRunCommandPolicy=off` and add `run_command` to `duplicateToolHardStopExclude` to restore the old permissive behavior.
+
+**Auto sprint session refresh:** When **Auto Sprint** is on, the sidebar timer counts down to a browser reload that frees memory. Refresh runs **after the current sprint step finishes** on the server (not mid-step). If the timer hits `0:00` while idle, the UI reloads and resumes auto sprint via `sessionStorage`. After a backend-driven refresh, the countdown resets and sprint continues without toggling Auto Sprint off.
+
 ### Focus micro-steps and prompt sections
 
 For implementation cards with **≥2 acceptance criteria**, Dev sprint steps can run in **focus mode** (default **on** via `enableFocusMicroSteps`):

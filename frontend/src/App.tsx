@@ -423,7 +423,7 @@ export default function App() {
     [applyState, workspaceOpen, selectedFile],
   )
 
-  const { autoSprint, setAutoSprint, autoSprintPaused, sprintRunning, stopAutoSprint, startAutoSprint, autoSprintSessionStartedAt } =
+  const { autoSprint, setAutoSprint, autoSprintPaused, sprintRunning, stopAutoSprint, startAutoSprint, autoSprintSessionStartedAt, onSessionRefreshDue } =
     useAutoSprint(
       brief,
       ollamaUrl,
@@ -1419,6 +1419,7 @@ export default function App() {
         onToggleTheme={toggleTheme}
         onToggleAutoSprint={setAutoSprint}
         onCancelSprint={() => void stopAutoSprint()}
+        onSessionRefreshDue={onSessionRefreshDue}
       />
 
       <SettingsSlideOver

@@ -1,4 +1,4 @@
-import { memo, useEffect, useState } from 'react'
+import { memo, useEffect, useRef, useState } from 'react'
 import type { AppState } from '../types'
 
 interface SidebarProps {
@@ -29,6 +29,7 @@ interface SidebarProps {
   onToggleTheme: () => void
   onToggleAutoSprint: (enabled: boolean) => void
   onCancelSprint: () => void
+  onSessionRefreshDue?: () => void
 }
 
 export default memo(function Sidebar({
@@ -59,6 +60,7 @@ export default memo(function Sidebar({
   onToggleTheme,
   onToggleAutoSprint,
   onCancelSprint,
+  onSessionRefreshDue,
 }: SidebarProps) {
   const boardEmpty =
     (state.board.Backlog?.length ?? 0) === 0 &&
@@ -75,10 +77,12 @@ export default memo(function Sidebar({
   }
 
   const [refreshCountdown, setRefreshCountdown] = useState('')
+  const refreshDueFiredRef = useRef(false)
 
   useEffect(() => {
     if (!autoSprint || !autoSprintSessionStartedAt) {
       setRefreshCountdown('')
+      refreshDueFiredRef.current = false
       return
     }
     const tick = () => {
@@ -88,11 +92,21 @@ export default memo(function Sidebar({
       const m = Math.floor(left / 60000)
       const s = Math.floor((left % 60000) / 1000)
       setRefreshCountdown(`${m}:${s.toString().padStart(2, '0')}`)
+      if (left <= 0 && !sprintRunning && autoSprint && onSessionRefreshDue && !refreshDueFiredRef.current) {
+        refreshDueFiredRef.current = true
+        onSessionRefreshDue()
+      }
     }
     tick()
     const id = window.setInterval(tick, 1000)
     return () => window.clearInterval(id)
-  }, [autoSprint, autoSprintSessionStartedAt, autoSprintSessionRefreshMinutes])
+  }, [
+    autoSprint,
+    autoSprintSessionStartedAt,
+    autoSprintSessionRefreshMinutes,
+    sprintRunning,
+    onSessionRefreshDue,
+  ])
 
   return (
     <aside className="w-full lg:w-52 xl:w-56 bg-cat-mantle dark:bg-cat-mantle border-b lg:border-b-0 lg:border-r border-cat-surface1 p-3 flex flex-col justify-between overflow-y-auto shrink-0">
@@ -269,7 +283,9 @@ export default memo(function Sidebar({
             )}
             {autoSprint && autoSprintSessionStartedAt && refreshCountdown && (
               <p className="text-[9px] text-cat-overlay font-mono">
-                Session refresh in {refreshCountdown}
+                {sprintRunning
+                  ? `Refresh after current step (≤ ${refreshCountdown})`
+                  : `Session refresh in ${refreshCountdown}`}
               </p>
             )}
             {autoSprint && autoSprintPaused && !sprintRunning && (

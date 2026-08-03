@@ -22,11 +22,28 @@ from backend.services.task_working_context import (
 )
 
 
-def test_run_command_excluded_from_hard_stop_and_soft_skip():
-    assert duplicate_in_step_hard_stop_applies("run_command") is False
-    assert duplicate_in_step_soft_skip_applies("run_command") is False
+def test_run_command_strict_duplicate_policy_by_default():
+    assert duplicate_in_step_hard_stop_applies("run_command") is True
+    assert duplicate_in_step_soft_skip_applies("run_command") is True
     assert duplicate_in_step_hard_stop_applies("read_file") is True
     assert duplicate_in_step_soft_skip_applies("read_file") is True
+
+
+def test_normalize_run_command_for_duplicate():
+    from backend.services.duplicate_tool_policy import normalize_run_command_for_duplicate
+
+    assert normalize_run_command_for_duplicate("  Flutter   Clean  ") == "flutter clean"
+    assert normalize_run_command_for_duplicate("flutter clean") == "flutter clean"
+
+
+def test_run_command_off_policy_allows_repeat_when_excluded():
+    ws = {
+        "duplicateToolPolicy": "strict",
+        "duplicateRunCommandPolicy": "off",
+        "duplicateToolHardStopExclude": ["run_command"],
+    }
+    assert duplicate_in_step_hard_stop_applies("run_command", ws) is False
+    assert duplicate_in_step_soft_skip_applies("run_command", ws) is False
 
 
 def test_readonly_tools_exempt_from_cross_step_block():
@@ -37,13 +54,18 @@ def test_readonly_tools_exempt_from_cross_step_block():
     assert duplicate_cross_step_block_applies("apply_patch") is True
 
 
-def test_run_command_cross_block_skipped_for_duplicate_tool_reason():
-    assert duplicate_cross_step_block_applies("run_command", stop_reason="duplicate_tool") is False
+def test_run_command_cross_step_block_when_not_excluded():
+    assert duplicate_cross_step_block_applies("run_command", stop_reason="duplicate_tool") is True
     assert duplicate_cross_step_block_applies("run_command", stop_reason="tool_failure_stop") is True
-    assert duplicate_cross_step_block_applies("apply_patch", stop_reason="duplicate_tool") is True
+    ws = {
+        "duplicateToolPolicy": "strict",
+        "duplicateRunCommandPolicy": "off",
+        "duplicateToolHardStopExclude": ["run_command"],
+    }
+    assert duplicate_cross_step_block_applies("run_command", stop_reason="duplicate_tool", ws=ws) is False
 
 
-def test_finalize_does_not_block_run_command_on_duplicate_tool():
+def test_finalize_blocks_run_command_on_duplicate_tool_by_default():
     initialize()
     task = init_new_task({"id": "T-DUP", "title": "x", "description": "d", "status": "In Progress"})
     key = tool_fingerprint_key("run_command", {"command": "flutter analyze"})
@@ -53,7 +75,7 @@ def test_finalize_does_not_block_run_command_on_duplicate_tool():
         stop_reason="duplicate_tool",
     )
     blocked = task.get("blockedToolFingerprints") or []
-    assert not any(e.get("tool") == "run_command" for e in blocked if isinstance(e, dict))
+    assert any(e.get("tool") == "run_command" for e in blocked if isinstance(e, dict))
 
 
 def test_working_context_in_build_task_prompt():
@@ -90,13 +112,16 @@ class _FakeToolCall:
         self.function = _FakeFunction(name, arguments)
 
 
-def test_run_command_third_identical_call_does_not_hard_stop_agent():
-    """With default exclude list, repeated run_command should reach execute_tool."""
+def test_run_command_second_identical_call_soft_skips_execute():
+    """Strict run_command policy: second identical success skips execute_tool."""
     initialize()
     agent = ScrumAgent(role="Developer", model="m", system_prompt="test")
-    call = _FakeToolCall("run_command", {"command": "echo hi"})
-    key = ("run_command", json.dumps({"command": "echo hi"}, sort_keys=True))
-    successful = [key, key]  # would trigger hard stop for read_file
+    call = _FakeToolCall("run_command", {"command": "flutter clean"})
+    from backend.services.duplicate_tool_policy import normalize_run_command_for_duplicate
+
+    cmd = normalize_run_command_for_duplicate("flutter clean")
+    dup_key = ("run_command", json.dumps({"command": cmd}, sort_keys=True))
+    successful = [dup_key]
     exec_count = {"n": 0}
 
     def fake_execute(*_args, **_kwargs):
@@ -105,9 +130,9 @@ def test_run_command_third_identical_call_does_not_hard_stop_agent():
 
         return ToolExecutionResult(
             tool_name="run_command",
-            arguments={"command": "echo hi"},
+            arguments={"command": "flutter clean"},
             safe_args={},
-            tool_output="hi\n",
+            tool_output="ok",
             success=True,
             duration_ms=1,
             timestamp="",
@@ -133,5 +158,7 @@ def test_run_command_third_identical_call_does_not_hard_stop_agent():
                     max_tool_failures=5,
                 )
     assert early is None
-    assert exec_count["n"] == 1
+    assert exec_count["n"] == 0
     assert result.success is True
+    assert getattr(result, "duplicate_skip", False) is True
+    assert "already succeeded" in result.tool_output.lower()

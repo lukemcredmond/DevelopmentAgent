@@ -569,6 +569,7 @@ export interface WorkflowSettings {
   simulationAutoUseExistingFile?: boolean
   duplicateToolPolicy?: string
   duplicateToolHardStopExclude?: string[]
+  duplicateRunCommandPolicy?: string
   enableFocusMicroSteps?: boolean
   maxFocusStepsPerCard?: number
   enablePromptSectionRotation?: boolean
@@ -1204,6 +1205,7 @@ export interface WorkflowSettingsPayload {
   autoSprintHardReload?: boolean
   duplicateToolPolicy?: string
   duplicateToolHardStopExclude?: string[]
+  duplicateRunCommandPolicy?: string
   enableFocusMicroSteps?: boolean
   maxFocusStepsPerCard?: number
   enablePromptSectionRotation?: boolean
@@ -1490,7 +1492,8 @@ export const DEFAULT_WORKFLOW_SETTINGS: WorkflowSettings = {
   simulationAutoAccept: false,
   simulationAutoUseExistingFile: true,
   duplicateToolPolicy: 'strict',
-  duplicateToolHardStopExclude: ['run_command'],
+  duplicateToolHardStopExclude: [],
+  duplicateRunCommandPolicy: 'strict',
   enableFocusMicroSteps: true,
   maxFocusStepsPerCard: 8,
   enablePromptSectionRotation: true,

@@ -761,6 +761,8 @@ def derive_exit_reason(
         return "max_iterations"
     if state.DEV_STEP_READ_ONLY_NO_EDITS:
         return "read_only_no_edits"
+    if state.DEV_STEP_COMMAND_REPEAT_NO_PROGRESS:
+        return "command_repeat_no_progress"
     trace = get_active_trace()
     if trace and trace.plan_rejections >= 2 and not (tools & {"write_file", "apply_patch"}):
         return "plan_exhausted"

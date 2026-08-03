@@ -138,7 +138,8 @@ DEFAULT_WORKFLOW_SETTINGS: Dict[str, Any] = {
     "simulationAutoAccept": False,
     "simulationAutoUseExistingFile": True,
     "duplicateToolPolicy": "strict",
-    "duplicateToolHardStopExclude": ["run_command"],
+    "duplicateToolHardStopExclude": [],
+    "duplicateRunCommandPolicy": "strict",
     # Focus micro-steps: one AC/subtask per Dev sprint tick; rotate prompt sections per LLM iter.
     "enableFocusMicroSteps": True,
     "maxFocusStepsPerCard": 8,

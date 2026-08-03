@@ -179,6 +179,7 @@ def _prepare_single_step_progress(*, force: bool = False) -> bool:
     state.LAST_STEP_OUTCOME = None
     state.LAST_AGENT_STEP_RESULT = None
     state.DEV_STEP_READ_ONLY_NO_EDITS = False
+    state.DEV_STEP_COMMAND_REPEAT_NO_PROGRESS = False
     state.DEV_STEP_INTERRUPTED = False
     state.LAST_STEP_DIAGNOSTICS = None
     from backend.services.step_diagnostics import clear_active_step_trace
@@ -211,6 +212,39 @@ def _step_transcript_tools_since(
         elif name in ("write_file", "apply_patch"):
             has_write = True
     return has_read, has_write
+
+
+def _dev_step_repeated_command_no_progress(
+    task: Dict[str, Any],
+    lane_before: str,
+    step_started: str,
+) -> bool:
+    lane_after = get_task_lane(str(task.get("id", ""))) or lane_before
+    if lane_before != lane_after or lane_after != "In Progress":
+        return False
+    if _task_has_write_files(task):
+        return False
+    _, has_write = _step_transcript_tools_since(task, step_started)
+    if has_write:
+        return False
+    from backend.services.duplicate_tool_policy import normalize_run_command_for_duplicate
+
+    counts: Dict[str, int] = {}
+    for entry in task.get("transcript") or []:
+        if not isinstance(entry, dict):
+            continue
+        if step_started and str(entry.get("timestamp") or "") < step_started:
+            continue
+        if entry.get("toolName") != "run_command":
+            continue
+        if entry.get("toolSuccess") is False:
+            continue
+        args = entry.get("toolArgs") if isinstance(entry.get("toolArgs"), dict) else {}
+        cmd = normalize_run_command_for_duplicate(str(args.get("command") or ""))
+        if not cmd:
+            continue
+        counts[cmd] = counts.get(cmd, 0) + 1
+    return any(n >= 2 for n in counts.values())
 
 
 def _dev_step_read_only_no_edits(
@@ -265,6 +299,11 @@ def _outcome_why_card_stayed(
     if stop_reason == "read_only_no_edits":
         return (
             f"Developer read files but never called apply_patch/write_file on '{title}'. {base}"
+        )
+    if stop_reason == "command_repeat_no_progress":
+        return (
+            f"Developer repeated the same successful run_command without verification or "
+            f"lane move on '{title}'. Run lint/analyze/build next or escalate — do not loop clean/build. {base}"
         )
     if stop_reason == "plan_exhausted":
         return (
@@ -370,6 +409,12 @@ def _build_last_step_outcome(
         message = (
             f"Dev step read files but made no edits on '{title}'. "
             f"Card still in {lane_after}. Open the card → Transcript or Tools tab."
+        )
+    elif state.DEV_STEP_COMMAND_REPEAT_NO_PROGRESS:
+        ok = False
+        message = (
+            f"Dev step repeated the same command without progress on '{title}'. "
+            f"Card still in {lane_after}. Run verification or escalate — see Transcript."
         )
     elif lane_before != lane_after:
         message = f"'{title}' moved from {lane_before} → {lane_after}."
@@ -513,6 +558,7 @@ def _record_last_step_outcome(
             "ok": diag.get("ok"),
         }
     state.DEV_STEP_READ_ONLY_NO_EDITS = False
+    state.DEV_STEP_COMMAND_REPEAT_NO_PROGRESS = False
     state.DEV_STEP_INTERRUPTED = False
 
 
@@ -2966,6 +3012,8 @@ def _run_developer_step(active_task: Dict[str, Any], brief: str) -> None:
             "Fix syntax/parse errors before logic changes. "
             "After edits, run the lint command once to verify. "
             "Do NOT re-run the same lint command without fixing code first.\n"
+            "Hygiene/build commands (e.g. clean): run each command at most once per step; "
+            "after success, run project lint/analyze to satisfy remaining AC — do not repeat the same hygiene command.\n"
             "Escalation: unclear requirements → move to 'Needs PO' (not Needs User). "
             "Needs User ONLY for: secrets/credentials you cannot invent, irreversible external "
             "actions (production deploy, billing), or product choices with no default in brief/AC. "
@@ -3002,6 +3050,13 @@ def _run_developer_step(active_task: Dict[str, Any], brief: str) -> None:
                     "Developer",
                     "warning",
                     f"'{task.get('title', task_id)}': dev step read files but made no edits — staying In Progress",
+                )
+            if _dev_step_repeated_command_no_progress(task, lane_before, step_started):
+                state.DEV_STEP_COMMAND_REPEAT_NO_PROGRESS = True
+                add_system_log(
+                    "Developer",
+                    "warning",
+                    f"'{task.get('title', task_id)}': repeated identical run_command without progress — staying In Progress",
                 )
             if result == "SIMULATION_FALLBACK":
                 from backend.services.simulation_gate import (

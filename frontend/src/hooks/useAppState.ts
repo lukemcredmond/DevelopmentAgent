@@ -1095,13 +1095,35 @@ export function useAutoSprint(
   const backlogLenRef = useRef(board.Backlog?.length ?? 0)
   const sessionStartedRef = useRef<number | null>(null)
   const [sessionStartedAt, setSessionStartedAt] = useState<number | null>(null)
+  const resumeKickRef = useRef(false)
+  const startAutoSprintRef = useRef<(() => Promise<void>) | null>(null)
+
+  const persistAutoSprintSession = useCallback((startedAt: number | null) => {
+    try {
+      if (startedAt != null) {
+        sessionStorage.setItem('autoSprintEnabled', '1')
+        sessionStorage.setItem('autoSprintSessionStartedAt', String(startedAt))
+      }
+    } catch {
+      /* ignore */
+    }
+  }, [])
 
   useEffect(() => {
     try {
       if (sessionStorage.getItem('autoSprintResume') === '1') {
         sessionStorage.removeItem('autoSprintResume')
+        resumeKickRef.current = true
         setAutoSprint(true)
         setAutoSprintPaused(false)
+      } else if (sessionStorage.getItem('autoSprintEnabled') === '1') {
+        setAutoSprint(true)
+        const raw = sessionStorage.getItem('autoSprintSessionStartedAt')
+        const ts = raw ? Number(raw) : NaN
+        if (Number.isFinite(ts) && ts > 0) {
+          sessionStartedRef.current = ts
+          setSessionStartedAt(ts)
+        }
       }
     } catch {
       /* ignore */
@@ -1129,6 +1151,7 @@ export function useAutoSprint(
     if (sessionStartedRef.current == null) {
       sessionStartedRef.current = Date.now()
       setSessionStartedAt(sessionStartedRef.current)
+      persistAutoSprintSession(sessionStartedRef.current)
     }
     cancelRef.current = new AbortController()
 
@@ -1143,10 +1166,11 @@ export function useAutoSprint(
       if (data.lastSprintSummary?.status === 'session_refresh') {
         try {
           sessionStorage.setItem('autoSprintResume', '1')
+          sessionStorage.setItem('autoSprintEnabled', '1')
+          sessionStorage.removeItem('autoSprintSessionStartedAt')
         } catch {
           /* ignore */
         }
-        setAutoSprintPaused(true)
         await onSessionRefresh?.()
         sessionStartedRef.current = null
         setSessionStartedAt(null)
@@ -1155,6 +1179,7 @@ export function useAutoSprint(
           return
         }
         setAutoSprintPaused(false)
+        resumeKickRef.current = true
       } else if (data.pendingSimulation?.id || data.lastSprintSummary?.status === 'simulation_pending') {
         setAutoSprintPaused(true)
       } else if (data.lastSprintSummary?.status === 'idle') {
@@ -1165,13 +1190,38 @@ export function useAutoSprint(
     } finally {
       setSprintRunning(false)
     }
-  }, [brief, ollamaUrl, board, workflowSettings, onState, pendingSimulation?.id, onSessionRefresh])
+  }, [brief, ollamaUrl, board, workflowSettings, onState, pendingSimulation?.id, onSessionRefresh, persistAutoSprintSession])
+
+  startAutoSprintRef.current = startAutoSprint
+
+  useEffect(() => {
+    if (!resumeKickRef.current || !autoSprint || sprintRunning) return
+    resumeKickRef.current = false
+    void startAutoSprintRef.current?.()
+  }, [autoSprint, sprintRunning])
+
+  const onSessionRefreshDue = useCallback(() => {
+    try {
+      sessionStorage.setItem('autoSprintResume', '1')
+      sessionStorage.setItem('autoSprintEnabled', '1')
+      sessionStorage.removeItem('autoSprintSessionStartedAt')
+    } catch {
+      /* ignore */
+    }
+    window.location.reload()
+  }, [])
 
   const stopAutoSprint = useCallback(async () => {
     setAutoSprint(false)
     setAutoSprintPaused(false)
     sessionStartedRef.current = null
     setSessionStartedAt(null)
+    try {
+      sessionStorage.removeItem('autoSprintEnabled')
+      sessionStorage.removeItem('autoSprintSessionStartedAt')
+    } catch {
+      /* ignore */
+    }
     cancelRef.current?.abort()
     try {
       await cancelSprint()
@@ -1215,5 +1265,6 @@ export function useAutoSprint(
     startAutoSprint,
     stopAutoSprint,
     autoSprintSessionStartedAt: sessionStartedAt,
+    onSessionRefreshDue,
   }
 }

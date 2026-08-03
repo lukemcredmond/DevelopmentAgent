@@ -258,6 +258,7 @@ class WorkflowSettingsPayload(BaseModel):
     simulationAutoUseExistingFile: Optional[bool] = None
     duplicateToolPolicy: Optional[str] = None
     duplicateToolHardStopExclude: Optional[List[str]] = None
+    duplicateRunCommandPolicy: Optional[str] = None
     enableFocusMicroSteps: Optional[bool] = None
     maxFocusStepsPerCard: Optional[int] = None
     enablePromptSectionRotation: Optional[bool] = None

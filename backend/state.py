@@ -45,6 +45,7 @@ LAST_AGENT_STEP_RESULT: Optional[str] = None
 # Progress snapshot when a step hits max LLM iterations (for Extend UX).
 LAST_STEP_PROGRESS: Optional[Dict[str, Any]] = None
 DEV_STEP_READ_ONLY_NO_EDITS: bool = False
+DEV_STEP_COMMAND_REPEAT_NO_PROGRESS: bool = False
 DEV_STEP_INTERRUPTED: bool = False
 
 # Active per-step diagnostics trace (manual sprint steps).

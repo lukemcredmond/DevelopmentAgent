@@ -304,11 +304,14 @@ class ScrumAgent:
         lines = ["=== OBSERVATION ==="]
         files_touched: List[str] = []
         hints: List[str] = []
+        obs_cmd_cap = 400
         for tool_name, arguments, result in batch:
             ok = "ok" if getattr(result, "success", False) else "FAIL"
             if getattr(result, "duplicate_skip", False):
                 ok = "skip"
-            out = str(getattr(result, "tool_output", "") or "").replace("\n", " ")[:120]
+            raw_out = str(getattr(result, "tool_output", "") or "")
+            cap = obs_cmd_cap if tool_name == "run_command" else 120
+            out = raw_out.replace("\n", " ")[:cap]
             lines.append(f"- {tool_name}: {ok} — {out}")
             path = ""
             if isinstance(arguments, dict):
@@ -317,9 +320,15 @@ class ScrumAgent:
                 files_touched.append(path)
             # Fold former per-tool system nudges into this one block.
             if getattr(result, "duplicate_skip", False):
-                hints.append(
-                    f"Already ran '{tool_name}' with identical args — change approach; do not repeat."
-                )
+                if tool_name == "run_command":
+                    hints.append(
+                        "Command already succeeded this step — do not re-run; "
+                        "run verification (lint/analyze/build) or update_board when AC are met."
+                    )
+                else:
+                    hints.append(
+                        f"Already ran '{tool_name}' with identical args — change approach; do not repeat."
+                    )
             elif not getattr(result, "success", False):
                 hint = (
                     f"Tool '{tool_name}' failed — do not repeat the same arguments."
@@ -359,6 +368,12 @@ class ScrumAgent:
                     hints.append(
                         "Command non-zero exit — fix budgeted issues, then re-run once "
                         "(do not repeat without edits)."
+                    )
+                elif getattr(result, "success", False) and not getattr(result, "duplicate_skip", False):
+                    hints.append(
+                        f"Command '{command[:80]}' succeeded (exit 0) — do not run it again. "
+                        "Run the next verification step from acceptance criteria "
+                        "(project lint/analyze/build) or update_board when all AC are satisfied."
                     )
         if files_touched:
             lines.append("files touched: " + ", ".join(dict.fromkeys(files_touched)))
@@ -468,6 +483,18 @@ class ScrumAgent:
                             "Command completed with findings (non-zero exit). "
                             "Fix budgeted issues with apply_patch/write_file, then re-run "
                             "the lint command once. Do not repeat the same command without making changes."
+                        ),
+                    }
+                )
+            elif success and exit_code == 0 and not diagnostics:
+                command = str(arguments.get("command") or "")
+                messages.append(
+                    {
+                        "role": "system",
+                        "content": (
+                            f"Command succeeded: {command[:120]}. Do not run the same command again. "
+                            "Proceed to verification (lint/analyze/build) for remaining acceptance criteria, "
+                            "or update_board when the card is complete."
                         ),
                     }
                 )
@@ -859,6 +886,16 @@ class ScrumAgent:
         tool_summary = summarize_tool_args(tool_name, arguments)
         key = (tool_name, json.dumps(arguments, sort_keys=True, default=str))
 
+        def _duplicate_success_key() -> Tuple[str, str]:
+            if tool_name == "run_command" and isinstance(arguments, dict):
+                from backend.services.duplicate_tool_policy import normalize_run_command_for_duplicate
+
+                cmd = normalize_run_command_for_duplicate(str(arguments.get("command") or ""))
+                return (tool_name, json.dumps({"command": cmd}, sort_keys=True))
+            return key
+
+        dup_key = _duplicate_success_key()
+
         def _track_fingerprint(*, block: bool = False) -> None:
             if not task_id:
                 return
@@ -903,7 +940,7 @@ class ScrumAgent:
                 )
                 add_system_log(self.role, "info", skip_intent)
                 with _FAILURE_LOCK:
-                    successful_tool_keys.append(key)
+                    successful_tool_keys.append(dup_key)
                 _track_fingerprint()
                 _log_duplicate_skip(
                     agent=self.role,
@@ -933,7 +970,7 @@ class ScrumAgent:
                 return tool_name, arguments, result, None
 
         with _FAILURE_LOCK:
-            same_success = successful_tool_keys.count(key)
+            same_success = successful_tool_keys.count(dup_key)
 
         from backend.services.duplicate_tool_policy import (
             duplicate_in_step_hard_stop_applies,
@@ -995,11 +1032,19 @@ class ScrumAgent:
                 tool_output, success = cached
             else:
                 cmd = str((arguments or {}).get("command") or tool_summary)[:120]
-                tool_output = (
-                    f"[skipped duplicate] Already ran '{tool_name}' with identical args"
-                    + (f" ({cmd})" if cmd else "")
-                    + ". Use prior output; change approach or edit files."
-                )
+                if tool_name == "run_command":
+                    tool_output = (
+                        f"[skipped duplicate] Command already succeeded in this step"
+                        + (f" ({cmd})" if cmd else "")
+                        + ". Do not re-run — proceed to verification (lint/analyze/build) "
+                        "or update_board when acceptance criteria are met."
+                    )
+                else:
+                    tool_output = (
+                        f"[skipped duplicate] Already ran '{tool_name}' with identical args"
+                        + (f" ({cmd})" if cmd else "")
+                        + ". Use prior output; change approach or edit files."
+                    )
                 success = True
             skip_intent = f"Skipped duplicate {tool_name}"
             if tool_name == "run_command":
@@ -1014,7 +1059,7 @@ class ScrumAgent:
             )
             add_system_log(self.role, "info", skip_intent)
             with _FAILURE_LOCK:
-                successful_tool_keys.append(key)
+                successful_tool_keys.append(dup_key)
             _track_fingerprint()
             _log_duplicate_skip(
                 agent=self.role,
@@ -1092,7 +1137,7 @@ class ScrumAgent:
 
         if result.success and not result.pending_approval:
             with _FAILURE_LOCK:
-                successful_tool_keys.append(key)
+                successful_tool_keys.append(dup_key)
             _track_fingerprint()
 
         if not result.success and not result.pending_approval:
@@ -1232,12 +1277,34 @@ class ScrumAgent:
             for call in all_calls
         ]
         self._append_observation_summary(messages, batch)
-        if any(
+        write_success = any(
             results_by_id[id(call)][0] in ("write_file", "apply_patch")
             and results_by_id[id(call)][2].success
             for call in all_calls
-        ):
+        )
+        command_success = any(
+            results_by_id[id(call)][0] == "run_command"
+            and results_by_id[id(call)][2].success
+            and not getattr(results_by_id[id(call)][2], "duplicate_skip", False)
+            for call in all_calls
+        )
+        if write_success or command_success:
             self._inject_ac_progress_after_write(messages, task_id)
+        if command_success and task_id:
+            from backend.services.ac_command_match import apply_run_command_ac_ticks
+
+            for call in all_calls:
+                if not hasattr(call, "function"):
+                    continue
+                res = results_by_id.get(id(call))
+                if not res or res[0] != "run_command" or not res[2].success:
+                    continue
+                if getattr(res[2], "duplicate_skip", False):
+                    continue
+                args = normalize_tool_arguments(call.function.arguments)
+                cmd = str(args.get("command") or "")
+                if cmd:
+                    apply_run_command_ac_ticks(task_id, cmd, success=True)
 
         tool_summary = ", ".join(
             call.function.name for call in all_calls if hasattr(call, "function")
