@@ -456,6 +456,7 @@ Persisted per project. Update via sidebar **Workflow** or `POST /api/workflow/se
 | semanticSprintTopK | 3 | Max semantic chunks injected per sprint step |
 | sprintFileContextMode | excerpt | `excerpt` = paths + short signatures (default); `full` = whole file bodies |
 | enableObservationSummaries | On | Compact `=== OBSERVATION ===` after each tool batch |
+| enableAgentStepRecap | On | `=== STEP GOAL ===` at step start + `=== STEP RECAP ===` after tools (intent, dedupe list, next action) for local/weaker models |
 | enableEpisodeSummary | On | Fold pruned tool messages into `=== EPISODE SUMMARY ===` |
 | enableStepLessonMemory | On | Save one structured lesson to memory at end of each agent step |
 | enableLlmContextCompress | **Off** | When sprint inject (semantic + files) exceeds `contextCompressMinChars`, one extra Ollama call shrinks it to `contextCompressMaxChars` (fail-open). Off by default because it adds a call per step |

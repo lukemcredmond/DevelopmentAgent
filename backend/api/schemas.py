@@ -237,6 +237,7 @@ class WorkflowSettingsPayload(BaseModel):
     semanticSprintTopK: Optional[int] = None
     sprintFileContextMode: Optional[str] = None
     enableObservationSummaries: Optional[bool] = None
+    enableAgentStepRecap: Optional[bool] = None
     enableEpisodeSummary: Optional[bool] = None
     enableStepLessonMemory: Optional[bool] = None
     enableLlmContextCompress: Optional[bool] = None

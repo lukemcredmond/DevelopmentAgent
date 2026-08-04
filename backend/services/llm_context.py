@@ -165,6 +165,8 @@ def prune_messages_if_needed(messages: MutableSequence[Dict[str, Any]]) -> Mutab
 
 _PROGRESS_MARKER = "=== STEP PROGRESS (prompt unchanged) ==="
 _BUNDLE_PREFIX = "=== PROMPT_SECTION_BUNDLE"
+_STEP_RECAP_MARKER = "=== STEP RECAP (local model aid) ==="
+_STEP_GOAL_MARKER = "=== STEP GOAL (this sprint step) ==="
 
 
 def fingerprint_llm_messages(messages: Sequence[Dict[str, Any]]) -> str:
@@ -176,6 +178,10 @@ def fingerprint_llm_messages(messages: Sequence[Dict[str, Any]]) -> str:
         role = str(msg.get("role") or "")
         content = str(msg.get("content") or "")
         if content.startswith(_PROGRESS_MARKER):
+            continue
+        if content.startswith(_STEP_RECAP_MARKER) or content.startswith(_STEP_GOAL_MARKER):
+            continue
+        if content.startswith("=== OBSERVATION ==="):
             continue
         if content.startswith(_BUNDLE_PREFIX):
             parts.append(f"{role}:bundle:{len(content)}:{content[:120]}")

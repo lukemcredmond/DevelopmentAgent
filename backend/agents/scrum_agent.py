@@ -191,6 +191,79 @@ _PLAN_REJECTION_MESSAGE = (
     "call apply_patch or write_file now using the read_file output above."
 )
 
+_PO_IDLE_GREETING_MARKERS = (
+    "ready to act",
+    "ready to assist",
+    "please provide the product brief",
+    "please provide the brief",
+    "provide the product brief",
+    "provide the brief",
+    "share the product brief",
+    "share your brief",
+    "any new feature",
+    "new feature requests",
+    "how can i assist",
+    "how may i assist",
+)
+
+_PO_BOARD_TOOLS = frozenset({"update_board", "add_backlog_tasks", "add_subtasks"})
+_PO_READONLY_TOOLS = frozenset(
+    {"list_dir", "grep", "glob_file_search", "read_file", "search_code", "semantic_search", "graph_query"}
+)
+
+_PO_IDLE_REJECTION_MESSAGE = (
+    "You are already in an active project step. Task Detail and the project brief are in the "
+    "user message above; tool results (list_dir, grep, read_file) are in prior tool messages. "
+    "Do not ask the user to paste the brief again. Use those results and call update_board, "
+    "add_backlog_tasks, add_subtasks, or reply with the JSON format requested in Task Detail."
+)
+
+
+def _looks_like_po_idle_greeting(content: str) -> bool:
+    lower = (content or "").lower()
+    if not lower.strip():
+        return False
+    if any(m in lower for m in _PO_IDLE_GREETING_MARKERS):
+        return True
+    if "product owner" in lower and ("provide" in lower or "share" in lower) and "brief" in lower:
+        return True
+    return False
+
+
+def _looks_like_po_work_product(content: str) -> bool:
+    text = (content or "").strip()
+    if not text:
+        return False
+    lower = text.lower()
+    if '"acceptancecriteria"' in lower or '"description"' in lower:
+        return True
+    if text.startswith("[") and ("title" in lower or "acceptance" in lower):
+        return True
+    if text.startswith("{") and ("acceptancecriteria" in lower or "executionplan" in lower):
+        return True
+    return False
+
+
+def _po_step_should_reject_text_only(
+    content: str,
+    tools_used: set[str],
+    task_id: Optional[str],
+) -> bool:
+    """PO must not exit on onboarding chat after exploration tools or with task context."""
+    if state.ACTIVE_SPRINT_AGENT != "Product Owner":
+        return False
+    if not (content or "").strip():
+        return False
+    if _looks_like_po_work_product(content):
+        return False
+    if _looks_like_po_idle_greeting(content):
+        return bool(task_id or tools_used)
+    explored = bool(tools_used & _PO_READONLY_TOOLS)
+    acted = bool(tools_used & _PO_BOARD_TOOLS)
+    if explored and not acted:
+        return True
+    return False
+
 
 class ScrumAgent:
     def __init__(
@@ -1392,6 +1465,18 @@ class ScrumAgent:
             for call in all_calls
         ]
         self._append_observation_summary(messages, batch)
+        from backend.services.step_recap import append_step_recap_after_batch_if_enabled
+
+        append_step_recap_after_batch_if_enabled(
+            messages,
+            agent_role=self.role,
+            task_id=task_id,
+            batch=batch,
+            tools_used_step=tools_used,
+            successful_tool_keys=successful_tool_keys,
+            iteration=iteration,
+            max_iterations=max_iterations,
+        )
         write_success = any(
             results_by_id[id(call)][0] in ("write_file", "apply_patch")
             and results_by_id[id(call)][2].success
@@ -1571,6 +1656,14 @@ class ScrumAgent:
                 bundle_name = _apply_rotation_for_iteration(iteration)
                 from backend.services.llm_context import maybe_inject_unchanged_prompt_progress
 
+                if iteration == 1 and task_id:
+                    from backend.services.step_recap import append_step_goal_anchor_if_enabled
+
+                    append_step_goal_anchor_if_enabled(
+                        messages,
+                        agent_role=self.role,
+                        task_id=task_id,
+                    )
                 last_llm_fingerprint, injected = maybe_inject_unchanged_prompt_progress(
                     messages,
                     iteration=iteration,
@@ -1758,6 +1851,32 @@ class ScrumAgent:
                     continue
 
                 content = unwrap_llm_text((message.content or "")).strip()
+                if content and _po_step_should_reject_text_only(content, tools_used, task_id):
+                    if task_id and is_task_done(task_id) and not state.ALLOW_DONE_RETRY:
+                        stop_msg = "Stopped: task already Done"
+                        add_system_log(self.role, "info", stop_msg)
+                        self._log_step_exit(stop_msg, "info")
+                        finish_run(status="completed")
+                        return stop_msg
+                    if iteration >= max_iterations:
+                        add_system_log(
+                            self.role,
+                            "warning",
+                            "PO returned idle/onboarding text after exploration tools — max iterations.",
+                        )
+                        finish_run(status="failed", error=content[:300])
+                        return content or "Task completed."
+                    messages.append({"role": "assistant", "content": content})
+                    add_system_log(
+                        self.role,
+                        "warning",
+                        "PO idle or non-action text rejected — tool results are already in context; "
+                        f"continuing to iter {min(iteration + 1, max_iterations)}/{max_iterations}.",
+                    )
+                    log_event("po_idle_rejected", content[:200])
+                    messages.append({"role": "system", "content": _PO_IDLE_REJECTION_MESSAGE})
+                    continue
+
                 if content and _dev_step_needs_more_tools(tools_used, task_id):
                     if task_id and is_task_done(task_id) and not state.ALLOW_DONE_RETRY:
                         stop_msg = "Stopped: task already Done"

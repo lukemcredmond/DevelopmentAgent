@@ -124,6 +124,26 @@ def record_tool_working_context(
             kind="read",
             summary=f"read_file ok: {path}",
         )
+        return
+
+    if tool_name == "list_dir" and success:
+        path = str(arguments.get("path") or ".")
+        append_working_context(
+            task,
+            kind="explore",
+            summary=f"list_dir ok: {path}",
+        )
+        return
+
+    if tool_name == "grep" and success:
+        pattern = str(arguments.get("pattern") or "")[:80]
+        path = str(arguments.get("path") or "")
+        where = f" in {path}" if path else ""
+        append_working_context(
+            task,
+            kind="explore",
+            summary=f"grep ok: '{pattern}'{where}",
+        )
 
 
 def save_task_fact_memory(

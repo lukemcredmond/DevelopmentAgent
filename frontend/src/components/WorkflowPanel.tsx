@@ -1401,6 +1401,15 @@ export default function WorkflowPanel({
       <label className="flex items-center gap-2 text-[11px] text-cat-subtext cursor-pointer pl-5">
         <input
           type="checkbox"
+          checked={settings.enableAgentStepRecap !== false}
+          onChange={(e) => onSettingsChange({ enableAgentStepRecap: e.target.checked })}
+        />
+        Step recap for local models (goal, tool intent, dedupe list)
+        <SettingHint hint="After each tool batch, injects STEP RECAP with AC reminder, why tools ran, do-not-repeat list, and suggested next tool. Helps weaker Ollama models avoid duplicate calls and onboarding text." />
+      </label>
+      <label className="flex items-center gap-2 text-[11px] text-cat-subtext cursor-pointer pl-5">
+        <input
+          type="checkbox"
           checked={settings.enableObservationSummaries !== false}
           onChange={(e) => onSettingsChange({ enableObservationSummaries: e.target.checked })}
         />

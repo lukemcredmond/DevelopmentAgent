@@ -541,6 +541,7 @@ export interface WorkflowSettings {
   semanticSprintTopK?: number
   sprintFileContextMode?: 'excerpt' | 'full' | string
   enableObservationSummaries?: boolean
+  enableAgentStepRecap?: boolean
   enableEpisodeSummary?: boolean
   enableStepLessonMemory?: boolean
   enableLlmContextCompress?: boolean
@@ -1177,6 +1178,7 @@ export interface WorkflowSettingsPayload {
   semanticSprintTopK?: number
   sprintFileContextMode?: 'excerpt' | 'full' | string
   enableObservationSummaries?: boolean
+  enableAgentStepRecap?: boolean
   enableEpisodeSummary?: boolean
   enableStepLessonMemory?: boolean
   enableLlmContextCompress?: boolean
@@ -1510,6 +1512,7 @@ export const DEFAULT_WORKFLOW_SETTINGS: WorkflowSettings = {
   semanticSprintTopK: 3,
   sprintFileContextMode: 'excerpt',
   enableObservationSummaries: true,
+  enableAgentStepRecap: true,
   enableEpisodeSummary: true,
   enableStepLessonMemory: true,
   enableLlmContextCompress: false,

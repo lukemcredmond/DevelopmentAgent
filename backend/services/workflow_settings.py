@@ -104,6 +104,7 @@ DEFAULT_WORKFLOW_SETTINGS: Dict[str, Any] = {
     # excerpt = paths + short signatures (default); full = whole file bodies.
     "sprintFileContextMode": "excerpt",
     "enableObservationSummaries": True,
+    "enableAgentStepRecap": True,
     "enableEpisodeSummary": True,
     "enableStepLessonMemory": True,
     # Off by default: it adds one extra Ollama call per step.
