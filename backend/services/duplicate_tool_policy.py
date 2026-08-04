@@ -113,6 +113,105 @@ def duplicate_in_step_soft_skip_applies(tool_name: str, ws: dict | None = None) 
     return True
 
 
+def _duplicate_args_summary(tool_name: str, arguments: Dict[str, Any]) -> str:
+    args = arguments if isinstance(arguments, dict) else {}
+    if tool_name == "run_command":
+        return str(args.get("command") or "")[:100]
+    if tool_name == "grep":
+        return f"pattern={str(args.get('pattern') or '')[:60]}"
+    if tool_name == "glob_file_search":
+        return f"pattern={str(args.get('pattern') or '')[:60]}"
+    if tool_name == "read_file":
+        return str(args.get("path") or "")[:100]
+    if tool_name == "list_dir":
+        return str(args.get("path") or ".")[:100]
+    if tool_name == "search_code":
+        return f"query={str(args.get('query') or '')[:60]}"
+    return ""
+
+
+def _suggested_next_after_duplicate(tool_name: str, arguments: Dict[str, Any]) -> str:
+    if tool_name == "run_command":
+        return (
+            "Run a different command (lint/analyze/build from acceptance criteria) "
+            "or update_board when AC are met."
+        )
+    if tool_name == "read_file":
+        path = str((arguments or {}).get("path") or "")
+        return f"Use the file content above — call apply_patch on '{path}' or move on; do not read again."
+    if tool_name in ("grep", "glob_file_search", "search_code", "semantic_search", "list_dir"):
+        return (
+            "Use the listing/matches above to edit files (apply_patch/write_file), "
+            "try different search args, or run verification — do not repeat identical search."
+        )
+    return "Change approach: edit files, use prior tool output, or update_board / escalate."
+
+
+def duplicate_loop_should_hard_stop(
+    identical_prior_successes: int,
+    *,
+    limit: int = 3,
+) -> bool:
+    """True when another identical call must not replay — step should stop."""
+    return identical_prior_successes >= limit
+
+
+def format_duplicate_loop_breaker(
+    tool_name: str,
+    arguments: Dict[str, Any],
+    *,
+    identical_prior_successes: int,
+    limit: int = 3,
+) -> str:
+    """Header prepended to replayed duplicate tool output to break LLM retry loops."""
+    attempt = identical_prior_successes + 1
+    summary = _duplicate_args_summary(tool_name, arguments)
+    args_clause = f" ({summary})" if summary else ""
+    next_step = _suggested_next_after_duplicate(tool_name, arguments)
+    remaining = max(0, limit - identical_prior_successes)
+
+    if attempt <= 2:
+        return (
+            f"[duplicate tool — call #{attempt} this step] "
+            f"You already ran '{tool_name}' with the same arguments{args_clause}. "
+            f"Output is unchanged — do NOT call this tool again with these args. "
+            f"NEXT: {next_step}"
+        )
+    if identical_prior_successes < limit:
+        return (
+            f"[LOOP WARNING — call #{attempt}] Repeated identical '{tool_name}'{args_clause}. "
+            f"The workspace has not changed; replaying the same result. "
+            f"STOP retrying this tool. {next_step} "
+            f"(After {remaining} more identical attempt(s) this step will hard-stop.)"
+        )
+    return (
+        f"[LOOP STOP] '{tool_name}'{args_clause} was invoked too many times with identical args. "
+        f"Do not call it again. {next_step}"
+    )
+
+
+def apply_duplicate_loop_breaker_to_output(
+    tool_name: str,
+    arguments: Dict[str, Any],
+    body: str,
+    *,
+    identical_prior_successes: int,
+    limit: int = 3,
+) -> str:
+    header = format_duplicate_loop_breaker(
+        tool_name,
+        arguments,
+        identical_prior_successes=identical_prior_successes,
+        limit=limit,
+    )
+    text = str(body or "").strip()
+    if not header:
+        return text
+    if text.startswith("[duplicate tool") or text.startswith("[LOOP WARNING") or text.startswith("[LOOP STOP"):
+        return text
+    return f"{header}\n\n{text}"
+
+
 def duplicate_cross_step_block_applies(
     tool_name: str,
     *,

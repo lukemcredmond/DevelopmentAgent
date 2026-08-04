@@ -138,6 +138,9 @@ def _format_grep_results(
     context_lines=0,
     limit=100,
 ) -> str:
+    pattern = str(pattern or "").strip()
+    if not pattern:
+        return "Error: grep requires a non-empty pattern — do not call grep with pattern ''."
     if path:
         from backend.workspace.files import _path_tool_failure_message, resolve_workspace_path
 
@@ -166,6 +169,9 @@ def _format_grep_results(
 
 
 def _format_glob_results(pattern: str, limit: int = 200) -> str:
+    pattern = str(pattern or "").strip()
+    if not pattern:
+        return "Error: glob_file_search requires a non-empty pattern."
     paths = glob_workspace(pattern, limit=int(limit or 200))
     if not paths:
         return f"No files match glob '{pattern}'."

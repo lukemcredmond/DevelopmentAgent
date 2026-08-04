@@ -164,6 +164,7 @@ def test_run_command_second_identical_call_soft_skips_when_replay_exists():
     assert exec_count["n"] == 0
     assert getattr(result, "duplicate_skip", False) is True
     assert "clean ok" in result.tool_output
+    assert "[duplicate tool" in result.tool_output
 
 
 def test_run_command_second_identical_call_executes_without_replay():
@@ -218,3 +219,78 @@ def test_run_command_second_identical_call_executes_without_replay():
     assert exec_count["n"] == 1
     assert result.success is True
     assert getattr(result, "duplicate_skip", False) is False
+
+
+def test_grep_fourth_identical_call_hard_stops_loop():
+    """After LIMIT identical successes, replay is disabled and the step stops."""
+    initialize()
+    from backend.services.tool_cache import clear_tool_cache, store_cached_result
+
+    clear_tool_cache()
+    agent = ScrumAgent(role="Developer", model="m", system_prompt="test")
+    call = _FakeToolCall("grep", {"pattern": "Widget"})
+    dup_key = ("grep", json.dumps({"pattern": "Widget"}, sort_keys=True))
+    successful = [dup_key, dup_key, dup_key]
+    store_cached_result(
+        "grep",
+        {"pattern": "Widget"},
+        "Grep 'Widget' (1 match(es)):\n- a.dart:1: Widget",
+        True,
+    )
+    exec_count = {"n": 0}
+
+    def fake_execute(*_args, **_kwargs):
+        exec_count["n"] += 1
+        from backend.services.tool_execution_service import ToolExecutionResult
+
+        return ToolExecutionResult(
+            tool_name="grep",
+            arguments={"pattern": "Widget"},
+            safe_args={},
+            tool_output="should not run",
+            success=True,
+            duration_ms=1,
+            timestamp="",
+            agent="Developer",
+            agent_id="dev",
+            task_id="T1",
+            source="agent",
+            run_id="R1",
+        )
+
+    with patch.object(agent, "_publish_work_progress"):
+        with patch.object(agent, "_log_step_exit"):
+            with patch("backend.agents.scrum_agent.finish_run"):
+                with patch("backend.agents.scrum_agent.execute_tool", side_effect=fake_execute):
+                    with patch("backend.agents.scrum_agent.find_task_by_id", return_value=None):
+                        _tool_name, _args, result, early = agent._execute_single_tool_call(
+                            call,
+                            task_id="T1",
+                            agent_id="dev",
+                            run_id="R1",
+                            user_prompt="",
+                            failed_tool_keys=[],
+                            successful_tool_keys=successful,
+                            total_failures=[0],
+                            max_tool_failures=5,
+                        )
+    assert exec_count["n"] == 0
+    assert early is not None
+    assert "loop detected" in early.lower()
+    assert result.success is False
+
+
+def test_duplicate_replay_includes_loop_breaker_header():
+    from backend.services.duplicate_tool_policy import apply_duplicate_loop_breaker_to_output
+
+    body = "Grep 'foo' (0 matches)"
+    wrapped = apply_duplicate_loop_breaker_to_output(
+        "grep",
+        {"pattern": "foo"},
+        body,
+        identical_prior_successes=1,
+        limit=SAME_ARGS_SUCCESS_LIMIT,
+    )
+    assert "[duplicate tool" in wrapped
+    assert "do not" in wrapped.lower()
+    assert body in wrapped

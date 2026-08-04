@@ -156,6 +156,55 @@ def _log_duplicate_skip(
         pass
 
 
+def _duplicate_loop_stop_message(
+    tool_name: str,
+    arguments: Dict[str, Any],
+    same_success: int,
+) -> str:
+    from backend.services.duplicate_tool_policy import (
+        _duplicate_args_summary,
+        _suggested_next_after_duplicate,
+    )
+
+    summary = _duplicate_args_summary(tool_name, arguments)
+    args_clause = f" ({summary})" if summary else ""
+    return (
+        f"Stopped: loop detected — '{tool_name}' invoked {same_success + 1} time(s) this step "
+        f"with identical arguments{args_clause}. Tool output and workspace are unchanged. "
+        f"{_suggested_next_after_duplicate(tool_name, arguments)}"
+    )
+
+
+def _resolve_in_step_duplicate_replay(
+    tool_name: str,
+    arguments: Dict[str, Any],
+    live_task: Optional[Dict[str, Any]],
+    same_success: int,
+    *,
+    limit: int = SAME_ARGS_SUCCESS_LIMIT,
+) -> Optional[Tuple[str, bool]]:
+    from backend.services.duplicate_tool_policy import (
+        apply_duplicate_loop_breaker_to_output,
+        duplicate_loop_should_hard_stop,
+    )
+    from backend.services.tool_cache import resolve_duplicate_replay
+
+    if duplicate_loop_should_hard_stop(same_success, limit=limit):
+        return None
+    replay = resolve_duplicate_replay(tool_name, arguments, live_task)
+    if not replay:
+        return None
+    body, success = replay
+    body = apply_duplicate_loop_breaker_to_output(
+        tool_name,
+        arguments,
+        body,
+        identical_prior_successes=same_success,
+        limit=limit,
+    )
+    return body, success
+
+
 def _dev_step_needs_more_tools(tools_used: set[str], task_id: Optional[str]) -> bool:
     """True when a Developer sprint step should not exit on text-only LLM output."""
     if state.ACTIVE_SPRINT_AGENT != "Developer" or not task_id:
@@ -523,6 +572,7 @@ class ScrumAgent:
                 files_touched.append(path)
             # Fold former per-tool system nudges into this one block.
             if getattr(result, "duplicate_skip", False):
+                attempt = int(getattr(result, "duplicate_attempt", 0) or 0)
                 if tool_name == "run_command":
                     hints.append(
                         "Command already succeeded this step — do not re-run; "
@@ -536,6 +586,15 @@ class ScrumAgent:
                 else:
                     hints.append(
                         f"Already ran '{tool_name}' with identical args — use replayed output; do not repeat."
+                    )
+                if attempt >= 3:
+                    hints.append(
+                        "LOOP: You are retrying the same tool call repeatedly. "
+                        "Stop this tool — use output already in context, edit files, or update_board."
+                    )
+                elif attempt == 2:
+                    hints.append(
+                        "Duplicate #2 — if you call the same tool again with these args, the step may hard-stop."
                     )
             elif not getattr(result, "success", False):
                 hint = (
@@ -612,6 +671,7 @@ class ScrumAgent:
         success: bool,
         *,
         duplicate_skip: bool = False,
+        duplicate_attempt: int = 0,
     ) -> None:
         from backend.services.llm_context import prepare_tool_output_parts
 
@@ -669,6 +729,22 @@ class ScrumAgent:
                                     "content": _read_file_followup_system_message(path, task=task),
                                 }
                             )
+            if duplicate_skip and duplicate_attempt >= 2:
+                from backend.services.duplicate_tool_policy import (
+                    _suggested_next_after_duplicate,
+                )
+
+                messages.append(
+                    {
+                        "role": "system",
+                        "content": (
+                            f"=== DUPLICATE TOOL LOOP (call #{duplicate_attempt}) ===\n"
+                            f"Do NOT invoke '{tool_name}' again with the same arguments. "
+                            f"Full output is in the tool message(s) above and === OBSERVATION ===.\n"
+                            f"NEXT: {_suggested_next_after_duplicate(tool_name, arguments)}"
+                        ),
+                    }
+                )
             return
         if duplicate_skip:
             messages.append(
@@ -1286,11 +1362,55 @@ class ScrumAgent:
             and same_success >= SAME_ARGS_SUCCESS_LIMIT - 1
         ):
             live_task = find_task_by_id(task_id) if task_id else None
-            from backend.services.tool_cache import resolve_duplicate_replay
+            from backend.services.duplicate_tool_policy import duplicate_loop_should_hard_stop
 
-            replay = resolve_duplicate_replay(tool_name, arguments, live_task)
-            if replay:
-                tool_output, success = replay
+            if duplicate_loop_should_hard_stop(same_success, limit=SAME_ARGS_SUCCESS_LIMIT):
+                cmd_hint = ""
+                if tool_name == "run_command" and isinstance(arguments, dict):
+                    cmd_hint = str(arguments.get("command") or "")[:80]
+                stop_msg = _duplicate_loop_stop_message(tool_name, arguments, same_success)
+                self._log_step_exit(stop_msg, "warning")
+                self._publish_work_progress(
+                    task_id=task_id,
+                    intent=f"Stopped duplicate loop {tool_name}"
+                    + (f": {cmd_hint}" if cmd_hint else ""),
+                    status=stop_msg[:200],
+                    run_status="failed",
+                    clear_tool=True,
+                )
+                finish_run(status="failed", error=stop_msg)
+                _track_fingerprint(block=True)
+                _log_duplicate_skip(
+                    agent=self.role,
+                    tool_name=tool_name,
+                    arguments=arguments,
+                    tool_output=stop_msg,
+                    task_id=task_id,
+                    run_id=run_id,
+                    success=False,
+                )
+                safe_args = sanitize_tool_args_for_log(tool_name, arguments)
+                result = ToolExecutionResult(
+                    tool_name=tool_name,
+                    arguments=arguments,
+                    safe_args=safe_args,
+                    tool_output=stop_msg,
+                    success=False,
+                    duration_ms=0,
+                    timestamp="",
+                    agent=self.role,
+                    agent_id=agent_id,
+                    task_id=task_id,
+                    source="agent",
+                    run_id=run_id,
+                )
+                return tool_name, arguments, result, stop_msg
+
+            replay_pair = _resolve_in_step_duplicate_replay(
+                tool_name, arguments, live_task, same_success
+            )
+            if replay_pair:
+                tool_output, success = replay_pair
                 skip_intent = f"Replayed duplicate {tool_name} (hard-stop avoided)"
                 self._publish_work_progress(
                     task_id=task_id,
@@ -1328,6 +1448,7 @@ class ScrumAgent:
                     run_id=run_id,
                 )
                 setattr(result, "duplicate_skip", True)
+                setattr(result, "duplicate_attempt", same_success + 1)
                 return tool_name, arguments, result, None
             cmd_hint = ""
             if tool_name == "run_command" and isinstance(arguments, dict):
@@ -1380,11 +1501,35 @@ class ScrumAgent:
             and same_success >= 1
         ):
             live_task = find_task_by_id(task_id) if task_id else None
-            from backend.services.tool_cache import resolve_duplicate_replay
+            from backend.services.duplicate_tool_policy import duplicate_loop_should_hard_stop
 
-            replay = resolve_duplicate_replay(tool_name, arguments, live_task)
-            if replay:
-                tool_output, success = replay
+            if duplicate_loop_should_hard_stop(same_success, limit=SAME_ARGS_SUCCESS_LIMIT):
+                stop_msg = _duplicate_loop_stop_message(tool_name, arguments, same_success)
+                self._log_step_exit(stop_msg, "warning")
+                finish_run(status="failed", error=stop_msg)
+                _track_fingerprint(block=True)
+                safe_args = sanitize_tool_args_for_log(tool_name, arguments)
+                result = ToolExecutionResult(
+                    tool_name=tool_name,
+                    arguments=arguments,
+                    safe_args=safe_args,
+                    tool_output=stop_msg,
+                    success=False,
+                    duration_ms=0,
+                    timestamp="",
+                    agent=self.role,
+                    agent_id=agent_id,
+                    task_id=task_id,
+                    source="agent",
+                    run_id=run_id,
+                )
+                return tool_name, arguments, result, stop_msg
+
+            replay_pair = _resolve_in_step_duplicate_replay(
+                tool_name, arguments, live_task, same_success
+            )
+            if replay_pair:
+                tool_output, success = replay_pair
                 skip_intent = f"Skipped duplicate {tool_name}"
                 if tool_name == "run_command":
                     skip_intent = f"Skipped duplicate run_command: {str(arguments.get('command') or '')[:100]}"
@@ -1424,6 +1569,7 @@ class ScrumAgent:
                     run_id=run_id,
                 )
                 setattr(result, "duplicate_skip", True)
+                setattr(result, "duplicate_attempt", same_success + 1)
                 return tool_name, arguments, result, None
             add_system_log(
                 self.role,
@@ -1626,6 +1772,7 @@ class ScrumAgent:
                 result.tool_output,
                 result.success,
                 duplicate_skip=bool(getattr(result, "duplicate_skip", False)),
+                duplicate_attempt=int(getattr(result, "duplicate_attempt", 0) or 0),
             )
 
         batch = [

@@ -107,6 +107,52 @@ def tool_arguments_equal(a: Dict[str, Any], b: Dict[str, Any]) -> bool:
     )
 
 
+def tool_arguments_eligible_for_cache(tool_name: str, arguments: Dict[str, Any]) -> bool:
+    """Invalid args should never hit step cache — always execute fresh."""
+    args = arguments if isinstance(arguments, dict) else {}
+    if tool_name == "grep":
+        return bool(str(args.get("pattern") or "").strip())
+    if tool_name == "glob_file_search":
+        return bool(str(args.get("pattern") or "").strip())
+    if tool_name == "search_code":
+        return bool(str(args.get("query") or "").strip())
+    if tool_name == "read_file":
+        return bool(str(args.get("path") or "").strip())
+    if tool_name == "list_dir":
+        return True
+    if tool_name == "run_command":
+        return bool(str(args.get("command") or "").strip())
+    return True
+
+
+def is_substantive_tool_output(
+    tool_name: str,
+    arguments: Dict[str, Any],
+    output: str,
+) -> bool:
+    """False → do not cache or replay; force a real tool execution."""
+    text = str(output or "").strip()
+    if not text:
+        return False
+    if not tool_arguments_eligible_for_cache(tool_name, arguments):
+        return False
+    lower = text.lower()
+    if lower.startswith("error:"):
+        return False
+    if "no matches for pattern ''" in lower or "no matches for pattern \"\"" in lower:
+        return False
+    if text.startswith("[skipped duplicate]") and "replayed" not in lower:
+        return False
+    if text.startswith("[blocked fingerprint]"):
+        return False
+    # Cache-only stub with no prior body (legacy bad entries)
+    if lower.startswith("no matches for pattern") and "[cached" in lower and len(text) < 120:
+        pat = str((arguments or {}).get("pattern") or "").strip()
+        if not pat:
+            return False
+    return True
+
+
 def find_prior_tool_output_for_task(
     task: Dict[str, Any],
     tool_name: str,
@@ -118,7 +164,11 @@ def find_prior_tool_output_for_task(
 
     def _accept_output(text: str) -> bool:
         head = (text or "").strip()[:120].lower()
-        return bool(text) and not any(m in head for m in skip_markers)
+        if not text:
+            return False
+        if any(m in head for m in skip_markers):
+            return False
+        return is_substantive_tool_output(tool_name, args, text)
 
     for entry in reversed(task.get("transcript") or []):
         if not isinstance(entry, dict):
@@ -168,6 +218,8 @@ def resolve_duplicate_replay(
     task: Optional[Dict[str, Any]],
 ) -> Optional[Tuple[str, bool]]:
     """Last successful output for duplicate skip, or None to allow a real tool run."""
+    if not tool_arguments_eligible_for_cache(tool_name, arguments):
+        return None
     cached = get_cached_result(tool_name, arguments)
     if cached:
         return cached
@@ -254,11 +306,17 @@ def get_cached_result(
     arguments: Dict[str, Any],
 ) -> Optional[Tuple[str, bool]]:
     key = _cache_key(tool_name, arguments)
+    if not tool_arguments_eligible_for_cache(tool_name, arguments):
+        _STEP_CACHE.pop(key, None)
+        return None
     entry = _STEP_CACHE.get(key)
     if not entry:
         return None
     output = str(entry.get("output") or "")
     success = entry.get("success") is not False
+    if not is_substantive_tool_output(tool_name, arguments, output):
+        _STEP_CACHE.pop(key, None)
+        return None
     if "[cached" not in output:
         output = f"{output}\n[cached — workspace unchanged since last call]"
     return output, success
@@ -270,6 +328,12 @@ def store_cached_result(
     output: str,
     success: bool,
 ) -> None:
+    if not success:
+        return
+    if not tool_arguments_eligible_for_cache(tool_name, arguments):
+        return
+    if not is_substantive_tool_output(tool_name, arguments, output):
+        return
     _STEP_CACHE[_cache_key(tool_name, arguments)] = {
         "output": output,
         "success": success,
