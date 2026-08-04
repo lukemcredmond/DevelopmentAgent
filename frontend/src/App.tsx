@@ -53,6 +53,7 @@ import AgentConsole from './components/AgentConsole'
 import BriefPanel, { readBriefOpen } from './components/BriefPanel'
 import ChatPanel, { type ChatUiMessage } from './components/ChatPanel'
 import DoneAuditModal from './components/DoneAuditModal'
+import RefinementAuditModal from './components/RefinementAuditModal'
 import SimulationConfirmModal from './components/SimulationConfirmModal'
 import EvidencePanel from './components/EvidencePanel'
 import GitPanel from './components/GitPanel'
@@ -265,6 +266,7 @@ export default function App() {
 
   const [selectedTask, setSelectedTask] = useState<Task | null>(null)
   const [doneAuditOpen, setDoneAuditOpen] = useState(false)
+  const [refinementAuditOpen, setRefinementAuditOpen] = useState(false)
   const [simulationFocusNonce, setSimulationFocusNonce] = useState(0)
   const [skillModalAgent, setSkillModalAgent] = useState<AgentId | null>(null)
   const [skillSearch, setSkillSearch] = useState('')
@@ -1559,6 +1561,7 @@ export default function App() {
                 void withLoading(async () => handleState(await reorderTasks(lane, taskIds)))
               }
               onAuditDone={() => setDoneAuditOpen(true)}
+              onAuditRefinement={() => setRefinementAuditOpen(true)}
             />
           </div>
         )}
@@ -2350,6 +2353,12 @@ export default function App() {
       <DoneAuditModal
         open={doneAuditOpen}
         onClose={() => setDoneAuditOpen(false)}
+        onApplied={(data) => handleState(data)}
+      />
+
+      <RefinementAuditModal
+        open={refinementAuditOpen}
+        onClose={() => setRefinementAuditOpen(false)}
         onApplied={(data) => handleState(data)}
       />
 

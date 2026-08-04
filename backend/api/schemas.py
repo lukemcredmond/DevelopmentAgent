@@ -85,6 +85,17 @@ class DoneAuditApplyPayload(BaseModel):
     only_incomplete: bool = Field(default=True, alias="onlyIncomplete")
 
 
+class RefinementAuditApplyPayload(BaseModel):
+    model_config = ConfigDict(populate_by_name=True)
+
+    delete_task_ids: List[str] = Field(default_factory=list, alias="deleteTaskIds")
+    move_to_done_task_ids: List[str] = Field(default_factory=list, alias="moveToDoneTaskIds")
+    move_to_backlog_task_ids: List[str] = Field(default_factory=list, alias="moveToBacklogTaskIds")
+    duplicate_of_by_task_id: Optional[Dict[str, str]] = Field(
+        default=None, alias="duplicateOfByTaskId"
+    )
+
+
 class UpdateTaskPayload(BaseModel):
     task_id: Optional[str] = None
     title: Optional[str] = None

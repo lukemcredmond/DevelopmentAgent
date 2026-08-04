@@ -1119,7 +1119,7 @@ Chat and sprint steps run through the same `execute_step` and neither streams to
 | Model switching | Auto-sprint chains PO → Dev → CR → QA with different models, and each switch can reload weights | Use one model across roles; `ollamaKeepAlive` |
 | Extra LLM passes | Context compress, auto-extend on max iterations, fix-verify | `enableLlmContextCompress` (off by default), `autoExtendOnMaxIter` (off by default) |
 
-Per-card evidence lives in **Task Detail → Agent progress** (LLM/tool counts per checklist item) and the **Flow** tab (`LLM 12.4s · tools 3.1s` split), so you can see whether a step spent its time in the model or in tools. Progress rows are derived after the fact; Flow links calls by tool type, not strict top-to-bottom execution order. **Done** on the board does not guarantee dev verification unless agent gates passed — use **Audit Done** on the kanban to find incomplete cards and move them back.
+Per-card evidence lives in **Task Detail → Agent progress** (LLM/tool counts per checklist item) and the **Flow** tab (`LLM 12.4s · tools 3.1s` split), so you can see whether a step spent its time in the model or in tools. Progress rows are derived after the fact; Flow links calls by tool type, not strict top-to-bottom execution order. **Done** on the board does not guarantee dev verification unless agent gates passed — use **Audit Done** on the kanban to find incomplete cards and move them back. A large **Refinement** backlog can be triaged with **Review Refinement** (duplicate groups + quality flags; delete, mark dupes Done, or move flagged cards to Backlog).
 
 ### Embeddings, RAG, and memory
 

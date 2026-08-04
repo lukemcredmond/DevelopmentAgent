@@ -56,6 +56,7 @@ interface KanbanBoardProps {
   onReorderBacklog?: (taskIds: string[]) => void
   onReorderLane?: (lane: BoardLane, taskIds: string[]) => void
   onAuditDone?: () => void
+  onAuditRefinement?: () => void
 }
 
 function getTaskFileCount(task: Task): number {
@@ -79,6 +80,7 @@ export default memo(function KanbanBoard({
   onReorderBacklog,
   onReorderLane,
   onAuditDone,
+  onAuditRefinement,
 }: KanbanBoardProps) {
   const [activeTask, setActiveTask] = useState<Task | null>(null)
   const [filterQuery, setFilterQuery] = useState(readBoardFilter)
@@ -231,6 +233,16 @@ export default memo(function KanbanBoard({
             <span className="text-[10px] text-indigo-300 font-mono bg-indigo-950/40 border border-indigo-500/30 px-2 py-0.5 rounded shrink-0">
               {matchCount} match{matchCount === 1 ? '' : 'es'}
             </span>
+          )}
+          {onAuditRefinement && (board.Refinement?.length ?? 0) > 0 && (
+            <button
+              type="button"
+              onClick={onAuditRefinement}
+              className="text-[10px] px-2 py-1 rounded border border-violet-500/40 bg-violet-950/30 text-violet-200 hover:bg-violet-950/50 shrink-0"
+              title="Find duplicate or low-quality cards in Refinement"
+            >
+              Review Refinement…
+            </button>
           )}
           {onAuditDone && (board.Done?.length ?? 0) > 0 && (
             <button

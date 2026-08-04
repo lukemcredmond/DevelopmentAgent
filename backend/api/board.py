@@ -22,6 +22,7 @@ from backend.api.schemas import (
     ManualTaskPayload,
     MoveTaskPayload,
     ReorderTasksPayload,
+    RefinementAuditApplyPayload,
     ResolveUserPayload,
     SplitTaskPayload,
     DiagnoseTaskPayload,
@@ -35,6 +36,7 @@ from backend.services.board_service import (
     publish_board_update,
 )
 from backend.services.done_audit import apply_done_audit_actions, audit_done_tasks
+from backend.services.refinement_audit import apply_refinement_audit_actions, audit_refinement_lane
 from backend.services.logs import add_system_log
 from backend.services.needs_user_guard import append_user_resolution, set_needs_user_cooldown
 from backend.services.project_service import save_current_project_state
@@ -522,6 +524,43 @@ def apply_done_audit(payload: DoneAuditApplyPayload):
             f"Done audit: moved {len(result.get('moved') or [])} card(s) to {payload.move_to}",
         )
     return {**build_state_response(), "auditResult": result}
+
+
+@router.get("/api/board/refinement-audit")
+def get_refinement_audit():
+    with state.STATE_LOCK:
+        report = audit_refinement_lane(state.SHARED_BOARD)
+    return report
+
+
+@router.post("/api/board/refinement-audit/apply")
+def apply_refinement_audit(payload: RefinementAuditApplyPayload):
+    from backend.agents.agent_run import get_active_run
+
+    with state.STATE_LOCK:
+        if get_active_run() is not None:
+            raise HTTPException(
+                status_code=409,
+                detail="Cannot apply refinement cleanup while an agent sprint step is running.",
+            )
+    result = apply_refinement_audit_actions(
+        delete_task_ids=payload.delete_task_ids,
+        move_to_done_task_ids=payload.move_to_done_task_ids,
+        move_to_backlog_task_ids=payload.move_to_backlog_task_ids,
+        duplicate_of_by_task_id=payload.duplicate_of_by_task_id,
+    )
+    if not result.get("ok"):
+        raise HTTPException(status_code=400, detail=result.get("error") or "Apply failed")
+    with state.STATE_LOCK:
+        add_system_log(
+            "System",
+            "info",
+            "Refinement audit: "
+            f"deleted {len(result.get('deleted') or [])}, "
+            f"Done {len(result.get('movedDone') or [])}, "
+            f"Backlog {len(result.get('movedBacklog') or [])}",
+        )
+    return {**build_state_response(), "refinementAuditResult": result}
 
 
 @router.post("/api/tasks/delete")

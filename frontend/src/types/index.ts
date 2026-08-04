@@ -1286,6 +1286,41 @@ export interface DoneAuditReport {
   items: DoneAuditItem[]
 }
 
+export interface RefinementAuditMember {
+  taskId: string
+  title: string
+  similarityToKeep: number
+  reasons: string[]
+  isSuggestedKeep: boolean
+}
+
+export interface RefinementAuditCluster {
+  clusterId: string
+  matchKind: string
+  maxScore: number
+  suggestedKeepTaskId: string
+  memberCount: number
+  members: RefinementAuditMember[]
+  removableTaskIds: string[]
+}
+
+export interface RefinementAuditQualityIssue {
+  taskId: string
+  title: string
+  reasons: string[]
+}
+
+export interface RefinementAuditReport {
+  totalRefinement: number
+  duplicateClusterCount: number
+  duplicateExtraCount: number
+  qualityIssueCount: number
+  estimatedUniqueAfterMerge: number
+  clusters: RefinementAuditCluster[]
+  qualityIssues: RefinementAuditQualityIssue[]
+  defaultRemoveTaskIds: string[]
+}
+
 export interface ChatResponse {
   agent: AgentId
   response: string

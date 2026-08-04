@@ -6,6 +6,7 @@ import type {
   ChatPayload,
   ChatResponse,
   DoneAuditReport,
+  RefinementAuditReport,
   ConfigPayload,
   CreateProjectPayload,
   FileDiffResponse,
@@ -437,6 +438,36 @@ export async function applyDoneAudit(payload: {
       taskIds: payload.taskIds,
       moveTo: payload.moveTo,
       onlyIncomplete: payload.onlyIncomplete ?? true,
+    }),
+  })
+}
+
+export async function fetchRefinementAudit(): Promise<RefinementAuditReport> {
+  return request<RefinementAuditReport>('/api/board/refinement-audit')
+}
+
+export async function applyRefinementAudit(payload: {
+  deleteTaskIds?: string[]
+  moveToDoneTaskIds?: string[]
+  moveToBacklogTaskIds?: string[]
+  duplicateOfByTaskId?: Record<string, string>
+}): Promise<
+  AppState & {
+    refinementAuditResult?: {
+      deleted?: string[]
+      movedDone?: string[]
+      movedBacklog?: string[]
+      skipped?: string[]
+    }
+  }
+> {
+  return request('/api/board/refinement-audit/apply', {
+    method: 'POST',
+    body: JSON.stringify({
+      deleteTaskIds: payload.deleteTaskIds ?? [],
+      moveToDoneTaskIds: payload.moveToDoneTaskIds ?? [],
+      moveToBacklogTaskIds: payload.moveToBacklogTaskIds ?? [],
+      duplicateOfByTaskId: payload.duplicateOfByTaskId,
     }),
   })
 }
