@@ -1997,7 +1997,7 @@ def run_po_plan_outline(brief: str, ollama_url: str) -> str:
                 "(prefer 6–12 for a non-trivial brief). Each bullet: one line with capability + why. "
                 "Do not collapse the brief into a few audit/meta mega-epics.\n"
             )
-            f"{build_dod_block()}\nProject brief:\n{brief_text}",
+            + f"{build_dod_block()}\nProject brief:\n{brief_text}",
             max_iterations=1,
         )
     finally:
