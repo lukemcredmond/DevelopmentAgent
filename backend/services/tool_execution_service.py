@@ -750,6 +750,15 @@ def execute_tool(
                 if path_key:
                     invalidate_step_file_read(path_key)
 
+        if not success and tool_name in ("write_file", "apply_patch"):
+            from backend.workspace.files import invalidate_read_file_tracking_for_path
+
+            path_key = str(
+                arguments.get("path") or arguments.get("test_script_path") or ""
+            )
+            if path_key:
+                invalidate_read_file_tracking_for_path(path_key)
+
         duration_ms = int((time.time() - started) * 1000)
         _emit_tool_end(
             event_id=event_id,

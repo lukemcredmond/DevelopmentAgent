@@ -1668,6 +1668,16 @@ class ScrumAgent:
                 failed_tool_keys.append(key)
                 same_count = failed_tool_keys.count(key)
                 fail_total = total_failures[0]
+            if tool_name in ("apply_patch", "write_file"):
+                path_key = str(arguments.get("path") or "")
+                if path_key:
+                    from backend.workspace.files import invalidate_read_file_tracking_for_path
+                    from backend.services.duplicate_tool_policy import (
+                        purge_read_file_success_keys_for_path,
+                    )
+
+                    invalidate_read_file_tracking_for_path(path_key)
+                    purge_read_file_success_keys_for_path(successful_tool_keys, path_key)
             _track_fingerprint()
             if same_count >= SAME_ARGS_FAILURE_LIMIT or (
                 tool_name in PATH_TOOL_NAMES

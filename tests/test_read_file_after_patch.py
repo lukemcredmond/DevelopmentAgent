@@ -179,3 +179,107 @@ def test_successful_apply_patch_purges_read_dup_keys():
         )
 
     assert read_key not in successful
+
+
+def test_failed_apply_patch_invalidates_read_so_next_read_executes():
+    agent = ScrumAgent.__new__(ScrumAgent)
+    agent.role = "Developer"
+    agent._publish_work_progress = MagicMock()
+    agent._log_step_exit = MagicMock()
+
+    patch_call = MagicMock()
+    patch_call.function.name = "apply_patch"
+    patch_call.function.arguments = {
+        "path": "lib/main.dart",
+        "old_text": "void main() {}",
+        "new_text": "void main() { print(1); }",
+    }
+
+    state.STEP_FILE_READS.clear()
+    record_step_file_read("lib/main.dart", "stale from before patch")
+
+    from backend.services.tool_cache import clear_tool_cache, store_cached_result
+
+    clear_tool_cache()
+    store_cached_result("read_file", {"path": "lib/main.dart"}, "cached stale body", True)
+
+    read_args = {"path": "lib/main.dart"}
+    read_key = ("read_file", json.dumps(read_args, sort_keys=True, default=str))
+    successful = [read_key]
+
+    fail_patch = ToolExecutionResult(
+        tool_name="apply_patch",
+        arguments=patch_call.function.arguments,
+        safe_args=patch_call.function.arguments,
+        tool_output="Error: old_text not found",
+        success=False,
+        duration_ms=1,
+        timestamp="",
+        agent="Developer",
+        agent_id="dev",
+        task_id="T1",
+        source="agent",
+        run_id="r1",
+    )
+
+    with patch("backend.agents.scrum_agent.execute_tool", return_value=fail_patch), patch(
+        "backend.agents.scrum_agent.finish_run"
+    ), patch("backend.agents.scrum_agent.add_system_log"), patch(
+        "backend.agents.scrum_agent.update_run"
+    ):
+        ScrumAgent._execute_single_tool_call(
+            agent,
+            patch_call,
+            task_id="T1",
+            agent_id="dev",
+            run_id="r1",
+            user_prompt="go",
+            failed_tool_keys=[],
+            successful_tool_keys=successful,
+            total_failures=[0],
+            max_tool_failures=5,
+        )
+
+    assert read_key not in successful
+    assert read_file_in_step_duplicate_skip_allowed({"path": "lib/main.dart"}) is False
+
+    read_call = MagicMock()
+    read_call.function.name = "read_file"
+    read_call.function.arguments = read_args
+
+    fresh_read = ToolExecutionResult(
+        tool_name="read_file",
+        arguments=read_args,
+        safe_args=read_args,
+        tool_output="fresh from disk",
+        success=True,
+        duration_ms=1,
+        timestamp="",
+        agent="Developer",
+        agent_id="dev",
+        task_id="T1",
+        source="agent",
+        run_id="r1",
+    )
+
+    with patch("backend.agents.scrum_agent.execute_tool", return_value=fresh_read) as exec_mock, patch(
+        "backend.agents.scrum_agent.finish_run"
+    ), patch("backend.agents.scrum_agent.add_system_log"), patch(
+        "backend.agents.scrum_agent.update_run"
+    ):
+        _n, _a, result, early = ScrumAgent._execute_single_tool_call(
+            agent,
+            read_call,
+            task_id="T1",
+            agent_id="dev",
+            run_id="r1",
+            user_prompt="go",
+            failed_tool_keys=[],
+            successful_tool_keys=successful,
+            total_failures=[0],
+            max_tool_failures=5,
+        )
+
+    exec_mock.assert_called_once()
+    assert getattr(result, "duplicate_skip", False) is False
+    assert result.tool_output == "fresh from disk"

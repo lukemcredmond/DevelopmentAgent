@@ -356,6 +356,11 @@ def store_cached_result(
     }
 
 
+def evict_step_cache_for_tool(tool_name: str, arguments: Dict[str, Any]) -> None:
+    """Remove one step-cache entry (e.g. read_file after failed apply_patch)."""
+    _STEP_CACHE.pop(_cache_key(tool_name, arguments), None)
+
+
 def check_run_command_cache(command: str, arguments: Dict[str, Any]) -> Optional[str]:
     """Soft block repeated lint/probe commands when workspace fingerprint is unchanged."""
     key = _cache_key("run_command", arguments)

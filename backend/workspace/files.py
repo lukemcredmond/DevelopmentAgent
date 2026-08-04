@@ -354,6 +354,26 @@ def invalidate_step_file_read(path: str) -> None:
     state.STEP_FILE_READS.pop(safe_path, None)
 
 
+def invalidate_read_file_tracking_for_path(path: str) -> None:
+    """Drop step read + read_file cache so the next read_file hits disk (e.g. after failed patch)."""
+    raw = str(path or "").strip()
+    if not raw:
+        return
+    invalidate_step_file_read(raw)
+    try:
+        from backend.services.tool_cache import (
+            evict_step_cache_for_tool,
+            invalidate_fingerprint,
+            register_touched_path,
+        )
+
+        evict_step_cache_for_tool("read_file", {"path": raw})
+        register_touched_path(raw)
+        invalidate_fingerprint()
+    except Exception:
+        pass
+
+
 def step_file_read_output_for_replay(path: str) -> Optional[str]:
     """Full read_file body stored this step — use for duplicate replay to the LLM."""
     raw = str(path or "").strip()
