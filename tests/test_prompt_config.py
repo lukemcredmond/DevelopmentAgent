@@ -1,6 +1,6 @@
 """Tests for per-project agent prompt defaults and overrides."""
 
-from backend.agents.registry import agent_dev, configure_agent_prompts
+from backend.agents.registry import agent_dev, configure_agent_prompts, configure_agent_tools
 from backend.services.prompt_defaults import (
     DEFAULT_AGENT_SYSTEM,
     clear_agent_prompt_overrides,
@@ -8,9 +8,10 @@ from backend.services.prompt_defaults import (
     get_effective_step_instructions,
     get_effective_system_prompt,
     has_prompt_override,
+    registered_tool_names_for_role,
     validate_agent_prompts_patch,
 )
-from backend.services.workflow_settings import restore_agent_prompt_overrides, save_workflow_settings
+from backend.services.workflow_settings import reset_workflow_settings, restore_agent_prompt_overrides, save_workflow_settings
 
 
 def test_get_effective_system_prompt_uses_default():
@@ -33,6 +34,8 @@ def test_format_step_instructions_unknown_placeholder_preserved():
 
 
 def test_get_effective_step_instructions_dev_default_contains_safety_lines():
+    reset_workflow_settings()
+    configure_agent_tools({})
     text = get_effective_step_instructions(
         "Developer",
         {},
@@ -40,16 +43,48 @@ def test_get_effective_step_instructions_dev_default_contains_safety_lines():
     )
     assert "Needs PO" in text
     assert "apply_patch" in text
+    assert "Registered tools:" in text
+    for name in registered_tool_names_for_role("Developer").split(", "):
+        assert name in text
+
+
+def test_get_effective_step_instructions_registered_tools_match_agent_tools_tab():
+    reset_workflow_settings()
+    try:
+        configure_agent_tools(
+            {
+                "agentTools": {
+                    "Developer": ["read_file", "grep", "update_board"],
+                },
+                "enableSemanticSearch": False,
+                "enableWebSearch": False,
+            }
+        )
+        expected = "grep, read_file, update_board"
+        assert registered_tool_names_for_role("Developer") == expected
+        text = get_effective_step_instructions(
+            "Developer",
+            {},
+            {"lint_hint": "", "max_in_card_lint": 5, "target_lane": "QA", "autonomous_suffix": ""},
+        )
+        assert f"Registered tools: {expected}." in text
+        assert "git_commit" not in text.split("Registered tools:")[-1]
+    finally:
+        configure_agent_tools({})
 
 
 def test_get_effective_step_instructions_override():
+    reset_workflow_settings()
+    configure_agent_tools({})
     settings = {
         "agentPrompts": {
             "Developer": {"system": None, "stepInstructions": "Only do {target_lane}"},
         }
     }
     out = get_effective_step_instructions("Developer", settings, {"target_lane": "Done"})
-    assert out == "Only do Done"
+    assert out.startswith("Only do Done")
+    assert "Registered tools:" in out
+    assert "read_file" in out
 
 
 def test_clear_agent_prompt_overrides_one_role():

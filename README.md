@@ -631,7 +631,7 @@ Default registration is in [backend/agents/registry.py](backend/agents/registry.
 
 ### Agent prompts (per project)
 
-Shipped system and sprint-step instruction text lives in [backend/services/prompt_defaults.py](backend/services/prompt_defaults.py). Workflow → **Prompts** can **replace** either block per role; **Restore defaults** clears overrides in SQLite (`agentPrompts`). Step instruction templates may use placeholders such as `{lint_hint}`, `{target_lane}`, `{ac_block}`. Board gates, duplicate/observation inject text, and composable prompt sections stay in code.
+Shipped system and sprint-step instruction text lives in [backend/services/prompt_defaults.py](backend/services/prompt_defaults.py). Workflow → **Prompts** can **replace** either block per role; **Restore defaults** clears overrides in SQLite (`agentPrompts`). Step instruction templates may use placeholders such as `{registered_tools}` (filled from the live Agent tools allowlist each sprint step), `{lint_hint}`, `{target_lane}`, `{ac_block}`. Board gates, duplicate/observation inject text, and composable prompt sections stay in code.
 
 | Tool | Typical agents | Purpose |
 |------|----------------|---------|

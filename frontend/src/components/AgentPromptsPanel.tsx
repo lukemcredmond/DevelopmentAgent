@@ -96,9 +96,12 @@ export default function AgentPromptsPanel({
       <p className="text-[10px] text-cat-overlay leading-relaxed">
         Replace system and sprint-step instructions per role. Edits save with other workflow settings.
         Step templates support placeholders such as{' '}
+        <span className="font-mono">{`{registered_tools}`}</span> (from Agent tools tab),{' '}
         <span className="font-mono">{`{lint_hint}`}</span>,{' '}
         <span className="font-mono">{`{target_lane}`}</span>,{' '}
-        <span className="font-mono">{`{ac_block}`}</span>.
+        <span className="font-mono">{`{ac_block}`}</span>. If{' '}
+        <span className="font-mono">{`{registered_tools}`}</span> is omitted, the list is appended
+        automatically each sprint step.
       </p>
       {loadError && <p className="text-[10px] text-rose-400">{loadError}</p>}
 

@@ -64,10 +64,11 @@ DEFAULT_AGENT_SYSTEM: Dict[str, str] = {
     ),
 }
 
+REGISTERED_TOOLS_PLACEHOLDER = "registered_tools"
+
 DEFAULT_STEP_INSTRUCTIONS: Dict[str, str] = {
     "Developer": (
-        "Tools: read_file, write_file, apply_patch, run_command, update_board, "
-        "list_dir, grep, glob_file_search, git_status, git_diff, git_commit, search_code.\n"
+        "Registered tools: {registered_tools}.\n"
         "Edits: use apply_patch for existing files; write_file for new files. "
         "Before apply_patch, read_file the same path in this step and copy old_text "
         "verbatim from that result — never from pre-loaded context or analyze output.\n"
@@ -103,13 +104,13 @@ DEFAULT_STEP_INSTRUCTIONS: Dict[str, str] = {
         "{autonomous_suffix}"
     ),
     "Code Reviewer": (
-        "Registered tools: read_file, apply_patch, update_board, grep, glob_file_search, git_diff, search_code. "
+        "Registered tools: {registered_tools}. "
         "Review with read_file. Pass → 'QA'. Fail → 'In Progress'."
     ),
     "QA Tester": (
         "Validate acceptance criteria:\n{ac_block}\n"
         "{dod_block}{playbook_block}"
-        "Registered tools: read_file, run_test, run_command, update_board, grep, glob_file_search, search_code. "
+        "Registered tools: {registered_tools}. "
         "Review the automated test results above. Use read_file and run_test for additional checks. "
         "Pass → 'Done'. Fail → 'In Progress' with failure details. "
         "You cannot move to Done without passing automated tests or successful run_test/run_command."
@@ -126,6 +127,23 @@ def format_step_instructions(template: str, ctx: Mapping[str, Any]) -> str:
     """Substitute {placeholders} in step instruction templates; unknown keys stay literal."""
     safe = _SafeFormat({k: str(v) for k, v in ctx.items()})
     return template.format_map(safe)
+
+
+def registered_tool_names_for_role(role: str) -> str:
+    """Comma-separated sorted tool names from the live agent registry (matches Tools tab)."""
+    from backend.agents.registry import AGENT_MAP
+
+    for agent in AGENT_MAP.values():
+        if agent.role == role:
+            return ", ".join(sorted(agent.registry.tool_names()))
+    return ""
+
+
+def _append_registered_tools_if_missing(template: str, formatted: str, registered_tools: str) -> str:
+    if f"{{{REGISTERED_TOOLS_PLACEHOLDER}}}" in template or not registered_tools.strip():
+        return formatted
+    sep = "\n" if formatted and not formatted.endswith("\n") else ""
+    return f"{formatted}{sep}Registered tools: {registered_tools}.\n"
 
 
 def _role_prompt_cfg(settings: Dict[str, Any] | None, role: str) -> Dict[str, Any]:
@@ -164,7 +182,11 @@ def get_effective_step_instructions(
     template = override if override else DEFAULT_STEP_INSTRUCTIONS.get(role, "")
     if not template:
         return ""
-    return format_step_instructions(template, ctx)
+    registered_tools = registered_tool_names_for_role(role)
+    merged_ctx: Dict[str, Any] = dict(ctx)
+    merged_ctx[REGISTERED_TOOLS_PLACEHOLDER] = registered_tools
+    formatted = format_step_instructions(template, merged_ctx)
+    return _append_registered_tools_if_missing(template, formatted, registered_tools)
 
 
 def clear_agent_prompt_overrides(
