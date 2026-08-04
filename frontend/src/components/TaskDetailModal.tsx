@@ -343,8 +343,6 @@ export default function TaskDetailModal({
   const [movingToProgress, setMovingToProgress] = useState(false)
   const [runningDevStep, setRunningDevStep] = useState(false)
   const [flowOpen, setFlowOpen] = useState(false)
-  const [highlightWorkItemId, setHighlightWorkItemId] = useState<string | null>(null)
-  const [highlightWorkItemManual, setHighlightWorkItemManual] = useState(false)
   const [flowSummary, setFlowSummary] = useState<TaskFlowSummaryResponse | null>(null)
 
   useEffect(() => {
@@ -364,8 +362,6 @@ export default function TaskDetailModal({
     setInjectOutput('')
     setInjectNote('')
     setFlowOpen(false)
-    setHighlightWorkItemId(null)
-    setHighlightWorkItemManual(false)
     try {
       const draft = sessionStorage.getItem(`needs-user-draft-${task.id}`)
       setUserAnswer(draft ?? '')
@@ -393,13 +389,6 @@ export default function TaskDetailModal({
       cancelled = true
     }
   }, [task?.id, flowRefreshKey])
-
-  const suggestedFocusId = flowSummary?.suggestedFocusWorkItemId ?? null
-
-  useEffect(() => {
-    if (!isAgentRunningOnTask || highlightWorkItemManual || !suggestedFocusId) return
-    setHighlightWorkItemId(suggestedFocusId)
-  }, [isAgentRunningOnTask, highlightWorkItemManual, suggestedFocusId])
 
   useEffect(() => {
     if (!task?.id) return
@@ -832,35 +821,18 @@ export default function TaskDetailModal({
               >
                 <p className="text-[10px] text-cat-overlay mb-2">
                   Derived process checklist from card evidence (reads, writes, verify, lane) — not live
-                  “current step” and not QA acceptance criteria. Counts come from Flow aggregation.
-                  Click a row to filter Flow by tool-type tags for that item.
+                  “current step” and not QA acceptance criteria. LLM/tool counts come from Flow aggregation.
                 </p>
                 <ul className="text-[11px] space-y-1.5" data-testid="agent-work-items">
                   {items.map((item) => {
                     const entry = flowSummary?.workItemIndex?.[item.id]
                     const counts = formatWorkItemCounts(entry)
                     const breakdown = formatToolBreakdown(entry)
-                    const isSuggestedFocus =
-                      suggestedFocusId === item.id &&
-                      (!highlightWorkItemManual || highlightWorkItemId === item.id)
                     return (
                     <li key={item.id}>
-                      <button
-                        type="button"
+                      <div
                         id={`agent-work-item-${item.id}`}
-                        onClick={() => {
-                          setHighlightWorkItemManual(true)
-                          setHighlightWorkItemId(item.id)
-                          setFlowOpen(true)
-                          window.requestAnimationFrame(() => {
-                            document
-                              .getElementById('task-flow-section')
-                              ?.scrollIntoView({ behavior: 'smooth', block: 'nearest' })
-                          })
-                        }}
-                        className={`w-full flex items-start gap-2 text-left rounded px-1 py-0.5 hover:bg-cat-base/60 ${
-                          highlightWorkItemId === item.id ? 'ring-1 ring-sky-400/60 bg-sky-950/30' : ''
-                        }`}
+                        className="flex items-start gap-2 rounded px-1 py-0.5"
                       >
                         <span
                           className={
@@ -885,11 +857,6 @@ export default function TaskDetailModal({
                         >
                           {item.label}
                         </span>
-                        {isSuggestedFocus && isAgentRunningOnTask ? (
-                          <span className="shrink-0 text-[9px] uppercase tracking-wide text-sky-300/90 border border-sky-500/40 rounded px-1">
-                            Focus
-                          </span>
-                        ) : null}
                         {counts ? (
                           <span
                             className="ml-auto shrink-0 text-[9px] text-cat-overlay font-mono"
@@ -903,7 +870,7 @@ export default function TaskDetailModal({
                             board state
                           </span>
                         ) : null}
-                      </button>
+                      </div>
                       {breakdown && (
                         <p className="pl-6 text-[9px] text-cat-overlay font-mono truncate">
                           {breakdown}
@@ -1031,23 +998,7 @@ export default function TaskDetailModal({
               open={flowOpen}
               onOpenChange={setFlowOpen}
             >
-              <TaskFlowPanel
-                taskId={task.id}
-                active={flowOpen}
-                refreshKey={flowRefreshKey}
-                highlightWorkItemId={highlightWorkItemId}
-                onHighlightWorkItem={(wid) => {
-                  setHighlightWorkItemManual(Boolean(wid))
-                  setHighlightWorkItemId(wid)
-                  if (wid) {
-                    window.requestAnimationFrame(() => {
-                      document
-                        .getElementById(`agent-work-item-${wid}`)
-                        ?.scrollIntoView({ behavior: 'smooth', block: 'nearest' })
-                    })
-                  }
-                }}
-              />
+              <TaskFlowPanel taskId={task.id} active={flowOpen} refreshKey={flowRefreshKey} />
             </CollapsibleSection>
           </div>
 

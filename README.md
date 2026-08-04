@@ -677,7 +677,7 @@ During sprint steps, the **Agent Run bar** above the bottom panel shows live too
 
 - View/edit title, description, acceptance criteria
 - **Agent progress** — derived done/pending/blocked checklist for Dev/CR/PO process work (reads, edits, verify, lane gates). Separate from **Acceptance Criteria (QA)** checkboxes. Status reflects evidence on the card (not a live “current step”). While a step runs, the first pending/blocked row is a **suggested focus** hint only.
-- **Flow** — on-demand ordered LLM↔tool graph with full prompt/response/tool text from persisted logs + step diagnostics (not stored in board/page memory). Tags each call **by tool type**; one LLM turn can match multiple progress rows. Filtering by a progress row shows tagged nodes (primary row used for highlight when a call matches several). `GET /api/tasks/{id}/flow`
+- **Flow** — on-demand ordered LLM↔tool graph with full prompt/response/tool text from persisted logs + step diagnostics (not stored in board/page memory). Tags each call **by tool type** (read-only chips on nodes); one LLM turn can match multiple progress rows. `GET /api/tasks/{id}/flow`
 - Compact agent checklist also on the kanban **card** (`agentWorkItems`)
 - **Feature epic hub** — children, rolled-up files, recent decisions (`featureRollup`)
 - **Approve** (Pending Approval)

@@ -1,57 +1,29 @@
-import { useEffect, useRef, useState } from 'react'
+import { useEffect, useState } from 'react'
 import { fetchTaskFlow } from '../api/client'
 import type { TaskFlowNode, TaskFlowResponse, TaskFlowWorkItemIndexEntry } from '../types'
-import {
-  formatToolBreakdown,
-  formatTimeSplit,
-  formatWorkItemCounts,
-} from '../utils/flowCounts'
+import { formatTimeSplit, formatWorkItemCounts } from '../utils/flowCounts'
 import { llmCollapsedPreview, llmToolCallCount } from '../utils/flowLlmPreview'
 
 interface TaskFlowPanelProps {
   taskId: string
   active: boolean
   refreshKey?: number | string
-  highlightWorkItemId?: string | null
-  onHighlightWorkItem?: (workItemId: string | null) => void
-}
-
-function flowNodeHighlightMode(
-  node: TaskFlowNode,
-  highlightWorkItemId: string | null | undefined,
-): 'strong' | 'soft' | 'dim' | 'none' {
-  if (!highlightWorkItemId) return 'none'
-  const ids = node.workItemIds ?? []
-  if (!ids.includes(highlightWorkItemId)) return 'dim'
-  const primary = node.primaryWorkItemId
-  if (!primary || primary === highlightWorkItemId) return 'strong'
-  return 'soft'
 }
 
 function FlowNode({
   node,
-  highlighted,
-  highlightSoft,
   workItemIndex,
-  onSelectWorkItem,
 }: {
   node: TaskFlowNode
-  highlighted: boolean
-  highlightSoft?: boolean
   workItemIndex?: Record<string, TaskFlowWorkItemIndexEntry>
-  onSelectWorkItem?: (workItemId: string) => void
 }) {
   const [open, setOpen] = useState(false)
   const isLlm = node.kind === 'llm'
-  const border = highlighted
-    ? highlightSoft
-      ? 'border-sky-500/40 ring-1 ring-sky-400/30 bg-sky-950/15'
-      : 'border-sky-400 ring-2 ring-sky-400/50 bg-sky-950/30'
-    : isLlm
-      ? 'border-indigo-500/30 bg-indigo-950/20'
-      : node.success === false
-        ? 'border-rose-500/30 bg-rose-950/20'
-        : 'border-amber-500/30 bg-amber-950/15'
+  const border = isLlm
+    ? 'border-indigo-500/30 bg-indigo-950/20'
+    : node.success === false
+      ? 'border-rose-500/30 bg-rose-950/20'
+      : 'border-amber-500/30 bg-amber-950/15'
 
   const linkedIds = node.workItemIds ?? []
   const llmPreview = isLlm ? llmCollapsedPreview(node) : ''
@@ -63,7 +35,6 @@ function FlowNode({
       id={`flow-node-${node.id}`}
       className={`rounded-lg border ${border} px-2.5 py-2`}
       data-testid={`flow-node-${node.kind}`}
-      data-highlighted={highlighted ? '1' : '0'}
     >
       <button
         type="button"
@@ -128,22 +99,13 @@ function FlowNode({
       {linkedIds.length > 0 && (
         <div className="mt-1.5 flex flex-wrap gap-1">
           {linkedIds.map((wid) => (
-            <button
+            <span
               key={wid}
-              type="button"
-              onClick={(e) => {
-                e.stopPropagation()
-                onSelectWorkItem?.(wid)
-              }}
-              className={`text-[9px] px-1.5 py-0.5 rounded border ${
-                highlighted && linkedIds.includes(wid)
-                  ? 'border-sky-400/60 text-sky-200 bg-sky-950/40'
-                  : 'border-cat-surface1 text-cat-subtext hover:border-sky-500/40 hover:text-sky-200'
-              }`}
-              title={`Highlight agent progress: ${workItemIndex?.[wid]?.label || wid}`}
+              className="text-[9px] px-1.5 py-0.5 rounded border border-cat-surface1 text-cat-subtext"
+              title={workItemIndex?.[wid]?.label || wid}
             >
               {workItemIndex?.[wid]?.label || wid}
-            </button>
+            </span>
           ))}
         </div>
       )}
@@ -215,17 +177,10 @@ function FlowNode({
   )
 }
 
-export default function TaskFlowPanel({
-  taskId,
-  active,
-  refreshKey = 0,
-  highlightWorkItemId = null,
-  onHighlightWorkItem,
-}: TaskFlowPanelProps) {
+export default function TaskFlowPanel({ taskId, active, refreshKey = 0 }: TaskFlowPanelProps) {
   const [data, setData] = useState<TaskFlowResponse | null>(null)
   const [error, setError] = useState<string | null>(null)
   const [loading, setLoading] = useState(false)
-  const scrolledFor = useRef<string | null>(null)
 
   useEffect(() => {
     if (!active || !taskId) return
@@ -247,34 +202,8 @@ export default function TaskFlowPanel({
     }
   }, [active, taskId, refreshKey])
 
-  useEffect(() => {
-    if (!highlightWorkItemId || !data) return
-    const entry = data.workItemIndex?.[highlightWorkItemId]
-    const firstId = entry?.nodeIds?.[0]
-    if (!firstId) return
-    if (scrolledFor.current === `${highlightWorkItemId}:${firstId}`) return
-    scrolledFor.current = `${highlightWorkItemId}:${firstId}`
-    window.requestAnimationFrame(() => {
-      document.getElementById(`flow-node-${firstId}`)?.scrollIntoView({
-        behavior: 'smooth',
-        block: 'nearest',
-      })
-    })
-  }, [highlightWorkItemId, data])
-
   if (!active) return null
 
-  const activeEntry = highlightWorkItemId ? data?.workItemIndex?.[highlightWorkItemId] : undefined
-  const matchedCount = activeEntry?.nodeIds?.length ?? 0
-  const multiTagInFilter =
-    Boolean(highlightWorkItemId) &&
-    (data?.nodes ?? []).some((node) => {
-      const mode = flowNodeHighlightMode(node, highlightWorkItemId)
-      return (mode === 'strong' || mode === 'soft') && (node.workItemIds?.length ?? 0) > 1
-    })
-  const activeCounts = formatWorkItemCounts(activeEntry)
-  const activeBreakdown = formatToolBreakdown(activeEntry)
-  const activeTiming = formatTimeSplit(activeEntry)
   const totalsCounts = formatWorkItemCounts(data?.totals)
   const totalsTiming = formatTimeSplit(data?.totals)
 
@@ -282,43 +211,9 @@ export default function TaskFlowPanel({
     <div className="space-y-2" data-testid="task-flow-panel">
       <p className="text-[10px] text-cat-overlay leading-relaxed">
         Loaded on demand from persisted LLM/tool logs and step diagnostics — not kept in board memory.
-        Expand a node for full prompt / response / tool output. Agent progress rows are derived from card
-        evidence; Flow tags each call by tool type (one turn can match multiple rows). Click a progress
-        row to filter nodes tagged with that item.
+        Expand a node for full prompt / response / tool output. Agent progress counts use the same
+        aggregation; nodes may show read-only tags for matching progress rows.
       </p>
-      {highlightWorkItemId && (
-        <div
-          className="flex flex-wrap items-center gap-2 text-[10px]"
-          data-testid="flow-filter-header"
-        >
-          <span className="text-sky-200">
-            Filtered: {activeEntry?.label || highlightWorkItemId}
-            {matchedCount > 0
-              ? ` (${matchedCount} node${matchedCount === 1 ? '' : 's'} tagged)`
-              : activeEntry?.toolLinked === false
-                ? ' (board state, no tools)'
-                : ' (no Flow tools yet)'}
-          </span>
-          {multiTagInFilter && (
-            <span className="text-cat-overlay italic">
-              Some nodes also match other progress rows.
-            </span>
-          )}
-          {activeCounts && (
-            <span className="text-cat-subtext" title={activeBreakdown || undefined}>
-              {activeCounts}
-            </span>
-          )}
-          {activeTiming && <span className="text-cat-overlay font-mono">{activeTiming}</span>}
-          <button
-            type="button"
-            onClick={() => onHighlightWorkItem?.(null)}
-            className="px-1.5 py-0.5 rounded border border-cat-surface1 text-cat-subtext hover:text-white"
-          >
-            Clear filter
-          </button>
-        </div>
-      )}
       {loading && <p className="text-[11px] text-cat-subtext">Loading flow…</p>}
       {error && <p className="text-[11px] text-rose-300">{error}</p>}
       {!loading && !error && data && (
@@ -334,45 +229,12 @@ export default function TaskFlowPanel({
             {data.nodes.length === 0 ? (
               <p className="text-[11px] text-cat-overlay italic">No LLM/tool events for this card yet.</p>
             ) : (
-              data.nodes.map((node) => {
-                const mode = flowNodeHighlightMode(node, highlightWorkItemId)
-                const highlighted = mode === 'strong' || mode === 'soft'
-                const soft = mode === 'soft'
-                const primaryOther =
-                  soft && node.primaryWorkItemId
-                    ? data.workItemIndex?.[node.primaryWorkItemId]?.label || node.primaryWorkItemId
-                    : null
-                return (
-                  <div
-                    key={node.id}
-                    className={`relative ${
-                      mode === 'dim' ? 'opacity-35' : mode === 'soft' ? 'opacity-80' : ''
-                    }`}
-                    title={
-                      primaryOther
-                        ? `Primary progress row: ${primaryOther}. Also tagged with this filter.`
-                        : undefined
-                    }
-                  >
-                    <span
-                      className={`absolute -left-3 top-3 h-2 w-2 rounded-full ${
-                        mode === 'strong'
-                          ? 'bg-sky-400'
-                          : mode === 'soft'
-                            ? 'bg-sky-400/50'
-                            : 'bg-cat-overlay/80'
-                      }`}
-                    />
-                    <FlowNode
-                      node={node}
-                      highlighted={highlighted}
-                      highlightSoft={soft}
-                      workItemIndex={data.workItemIndex}
-                      onSelectWorkItem={(wid) => onHighlightWorkItem?.(wid)}
-                    />
-                  </div>
-                )
-              })
+              data.nodes.map((node) => (
+                <div key={node.id} className="relative">
+                  <span className="absolute -left-3 top-3 h-2 w-2 rounded-full bg-cat-overlay/80" />
+                  <FlowNode node={node} workItemIndex={data.workItemIndex} />
+                </div>
+              ))
             )}
           </div>
         </>
