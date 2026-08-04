@@ -44,14 +44,13 @@ from backend.agents.task_context import (
 from backend.services.board_lanes import normalize_board_lanes
 from backend.services.board_service import append_backlog_tasks, move_board_stage, publish_board_delta, publish_board_update
 from backend.services.brief_service import (
-    PO_EPIC_DECOMPOSITION_GUIDANCE,
-    PO_SMALLEST_TASKS_GUIDANCE,
     append_feature_to_brief,
     append_brief_text,
     existing_backlog_titles,
     record_brief_changelog,
     set_project_brief,
 )
+from backend.services.prompt_profile import is_local_slm_profile, po_planning_guidance_block
 from backend.services.events import publish_event
 from backend.services.feature_service import (
     apply_plan_epics_from_po_output,
@@ -1300,26 +1299,35 @@ def _inject_sprint_context(
 
     task_id = active_task["id"]
     normalize_task(active_task)
-    num_ctx = initial_ollama_num_ctx(agent_role)
-    total_budget = sprint_file_context_max_chars(num_ctx)
-    semantic_block, sem_paths = build_semantic_sprint_context(
-        active_task,
-        max_chars=semantic_sprint_context_max_chars(num_ctx),
-    )
-    graph_block = ""
-    try:
-        from backend.services.graphify_service import build_graphify_sprint_context, graphify_status
+    from backend.services.prompt_profile import is_local_slm_profile, local_slm_sections_for_role
+    from backend.services.prompt_sections import FocusContext, compose_prompt
 
-        if graphify_status().get("available") or graphify_status().get("reportExists"):
-            graph_block = build_graphify_sprint_context(
-                active_task,
-                max_chars=min(2500, semantic_sprint_context_max_chars(num_ctx) // 2),
-            )
-    except Exception:
+    local_slm = is_local_slm_profile()
+    num_ctx = initial_ollama_num_ctx(agent_role)
+    semantic_block, sem_paths = "", []
+    graph_block = ""
+    file_block, file_paths = "", []
+    context_block = ""
+    if not local_slm:
+        total_budget = sprint_file_context_max_chars(num_ctx)
+        semantic_block, sem_paths = build_semantic_sprint_context(
+            active_task,
+            max_chars=semantic_sprint_context_max_chars(num_ctx),
+        )
         graph_block = ""
-    file_budget = max(1000, total_budget - len(semantic_block) - len(graph_block)) if (semantic_block or graph_block) else total_budget
-    file_block, file_paths = build_sprint_file_context(active_task, max_chars=file_budget)
-    context_block = "".join(part for part in (semantic_block, graph_block, file_block) if part)
+        try:
+            from backend.services.graphify_service import build_graphify_sprint_context, graphify_status
+
+            if graphify_status().get("available") or graphify_status().get("reportExists"):
+                graph_block = build_graphify_sprint_context(
+                    active_task,
+                    max_chars=min(2500, semantic_sprint_context_max_chars(num_ctx) // 2),
+                )
+        except Exception:
+            graph_block = ""
+        file_budget = max(1000, total_budget - len(semantic_block) - len(graph_block)) if (semantic_block or graph_block) else total_budget
+        file_block, file_paths = build_sprint_file_context(active_task, max_chars=file_budget)
+        context_block = "".join(part for part in (semantic_block, graph_block, file_block) if part)
     paths = list(dict.fromkeys([*sem_paths, *file_paths]))
     if paths:
         if semantic_block and file_block:
@@ -1357,7 +1365,7 @@ def _inject_sprint_context(
 
     codebase_pack = ""
     pack_mode = "off"
-    if agent_role == "Developer":
+    if agent_role == "Developer" and not local_slm:
         pack_mode = str(get_workflow_settings().get("contextPacker") or "off").strip().lower()
         if pack_mode not in ("", "off", "none", "false"):
             try:
@@ -1385,9 +1393,23 @@ def _inject_sprint_context(
             except Exception:
                 codebase_pack = ""
 
-    base = build_task_prompt(active_task, brief, agent_role=agent_role)
     use_focus_compose = False
-    if agent_role == "Developer":
+    if local_slm:
+        focus = FocusContext(agent_role=agent_role, focus_mode="whole", include_full_spec=False)
+        base = compose_prompt(
+            active_task,
+            brief,
+            local_slm_sections_for_role(agent_role, active_task),
+            focus,
+            agent_role=agent_role,
+            codebase_pack="",
+        )
+        state.SPRINT_PROMPT_ROTATION_ENABLED = False
+        state.SPRINT_PROMPT_ROTATION_BLOCKS = []
+        state.SPRINT_PROMPT_ROTATION_NAMES = []
+    else:
+        base = build_task_prompt(active_task, brief, agent_role=agent_role)
+    if not local_slm and agent_role == "Developer":
         from backend.services.focus_slice import (
             dev_micro_steps_enabled,
             focus_context_from_task,
@@ -1458,7 +1480,7 @@ def _inject_sprint_context(
         parts.append(context_block)
         parts.append(CONTEXT_INJECT_NOTE)
     structure_audit = ""
-    if agent_role == "Developer":
+    if agent_role == "Developer" and not local_slm:
         try:
             from backend.services.workspace_structure_audit import (
                 audit_workspace_structure,
@@ -1965,13 +1987,16 @@ def run_po_plan_outline(brief: str, ollama_url: str) -> str:
     try:
         set_active_sprint_context(PLANNING_TASK_ID, "Product Owner")
         outline = agent_po.execute_step(
-            "You are the Product Owner. Produce a concise markdown project plan ONLY — no JSON, no code.\n"
-            "Use these sections:\n"
-            "## Summary\n## Approach\n## Risks\n## Open questions\n## Proposed epics\n"
-            f"{PO_EPIC_DECOMPOSITION_GUIDANCE}\n"
-            "Under ## Proposed epics, list many concrete product epics as a bullet list "
-            "(prefer 6–12 for a non-trivial brief). Each bullet: one line with capability + why. "
-            "Do not collapse the brief into a few audit/meta mega-epics.\n"
+            "Produce a concise markdown project plan ONLY — no JSON, no code.\n"
+            "Sections: ## Summary, ## Approach, ## Risks, ## Open questions, ## Proposed epics.\n"
+            f"{po_planning_guidance_block()}"
+            + (
+                "Under ## Proposed epics, list 6–12 product epics (one line each).\n"
+                if is_local_slm_profile()
+                else "Under ## Proposed epics, list many concrete product epics as a bullet list "
+                "(prefer 6–12 for a non-trivial brief). Each bullet: one line with capability + why. "
+                "Do not collapse the brief into a few audit/meta mega-epics.\n"
+            )
             f"{build_dod_block()}\nProject brief:\n{brief_text}",
             max_iterations=1,
         )
@@ -2040,10 +2065,8 @@ def run_po_plan_backlog(brief: str, ollama_url: str, outline: Optional[str] = No
     try:
         set_active_sprint_context(PLANNING_TASK_ID, "Product Owner")
         po_output = agent_po.execute_step(
-            f"{PO_EPIC_DECOMPOSITION_GUIDANCE}\n\n"
-            f"{PO_SMALLEST_TASKS_GUIDANCE}\n\n"
-            "You are the Product Owner. Convert the approved plan outline into Features (epics) "
-            "with smallest developer-ready child cards.\n"
+            f"{po_planning_guidance_block()}"
+            "Convert the approved plan outline into Features (epics) with smallest developer-ready child cards.\n"
             "Reply with ONLY a JSON object of this shape:\n"
             '{"epics":[{"title":"...","description":"...","children":['
             '{"title":"...","description":"...","acceptanceCriteria":["..."],'
@@ -2128,10 +2151,8 @@ def run_po_plan(brief: str, ollama_url: str) -> None:
             "PO calling Ollama (this may take 1–3 min on first run)…",
         )
         po_output = agent_po.execute_step(
-            f"{PO_EPIC_DECOMPOSITION_GUIDANCE}\n\n"
-            f"{PO_SMALLEST_TASKS_GUIDANCE}\n\n"
-            "You are the Product Owner. Decompose the project brief into Features (epics) "
-            "with smallest developer-ready child cards.\n"
+            f"{po_planning_guidance_block()}"
+            "Decompose the project brief into Features (epics) with smallest developer-ready child cards.\n"
             "Reply with ONLY a JSON object of this shape:\n"
             '{"epics":[{"title":"...","description":"...","children":['
             '{"title":"...","description":"...","acceptanceCriteria":["..."],'
@@ -2248,7 +2269,7 @@ def run_po_add_feature(
             match_hint = f"\nLikely match (similarity hint): {scored[0][1]} (score {scored[0][0]:.2f})\n"
 
     intake_prompt = (
-        f"{PO_SMALLEST_TASKS_GUIDANCE}\n\n"
+        f"{po_planning_guidance_block()}"
         "The user added a feature request. Decide whether this is a NEW feature or an UPDATE to an "
         "existing feature in the Features lane.\n"
         "Reply with ONLY a JSON object (not an array) with:\n"
@@ -2403,7 +2424,7 @@ def run_po_split_task(task_id: str, ollama_url: str, guidance: str = "") -> Dict
         prompt = build_task_prompt(task, state.PROJECT_BRIEF)
         extra = f"\nAdditional guidance: {guidance.strip()}" if guidance.strip() else ""
         po_output = agent_po.execute_step(
-            f"{PO_SMALLEST_TASKS_GUIDANCE}\n\n{prompt}\n\n"
+            f"{po_planning_guidance_block()}{prompt}\n\n"
             "Split this card into 2–5 smaller developer-ready backlog tasks."
             f"{extra}\n"
             f"You MUST call add_backlog_tasks with split_from_task_id={task_id!r}.\n"

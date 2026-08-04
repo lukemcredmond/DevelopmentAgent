@@ -14,6 +14,7 @@ from backend.agents.task_context import (
     normalize_task,
 )
 from backend.services.workflow_settings import get_workflow_settings
+from backend.services.prompt_profile import is_local_slm_profile, local_slm_sections_for_role
 
 SECTION_IDS = (
     "brief_slice",
@@ -95,6 +96,18 @@ class _PromptLimits:
 def _limits_for_role(role: str) -> _PromptLimits:
     from backend.services.prompt_budget import resolve_ollama_num_ctx
 
+    if is_local_slm_profile():
+        num_ctx = resolve_ollama_num_ctx(
+            "qa" if role == "QA Tester" else ("cr" if role == "Code Reviewer" else "dev")
+        )
+        return _PromptLimits(
+            slim=True,
+            decision_limit=0,
+            transcript_limit=0,
+            related_limit=0,
+            dependency_limit=2,
+            num_ctx=num_ctx,
+        )
     slim = role in ("Code Reviewer", "QA Tester")
     num_ctx = resolve_ollama_num_ctx(
         "qa" if role == "QA Tester" else ("cr" if role == "Code Reviewer" else "dev")
@@ -155,6 +168,22 @@ def compose_prompt(
     brief = truncate_brief(brief, limits.num_ctx)
     normalize_task(task)
 
+    if is_local_slm_profile():
+        section_ids = section_ids or local_slm_sections_for_role(role, task)
+        parts: List[str] = []
+        for sid in section_ids:
+            block = build_section(
+                sid,
+                task,
+                brief,
+                focus=focus,
+                limits=limits,
+                codebase_pack=codebase_pack,
+            )
+            if block and block.strip():
+                parts.append(block.strip())
+        return "\n\n".join(parts) + ("\n" if parts else "")
+
     # Full-stack parity with build_task_prompt_legacy when requested.
     if focus.include_full_spec and focus.focus_mode == "whole":
         role = (agent_role or focus.agent_role or state.ACTIVE_SPRINT_AGENT or "").strip()
@@ -196,7 +225,8 @@ def build_section(
     if section_id == "working_context":
         from backend.services.task_working_context import format_working_context_for_prompt
 
-        wc = format_working_context_for_prompt(task)
+        max_lines = 3 if is_local_slm_profile() else 12
+        wc = format_working_context_for_prompt(task, max_lines=max_lines)
         return (wc + "\n") if wc else ""
     if section_id == "card_core":
         return _section_card_core(task, focus)
@@ -308,6 +338,8 @@ def _section_ac_focus(task: Dict[str, Any], focus: FocusContext) -> str:
             "Verify and implement only this criterion in this step. "
             "Call update_board with decision type focus_done when satisfied.\n"
         )
+    if is_local_slm_profile():
+        ac_lines = ac_lines[:3]
     ac_str = "\n".join(f"- {c}" for c in ac_lines)
     return f"Acceptance criteria:\n{ac_str}\n"
 

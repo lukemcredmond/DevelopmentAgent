@@ -423,7 +423,16 @@ class ScrumAgent:
         if not skill_files:
             return ""
 
+        from backend.services.prompt_profile import is_local_slm_profile
+
+        if is_local_slm_profile():
+            names = ", ".join(skill_files[:6])
+            suffix = "…" if len(skill_files) > 6 else ""
+            return f"\n=== ASSIGNED SKILLS (names only — no full skill text in local SLM mode) ===\n{names}{suffix}\n"
+
         max_chars = skills_context_max_chars(self._effective_num_ctx())
+        if max_chars <= 0:
+            return ""
         skills_context = "\n=== SPECIALIZED AGENT SKILLS ===\n"
         used = len(skills_context)
         truncated = False
@@ -475,14 +484,18 @@ class ScrumAgent:
                     "max_iterations",
                 ):
                     prefer = ["failure", "fix_pattern"]
-        related_memories = self.memory.search(
-            self.role,
-            query,
-            limit=3,
-            project_id=project_id,
-            include_all_agents=True,
-            prefer_categories=prefer,
-        )
+        related_memories = []
+        from backend.services.prompt_profile import is_local_slm_profile
+
+        if not is_local_slm_profile():
+            related_memories = self.memory.search(
+                self.role,
+                query,
+                limit=3,
+                project_id=project_id,
+                include_all_agents=True,
+                prefer_categories=prefer,
+            )
         self._last_memories_used = related_memories
         memory_context = ""
         if related_memories:

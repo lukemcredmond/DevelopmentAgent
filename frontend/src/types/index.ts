@@ -538,6 +538,7 @@ export interface WorkflowSettings {
   ollamaCooldownRetryAttempts?: number
   maxToolOutputCharsForLlm?: number
   messagePruneThresholdPct?: number
+  promptProfile?: 'full' | 'local_slm' | string
   enableSemanticSprintContext?: boolean
   enableHybridSearch?: boolean
   semanticMinScore?: number
@@ -1178,6 +1179,7 @@ export interface WorkflowSettingsPayload {
   ollamaCooldownRetryAttempts?: number
   maxToolOutputCharsForLlm?: number
   messagePruneThresholdPct?: number
+  promptProfile?: 'full' | 'local_slm' | string
   enableSemanticSprintContext?: boolean
   enableHybridSearch?: boolean
   semanticMinScore?: number
@@ -1515,6 +1517,7 @@ export const DEFAULT_WORKFLOW_SETTINGS: WorkflowSettings = {
   ollamaCooldownRetryAttempts: 2,
   maxToolOutputCharsForLlm: 32000,
   messagePruneThresholdPct: 60,
+  promptProfile: 'full',
   enableSemanticSprintContext: true,
   enableHybridSearch: true,
   semanticMinScore: 0.35,

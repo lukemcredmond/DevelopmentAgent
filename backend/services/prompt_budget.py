@@ -115,6 +115,10 @@ def sprint_file_context_max_chars(num_ctx: int) -> int:
 
 def truncate_brief(brief: str, num_ctx: int, max_chars: int = 6000) -> str:
     """Truncate project brief to fit context budget."""
+    from backend.services.prompt_profile import is_local_slm_profile
+
+    if is_local_slm_profile():
+        max_chars = min(max_chars, max(1500, num_ctx))
     budget = min(max_chars, num_ctx * 2)
     if len(brief) <= budget:
         return brief
@@ -122,6 +126,10 @@ def truncate_brief(brief: str, num_ctx: int, max_chars: int = 6000) -> str:
 
 
 def skills_context_max_chars(num_ctx: int) -> int:
+    from backend.services.prompt_profile import is_local_slm_profile
+
+    if is_local_slm_profile():
+        return 0
     return min(8000, max(2000, num_ctx))
 
 

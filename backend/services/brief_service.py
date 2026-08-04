@@ -33,6 +33,11 @@ PO_SMALLEST_TASKS_GUIDANCE = (
     "Planning/spike cards may omit AC when the deliverable is a plan or report."
 )
 
+PO_LOCAL_SLM_GUIDANCE = (
+    "Story cards: workType (planning|implementation), requiresDev, requiresQa, userStory, "
+    "acceptanceCriteria (1–3 items), testPlan. Planning cards: requiresDev=false."
+)
+
 PO_EPIC_DECOMPOSITION_GUIDANCE = (
     "Decompose into many focused product epics (prefer 6–12 for a non-trivial brief; "
     "fewer only for tiny briefs). Each epic is one user-facing capability or bounded technical "

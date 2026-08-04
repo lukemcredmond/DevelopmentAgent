@@ -295,7 +295,7 @@ export default function WorkflowPanel({
             <SettingHint hint="How much of each tool result is sent back to the model. Raise if replies look cut off; lower to save memory and speed." />
           </span>
           <NumberSettingInput
-            value={settings.maxToolOutputCharsForLlm ?? 6000}
+            value={settings.maxToolOutputCharsForLlm ?? 32000}
             min={1000}
             max={50000}
             onCommit={(maxToolOutputCharsForLlm) => onSettingsChange({ maxToolOutputCharsForLlm })}
@@ -717,7 +717,34 @@ export default function WorkflowPanel({
       )}
 
       {(workflowTab === 'prompts') && (
+        <>
+        <div className="border border-cat-surface1 rounded-lg p-2.5 space-y-2 bg-cat-base/30">
+          <p className="text-[10px] font-bold uppercase tracking-wider text-cat-subtext">
+            Prompt profile
+          </p>
+          <p className="text-[10px] text-cat-overlay leading-relaxed">
+            Use <span className="font-mono text-cat-subtext">local_slm</span> on 12GB GPUs with 7B–14B
+            models to shrink static system and Task Detail prompts. Tool results in each LLM turn are
+            unchanged.
+          </p>
+          <label className="text-[11px] text-cat-subtext block">
+            <span className="text-[10px] text-cat-overlay">Static prompt size</span>
+            <select
+              value={settings.promptProfile ?? 'full'}
+              onChange={(e) =>
+                onSettingsChange({
+                  promptProfile: e.target.value === 'local_slm' ? 'local_slm' : 'full',
+                })
+              }
+              className="w-full bg-cat-base border border-cat-surface1 rounded p-1 text-white mt-0.5"
+            >
+              <option value="full">full (default)</option>
+              <option value="local_slm">local_slm (lean — all roles)</option>
+            </select>
+          </label>
+        </div>
         <AgentPromptsPanel settings={settings} onSettingsChange={onSettingsChange} />
+        </>
       )}
 
       {(workflowTab === 'discord') && (

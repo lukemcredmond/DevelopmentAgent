@@ -77,7 +77,12 @@ def format_working_context_for_prompt(task: Dict[str, Any], *, max_lines: int = 
         at = item.get("at") or "?"
         kind = item.get("kind") or "fact"
         lines.append(f"- [{kind} @ {at}] {item.get('summary', '')}")
-    lines.append("Treat this as current truth for this card; re-run commands after workspaceGeneration increases.")
+    from backend.services.prompt_profile import is_local_slm_profile
+
+    if not is_local_slm_profile():
+        lines.append(
+            "Treat this as current truth for this card; re-run commands after workspaceGeneration increases."
+        )
     return "\n".join(lines) + "\n"
 
 

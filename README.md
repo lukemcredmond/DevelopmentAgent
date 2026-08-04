@@ -488,8 +488,9 @@ Persisted per project. Update via sidebar **Workflow** or `POST /api/workflow/se
 | maxMcpTools | 40 | Max MCP tools registered |
 | definitionOfDone | [] | Checklist injected into PO/Dev/QA prompts |
 | autoFormatAfterEdit | On | Format files after agent edits when supported |
-| maxToolOutputCharsForLlm | 6000 | Truncate tool output in LLM context |
+| maxToolOutputCharsForLlm | 32000 | Truncate tool output in LLM context (0 = auto cap from num_ctx) |
 | messagePruneThresholdPct | 60 | Prune message history when context fills |
+| promptProfile | full | `full` = legacy monolithic PO prompts + full skills/memories; `local_slm` = lean static prompts for all roles (PO/Dev/CR/QA). Tool messages in the agent loop are unchanged. |
 
 #### Phone alerts (outbound Discord)
 

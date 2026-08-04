@@ -101,6 +101,7 @@ DEFAULT_WORKFLOW_SETTINGS: Dict[str, Any] = {
     "ollamaCooldownRetryAttempts": 2,
     "maxToolOutputCharsForLlm": 32000,
     "messagePruneThresholdPct": 60,
+    "promptProfile": "full",
     "enableSemanticSprintContext": True,
     "enableHybridSearch": True,
     "semanticMinScore": 0.35,
@@ -219,6 +220,12 @@ def save_workflow_settings(settings: Dict[str, Any], project_id: str | None = No
         updates.pop("phoneNotifyDiscordWebhookUrl", None)
     if not str(updates.get("discordBotToken") or "").strip():
         updates.pop("discordBotToken", None)
+    if "promptProfile" in updates:
+        raw_profile = str(updates.get("promptProfile") or "full").strip().lower()
+        if raw_profile in ("local_slm", "local", "slm", "lean"):
+            updates["promptProfile"] = "local_slm"
+        else:
+            updates["promptProfile"] = "full"
     if "discordBotAllowedUserIds" in updates:
         raw_ids = updates.get("discordBotAllowedUserIds") or []
         if isinstance(raw_ids, str):

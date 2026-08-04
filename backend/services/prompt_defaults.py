@@ -4,7 +4,12 @@ from __future__ import annotations
 
 from typing import Any, Dict, Mapping, Optional
 
-from backend.services.brief_service import PO_EPIC_DECOMPOSITION_GUIDANCE, PO_SMALLEST_TASKS_GUIDANCE
+from backend.services.prompt_profile import (
+    LOCAL_SLM_STEP_INSTRUCTIONS,
+    LOCAL_SLM_SYSTEM,
+    full_po_system_prompt,
+    is_local_slm_profile,
+)
 
 AGENT_ROLES = (
     "Product Owner",
@@ -20,29 +25,7 @@ DEFAULT_AGENT_PROMPTS: Dict[str, Dict[str, Optional[str]]] = {
 }
 
 DEFAULT_AGENT_SYSTEM: Dict[str, str] = {
-    "Product Owner": (
-        "You are the Product Owner. You decompose project briefs into backlog features (user stories) "
-        "as JSON arrays. When developers ask questions, you clarify requirements and acceptance criteria. "
-        "During sprint steps the project brief and active card are already in Task Detail — never ask the "
-        "user to paste the brief or restart onboarding. After list_dir, grep, or read_file, use the tool "
-        "output in the conversation and call update_board, add_backlog_tasks, add_subtasks, or the JSON "
-        "format requested in Task Detail. "
-        "When the user adds features, refine them into clear developer-ready stories. "
-        "Use update_board to move tasks from 'Needs PO' back to 'In Progress' when clarification is done. "
-        "For cards in 'Refinement', answer developer questions, update AC/description, use add_backlog_tasks "
-        "to split scope, then move to 'Backlog' when refinementComplete. "
-        "Use add_backlog_tasks to add new stories to the Backlog; when splitting a large or stuck card, "
-        "pass split_from_task_id so the original moves to Done with a split note. "
-        "Use add_subtasks for ordered child todos under a parent card (during refinement set executionOrder). "
-        "Invoke add_backlog_tasks yourself — never instruct the user to call it. "
-        "If a card already covers the same request, do not recreate it — reuse that card and its outcomes. "
-        "Prefer acting (split, move board) over asking clarifying questions when acceptance criteria exist. "
-        "Use grep and glob_file_search to explore the codebase; prefer grep over search_code for patterns. "
-        "When planning Features (epics), prefer many focused product epics with multiple small children — "
-        "not a handful of audit/meta mega-epics. "
-        f"{PO_EPIC_DECOMPOSITION_GUIDANCE} "
-        f"{PO_SMALLEST_TASKS_GUIDANCE}"
-    ),
+    "Product Owner": full_po_system_prompt(),
     "Developer": (
         "You implement features from the backlog. Use apply_patch for edits to existing files "
         "and write_file for new files. Use list_dir and glob_file_search to inventory the workspace "
@@ -174,6 +157,12 @@ def get_effective_system_prompt(role: str, settings: Dict[str, Any] | None = Non
     override = prompt_override(settings, role, "system")
     if override:
         return override
+    if settings is None:
+        from backend.services.workflow_settings import get_workflow_settings
+
+        settings = get_workflow_settings()
+    if is_local_slm_profile(settings):
+        return LOCAL_SLM_SYSTEM.get(role, DEFAULT_AGENT_SYSTEM.get(role, ""))
     return DEFAULT_AGENT_SYSTEM.get(role, "")
 
 
@@ -182,8 +171,17 @@ def get_effective_step_instructions(
     settings: Dict[str, Any] | None,
     ctx: Mapping[str, Any],
 ) -> str:
+    if settings is None:
+        from backend.services.workflow_settings import get_workflow_settings
+
+        settings = get_workflow_settings()
     override = prompt_override(settings, role, "stepInstructions")
-    template = override if override else DEFAULT_STEP_INSTRUCTIONS.get(role, "")
+    if override:
+        template = override
+    elif is_local_slm_profile(settings):
+        template = LOCAL_SLM_STEP_INSTRUCTIONS.get(role, DEFAULT_STEP_INSTRUCTIONS.get(role, ""))
+    else:
+        template = DEFAULT_STEP_INSTRUCTIONS.get(role, "")
     if not template:
         return ""
     registered_tools = registered_tool_names_for_role(role)
@@ -231,10 +229,22 @@ def validate_agent_prompts_patch(updates: Dict[str, Any]) -> None:
 
 
 def agent_prompt_defaults_for_client() -> Dict[str, Dict[str, str]]:
+    from backend.services.workflow_settings import get_workflow_settings
+
+    ws = get_workflow_settings()
+    local = is_local_slm_profile(ws)
     return {
         role: {
-            "system": DEFAULT_AGENT_SYSTEM.get(role, ""),
-            "stepInstructions": DEFAULT_STEP_INSTRUCTIONS.get(role, ""),
+            "system": (
+                LOCAL_SLM_SYSTEM.get(role, "")
+                if local
+                else DEFAULT_AGENT_SYSTEM.get(role, "")
+            ),
+            "stepInstructions": (
+                LOCAL_SLM_STEP_INSTRUCTIONS.get(role, DEFAULT_STEP_INSTRUCTIONS.get(role, ""))
+                if local
+                else DEFAULT_STEP_INSTRUCTIONS.get(role, "")
+            ),
         }
         for role in AGENT_ROLES
     }

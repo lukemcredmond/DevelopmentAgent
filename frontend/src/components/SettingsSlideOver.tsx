@@ -544,10 +544,10 @@ export default function SettingsSlideOver({
                     type="number"
                     min={1000}
                     max={50000}
-                    value={state.workflowSettings?.maxToolOutputCharsForLlm ?? 6000}
+                    value={state.workflowSettings?.maxToolOutputCharsForLlm ?? 32000}
                     onChange={(e) =>
                       onWorkflowSettingsChange({
-                        maxToolOutputCharsForLlm: Number(e.target.value) || 6000,
+                        maxToolOutputCharsForLlm: Number(e.target.value),
                       })
                     }
                     className="w-full bg-cat-base border border-cat-surface1 rounded p-1.5 font-mono text-[11px] text-white focus:outline-none"

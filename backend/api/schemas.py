@@ -234,6 +234,7 @@ class WorkflowSettingsPayload(BaseModel):
     ollamaCooldownRetryAttempts: Optional[int] = None
     maxToolOutputCharsForLlm: Optional[int] = None
     messagePruneThresholdPct: Optional[int] = None
+    promptProfile: Optional[str] = None
     enableSemanticSprintContext: Optional[bool] = None
     enableHybridSearch: Optional[bool] = None
     semanticMinScore: Optional[float] = None
