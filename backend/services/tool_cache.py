@@ -162,6 +162,29 @@ def find_prior_tool_output_for_task(
     return None
 
 
+def resolve_duplicate_replay(
+    tool_name: str,
+    arguments: Dict[str, Any],
+    task: Optional[Dict[str, Any]],
+) -> Optional[Tuple[str, bool]]:
+    """Last successful output for duplicate skip, or None to allow a real tool run."""
+    cached = get_cached_result(tool_name, arguments)
+    if cached:
+        return cached
+    if task:
+        prior = find_prior_tool_output_for_task(task, tool_name, arguments)
+        if prior:
+            from backend.services.llm_context import truncate_tool_output_for_llm
+
+            body = truncate_tool_output_for_llm(tool_name, prior)
+            return (
+                "[skipped duplicate — prior result replayed; do not call again with identical args]\n"
+                + body,
+                True,
+            )
+    return None
+
+
 def format_duplicate_skip_output(
     tool_name: str,
     *,
@@ -170,17 +193,9 @@ def format_duplicate_skip_output(
     fallback_summary: str,
 ) -> str:
     """Build tool message for in-step duplicate skip (replay prior output when possible)."""
-    from backend.services.llm_context import truncate_tool_output_for_llm
-
-    replay: Optional[str] = None
-    if task and tool_name in CACHEABLE_READ_TOOLS:
-        replay = find_prior_tool_output_for_task(task, tool_name, arguments)
+    replay = resolve_duplicate_replay(tool_name, arguments, task)
     if replay:
-        body = truncate_tool_output_for_llm(tool_name, replay)
-        return (
-            "[skipped duplicate — prior result replayed; do not call again with identical args]\n"
-            + body
-        )
+        return replay[0]
     if tool_name == "run_command":
         cmd = str((arguments or {}).get("command") or fallback_summary)[:120]
         return (

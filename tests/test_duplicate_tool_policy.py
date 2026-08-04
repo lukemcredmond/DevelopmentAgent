@@ -112,9 +112,66 @@ class _FakeToolCall:
         self.function = _FakeFunction(name, arguments)
 
 
-def test_run_command_second_identical_call_soft_skips_execute():
-    """Strict run_command policy: second identical success skips execute_tool."""
+def test_run_command_second_identical_call_soft_skips_when_replay_exists():
+    """Strict run_command policy: second identical success replays cache when present."""
     initialize()
+    agent = ScrumAgent(role="Developer", model="m", system_prompt="test")
+    call = _FakeToolCall("run_command", {"command": "flutter clean"})
+    from backend.services.duplicate_tool_policy import normalize_run_command_for_duplicate
+    from backend.services.tool_cache import clear_tool_cache, store_cached_result
+
+    clear_tool_cache()
+    cmd = normalize_run_command_for_duplicate("flutter clean")
+    dup_key = ("run_command", json.dumps({"command": cmd}, sort_keys=True))
+    successful = [dup_key]
+    store_cached_result("run_command", {"command": "flutter clean"}, "clean ok", True)
+    exec_count = {"n": 0}
+
+    def fake_execute(*_args, **_kwargs):
+        exec_count["n"] += 1
+        from backend.services.tool_execution_service import ToolExecutionResult
+
+        return ToolExecutionResult(
+            tool_name="run_command",
+            arguments={"command": "flutter clean"},
+            safe_args={},
+            tool_output="ok",
+            success=True,
+            duration_ms=1,
+            timestamp="",
+            agent="Developer",
+            agent_id="dev",
+            task_id="T1",
+            source="agent",
+            run_id="R1",
+        )
+
+    with patch.object(agent, "_publish_work_progress"):
+        with patch("backend.agents.scrum_agent.execute_tool", side_effect=fake_execute):
+            with patch("backend.agents.scrum_agent.find_task_by_id", return_value=None):
+                _tool_name, _args, result, early = agent._execute_single_tool_call(
+                    call,
+                    task_id=None,
+                    agent_id="dev",
+                    run_id="R1",
+                    user_prompt="",
+                    failed_tool_keys=[],
+                    successful_tool_keys=successful,
+                    total_failures=[0],
+                    max_tool_failures=5,
+                )
+    assert early is None
+    assert exec_count["n"] == 0
+    assert getattr(result, "duplicate_skip", False) is True
+    assert "clean ok" in result.tool_output
+
+
+def test_run_command_second_identical_call_executes_without_replay():
+    """When no cached/transcript output exists, duplicate policy allows a real run."""
+    initialize()
+    from backend.services.tool_cache import clear_tool_cache
+
+    clear_tool_cache()
     agent = ScrumAgent(role="Developer", model="m", system_prompt="test")
     call = _FakeToolCall("run_command", {"command": "flutter clean"})
     from backend.services.duplicate_tool_policy import normalize_run_command_for_duplicate
@@ -158,7 +215,6 @@ def test_run_command_second_identical_call_soft_skips_execute():
                     max_tool_failures=5,
                 )
     assert early is None
-    assert exec_count["n"] == 0
+    assert exec_count["n"] == 1
     assert result.success is True
-    assert getattr(result, "duplicate_skip", False) is True
-    assert "already succeeded" in result.tool_output.lower()
+    assert getattr(result, "duplicate_skip", False) is False

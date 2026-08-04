@@ -81,18 +81,28 @@ def dev_explicit_needs_user(result: str) -> bool:
 
 
 def dev_clarification_from_result(result: str) -> bool:
-    """Clarification signals that should route to Needs PO instead."""
+    """Explicit PO-routing signals only — avoid substring false positives in long dev output."""
     if dev_explicit_needs_user(result):
         return False
     lower = result.lower()
-    loose = (
-        "needs clarification",
-        "need clarification",
-        "unclear requirement",
-        "move to needs po",
+    explicit_markers = (
         "escalate to po",
+        "move the task to 'needs po'",
+        "moving to needs po",
+        "move to needs po",
+        "escalating to product owner",
     )
-    return any(m in lower for m in loose) or is_clarification_shaped(result)
+    if any(m in lower for m in explicit_markers):
+        return True
+    for line in lower.split("\n"):
+        stripped = line.strip()
+        if stripped.startswith("needs po:") or stripped.startswith("need po:"):
+            return True
+        if stripped.startswith("needs clarification:") or stripped.startswith("need clarification:"):
+            return True
+        if stripped.startswith("blocked on requirements:"):
+            return True
+    return False
 
 
 def prefer_po_instruction_suffix() -> str:

@@ -1193,7 +1193,50 @@ class ScrumAgent:
             and duplicate_in_step_hard_stop_applies(tool_name)
             and same_success >= SAME_ARGS_SUCCESS_LIMIT - 1
         ):
-            # Already succeeded once and skipped once (count >= 2) → stop like failure stuck-loop
+            live_task = find_task_by_id(task_id) if task_id else None
+            from backend.services.tool_cache import resolve_duplicate_replay
+
+            replay = resolve_duplicate_replay(tool_name, arguments, live_task)
+            if replay:
+                tool_output, success = replay
+                skip_intent = f"Replayed duplicate {tool_name} (hard-stop avoided)"
+                self._publish_work_progress(
+                    task_id=task_id,
+                    intent=skip_intent,
+                    status=skip_intent,
+                    run_status="thinking",
+                    clear_tool=True,
+                    publish_activity_event=True,
+                )
+                add_system_log(self.role, "info", skip_intent)
+                with _FAILURE_LOCK:
+                    successful_tool_keys.append(dup_key)
+                _track_fingerprint()
+                _log_duplicate_skip(
+                    agent=self.role,
+                    tool_name=tool_name,
+                    arguments=arguments,
+                    tool_output=tool_output,
+                    task_id=task_id,
+                    run_id=run_id,
+                )
+                safe_args = sanitize_tool_args_for_log(tool_name, arguments)
+                result = ToolExecutionResult(
+                    tool_name=tool_name,
+                    arguments=arguments,
+                    safe_args=safe_args,
+                    tool_output=tool_output,
+                    success=success,
+                    duration_ms=0,
+                    timestamp="",
+                    agent=self.role,
+                    agent_id=agent_id,
+                    task_id=task_id,
+                    source="agent",
+                    run_id=run_id,
+                )
+                setattr(result, "duplicate_skip", True)
+                return tool_name, arguments, result, None
             cmd_hint = ""
             if tool_name == "run_command" and isinstance(arguments, dict):
                 cmd_hint = str(arguments.get("command") or "")[:80]
@@ -1244,63 +1287,57 @@ class ScrumAgent:
             and duplicate_in_step_soft_skip_applies(tool_name)
             and same_success >= 1
         ):
-            from backend.services.tool_cache import get_cached_result
+            live_task = find_task_by_id(task_id) if task_id else None
+            from backend.services.tool_cache import resolve_duplicate_replay
 
-            cached = get_cached_result(tool_name, arguments)
-            if cached:
-                tool_output, success = cached
-            else:
-                live_task = find_task_by_id(task_id) if task_id else None
-                from backend.services.tool_cache import format_duplicate_skip_output
-
-                tool_output = format_duplicate_skip_output(
-                    tool_name,
-                    arguments=arguments,
-                    task=live_task,
-                    fallback_summary=tool_summary,
+            replay = resolve_duplicate_replay(tool_name, arguments, live_task)
+            if replay:
+                tool_output, success = replay
+                skip_intent = f"Skipped duplicate {tool_name}"
+                if tool_name == "run_command":
+                    skip_intent = f"Skipped duplicate run_command: {str(arguments.get('command') or '')[:100]}"
+                self._publish_work_progress(
+                    task_id=task_id,
+                    intent=skip_intent,
+                    status=skip_intent,
+                    run_status="thinking",
+                    clear_tool=True,
+                    publish_activity_event=True,
                 )
-                success = True
-            skip_intent = f"Skipped duplicate {tool_name}"
-            if tool_name == "run_command":
-                skip_intent = f"Skipped duplicate run_command: {str(arguments.get('command') or '')[:100]}"
-            self._publish_work_progress(
-                task_id=task_id,
-                intent=skip_intent,
-                status=skip_intent,
-                run_status="thinking",
-                clear_tool=True,
-                publish_activity_event=True,
+                add_system_log(self.role, "info", skip_intent)
+                with _FAILURE_LOCK:
+                    successful_tool_keys.append(dup_key)
+                _track_fingerprint()
+                _log_duplicate_skip(
+                    agent=self.role,
+                    tool_name=tool_name,
+                    arguments=arguments,
+                    tool_output=tool_output,
+                    task_id=task_id,
+                    run_id=run_id,
+                )
+                safe_args = sanitize_tool_args_for_log(tool_name, arguments)
+                result = ToolExecutionResult(
+                    tool_name=tool_name,
+                    arguments=arguments,
+                    safe_args=safe_args,
+                    tool_output=tool_output,
+                    success=success,
+                    duration_ms=0,
+                    timestamp="",
+                    agent=self.role,
+                    agent_id=agent_id,
+                    task_id=task_id,
+                    source="agent",
+                    run_id=run_id,
+                )
+                setattr(result, "duplicate_skip", True)
+                return tool_name, arguments, result, None
+            add_system_log(
+                self.role,
+                "info",
+                f"No prior output for duplicate '{tool_name}' — executing tool",
             )
-            add_system_log(self.role, "info", skip_intent)
-            with _FAILURE_LOCK:
-                successful_tool_keys.append(dup_key)
-            _track_fingerprint()
-            _log_duplicate_skip(
-                agent=self.role,
-                tool_name=tool_name,
-                arguments=arguments,
-                tool_output=tool_output,
-                task_id=task_id,
-                run_id=run_id,
-            )
-            safe_args = sanitize_tool_args_for_log(tool_name, arguments)
-            result = ToolExecutionResult(
-                tool_name=tool_name,
-                arguments=arguments,
-                safe_args=safe_args,
-                tool_output=tool_output,
-                success=success,
-                duration_ms=0,
-                timestamp="",
-                agent=self.role,
-                agent_id=agent_id,
-                task_id=task_id,
-                source="agent",
-                run_id=run_id,
-            )
-            # Marker consumed by _process_tool_calls
-            setattr(result, "duplicate_skip", True)
-            return tool_name, arguments, result, None
 
         def _on_awaiting(name: str) -> None:
             self._publish_work_progress(
