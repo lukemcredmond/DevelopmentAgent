@@ -2,6 +2,7 @@ import { useEffect, useMemo, useState, type ReactNode } from 'react'
 import type {
   BoardLane,
   CommandDiagnostic,
+  LastSprintContextSources,
   Task,
   TaskFile,
   TaskFlowSummaryResponse,
@@ -199,6 +200,31 @@ interface TaskDetailModalProps {
   isAgentRunningOnTask?: boolean
   /** Bumps when tools/LLM events fire (SSE) so Flow can refresh without closing the section. */
   flowActivityKey?: string | number
+  /** Last sprint step prompt inject snapshot (Qdrant / file preload / packer). */
+  lastSprintContextSources?: LastSprintContextSources | null
+}
+
+function formatContextSourcesLine(cs: LastSprintContextSources): string {
+  const parts: string[] = []
+  if (cs.localSlmProfile) parts.push('profile=local_slm (no semantic/packer preload)')
+  else {
+    parts.push(
+      cs.semanticUsed
+        ? `semantic=${cs.semanticChunkCount ?? 0} chunk(s)`
+        : 'semantic=off',
+    )
+    parts.push(`files=${cs.filePreloadCount ?? 0}`)
+    if (cs.graphUsed) parts.push('graph=on')
+    const pack = (cs.contextPacker || 'off').toLowerCase()
+    if (pack !== 'off') {
+      parts.push(`packer=${pack} (${cs.contextPackerChars ?? 0} chars)`)
+    } else {
+      parts.push('packer=off')
+    }
+  }
+  parts.push(`qdrantIndex=${cs.qdrantIndexChunks ?? 0} chunks`)
+  if (cs.agentRole) parts.push(`role=${cs.agentRole}`)
+  return parts.join(' · ')
 }
 
 function CollapsibleSection({
@@ -321,6 +347,7 @@ export default function TaskDetailModal({
   onClearToolFingerprints,
   isAgentRunningOnTask = false,
   flowActivityKey = '',
+  lastSprintContextSources = null,
 }: TaskDetailModalProps) {
   const [title, setTitle] = useState('')
   const [description, setDescription] = useState('')
@@ -992,6 +1019,20 @@ export default function TaskDetailModal({
               )}
             </div>
           </CollapsibleSection>
+
+          {lastSprintContextSources?.taskId === safeTask.id && (
+            <div
+              className="text-[10px] text-cat-subtext border border-cat-surface1/80 rounded px-2 py-1.5 bg-cat-mantle/40"
+              data-testid="task-context-sources"
+            >
+              <span className="text-cat-overlay uppercase tracking-wide text-[9px]">
+                Last step context sources
+              </span>
+              <p className="mt-0.5 font-mono leading-relaxed">
+                {formatContextSourcesLine(lastSprintContextSources)}
+              </p>
+            </div>
+          )}
 
           <div id="task-flow-section">
             <CollapsibleSection

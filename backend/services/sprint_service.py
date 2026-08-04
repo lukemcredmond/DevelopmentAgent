@@ -1308,6 +1308,7 @@ def _inject_sprint_context(
     graph_block = ""
     file_block, file_paths = "", []
     context_block = ""
+    graph_used = False
     if not local_slm:
         total_budget = sprint_file_context_max_chars(num_ctx)
         semantic_block, sem_paths = build_semantic_sprint_context(
@@ -1323,6 +1324,7 @@ def _inject_sprint_context(
                     active_task,
                     max_chars=min(2500, semantic_sprint_context_max_chars(num_ctx) // 2),
                 )
+                graph_used = bool(graph_block)
         except Exception:
             graph_block = ""
         file_budget = max(1000, total_budget - len(semantic_block) - len(graph_block)) if (semantic_block or graph_block) else total_budget
@@ -1392,6 +1394,24 @@ def _inject_sprint_context(
                     )
             except Exception:
                 codebase_pack = ""
+
+    from backend.services.sprint_context_sources import (
+        build_context_sources_snapshot,
+        set_last_sprint_context_sources,
+    )
+
+    set_last_sprint_context_sources(
+        build_context_sources_snapshot(
+            task_id=task_id,
+            agent_role=agent_role,
+            local_slm=local_slm,
+            semantic_paths=sem_paths,
+            file_paths=file_paths,
+            graph_used=graph_used,
+            pack_mode=pack_mode,
+            codebase_pack_chars=len(codebase_pack or ""),
+        )
+    )
 
     use_focus_compose = False
     if local_slm:

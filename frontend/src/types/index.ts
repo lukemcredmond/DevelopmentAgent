@@ -134,6 +134,26 @@ export interface TaskFlowNode {
   promptSection?: string
   workItemIds?: string[]
   primaryWorkItemId?: string
+  decisionTrace?: {
+    outcome?: string
+    detail?: string
+    rejection?: string
+    toolsConsidered?: string[]
+  }
+  echoDetected?: boolean
+}
+
+export interface LastSprintContextSources {
+  taskId?: string
+  agentRole?: string
+  localSlmProfile?: boolean
+  semanticUsed?: boolean
+  semanticChunkCount?: number
+  filePreloadCount?: number
+  graphUsed?: boolean
+  contextPacker?: string
+  contextPackerChars?: number
+  qdrantIndexChunks?: number
 }
 
 export interface TaskFlowWorkItemIndexEntry {
@@ -552,6 +572,9 @@ export interface WorkflowSettings {
   enableAgentStepRecap?: boolean
   enableEpisodeSummary?: boolean
   enableMessageHistoryPrune?: boolean
+  enableLlmDecisionTrace?: boolean
+  enableLlmModelRationale?: boolean
+  toolOutputEchoStopAfter?: number
   enableStepLessonMemory?: boolean
   enableLlmContextCompress?: boolean
   contextCompressMinChars?: number
@@ -1016,6 +1039,7 @@ export interface AppState {
   lastStepOutcome?: LastStepOutcome | null
   lastStepDiagnostics?: LastStepDiagnostics | null
   activeStepDiagnostics?: ActiveStepDiagnostics | null
+  lastSprintContextSources?: LastSprintContextSources | null
   recovery?: RecoveryContext | null
   pendingSimulation?: PendingSimulation | null
   sprintPausedForSimulation?: boolean
@@ -1194,6 +1218,9 @@ export interface WorkflowSettingsPayload {
   enableAgentStepRecap?: boolean
   enableEpisodeSummary?: boolean
   enableMessageHistoryPrune?: boolean
+  enableLlmDecisionTrace?: boolean
+  enableLlmModelRationale?: boolean
+  toolOutputEchoStopAfter?: number
   enableStepLessonMemory?: boolean
   enableLlmContextCompress?: boolean
   contextCompressMinChars?: number
@@ -1533,6 +1560,9 @@ export const DEFAULT_WORKFLOW_SETTINGS: WorkflowSettings = {
   enableAgentStepRecap: true,
   enableEpisodeSummary: true,
   enableMessageHistoryPrune: true,
+  enableLlmDecisionTrace: false,
+  enableLlmModelRationale: false,
+  toolOutputEchoStopAfter: 2,
   enableStepLessonMemory: true,
   enableLlmContextCompress: false,
   contextCompressMinChars: 8000,

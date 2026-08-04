@@ -78,6 +78,8 @@ def append_llm_log_entry(
     tokens_reported: bool = False,
     prompt_unchanged_inject: bool = False,
     prompt_section: Optional[str] = None,
+    decision_trace: Optional[Dict[str, Any]] = None,
+    echo_detected: bool = False,
 ) -> Dict[str, Any]:
     entry: Dict[str, Any] = {
         "id": uuid.uuid4().hex[:12],
@@ -116,6 +118,10 @@ def append_llm_log_entry(
         entry["promptUnchangedInject"] = True
     if prompt_section:
         entry["promptSection"] = prompt_section
+    if decision_trace:
+        entry["decisionTrace"] = decision_trace
+    if echo_detected:
+        entry["echoDetected"] = True
     with state.STATE_LOCK:
         state.LLM_DEBUG_LOG.append(entry)
         overflow = len(state.LLM_DEBUG_LOG) - MAX_LLM_LOG_ENTRIES
@@ -123,6 +129,28 @@ def append_llm_log_entry(
             del state.LLM_DEBUG_LOG[:overflow]
         persist_llm_log()
     return entry
+
+
+def amend_llm_log_entry(
+    task_id: Optional[str],
+    iteration: int,
+    *,
+    decision_trace: Optional[Dict[str, Any]] = None,
+    echo_detected: Optional[bool] = None,
+) -> None:
+    """Patch the most recent log row for this task+iteration (post echo/trace analysis)."""
+    with state.STATE_LOCK:
+        for entry in reversed(state.LLM_DEBUG_LOG):
+            if entry.get("taskId") != task_id:
+                continue
+            if int(entry.get("iteration") or 0) != int(iteration):
+                continue
+            if decision_trace is not None:
+                entry["decisionTrace"] = decision_trace
+            if echo_detected is not None:
+                entry["echoDetected"] = bool(echo_detected)
+            persist_llm_log()
+            return
 
 
 def get_llm_logs(

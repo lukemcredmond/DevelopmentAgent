@@ -84,6 +84,11 @@ def build_state_response(*, include_files: bool = True) -> dict:
         response["lastStepDiagnostics"] = state.LAST_STEP_DIAGNOSTICS
     if state.LAST_STEP_PROGRESS is not None:
         response["lastStepProgress"] = state.LAST_STEP_PROGRESS
+    from backend.services.sprint_context_sources import get_last_sprint_context_sources
+
+    ctx_src = get_last_sprint_context_sources()
+    if ctx_src is not None:
+        response["lastSprintContextSources"] = ctx_src
     from backend.services.step_diagnostics import get_active_trace_summary
 
     active_diag = get_active_trace_summary()

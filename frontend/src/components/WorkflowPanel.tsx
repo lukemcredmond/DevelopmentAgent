@@ -2005,6 +2005,51 @@ export default function WorkflowPanel({
       )}
 
       {(workflowTab === 'rag') && (
+      <div className="border border-violet-500/20 bg-violet-950/15 rounded-lg p-2 space-y-2">
+        <p className="text-[10px] font-bold uppercase tracking-wider text-violet-200">
+          LLM decision trace (debug)
+        </p>
+        <label className="flex items-center gap-2 text-[11px] text-cat-subtext cursor-pointer">
+          <input
+            type="checkbox"
+            checked={settings.enableLlmDecisionTrace ?? false}
+            onChange={(e) =>
+              onSettingsChange({
+                enableLlmDecisionTrace: e.target.checked,
+                ...(e.target.checked ? {} : { enableLlmModelRationale: false }),
+              })
+            }
+          />
+          Record server-side decision trace on Flow LLM nodes
+          <SettingHint hint="No extra Ollama call — explains text reject, echo, tool recovery, and tool_calls outcomes." />
+        </label>
+        {(settings.enableLlmDecisionTrace ?? false) && (
+          <>
+            <label className="flex items-center gap-2 text-[11px] text-cat-subtext cursor-pointer pl-4">
+              <input
+                type="checkbox"
+                checked={settings.enableLlmModelRationale ?? false}
+                onChange={(e) => onSettingsChange({ enableLlmModelRationale: e.target.checked })}
+              />
+              Ask model for RATIONALE line (best-effort)
+              <SettingHint hint="Appends a one-line RATIONALE instruction to step prompts when trace is enabled." />
+            </label>
+            <label className="text-[11px] text-cat-subtext block pl-4">
+              <span className="text-[10px] text-cat-overlay">Stop step after tool-output echoes</span>
+              <NumberSettingInput
+                value={settings.toolOutputEchoStopAfter ?? 2}
+                min={1}
+                max={10}
+                onCommit={(toolOutputEchoStopAfter) => onSettingsChange({ toolOutputEchoStopAfter })}
+                className="w-full bg-cat-base border border-cat-surface1 rounded p-1 text-white mt-0.5"
+              />
+            </label>
+          </>
+        )}
+      </div>
+      )}
+
+      {(workflowTab === 'rag') && (
       <div className="border-t border-cat-surface1 pt-2">
         <p className="text-[10px] text-cat-overlay leading-relaxed">
           Project memories are injected into agent prompts. View, add, and edit notes in the bottom

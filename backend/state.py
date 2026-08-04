@@ -51,6 +51,7 @@ DEV_STEP_INTERRUPTED: bool = False
 # Active per-step diagnostics trace (manual sprint steps).
 ACTIVE_STEP_DIAGNOSTICS: Optional[Any] = None
 LAST_STEP_DIAGNOSTICS: Optional[Dict[str, Any]] = None
+LAST_SPRINT_CONTEXT_SOURCES: Optional[Dict[str, Any]] = None
 
 REFINEMENT_MODE: bool = False
 

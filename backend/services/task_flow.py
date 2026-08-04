@@ -151,6 +151,8 @@ def build_task_flow(
                 "promptSection": entry.get("promptSection"),
                 "memoriesUsed": entry.get("memoriesUsed") or [],
                 "decisionsIncluded": entry.get("decisionsIncluded"),
+                "decisionTrace": entry.get("decisionTrace"),
+                "echoDetected": bool(entry.get("echoDetected")),
                 "source": "llm_log",
             }
         )

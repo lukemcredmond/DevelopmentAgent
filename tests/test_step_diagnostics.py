@@ -105,6 +105,15 @@ def test_diagnostics_api_latest(tmp_path, monkeypatch):
     assert res404.status_code == 404
 
 
+def test_build_hint_tool_output_echo(tmp_path, monkeypatch):
+    monkeypatch.setenv("ALLHANDS_HOME", str(tmp_path))
+    initialize()
+    trace = start_step_trace("T-ECHO", "Echo", "Developer", "In Progress")
+    hint = trace._build_hint("tool_output_echo")
+    assert "repeated prior tool output" in hint.lower()
+    clear_active_step_trace()
+
+
 def test_checkpoint_written_on_start(tmp_path, monkeypatch):
     monkeypatch.setenv("ALLHANDS_HOME", str(tmp_path))
     initialize()

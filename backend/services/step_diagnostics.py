@@ -152,6 +152,9 @@ class StepDiagnosticsTracker:
                 "Resume with Sprint step or chat."
             ),
             "duplicate_tool": "Same tool + identical args repeated — agent loop stop.",
+            "tool_output_echo": (
+                "Model repeated prior tool output in assistant text instead of calling edit tools — stopped to save GPU."
+            ),
             "tool_failure_stop": "Tool failures exceeded the step limit.",
             "ollama_fallback": "Ollama was unavailable during the step.",
             "completed_text_only": (

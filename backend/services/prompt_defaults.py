@@ -188,7 +188,10 @@ def get_effective_step_instructions(
     merged_ctx: Dict[str, Any] = dict(ctx)
     merged_ctx[REGISTERED_TOOLS_PLACEHOLDER] = registered_tools
     formatted = format_step_instructions(template, merged_ctx)
-    return _append_registered_tools_if_missing(template, formatted, registered_tools)
+    out = _append_registered_tools_if_missing(template, formatted, registered_tools)
+    from backend.services.llm_decision_trace import rationale_step_suffix
+
+    return out + rationale_step_suffix()
 
 
 def clear_agent_prompt_overrides(

@@ -2164,6 +2164,7 @@ export default function App() {
             activeRun.status !== 'failed',
         )}
         flowActivityKey={`${toolStartTick}-${lastToolEventAt ?? ''}`}
+        lastSprintContextSources={state.lastSprintContextSources ?? null}
       />
 
       {fileDiffModal && (

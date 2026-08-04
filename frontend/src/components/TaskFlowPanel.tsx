@@ -63,6 +63,11 @@ function FlowNode({
             </span>
           )}
           {!isLlm && node.success === false && <span className="text-rose-400">failed</span>}
+          {node.echoDetected && (
+            <span className="text-rose-300/90 border border-rose-500/40 rounded px-1">
+              tool echo
+            </span>
+          )}
           {node.duplicateSkip && (
             <span className="text-amber-300/90 border border-amber-500/40 rounded px-1">
               skipped duplicate
@@ -85,13 +90,20 @@ function FlowNode({
           <span className="text-cat-overlay ml-auto">{open ? '▾' : '▸'}</span>
         </div>
         {!open && isLlm && (
-          <p
-            className={`text-[10px] truncate ${
-              node.error ? 'text-rose-300/90' : llmTextOnly ? 'text-cat-subtext' : 'text-amber-200/80 font-mono'
-            }`}
-          >
-            {llmPreview}
-          </p>
+          <div className="space-y-0.5">
+            {node.decisionTrace?.detail && (
+              <p className="text-[10px] text-sky-200/90 truncate" title={node.decisionTrace.detail}>
+                {node.decisionTrace.detail}
+              </p>
+            )}
+            <p
+              className={`text-[10px] truncate ${
+                node.error ? 'text-rose-300/90' : llmTextOnly ? 'text-cat-subtext' : 'text-amber-200/80 font-mono'
+              }`}
+            >
+              {llmPreview}
+            </p>
+          </div>
         )}
         {!open && !isLlm && (
           <p className="text-[10px] text-cat-subtext font-mono truncate">
@@ -114,6 +126,14 @@ function FlowNode({
       )}
       {open && (
         <div className="mt-2 space-y-2 border-t border-cat-surface1/60 pt-2">
+          {isLlm && node.decisionTrace && (
+            <div>
+              <div className="text-[9px] uppercase text-cat-overlay mb-1">Decision trace</div>
+              <pre className="text-[10px] text-sky-100/90 whitespace-pre-wrap max-h-32 overflow-y-auto bg-sky-950/20 rounded p-2 border border-sky-500/20">
+                {JSON.stringify(node.decisionTrace, null, 2)}
+              </pre>
+            </div>
+          )}
           {isLlm && (node.requestMessages?.length ?? 0) > 0 && (
             <div>
               <div className="text-[9px] uppercase text-cat-overlay mb-1">Prompt to model</div>

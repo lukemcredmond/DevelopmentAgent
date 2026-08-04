@@ -1986,6 +1986,7 @@ class ScrumAgent:
 
         set_llm_iterations_max(max_iterations)
         pending_lesson: Optional[Tuple[str, set, str]] = None
+        self._consecutive_echo_count = 0
 
         try:
             for iteration in range(1, max_iterations + 1):
@@ -2157,6 +2158,21 @@ class ScrumAgent:
                         "tool_calls_recovered_from_content",
                         ", ".join(recovered_tool_names),
                     )
+                    from backend.services.llm_decision_trace import (
+                        build_decision_trace as _build_dt,
+                        decision_trace_enabled as _dt_on,
+                    )
+                    from backend.services.llm_debug_log import amend_llm_log_entry as _amend_llm
+
+                    if _dt_on():
+                        _amend_llm(
+                            task_id,
+                            iteration,
+                            decision_trace=_build_dt(
+                                outcome="recovered_from_markdown",
+                                detail=f"Parsed tool calls from assistant text: {', '.join(recovered_tool_names)}",
+                            ),
+                        )
                 tool_call_names = (
                     [tc.function.name for tc in message.tool_calls]
                     if message.tool_calls
@@ -2187,7 +2203,28 @@ class ScrumAgent:
                         (getattr(self, "_last_token_usage", None) or {}).get("tokensReported")
                     ),
                 )
+                from backend.services.llm_decision_trace import (
+                    build_decision_trace,
+                    decision_trace_enabled,
+                )
+                from backend.services.llm_debug_log import amend_llm_log_entry
+                from backend.services.llm_echo_guard import (
+                    ECHO_REJECTION_MESSAGE,
+                    detect_tool_output_echo,
+                )
+
                 if message.tool_calls:
+                    self._consecutive_echo_count = 0
+                    if decision_trace_enabled():
+                        amend_llm_log_entry(
+                            task_id,
+                            iteration,
+                            decision_trace=build_decision_trace(
+                                outcome="tool_calls",
+                                detail=f"Model invoked: {', '.join(tool_call_names)}",
+                                tools_considered=list(self.registry.tool_names()),
+                            ),
+                        )
                     early_stop = self._process_tool_calls(
                         message,
                         messages,
@@ -2219,6 +2256,46 @@ class ScrumAgent:
                     continue
 
                 content = unwrap_llm_text((message.content or "")).strip()
+                echo_hit = detect_tool_output_echo(content, messages) if content else None
+                if echo_hit and echo_hit.is_echo:
+                    self._consecutive_echo_count = int(getattr(self, "_consecutive_echo_count", 0)) + 1
+                    ws_echo = get_workflow_settings()
+                    stop_after = max(1, int(ws_echo.get("toolOutputEchoStopAfter") or 2))
+                    detail = echo_hit.reason or "Assistant repeated prior tool output"
+                    add_system_log(
+                        self.role,
+                        "warning",
+                        f"Tool output echo ({self._consecutive_echo_count}/{stop_after}): {detail}",
+                    )
+                    log_event("tool_output_echo", detail[:240])
+                    if decision_trace_enabled():
+                        amend_llm_log_entry(
+                            task_id,
+                            iteration,
+                            decision_trace=build_decision_trace(
+                                outcome="tool_output_echo",
+                                detail=detail,
+                                rejection="echo_of_tool_output",
+                            ),
+                            echo_detected=True,
+                        )
+                    if self._consecutive_echo_count >= stop_after:
+                        stop_msg = (
+                            f"Stopped: model repeated tool output {self._consecutive_echo_count} times "
+                            "instead of calling edit tools."
+                        )
+                        add_system_log(self.role, "warning", stop_msg)
+                        self._log_step_exit(stop_msg, "warning")
+                        log_event("tool_output_echo_stop", stop_msg)
+                        finish_run(status="failed", error=stop_msg)
+                        pending_lesson = ("tool_output_echo", set(tools_used), stop_msg)
+                        return stop_msg
+                    messages.append({"role": "system", "content": ECHO_REJECTION_MESSAGE})
+                    continue
+
+                if content:
+                    self._consecutive_echo_count = 0
+
                 if content and _po_step_should_reject_text_only(content, tools_used, task_id):
                     if task_id and is_task_done(task_id) and not state.ALLOW_DONE_RETRY:
                         stop_msg = "Stopped: task already Done"
@@ -2330,6 +2407,23 @@ class ScrumAgent:
                         )
                         log_event("text_rejected", content[:200])
                         reject_label = "text-only"
+                    if decision_trace_enabled():
+                        amend_llm_log_entry(
+                            task_id,
+                            iteration,
+                            decision_trace=build_decision_trace(
+                                outcome="text_rejected"
+                                if reject_label == "text-only"
+                                else "plan_rejected",
+                                detail=(
+                                    f"Rejected {reject_label} assistant text — "
+                                    f"continuing to iter {next_iter}/{max_iterations}"
+                                ),
+                                rejection="text_only"
+                                if reject_label == "text-only"
+                                else "plan_only",
+                            ),
+                        )
                     reject_intent = build_live_intent(
                         phase="plan_reject" if reject_label == "plan-only" else "text_reject",
                         iteration=next_iter,

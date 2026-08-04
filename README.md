@@ -1248,6 +1248,9 @@ flowchart LR
 |---------|----------------|
 | Ollama unreachable | Sidebar health / `GET /api/ollama/health`. Agents use `SIMULATION_FALLBACK` offline. |
 | Qdrant not running | Workflow index status; `GET /api/ollama/qdrant-health`. Semantic search disabled until Qdrant is up. |
+| Never see Qdrant / semantic preload | Docker Qdrant up → Workflow **Reindex codebase** → chunk count &gt; 0. Console: `Pre-loaded N semantic chunk(s)`. Dev can also call `semantic_search`. **`promptProfile: local_slm`** skips sprint semantic preload. |
+| Repomix / code2prompt never runs | Set **contextPacker** to `repomix` or `code2prompt`, install CLI on PATH, run a **Developer** step (not `local_slm`). Console: `Codebase packer (repomix): N chars`. Task detail shows **Last step context sources**. |
+| Model repeats `read_file` in `<tool_response>` loops | Backend **tool-output echo guard** stops after `toolOutputEchoStopAfter` (default 2). Enable **LLM decision trace** on Flow to see `tool_output_echo` / `echoDetected`. |
 | Graphify missing | `graph_query` tool skipped; install Graphify CLI on PATH. |
 | Dev blocked by Needs PO | Use **Run In Progress** to run Dev without waiting for PO. |
 | Duplicate memories | Enable **Group duplicates** in Memory tab; delete grouped entries. New saves dedupe automatically. |
