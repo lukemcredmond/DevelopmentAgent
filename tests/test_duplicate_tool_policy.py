@@ -294,3 +294,41 @@ def test_duplicate_replay_includes_loop_breaker_header():
     assert "[duplicate tool" in wrapped
     assert "do not" in wrapped.lower()
     assert body in wrapped
+
+
+def test_duplicate_read_file_replay_uses_step_file_reads_not_short_cache():
+    """Duplicate read_file must embed full step read in the tool message for the next LLM call."""
+    initialize()
+    from backend import state
+    from backend.services.tool_cache import clear_tool_cache, store_cached_result
+    from backend.workspace.files import record_step_file_read
+
+    clear_tool_cache()
+    full_body = "void main() {\n  print('hello');\n}\n"
+    record_step_file_read("lib/main.dart", full_body)
+    store_cached_result(
+        "read_file",
+        {"path": "lib/main.dart"},
+        "[cached — workspace unchanged since last call]",
+        True,
+    )
+
+    agent = ScrumAgent(role="Developer", model="m", system_prompt="test")
+    messages: list = [
+        {"role": "system", "content": "sys"},
+        {"role": "user", "content": "task"},
+        {"role": "assistant", "content": "", "tool_calls": [{"function": {"name": "read_file", "arguments": {"path": "lib/main.dart"}}}]},
+    ]
+    agent._append_tool_messages(
+        messages,
+        "read_file",
+        {"path": "lib/main.dart"},
+        "[duplicate tool — call #2]\n[cached — workspace unchanged since last call]",
+        True,
+        duplicate_skip=True,
+        duplicate_attempt=2,
+    )
+    tool_msgs = [m for m in messages if m.get("role") == "tool"]
+    assert tool_msgs, "expected tool message"
+    assert "print('hello')" in tool_msgs[0]["content"]
+    assert "void main()" in tool_msgs[0]["content"]

@@ -220,6 +220,22 @@ def resolve_duplicate_replay(
     """Last successful output for duplicate skip, or None to allow a real tool run."""
     if not tool_arguments_eligible_for_cache(tool_name, arguments):
         return None
+    args = arguments if isinstance(arguments, dict) else {}
+    if tool_name == "read_file":
+        from backend.workspace.files import step_file_read_output_for_replay
+
+        path = str(args.get("path") or "")
+        step_body = step_file_read_output_for_replay(path)
+        if step_body:
+            from backend.services.llm_context import truncate_tool_output_for_llm
+
+            body = truncate_tool_output_for_llm("read_file", step_body, path=path)
+            return (
+                "[skipped duplicate — prior read_file replayed from this step; "
+                "do not call read_file on this path again]\n"
+                + body,
+                True,
+            )
     cached = get_cached_result(tool_name, arguments)
     if cached:
         return cached

@@ -354,6 +354,21 @@ def invalidate_step_file_read(path: str) -> None:
     state.STEP_FILE_READS.pop(safe_path, None)
 
 
+def step_file_read_output_for_replay(path: str) -> Optional[str]:
+    """Full read_file body stored this step — use for duplicate replay to the LLM."""
+    raw = str(path or "").strip()
+    if not raw:
+        return None
+    try:
+        safe_path = resolve_workspace_path(raw)
+    except ValueError:
+        return None
+    stored = state.STEP_FILE_READS.get(safe_path)
+    if not stored or str(stored).strip().startswith("Error:"):
+        return None
+    return str(stored)
+
+
 def read_file_in_step_duplicate_skip_allowed(arguments: dict) -> bool:
     """When False, in-step duplicate skip must not run — execute read_file on disk."""
     path = str((arguments or {}).get("path") or "")

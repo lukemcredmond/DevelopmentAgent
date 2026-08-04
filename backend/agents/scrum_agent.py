@@ -675,6 +675,19 @@ class ScrumAgent:
     ) -> None:
         from backend.services.llm_context import prepare_tool_output_parts
 
+        if duplicate_skip and tool_name == "read_file":
+            path = str(arguments.get("path") or "")
+            from backend.workspace.files import step_file_read_output_for_replay
+
+            step_body = step_file_read_output_for_replay(path)
+            if step_body and step_body.strip() not in str(tool_output or ""):
+                raw = str(tool_output or "").strip()
+                if raw.startswith("[") and "\n\n" in raw:
+                    header = raw.split("\n\n", 1)[0].strip()
+                    tool_output = f"{header}\n\n{step_body}"
+                else:
+                    tool_output = step_body
+
         parts = prepare_tool_output_parts(
             tool_name,
             tool_output,
@@ -742,6 +755,18 @@ class ScrumAgent:
                             f"Do NOT invoke '{tool_name}' again with the same arguments. "
                             f"Full output is in the tool message(s) above and === OBSERVATION ===.\n"
                             f"NEXT: {_suggested_next_after_duplicate(tool_name, arguments)}"
+                        ),
+                    }
+                )
+            elif duplicate_skip and tool_name == "read_file":
+                path = str(arguments.get("path") or "?")
+                messages.append(
+                    {
+                        "role": "system",
+                        "content": (
+                            f"read_file('{path}') duplicate skipped — full file content is in the "
+                            "tool message above (same as the first read this step). "
+                            "Do not read again; call apply_patch with verbatim old_text from that output."
                         ),
                     }
                 )
