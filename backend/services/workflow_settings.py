@@ -110,6 +110,7 @@ DEFAULT_WORKFLOW_SETTINGS: Dict[str, Any] = {
     "enableObservationSummaries": True,
     "enableAgentStepRecap": True,
     "enableEpisodeSummary": True,
+    "enableMessageHistoryPrune": True,
     "enableStepLessonMemory": True,
     # Off by default: it adds one extra Ollama call per step.
     "enableLlmContextCompress": False,

@@ -11,7 +11,12 @@ def test_glob_listing_not_truncated_at_old_6k_cap():
     assert "file_0.dart" in joined
 
 
-def test_chunk_splits_very_large_listing():
+def test_single_long_line_split_without_loss():
+    body = "a" * 12000
+    parts = chunk_tool_output("read_file", body, 5000)
+    assert len(parts) >= 2
+    assert "".join(p.split("===")[-1] for p in parts).count("a") >= 12000 or body in "".join(parts)
+
     cap = 5000
     body = "\n".join(f"line-{i}.dart" for i in range(800))
     parts = chunk_tool_output("glob_file_search", body, cap)

@@ -17,6 +17,31 @@ _LINE_CHUNK_TOOLS = frozenset(
 )
 
 
+def _label_parts(tool_name: str, parts: List[str]) -> List[str]:
+    total = len(parts)
+    if total <= 1:
+        return parts
+    labeled: List[str] = []
+    for i, part in enumerate(parts, 1):
+        labeled.append(
+            f"=== {tool_name} output (part {i}/{total}) ===\n"
+            f"{part}\n"
+            f"[End part {i}/{total} — all parts are consecutive; do not re-run the tool to see this data.]"
+        )
+    return labeled
+
+
+def _chunk_by_char_windows(tool_name: str, body: str, cap: int) -> List[str]:
+    """Split into fixed windows so 100% of body reaches the LLM (no head/tail drop)."""
+    if len(body) <= cap:
+        return [body]
+    windows: List[str] = []
+    step = max(400, cap - 96)
+    for start in range(0, len(body), step):
+        windows.append(body[start : start + step])
+    return _label_parts(tool_name, windows)
+
+
 def chunk_tool_output(tool_name: str, text: str, cap: int) -> List[str]:
     """Return one or more parts; only split when text exceeds cap."""
     body = str(text or "")
@@ -47,27 +72,12 @@ def chunk_tool_output(tool_name: str, text: str, cap: int) -> List[str]:
             buf_len += add
         flush(len(chunks) + 1)
 
-        if len(chunks) <= 1:
-            chunks = [body[: cap - 80] + f"\n...[truncated at {cap} chars]\n"]
+        if len(chunks) <= 1 and len(body) > cap:
+            return _chunk_by_char_windows(tool_name, body, cap)
 
         total = len(chunks)
         if total == 1:
             return chunks
-        labeled: List[str] = []
-        for i, part in enumerate(chunks, 1):
-            labeled.append(
-                f"=== {tool_name} output (part {i}/{total}) ===\n"
-                f"{part}\n"
-                f"[End part {i}/{total} — all parts are consecutive; do not re-run the tool to see this data.]"
-            )
-        return labeled
+        return _label_parts(tool_name, chunks)
 
-    head = max(200, cap // 2)
-    tail = max(100, cap - head - 120)
-    if head + tail >= len(body):
-        return [body[: cap - 60] + f"\n...[truncated at {cap} chars]\n"]
-    return [
-        body[:head]
-        + f"\n...[middle omitted — {len(body) - head - tail} chars]\n"
-        + body[-tail:]
-    ]
+    return _chunk_by_char_windows(tool_name, body, cap)

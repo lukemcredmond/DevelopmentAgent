@@ -11,16 +11,19 @@ _EPISODE_CAP = 1500
 
 
 def max_tool_output_chars_for_llm() -> int:
-    """Per tool message budget — scales with num_ctx unless user set a low explicit cap."""
+    """Per tool message part budget — scales with num_ctx; 0 = auto (maximize within context)."""
     ws = get_workflow_settings()
     raw = ws.get("maxToolOutputCharsForLlm")
     explicit = int(raw if raw not in (None, "") else 32000)
-    if explicit <= 8000:
-        return max(500, explicit)
     from backend.services.prompt_budget import resolve_ollama_num_ctx
 
     num_ctx = resolve_ollama_num_ctx()
-    return min(250_000, max(explicit, num_ctx * 6))
+    auto_cap = min(2_000_000, max(100_000, num_ctx * 32))
+    if explicit <= 0:
+        return auto_cap
+    if explicit <= 8000:
+        return max(500, explicit)
+    return min(2_000_000, max(explicit, num_ctx * 6))
 
 
 def prepare_tool_output_parts(
@@ -53,11 +56,12 @@ def prepare_tool_output_parts(
         output_idx = text.find("## Output", problems_idx)
         if output_idx >= 0:
             head = text[: output_idx + len("## Output\n")]
-            tail_budget = max(500, cap - len(head) - 80)
             raw_tail = text[output_idx + len("## Output\n") :]
-            if len(raw_tail) > tail_budget:
-                raw_tail = raw_tail[: tail_budget - 40] + "\n...[command output truncated]\n"
-            return [head + raw_tail]
+            tail_cap = max(500, cap - len(head) - 80)
+            if len(raw_tail) <= tail_cap:
+                return [head + raw_tail]
+            tail_parts = chunk_tool_output("run_command", raw_tail, tail_cap)
+            return [head + tail_parts[0]] + tail_parts[1:]
 
     return chunk_tool_output(tool_name, text, cap)
 
@@ -125,10 +129,12 @@ def _merge_episode_summary(existing: str, new_lines: List[str]) -> str:
 
 def prune_messages_if_needed(messages: MutableSequence[Dict[str, Any]]) -> MutableSequence[Dict[str, Any]]:
     """Drop oldest tool messages when conversation exceeds context budget."""
+    ws = get_workflow_settings()
+    if ws.get("enableMessageHistoryPrune", True) is False:
+        return messages
     if len(messages) <= 2:
         return messages
 
-    ws = get_workflow_settings()
     from backend.services.prompt_budget import resolve_ollama_num_ctx
 
     num_ctx = resolve_ollama_num_ctx()

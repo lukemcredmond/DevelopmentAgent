@@ -242,6 +242,7 @@ class WorkflowSettingsPayload(BaseModel):
     enableObservationSummaries: Optional[bool] = None
     enableAgentStepRecap: Optional[bool] = None
     enableEpisodeSummary: Optional[bool] = None
+    enableMessageHistoryPrune: Optional[bool] = None
     enableStepLessonMemory: Optional[bool] = None
     enableLlmContextCompress: Optional[bool] = None
     contextCompressMinChars: Optional[int] = None
