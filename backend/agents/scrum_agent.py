@@ -498,21 +498,27 @@ class ScrumAgent:
             if getattr(result, "duplicate_skip", False):
                 ok = "skip"
             raw_out = str(getattr(result, "tool_output", "") or "")
-            cap = obs_cmd_cap if tool_name == "run_command" else 400
-            if tool_name in (
-                "read_file",
-                "list_dir",
-                "grep",
-                "glob_file_search",
-                "search_code",
-                "semantic_search",
-            ):
-                cap = max(cap, 400)
-            out = raw_out.replace("\n", " ")[:cap]
-            lines.append(f"- {tool_name}: {ok} — {out}")
             path = ""
             if isinstance(arguments, dict):
                 path = str(arguments.get("path") or "")
+            if tool_name == "read_file":
+                from backend.services.tool_output_focus import read_file_observation_line
+
+                lines.append(
+                    f"- read_file: {ok} — {read_file_observation_line(path, raw_out)}"
+                )
+            else:
+                cap = obs_cmd_cap if tool_name == "run_command" else 400
+                if tool_name in (
+                    "list_dir",
+                    "grep",
+                    "glob_file_search",
+                    "search_code",
+                    "semantic_search",
+                ):
+                    cap = max(cap, 400)
+                out = raw_out.replace("\n", " ")[:cap]
+                lines.append(f"- {tool_name}: {ok} — {out}")
             if path:
                 files_touched.append(path)
             # Fold former per-tool system nudges into this one block.
@@ -547,6 +553,18 @@ class ScrumAgent:
                 dep = _manifest_read_observation_hint(path_lower, task)
                 if dep:
                     hints.append(f"read_file ok for '{path}'.{dep}")
+                elif state.ACTIVE_SPRINT_AGENT == "Product Owner":
+                    lane = get_task_lane(state.ACTIVE_SPRINT_TASK_ID or "") if state.ACTIVE_SPRINT_TASK_ID else ""
+                    if lane == "Needs PO":
+                        hints.append(
+                            f"read_file ok for '{path}' — content is in the tool message above; "
+                            "do NOT read again. Reply with clarification JSON + update_board → In Progress."
+                        )
+                    else:
+                        hints.append(
+                            f"read_file ok for '{path}' — use output above; "
+                            "call update_board or add_backlog_tasks next."
+                        )
                 else:
                     hints.append(
                         f"read_file ok for '{path}' — apply_patch next with verbatim old_text."
@@ -597,7 +615,11 @@ class ScrumAgent:
     ) -> None:
         from backend.services.llm_context import truncate_tool_output_for_llm
 
-        llm_output = truncate_tool_output_for_llm(tool_name, tool_output)
+        llm_output = truncate_tool_output_for_llm(
+            tool_name,
+            tool_output,
+            path=str(arguments.get("path") or "") if tool_name == "read_file" else None,
+        )
         messages.append(
             {
                 "role": "tool",
@@ -608,6 +630,32 @@ class ScrumAgent:
         # When observation summaries are on, nudges live in === OBSERVATION === only.
         ws = get_workflow_settings()
         if ws.get("enableObservationSummaries", True):
+            if success and tool_name == "read_file":
+                path = str(arguments.get("path") or "?")
+                if state.ACTIVE_SPRINT_AGENT == "Product Owner":
+                    lane = get_task_lane(state.ACTIVE_SPRINT_TASK_ID or "") if state.ACTIVE_SPRINT_TASK_ID else ""
+                    task = find_task_by_id(state.ACTIVE_SPRINT_TASK_ID or "") if state.ACTIVE_SPRINT_TASK_ID else None
+                    if lane == "Needs PO":
+                        messages.append(
+                            {
+                                "role": "system",
+                                "content": (
+                                    f"read_file('{path}') is complete — full content in the tool message above; "
+                                    "summary in === OBSERVATION === below. Do not read this path again. "
+                                    "Produce clarification JSON, then update_board → In Progress."
+                                ),
+                            }
+                        )
+                    else:
+                        from backend.services.tool_output_focus import is_dependency_manifest_path
+
+                        if is_dependency_manifest_path(path.replace("\\", "/")):
+                            messages.append(
+                                {
+                                    "role": "system",
+                                    "content": _read_file_followup_system_message(path, task=task),
+                                }
+                            )
             return
         if duplicate_skip:
             messages.append(

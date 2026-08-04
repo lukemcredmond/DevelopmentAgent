@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-from typing import Any, Dict, List, MutableSequence, Sequence
+from typing import Any, Dict, List, MutableSequence, Optional, Sequence
 
 from backend.services.workflow_settings import get_workflow_settings
 
@@ -36,10 +36,24 @@ def estimate_messages_chars(messages: Sequence[Dict[str, Any]]) -> int:
     return total
 
 
-def truncate_tool_output_for_llm(tool_name: str, tool_output: str) -> str:
+def truncate_tool_output_for_llm(tool_name: str, tool_output: str, *, path: Optional[str] = None) -> str:
     """Shrink tool output before appending to the LLM conversation."""
     cap = max_tool_output_chars_for_llm()
     text = str(tool_output or "")
+
+    if tool_name == "read_file" and path:
+        from backend import state
+        from backend.agents.task_context import get_task_lane
+        from backend.services.tool_output_focus import format_read_file_for_llm
+
+        task_lane = get_task_lane(state.ACTIVE_SPRINT_TASK_ID or "") if state.ACTIVE_SPRINT_TASK_ID else ""
+        text = format_read_file_for_llm(
+            path,
+            text,
+            agent_role=state.ACTIVE_SPRINT_AGENT,
+            task_lane=task_lane,
+        )
+
     if len(text) <= cap:
         return text
 
