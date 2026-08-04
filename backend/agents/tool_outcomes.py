@@ -361,6 +361,13 @@ def is_tool_failure(name: str, output: str) -> bool:
         return True
     if name == "read_file" and "not found" in lower:
         return True
+    if name == "web_search" and (
+        lower.startswith("error:")
+        or "no web results" in lower
+        or "could not parse results" in lower
+        or "web search failed" in lower
+    ):
+        return True
     if name in ("list_dir", "grep") and "not a directory" in lower:
         return True
     return False

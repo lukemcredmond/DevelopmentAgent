@@ -2127,16 +2127,19 @@ def test_web_search_mocked(monkeypatch):
 
     class FakeResp:
         text = (
-            '<a class="result__a">Example</a>'
+            '<a class="result__a" href="https://example.com">Example</a>'
             '<div class="result__snippet">Async patterns in Python</div>'
         )
 
         def raise_for_status(self):
             return None
 
-    monkeypatch.setattr(ws_mod.requests, "get", lambda *a, **k: FakeResp())
+    fake = FakeResp()
+    monkeypatch.setattr(ws_mod.requests, "get", lambda *a, **k: fake)
+    monkeypatch.setattr(ws_mod.requests, "post", lambda *a, **k: fake)
     result = ws_mod.web_search("python asyncio", max_results=3)
     assert "Example" in result or "Async" in result
+    assert result.startswith("Web search")
 
 
 def test_autonomous_mode_needs_user_cap():
