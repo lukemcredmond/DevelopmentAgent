@@ -44,6 +44,87 @@ ChatMessage = Union[Mapping[str, Any], Message]
 SAME_ARGS_FAILURE_LIMIT = 3
 PATH_TOOL_SAME_ARGS_FAILURE_LIMIT = 2
 PATH_TOOL_NAMES = frozenset({"read_file", "list_dir", "grep", "glob_file_search", "apply_patch", "write_file"})
+
+
+def _task_ac_description_text(task: Optional[Dict[str, Any]]) -> str:
+    if not task:
+        return ""
+    normalize_task(task)
+    parts = [str(task.get("title") or ""), str(task.get("description") or "")]
+    for ac in task.get("acceptanceCriteria") or []:
+        parts.append(str(ac))
+    return " ".join(parts).lower()
+
+
+def _task_suggests_dependency_verify_only(task: Optional[Dict[str, Any]]) -> bool:
+    """True when AC looks like check/verify dependency, not add/update."""
+    text = _task_ac_description_text(task)
+    if not text:
+        return False
+    verify = (
+        "verify",
+        "confirm",
+        "check",
+        "installed",
+        "present",
+        "exists",
+        "already",
+        "declared",
+        "listed",
+        "contains",
+        "includes",
+        "version",
+    )
+    edit = (
+        "add ",
+        "install",
+        "update",
+        "upgrade",
+        "include",
+        "pin ",
+        "bump",
+        "ensure dependency",
+        "add dependency",
+    )
+    has_verify = any(m in text for m in verify)
+    has_edit = any(m in text for m in edit)
+    return has_verify and not has_edit
+
+
+def _read_file_followup_system_message(
+    path: str,
+    *,
+    task: Optional[Dict[str, Any]] = None,
+) -> str:
+    path_lower = path.lower().replace("\\", "/")
+    is_manifest = path_lower.endswith("pubspec.yaml") or path_lower.endswith("package.json")
+    if is_manifest and _task_suggests_dependency_verify_only(task):
+        return (
+            f"read_file succeeded for '{path}'. Use the tool message above to answer the AC "
+            "(find package names/versions such as firebase_auth). "
+            "Do not apply_patch unless the AC requires changing dependencies — "
+            "then update_board or run grep if you still need a smaller snippet."
+        )
+    dep_hint = ""
+    if is_manifest:
+        dep_hint = (
+            " This task requires dependency updates — call apply_patch now to add "
+            "the required plugins/dependencies. Do not respond with text."
+        )
+    return (
+        f"read_file succeeded for '{path}'. Use apply_patch on this path next — "
+        "copy old_text verbatim from the read_file output above. "
+        "Do not stop until edits are written."
+        f"{dep_hint}"
+    )
+
+
+def _manifest_read_observation_hint(path_lower: str, task: Optional[Dict[str, Any]]) -> str:
+    if not (path_lower.endswith("pubspec.yaml") or path_lower.endswith("package.json")):
+        return ""
+    if _task_suggests_dependency_verify_only(task):
+        return " Dependency manifest — answer AC from tool output; patch only if AC requires edits."
+    return " Dependency file — apply_patch required next."
 SAME_ARGS_SUCCESS_LIMIT = 3  # early-stop after repeated identical successes
 _FAILURE_LOCK = threading.Lock()
 
@@ -357,12 +438,14 @@ class ScrumAgent:
                 hints.append(hint)
             elif tool_name == "read_file" and path:
                 path_lower = path.lower().replace("\\", "/")
-                dep = ""
-                if path_lower.endswith("pubspec.yaml") or path_lower.endswith("package.json"):
-                    dep = " Dependency file — apply_patch required next."
-                hints.append(
-                    f"read_file ok for '{path}' — apply_patch next with verbatim old_text.{dep}"
-                )
+                task = find_task_by_id(state.ACTIVE_SPRINT_TASK_ID or "") if state.ACTIVE_SPRINT_TASK_ID else None
+                dep = _manifest_read_observation_hint(path_lower, task)
+                if dep:
+                    hints.append(f"read_file ok for '{path}'.{dep}")
+                else:
+                    hints.append(
+                        f"read_file ok for '{path}' — apply_patch next with verbatim old_text."
+                    )
             elif tool_name == "run_command":
                 from backend.agents.tool_outcomes import parse_run_command_exit
                 from backend.services.diagnostics_parser import parse_command_diagnostics
@@ -452,22 +535,11 @@ class ScrumAgent:
             )
         elif tool_name == "read_file":
             path = str(arguments.get("path") or "?")
-            path_lower = path.lower().replace("\\", "/")
-            dep_hint = ""
-            if path_lower.endswith("pubspec.yaml") or path_lower.endswith("package.json"):
-                dep_hint = (
-                    " This task requires dependency updates — call apply_patch now to add "
-                    "the required plugins/dependencies. Do not respond with text."
-                )
+            task = find_task_by_id(state.ACTIVE_SPRINT_TASK_ID or "") if state.ACTIVE_SPRINT_TASK_ID else None
             messages.append(
                 {
                     "role": "system",
-                    "content": (
-                        f"read_file succeeded for '{path}'. Use apply_patch on this path next — "
-                        "copy old_text verbatim from the read_file output above. "
-                        "Do not stop until edits are written."
-                        f"{dep_hint}"
-                    ),
+                    "content": _read_file_followup_system_message(path, task=task),
                 }
             )
         elif tool_name == "run_command":

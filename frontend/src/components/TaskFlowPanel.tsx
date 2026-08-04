@@ -114,6 +114,12 @@ function FlowNode({
           {isLlm && (node.requestMessages?.length ?? 0) > 0 && (
             <div>
               <div className="text-[9px] uppercase text-cat-overlay mb-1">Prompt to model</div>
+              <p className="text-[9px] text-cat-overlay mb-1 leading-relaxed">
+                Snapshot at the start of this LLM call. After the prior turn&apos;s tools run, their
+                output appears here as{' '}
+                <span className="font-mono">[tool]</span> messages (scroll to the bottom). The
+                separate Tool node between LLM turns shows the full file output too.
+              </p>
               <pre className="text-[10px] text-cat-subtext whitespace-pre-wrap max-h-64 overflow-y-auto bg-black/30 rounded p-2">
                 {(node.requestMessages || [])
                   .map((m) =>
