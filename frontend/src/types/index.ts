@@ -547,6 +547,7 @@ export interface WorkflowSettings {
   enableObservationSummaries?: boolean
   enableAgentStepRecap?: boolean
   enableEpisodeSummary?: boolean
+  enableMessageHistoryPrune?: boolean
   enableStepLessonMemory?: boolean
   enableLlmContextCompress?: boolean
   contextCompressMinChars?: number
@@ -1188,6 +1189,7 @@ export interface WorkflowSettingsPayload {
   enableObservationSummaries?: boolean
   enableAgentStepRecap?: boolean
   enableEpisodeSummary?: boolean
+  enableMessageHistoryPrune?: boolean
   enableStepLessonMemory?: boolean
   enableLlmContextCompress?: boolean
   contextCompressMinChars?: number
@@ -1526,6 +1528,7 @@ export const DEFAULT_WORKFLOW_SETTINGS: WorkflowSettings = {
   enableObservationSummaries: true,
   enableAgentStepRecap: true,
   enableEpisodeSummary: true,
+  enableMessageHistoryPrune: true,
   enableStepLessonMemory: true,
   enableLlmContextCompress: false,
   contextCompressMinChars: 8000,

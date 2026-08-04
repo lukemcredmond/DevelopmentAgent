@@ -65,6 +65,27 @@ def test_recover_rejects_unknown_tool():
     assert calls == []
 
 
+def test_recover_run_test_bold_json_fence():
+    text = "**run_test**\n```json\n{}\n```"
+    calls = recover_tool_calls_from_content(text, {"run_test", "read_file"})
+    assert len(calls) == 1
+    assert calls[0].function.name == "run_test"
+    assert calls[0].function.arguments == {}
+
+
+def test_recover_run_test_bold_adjacent_fence():
+    text = "**run_test**```json\n{}\n```"
+    calls = recover_tool_calls_from_content(text, {"run_test"})
+    assert len(calls) == 1
+    assert calls[0].function.name == "run_test"
+
+
+def test_recover_prose_then_bold_tool():
+    text = "I'll verify now.\n**run_test**\n```json\n{}\n```"
+    calls = recover_tool_calls_from_content(text, {"run_test"})
+    assert len(calls) == 1
+
+
 def test_apply_recovery_produces_valid_ollama_message():
     from ollama._types import Message as OllamaMessage
 

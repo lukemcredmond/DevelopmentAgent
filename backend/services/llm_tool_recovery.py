@@ -148,6 +148,55 @@ def _shorthand_single_tool(obj: dict, allowed_tool_names: Set[str]) -> Optional[
     return None
 
 
+def _recover_markdown_tool_fences(text: str, allowed: Set[str]) -> List[RecoveredToolCall]:
+    """**tool_name** or tool line + ```json fence (common SLM markdown tool attempts)."""
+    calls: List[RecoveredToolCall] = []
+    if not text or not allowed:
+        return calls
+
+    bold_fence = re.compile(
+        r"\*\*([a-zA-Z_][a-zA-Z0-9_]*)\*\*\s*```(?:json)?\s*([\s\S]*?)```",
+        re.IGNORECASE,
+    )
+    for m in bold_fence.finditer(text):
+        name = m.group(1)
+        if name not in allowed:
+            continue
+        call = _call_from_name_args(name, m.group(2).strip() or "{}", allowed)
+        if call:
+            calls.append(call)
+
+    line_fence = re.compile(
+        r"(?:^|\n)\s*([a-zA-Z_][a-zA-Z0-9_]*)\s*\n\s*```(?:json)?\s*([\s\S]*?)```",
+        re.MULTILINE,
+    )
+    for m in line_fence.finditer(text):
+        name = m.group(1)
+        if name not in allowed:
+            continue
+        if any(c.function.name == name for c in calls):
+            continue
+        call = _call_from_name_args(name, m.group(2).strip() or "{}", allowed)
+        if call:
+            calls.append(call)
+
+    inline_backtick = re.compile(
+        r"\*\*([a-zA-Z_][a-zA-Z0-9_]*)\*\*\s*`(\{[\s\S]*?\})`",
+        re.IGNORECASE,
+    )
+    for m in inline_backtick.finditer(text):
+        name = m.group(1)
+        if name not in allowed:
+            continue
+        if any(c.function.name == name for c in calls):
+            continue
+        call = _call_from_name_args(name, m.group(2), allowed)
+        if call:
+            calls.append(call)
+
+    return calls[:MAX_RECOVERED_TOOL_CALLS]
+
+
 def recover_tool_calls_from_content(
     content: str,
     allowed_tool_names: Iterable[str],
@@ -157,7 +206,12 @@ def recover_tool_calls_from_content(
     if not allowed:
         return []
 
-    text = unwrap_llm_text(content or "")
+    raw_text = content or ""
+    markdown_calls = _recover_markdown_tool_fences(raw_text, allowed)
+    if markdown_calls:
+        return markdown_calls
+
+    text = unwrap_llm_text(raw_text)
     if not text:
         return []
 

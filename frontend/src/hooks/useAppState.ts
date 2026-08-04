@@ -449,6 +449,8 @@ export function useAppState() {
   const sprintProgressFlushTimerRef = useRef<number | null>(null)
   const agentRunPendingRef = useRef<AgentRunState | null | undefined>(undefined)
   const agentRunFlushTimerRef = useRef<number | null>(null)
+  const sseStatePendingRef = useRef<AppState | null>(null)
+  const sseStateFlushTimerRef = useRef<number | null>(null)
   const [sseLive, setSseLive] = useState(true)
   const [lastToolEventAt, setLastToolEventAt] = useState<string | null>(null)
 
@@ -862,6 +864,40 @@ export function useAppState() {
   const enqueueAgentRunRef = useRef(enqueueAgentRun)
   enqueueAgentRunRef.current = enqueueAgentRun
 
+  const applySseStateSnapshot = useCallback((data: AppState) => {
+    const board = trimBoardHistory(data.board)
+    setState((prev) => {
+      const incomingFiles = data.files
+      const keepFiles =
+        !incomingFiles ||
+        (typeof incomingFiles === 'object' && Object.keys(incomingFiles).length === 0)
+      return {
+        ...data,
+        board,
+        files: keepFiles ? prev.files : incomingFiles,
+        filePaths: data.filePaths?.length ? data.filePaths : prev.filePaths,
+        workflowSettings: mergePendingWorkflowSettings(
+          data.workflowSettings ?? prev.workflowSettings,
+        ),
+      }
+    })
+    if (data.projectPlanOutline != null) {
+      setPlanOutline(String(data.projectPlanOutline))
+    }
+    syncActivityFromBoardRef.current(board)
+  }, [])
+
+  const flushSseStateBatch = useCallback(() => {
+    sseStateFlushTimerRef.current = null
+    const data = sseStatePendingRef.current
+    sseStatePendingRef.current = null
+    if (!data) return
+    applySseStateSnapshot(data)
+  }, [applySseStateSnapshot])
+
+  const flushSseStateBatchRef = useRef(flushSseStateBatch)
+  flushSseStateBatchRef.current = flushSseStateBatch
+
   useEffect(() => {
     void refresh()
     void refreshToolHistory()
@@ -872,19 +908,12 @@ export function useAppState() {
     const source = subscribeEvents((event) => {
       setSseLive(true)
       if (event.type === 'state' && event.data) {
-        const data = event.data as AppState
-        const board = trimBoardHistory(data.board)
-        setState((prev) => ({
-          ...data,
-          board,
-          workflowSettings: mergePendingWorkflowSettings(
-            data.workflowSettings ?? prev.workflowSettings,
-          ),
-        }))
-        if (data.projectPlanOutline != null) {
-          setPlanOutline(String(data.projectPlanOutline))
+        sseStatePendingRef.current = event.data as AppState
+        if (sseStateFlushTimerRef.current == null) {
+          sseStateFlushTimerRef.current = window.setTimeout(() => {
+            flushSseStateBatchRef.current()
+          }, 120)
         }
-        syncActivityFromBoardRef.current(board)
       } else if (event.type === 'log' && event.data) {
         appendLogRef.current(event.data as SystemLog)
       } else if (event.type === 'board') {
@@ -1031,6 +1060,10 @@ export function useAppState() {
       if (agentRunFlushTimerRef.current) {
         window.clearTimeout(agentRunFlushTimerRef.current)
         agentRunFlushTimerRef.current = null
+      }
+      if (sseStateFlushTimerRef.current) {
+        window.clearTimeout(sseStateFlushTimerRef.current)
+        sseStateFlushTimerRef.current = null
       }
     }
   }, [])

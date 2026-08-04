@@ -302,6 +302,15 @@ export default function WorkflowPanel({
             className="w-full bg-cat-base border border-cat-surface1 rounded p-1 text-white"
           />
         </label>
+        <label className="flex items-center gap-2 text-[11px] text-cat-subtext cursor-pointer">
+          <input
+            type="checkbox"
+            checked={settings.enableMessageHistoryPrune ?? true}
+            onChange={(e) => onSettingsChange({ enableMessageHistoryPrune: e.target.checked })}
+          />
+          Enable message history prune
+          <SettingHint hint="When chat history exceeds the prune threshold, drop oldest tool messages before each LLM call." />
+        </label>
         <label className="text-[11px] text-cat-subtext block">
           <span className="text-[10px] text-cat-overlay inline-flex items-center">
             Message prune threshold (% of num_ctx)

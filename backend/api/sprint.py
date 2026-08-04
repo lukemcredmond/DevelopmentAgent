@@ -132,7 +132,7 @@ def update_workflow_settings(payload: WorkflowSettingsPayload):
         schedule_discord_bot_reload()
     except Exception:
         pass
-    return build_state_response()
+    return build_state_response(include_files=False)
 
 
 @router.get("/api/workflow/settings")

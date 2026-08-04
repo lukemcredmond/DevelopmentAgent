@@ -90,6 +90,7 @@ import CommandPalette, {
 import KanbanToggleBar, { readKanbanOpen, writeKanbanOpen } from './components/KanbanToggleBar'
 import ToolsPanel from './components/ToolsPanel'
 import MemoryPanel from './components/MemoryPanel'
+import EditorPanel from './components/EditorPanel'
 import { useAppState, useAutoSprint } from './hooks/useAppState'
 import { useTheme } from './hooks/useTheme'
 import type { AgentId, AppState, BoardLane, BriefCategory, ChatMessageRecord, PendingToolApproval, PendingToolRequest, SkillSuggestion, Task, WorkflowSettings } from './types'
@@ -99,10 +100,11 @@ import { buildTaskRunInfo } from './utils/taskRunInfo'
 import { chatAgentForLane } from './utils/chatAgentForLane'
 import {
   queuePendingWorkflowSettings,
-  requeuePendingWorkflowPayload,
+  mergePendingWorkflowSettings,
+  markWorkflowSaveFailed,
+  markWorkflowSaveSucceeded,
   setWorkflowSaveTimerActive,
-  takePendingWorkflowPayload,
-  peekPendingWorkflowSettings,
+  snapshotPendingWorkflowPayloadForSave,
 } from './workflowSettingsPending'
 
 type BottomTab =
@@ -918,24 +920,23 @@ export default function App() {
       workflowSaveTimerRef.current = setTimeout(() => {
         workflowSaveTimerRef.current = null
         setWorkflowSaveTimerActive(false)
-        const payload = takePendingWorkflowPayload()
+        const payload = snapshotPendingWorkflowPayloadForSave()
         void updateWorkflowSettings(payload)
           .then((data) => {
+            markWorkflowSaveSucceeded()
             setWorkflowSettingsSaveError(null)
             setWorkflowSettingsSaving(false)
             setState((prev) => ({
               ...prev,
-              workflowSettings: {
-                ...data.workflowSettings,
-                ...peekPendingWorkflowSettings(),
-              },
-              activeLanes: data.activeLanes,
-              notifications: data.notifications,
-              board: data.board,
+              workflowSettings: mergePendingWorkflowSettings(
+                data.workflowSettings ?? prev.workflowSettings,
+              ) as WorkflowSettings,
+              activeLanes: data.activeLanes ?? prev.activeLanes,
+              notifications: data.notifications ?? prev.notifications,
             }))
           })
           .catch(() => {
-            requeuePendingWorkflowPayload(payload)
+            markWorkflowSaveFailed(payload)
             setWorkflowSettingsSaving(false)
             setWorkflowSettingsSaveError('Could not save workflow settings. Will retry when you change a setting.')
           })
