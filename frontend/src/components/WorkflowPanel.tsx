@@ -751,6 +751,17 @@ export default function WorkflowPanel({
               <option value="local_slm">local_slm (lean — all roles)</option>
             </select>
           </label>
+          {(settings.promptProfile ?? 'full') === 'local_slm' && (
+            <label className="flex items-center gap-2 text-[11px] text-cat-subtext cursor-pointer">
+              <input
+                type="checkbox"
+                checked={settings.localSlmSprintPreload ?? true}
+                onChange={(e) => onSettingsChange({ localSlmSprintPreload: e.target.checked })}
+              />
+              Sprint retrieval preload (Qdrant / files / packer / memory)
+              <SettingHint hint="Bounded inject for small models. Uncheck if steps hit context OOM." />
+            </label>
+          )}
         </div>
         <AgentPromptsPanel settings={settings} onSettingsChange={onSettingsChange} />
         </>

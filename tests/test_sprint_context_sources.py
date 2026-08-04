@@ -7,7 +7,7 @@ def test_build_context_sources_snapshot_fields():
     snap = build_context_sources_snapshot(
         task_id="T-1",
         agent_role="Developer",
-        local_slm=False,
+        local_slm=True,
         semantic_paths=["a.py", "b.py"],
         file_paths=["a.py"],
         graph_used=True,
@@ -15,6 +15,7 @@ def test_build_context_sources_snapshot_fields():
         codebase_pack_chars=9000,
     )
     assert snap["taskId"] == "T-1"
+    assert snap["localSlmProfile"] is True
     assert snap["semanticUsed"] is True
     assert snap["semanticChunkCount"] == 2
     assert snap["contextPacker"] == "repomix"

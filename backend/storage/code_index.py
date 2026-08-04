@@ -613,6 +613,8 @@ def format_semantic_search_results(query: str, limit: int = 8) -> str:
 def build_semantic_sprint_context(
     task: Dict[str, Any],
     max_chars: int = 4000,
+    *,
+    top_k_override: Optional[int] = None,
 ) -> tuple[str, List[str]]:
     """Inject top semantic index chunks for a sprint task when index is available."""
     from backend.services.workflow_settings import get_workflow_settings
@@ -632,7 +634,10 @@ def build_semantic_sprint_context(
     if not query:
         return "", []
 
-    top_k = max(1, int(ws.get("semanticSprintTopK") or 5))
+    if top_k_override is not None:
+        top_k = max(1, int(top_k_override))
+    else:
+        top_k = max(1, int(ws.get("semanticSprintTopK") or 5))
     min_score = float(ws.get("semanticMinScore") if ws.get("semanticMinScore") is not None else 0.35)
     raw = engine.search(query, limit=max(top_k * 3, 8))
     # Dense cosine scores are typically 0–1; RRF fused scores are small (~0.03).

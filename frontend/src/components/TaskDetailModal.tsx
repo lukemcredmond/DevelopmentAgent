@@ -206,21 +206,19 @@ interface TaskDetailModalProps {
 
 function formatContextSourcesLine(cs: LastSprintContextSources): string {
   const parts: string[] = []
-  if (cs.localSlmProfile) parts.push('profile=local_slm (no semantic/packer preload)')
-  else {
-    parts.push(
-      cs.semanticUsed
-        ? `semantic=${cs.semanticChunkCount ?? 0} chunk(s)`
-        : 'semantic=off',
-    )
-    parts.push(`files=${cs.filePreloadCount ?? 0}`)
-    if (cs.graphUsed) parts.push('graph=on')
-    const pack = (cs.contextPacker || 'off').toLowerCase()
-    if (pack !== 'off') {
-      parts.push(`packer=${pack} (${cs.contextPackerChars ?? 0} chars)`)
-    } else {
-      parts.push('packer=off')
-    }
+  if (cs.localSlmProfile) parts.push('profile=local_slm (bounded preload)')
+  parts.push(
+    cs.semanticUsed
+      ? `semantic=${cs.semanticChunkCount ?? 0} chunk(s)`
+      : 'semantic=off',
+  )
+  parts.push(`files=${cs.filePreloadCount ?? 0}`)
+  if (cs.graphUsed) parts.push('graph=on')
+  const pack = (cs.contextPacker || 'off').toLowerCase()
+  if (pack !== 'off') {
+    parts.push(`packer=${pack} (${cs.contextPackerChars ?? 0} chars)`)
+  } else {
+    parts.push('packer=off')
   }
   parts.push(`qdrantIndex=${cs.qdrantIndexChunks ?? 0} chunks`)
   if (cs.agentRole) parts.push(`role=${cs.agentRole}`)

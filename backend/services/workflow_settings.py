@@ -102,6 +102,7 @@ DEFAULT_WORKFLOW_SETTINGS: Dict[str, Any] = {
     "maxToolOutputCharsForLlm": 32000,
     "messagePruneThresholdPct": 60,
     "promptProfile": "full",
+    "localSlmSprintPreload": True,
     "enableSemanticSprintContext": True,
     "enableHybridSearch": True,
     "semanticMinScore": 0.35,

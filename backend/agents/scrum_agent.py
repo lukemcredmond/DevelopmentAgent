@@ -485,7 +485,10 @@ class ScrumAgent:
                 ):
                     prefer = ["failure", "fix_pattern"]
         related_memories = []
-        from backend.services.prompt_profile import is_local_slm_profile
+        from backend.services.prompt_profile import (
+            is_local_slm_profile,
+            local_slm_sprint_preload_enabled,
+        )
 
         if not is_local_slm_profile():
             related_memories = self.memory.search(
@@ -496,6 +499,26 @@ class ScrumAgent:
                 include_all_agents=True,
                 prefer_categories=prefer,
             )
+        elif local_slm_sprint_preload_enabled():
+            from backend.services.prompt_budget import LOCAL_SLM_MEMORY_CHARS
+
+            related_memories = self.memory.search(
+                self.role,
+                query,
+                limit=2,
+                project_id=project_id,
+                include_all_agents=True,
+                prefer_categories=prefer,
+            )
+            trimmed = []
+            for m in related_memories:
+                if not isinstance(m, dict):
+                    continue
+                content = str(m.get("content") or "")
+                if len(content) > LOCAL_SLM_MEMORY_CHARS:
+                    content = content[: LOCAL_SLM_MEMORY_CHARS - 3] + "..."
+                trimmed.append({**m, "content": content})
+            related_memories = trimmed
         self._last_memories_used = related_memories
         memory_context = ""
         if related_memories:

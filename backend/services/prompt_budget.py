@@ -140,3 +140,46 @@ def workspace_file_list_cap(num_ctx: int) -> int:
 def semantic_sprint_context_max_chars(num_ctx: int) -> int:
     """Budget for semantic index chunks in sprint pre-load."""
     return min(6000, max(1500, sprint_file_context_max_chars(num_ctx) // 2))
+
+
+LOCAL_SLM_TOTAL_PRELOAD_CAP = 6000
+LOCAL_SLM_SEMANTIC_CAP = 2500
+LOCAL_SLM_GRAPH_CAP = 1200
+LOCAL_SLM_PACKER_CAP = 6000
+LOCAL_SLM_MEMORY_CHARS = 400
+
+
+def sprint_preload_budgets(num_ctx: int, *, local_slm: bool) -> Dict[str, int]:
+    """Char budgets for semantic / graph / file sprint inject."""
+    total_full = sprint_file_context_max_chars(num_ctx)
+    semantic_full = semantic_sprint_context_max_chars(num_ctx)
+    if not local_slm:
+        graph_max = min(2500, semantic_full // 2)
+        return {
+            "total": total_full,
+            "semantic": semantic_full,
+            "graph": graph_max,
+            "packer": 14000,
+        }
+    total = min(LOCAL_SLM_TOTAL_PRELOAD_CAP, max(1500, total_full // 2))
+    semantic = min(LOCAL_SLM_SEMANTIC_CAP, max(800, semantic_full // 2))
+    graph = min(LOCAL_SLM_GRAPH_CAP, semantic // 2)
+    return {
+        "total": total,
+        "semantic": semantic,
+        "graph": graph,
+        "packer": LOCAL_SLM_PACKER_CAP,
+    }
+
+
+def codebase_pack_max_chars_for_prompt(*, local_slm: bool, settings: Optional[Dict[str, Any]] = None) -> int:
+    try:
+        from backend.services.workflow_settings import get_workflow_settings
+
+        ws = settings if settings is not None else get_workflow_settings()
+    except Exception:
+        ws = settings or {}
+    packer_ws = int(ws.get("contextPackerMaxChars") or 12000)
+    if local_slm:
+        return min(packer_ws, LOCAL_SLM_PACKER_CAP, sprint_preload_budgets(8192, local_slm=True)["packer"])
+    return min(14000, packer_ws)

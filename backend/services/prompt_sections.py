@@ -261,9 +261,13 @@ def build_section(
         return _section_workspace_files(limits)
     if section_id == "codebase_pack":
         if codebase_pack and codebase_pack.strip():
+            from backend.services.prompt_budget import codebase_pack_max_chars_for_prompt
+            from backend.services.prompt_profile import is_local_slm_profile as _local_slm
+
+            pack_cap = codebase_pack_max_chars_for_prompt(local_slm=_local_slm())
             return (
                 "=== CODEBASE PACK (external CLI summary — prefer for navigation) ===\n"
-                + _truncate_section(codebase_pack.strip(), 14000)
+                + _truncate_section(codebase_pack.strip(), pack_cap)
             )
         return ""
     if section_id == "lane_instructions":

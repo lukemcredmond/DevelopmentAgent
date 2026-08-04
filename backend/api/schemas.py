@@ -235,6 +235,7 @@ class WorkflowSettingsPayload(BaseModel):
     maxToolOutputCharsForLlm: Optional[int] = None
     messagePruneThresholdPct: Optional[int] = None
     promptProfile: Optional[str] = None
+    localSlmSprintPreload: Optional[bool] = None
     enableSemanticSprintContext: Optional[bool] = None
     enableHybridSearch: Optional[bool] = None
     semanticMinScore: Optional[float] = None

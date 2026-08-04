@@ -563,6 +563,7 @@ export interface WorkflowSettings {
   maxToolOutputCharsForLlm?: number
   messagePruneThresholdPct?: number
   promptProfile?: 'full' | 'local_slm' | string
+  localSlmSprintPreload?: boolean
   enableSemanticSprintContext?: boolean
   enableHybridSearch?: boolean
   semanticMinScore?: number
@@ -1209,6 +1210,7 @@ export interface WorkflowSettingsPayload {
   maxToolOutputCharsForLlm?: number
   messagePruneThresholdPct?: number
   promptProfile?: 'full' | 'local_slm' | string
+  localSlmSprintPreload?: boolean
   enableSemanticSprintContext?: boolean
   enableHybridSearch?: boolean
   semanticMinScore?: number
@@ -1551,6 +1553,7 @@ export const DEFAULT_WORKFLOW_SETTINGS: WorkflowSettings = {
   maxToolOutputCharsForLlm: 32000,
   messagePruneThresholdPct: 60,
   promptProfile: 'full',
+  localSlmSprintPreload: true,
   enableSemanticSprintContext: true,
   enableHybridSearch: true,
   semanticMinScore: 0.35,

@@ -85,6 +85,17 @@ def is_local_slm_profile(ws: Optional[Dict[str, Any]] = None) -> bool:
     return get_prompt_profile(ws) == PROMPT_PROFILE_LOCAL_SLM
 
 
+def local_slm_sprint_preload_enabled(ws: Optional[Dict[str, Any]] = None) -> bool:
+    """Full profile always preloads; local_slm respects localSlmSprintPreload (default on)."""
+    if ws is None:
+        from backend.services.workflow_settings import get_workflow_settings
+
+        ws = get_workflow_settings()
+    if not is_local_slm_profile(ws):
+        return True
+    return bool(ws.get("localSlmSprintPreload", True))
+
+
 def po_planning_guidance_block() -> str:
     if is_local_slm_profile():
         return PO_LOCAL_SLM_GUIDANCE + "\n"

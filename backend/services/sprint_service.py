@@ -1292,28 +1292,37 @@ def _inject_sprint_context(
     """Build sprint prompt with pre-loaded file contents (no Tools log row per step)."""
     from backend.services.prompt_budget import (
         initial_ollama_num_ctx,
-        semantic_sprint_context_max_chars,
-        sprint_file_context_max_chars,
+        sprint_preload_budgets,
+    )
+    from backend.services.prompt_profile import (
+        is_local_slm_profile,
+        local_slm_sections_for_role,
+        local_slm_sprint_preload_enabled,
     )
     from backend.storage.code_index import build_semantic_sprint_context
 
     task_id = active_task["id"]
     normalize_task(active_task)
-    from backend.services.prompt_profile import is_local_slm_profile, local_slm_sections_for_role
     from backend.services.prompt_sections import FocusContext, compose_prompt
 
-    local_slm = is_local_slm_profile()
+    ws = get_workflow_settings()
+    local_slm = is_local_slm_profile(ws)
+    preload = local_slm_sprint_preload_enabled(ws)
     num_ctx = initial_ollama_num_ctx(agent_role)
     semantic_block, sem_paths = "", []
     graph_block = ""
     file_block, file_paths = "", []
     context_block = ""
     graph_used = False
-    if not local_slm:
-        total_budget = sprint_file_context_max_chars(num_ctx)
+    if preload:
+        budgets = sprint_preload_budgets(num_ctx, local_slm=local_slm)
+        top_k_override = None
+        if local_slm:
+            top_k_override = min(max(1, int(ws.get("semanticSprintTopK") or 5)), 2)
         semantic_block, sem_paths = build_semantic_sprint_context(
             active_task,
-            max_chars=semantic_sprint_context_max_chars(num_ctx),
+            max_chars=budgets["semantic"],
+            top_k_override=top_k_override,
         )
         graph_block = ""
         try:
@@ -1322,11 +1331,12 @@ def _inject_sprint_context(
             if graphify_status().get("available") or graphify_status().get("reportExists"):
                 graph_block = build_graphify_sprint_context(
                     active_task,
-                    max_chars=min(2500, semantic_sprint_context_max_chars(num_ctx) // 2),
+                    max_chars=budgets["graph"],
                 )
                 graph_used = bool(graph_block)
         except Exception:
             graph_block = ""
+        total_budget = budgets["total"]
         file_budget = max(1000, total_budget - len(semantic_block) - len(graph_block)) if (semantic_block or graph_block) else total_budget
         file_block, file_paths = build_sprint_file_context(active_task, max_chars=file_budget)
         context_block = "".join(part for part in (semantic_block, graph_block, file_block) if part)
@@ -1367,7 +1377,7 @@ def _inject_sprint_context(
 
     codebase_pack = ""
     pack_mode = "off"
-    if agent_role == "Developer" and not local_slm:
+    if agent_role == "Developer" and preload:
         pack_mode = str(get_workflow_settings().get("contextPacker") or "off").strip().lower()
         if pack_mode not in ("", "off", "none", "false"):
             try:
@@ -1416,13 +1426,16 @@ def _inject_sprint_context(
     use_focus_compose = False
     if local_slm:
         focus = FocusContext(agent_role=agent_role, focus_mode="whole", include_full_spec=False)
+        section_ids = list(local_slm_sections_for_role(agent_role, active_task))
+        if codebase_pack and codebase_pack.strip() and "codebase_pack" not in section_ids:
+            section_ids.append("codebase_pack")
         base = compose_prompt(
             active_task,
             brief,
-            local_slm_sections_for_role(agent_role, active_task),
+            section_ids,
             focus,
             agent_role=agent_role,
-            codebase_pack="",
+            codebase_pack=codebase_pack,
         )
         state.SPRINT_PROMPT_ROTATION_ENABLED = False
         state.SPRINT_PROMPT_ROTATION_BLOCKS = []
