@@ -15,7 +15,7 @@ def test_truncate_tool_output_respects_cap():
     long_text = "x" * 2000
     out = truncate_tool_output_for_llm("grep", long_text)
     assert len(out) <= 520
-    assert "truncated" in out.lower()
+    assert "middle omitted" in out.lower() or "truncated" in out.lower()
 
 
 def test_truncate_run_command_keeps_problems_section():
@@ -52,7 +52,10 @@ def test_prune_messages_drops_old_tools():
     assert after < before
     assert messages[0]["role"] == "system"
     assert messages[1]["role"] == "user"
-    assert any("Context pruned" in str(m.get("content", "")) for m in messages)
+    assert any(
+        "Context pruned" in str(m.get("content", "")) or "EPISODE SUMMARY" in str(m.get("content", ""))
+        for m in messages
+    )
 
 
 def test_chat_options_includes_keep_alive():
@@ -85,5 +88,5 @@ def test_workflow_settings_performance_defaults():
     reset_workflow_settings()
     ws = get_workflow_settings()
     assert ws["ollamaKeepAlive"] == DEFAULT_WORKFLOW_SETTINGS["ollamaKeepAlive"]
-    assert ws["maxToolOutputCharsForLlm"] == 6000
+    assert ws["maxToolOutputCharsForLlm"] == 32000
     assert ws["enableSemanticSprintContext"] is True

@@ -11,8 +11,63 @@ _EPISODE_CAP = 1500
 
 
 def max_tool_output_chars_for_llm() -> int:
+    """Per tool message budget — scales with num_ctx unless user set a low explicit cap."""
     ws = get_workflow_settings()
-    return int(ws.get("maxToolOutputCharsForLlm") or 6000)
+    raw = ws.get("maxToolOutputCharsForLlm")
+    explicit = int(raw if raw not in (None, "") else 32000)
+    if explicit <= 8000:
+        return max(500, explicit)
+    from backend.services.prompt_budget import resolve_ollama_num_ctx
+
+    num_ctx = resolve_ollama_num_ctx()
+    return min(250_000, max(explicit, num_ctx * 6))
+
+
+def prepare_tool_output_parts(
+    tool_name: str,
+    tool_output: str,
+    *,
+    path: Optional[str] = None,
+) -> List[str]:
+    """Format (optional read_file focus) then chunk if extremely large."""
+    from backend.services.tool_output_chunks import chunk_tool_output
+
+    cap = max_tool_output_chars_for_llm()
+    text = str(tool_output or "")
+
+    if tool_name == "read_file" and path:
+        from backend import state
+        from backend.agents.task_context import get_task_lane
+        from backend.services.tool_output_focus import format_read_file_for_llm
+
+        task_lane = get_task_lane(state.ACTIVE_SPRINT_TASK_ID or "") if state.ACTIVE_SPRINT_TASK_ID else ""
+        text = format_read_file_for_llm(
+            path,
+            text,
+            agent_role=state.ACTIVE_SPRINT_AGENT,
+            task_lane=task_lane,
+        )
+
+    if tool_name == "run_command" and "## Problems" in text and len(text) > cap:
+        problems_idx = text.find("## Problems")
+        output_idx = text.find("## Output", problems_idx)
+        if output_idx >= 0:
+            head = text[: output_idx + len("## Output\n")]
+            tail_budget = max(500, cap - len(head) - 80)
+            raw_tail = text[output_idx + len("## Output\n") :]
+            if len(raw_tail) > tail_budget:
+                raw_tail = raw_tail[: tail_budget - 40] + "\n...[command output truncated]\n"
+            return [head + raw_tail]
+
+    return chunk_tool_output(tool_name, text, cap)
+
+
+def truncate_tool_output_for_llm(tool_name: str, tool_output: str, *, path: Optional[str] = None) -> str:
+    """Shrink tool output before appending to the LLM conversation."""
+    parts = prepare_tool_output_parts(tool_name, tool_output, path=path)
+    if len(parts) == 1:
+        return parts[0]
+    return "\n\n".join(parts)
 
 
 def message_prune_threshold_chars(num_ctx: int) -> int:
@@ -36,51 +91,12 @@ def estimate_messages_chars(messages: Sequence[Dict[str, Any]]) -> int:
     return total
 
 
-def truncate_tool_output_for_llm(tool_name: str, tool_output: str, *, path: Optional[str] = None) -> str:
-    """Shrink tool output before appending to the LLM conversation."""
-    cap = max_tool_output_chars_for_llm()
-    text = str(tool_output or "")
-
-    if tool_name == "read_file" and path:
-        from backend import state
-        from backend.agents.task_context import get_task_lane
-        from backend.services.tool_output_focus import format_read_file_for_llm
-
-        task_lane = get_task_lane(state.ACTIVE_SPRINT_TASK_ID or "") if state.ACTIVE_SPRINT_TASK_ID else ""
-        text = format_read_file_for_llm(
-            path,
-            text,
-            agent_role=state.ACTIVE_SPRINT_AGENT,
-            task_lane=task_lane,
-        )
-
-    if len(text) <= cap:
-        return text
-
-    if tool_name == "run_command" and "## Problems" in text:
-        problems_idx = text.find("## Problems")
-        output_idx = text.find("## Output", problems_idx)
-        if output_idx >= 0:
-            head = text[: output_idx + len("## Output\n")]
-            tail_budget = max(500, cap - len(head) - 80)
-            raw_tail = text[output_idx + len("## Output\n") :]
-            if len(raw_tail) > tail_budget:
-                raw_tail = raw_tail[: tail_budget - 40] + "\n...[command output truncated]\n"
-            return head + raw_tail
-
-    if tool_name == "read_file":
-        return (
-            text[: cap - 120]
-            + f"\n...[read_file output truncated at {cap} chars — use start_line/end_line for large files]\n"
-        )
-
-    head_len = cap // 2
-    tail_len = cap - head_len - 50
-    return (
-        text[:head_len]
-        + f"\n...[truncated {len(text) - cap} chars for LLM context budget]\n"
-        + text[-tail_len:]
-    )
+def _index_of_last_assistant(messages: Sequence[Dict[str, Any]]) -> int:
+    for i in range(len(messages) - 1, 1, -1):
+        if str(messages[i].get("role") or "") == "assistant":
+            return i
+    tail_keep = 14
+    return max(2, len(messages) - tail_keep)
 
 
 def _summarize_removed(msg: Dict[str, Any]) -> str:
@@ -122,9 +138,12 @@ def prune_messages_if_needed(messages: MutableSequence[Dict[str, Any]]) -> Mutab
 
     enable_episode = ws.get("enableEpisodeSummary", True)
     preserved_head = 2
+    keep_from = _index_of_last_assistant(messages)
     pruned = 0
     removed_summaries: List[str] = []
     while len(messages) > preserved_head + 1 and estimate_messages_chars(messages) > threshold:
+        if preserved_head >= keep_from:
+            break
         removed = messages.pop(preserved_head)
         pruned += 1
         if enable_episode:
@@ -200,12 +219,21 @@ def fingerprint_llm_messages(messages: Sequence[Dict[str, Any]]) -> str:
         if content.startswith(_BUNDLE_PREFIX):
             parts.append(f"{role}:bundle:{len(content)}:{content[:120]}")
             continue
+        if role == "tool":
+            name = str(msg.get("tool_name") or msg.get("name") or "tool")
+            digest = hashlib.sha256(content.encode("utf-8", errors="replace")).hexdigest()[:16]
+            parts.append(f"tool:{name}:{len(content)}:{digest}")
+            continue
+        if role == "assistant":
+            digest = hashlib.sha256(content.encode("utf-8", errors="replace")).hexdigest()[:16]
+            parts.append(f"assistant:{len(content)}:{digest}")
+            continue
         parts.append(f"{role}:{len(content)}:{content[:200]}")
     blob = json.dumps(parts, ensure_ascii=False)
     return hashlib.sha256(blob.encode("utf-8")).hexdigest()
 
 
-def _tail_tool_summaries(messages: Sequence[Dict[str, Any]], *, max_items: int = 3) -> List[str]:
+def _tail_tool_summaries(messages: Sequence[Dict[str, Any]], *, max_items: int = 6) -> List[str]:
     lines: List[str] = []
     for msg in reversed(messages):
         role = str(msg.get("role") or "")
@@ -214,9 +242,11 @@ def _tail_tool_summaries(messages: Sequence[Dict[str, Any]], *, max_items: int =
             continue
         if role == "tool":
             name = str(msg.get("name") or msg.get("tool_name") or "tool")
-            lines.append(f"- tool {name}: {content[:600]}")
+            cap = max_tool_output_chars_for_llm()
+            preview = content if len(content) <= cap else content[: cap - 40] + "\n...[tail in tool message above]\n"
+            lines.append(f"- tool {name}:\n{preview}")
         elif role == "assistant":
-            lines.append(f"- assistant: {content[:400]}")
+            lines.append(f"- assistant: {content[:2000]}")
         if len(lines) >= max_items:
             break
     return list(reversed(lines))

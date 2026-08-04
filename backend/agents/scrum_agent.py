@@ -613,20 +613,33 @@ class ScrumAgent:
         *,
         duplicate_skip: bool = False,
     ) -> None:
-        from backend.services.llm_context import truncate_tool_output_for_llm
+        from backend.services.llm_context import prepare_tool_output_parts
 
-        llm_output = truncate_tool_output_for_llm(
+        parts = prepare_tool_output_parts(
             tool_name,
             tool_output,
             path=str(arguments.get("path") or "") if tool_name == "read_file" else None,
         )
-        messages.append(
-            {
-                "role": "tool",
-                "tool_name": tool_name,
-                "content": llm_output,
-            }
-        )
+        for idx, llm_output in enumerate(parts):
+            messages.append(
+                {
+                    "role": "tool",
+                    "tool_name": tool_name,
+                    "content": llm_output,
+                }
+            )
+        if len(parts) > 1:
+            messages.append(
+                {
+                    "role": "system",
+                    "content": (
+                        f"Tool '{tool_name}' returned {len(parts)} message part(s) above "
+                        "(large output split like Cursor file chunks). Use all parts — do not re-run "
+                        "the same tool to recover this listing."
+                    ),
+                }
+            )
+        llm_output = parts[0] if parts else str(tool_output or "")
         # When observation summaries are on, nudges live in === OBSERVATION === only.
         ws = get_workflow_settings()
         if ws.get("enableObservationSummaries", True):

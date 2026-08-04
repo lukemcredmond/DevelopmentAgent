@@ -10,7 +10,7 @@ from typing import Any, Dict, List, Optional, Sequence
 from backend import state
 
 MAX_LLM_LOG_ENTRIES = 500
-MAX_MESSAGE_CHARS = 8000
+MAX_MESSAGE_CHARS = 32000
 
 
 def _log_key(project_id: str) -> str:

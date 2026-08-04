@@ -1513,7 +1513,7 @@ export const DEFAULT_WORKFLOW_SETTINGS: WorkflowSettings = {
   ollamaCooldownRetryEnabled: true,
   ollamaCooldownRetrySec: 15,
   ollamaCooldownRetryAttempts: 2,
-  maxToolOutputCharsForLlm: 6000,
+  maxToolOutputCharsForLlm: 32000,
   messagePruneThresholdPct: 60,
   enableSemanticSprintContext: true,
   enableHybridSearch: true,

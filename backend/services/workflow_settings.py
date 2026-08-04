@@ -99,7 +99,7 @@ DEFAULT_WORKFLOW_SETTINGS: Dict[str, Any] = {
     "ollamaCooldownRetryEnabled": True,
     "ollamaCooldownRetrySec": 15,
     "ollamaCooldownRetryAttempts": 2,
-    "maxToolOutputCharsForLlm": 6000,
+    "maxToolOutputCharsForLlm": 32000,
     "messagePruneThresholdPct": 60,
     "enableSemanticSprintContext": True,
     "enableHybridSearch": True,
