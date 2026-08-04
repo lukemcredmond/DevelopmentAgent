@@ -197,6 +197,8 @@ interface TaskDetailModalProps {
   onClearToolFingerprints?: (taskId: string) => void | Promise<void>
   /** True while an agent step is actively running on this card (for suggested focus highlight). */
   isAgentRunningOnTask?: boolean
+  /** Bumps when tools/LLM events fire (SSE) so Flow can refresh without closing the section. */
+  flowActivityKey?: string | number
 }
 
 function CollapsibleSection({
@@ -318,6 +320,7 @@ export default function TaskDetailModal({
   onFocusReset,
   onClearToolFingerprints,
   isAgentRunningOnTask = false,
+  flowActivityKey = '',
 }: TaskDetailModalProps) {
   const [title, setTitle] = useState('')
   const [description, setDescription] = useState('')
@@ -371,7 +374,7 @@ export default function TaskDetailModal({
   }, [task?.id, defaultInjectCommand])
 
   // Counts-only flow view so each Agent progress row can show LLM/tool effort.
-  const flowRefreshKey = task?.transcript?.length ?? 0
+  const flowRefreshKey = `${task?.transcript?.length ?? 0}-${flowActivityKey}`
   useEffect(() => {
     if (!task?.id) {
       setFlowSummary(null)
@@ -998,7 +1001,12 @@ export default function TaskDetailModal({
               open={flowOpen}
               onOpenChange={setFlowOpen}
             >
-              <TaskFlowPanel taskId={task.id} active={flowOpen} refreshKey={flowRefreshKey} />
+              <TaskFlowPanel
+                taskId={task.id}
+                active={flowOpen}
+                refreshKey={flowRefreshKey}
+                liveRefresh={flowOpen}
+              />
             </CollapsibleSection>
           </div>
 

@@ -293,10 +293,12 @@ export async function deleteTask(taskId: string): Promise<AppState> {
 
 export async function fetchTaskFlow(
   taskId: string,
-  params?: { limit?: number; includeFull?: boolean },
+  params?: { limit?: number; offset?: number; order?: 'asc' | 'desc'; includeFull?: boolean },
 ): Promise<import('../types').TaskFlowResponse> {
   const q = new URLSearchParams()
   if (params?.limit != null) q.set('limit', String(params.limit))
+  if (params?.offset != null) q.set('offset', String(params.offset))
+  if (params?.order) q.set('order', params.order)
   if (params?.includeFull === false) q.set('includeFull', '0')
   else q.set('includeFull', '1')
   const qs = q.toString()

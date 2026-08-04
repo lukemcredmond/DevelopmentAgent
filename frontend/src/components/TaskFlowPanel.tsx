@@ -1,13 +1,16 @@
-import { useEffect, useState } from 'react'
+import { useCallback, useEffect, useRef, useState } from 'react'
 import { fetchTaskFlow } from '../api/client'
 import type { TaskFlowNode, TaskFlowResponse, TaskFlowWorkItemIndexEntry } from '../types'
 import { formatTimeSplit, formatWorkItemCounts } from '../utils/flowCounts'
 import { llmCollapsedPreview, llmToolCallCount } from '../utils/flowLlmPreview'
 
+const PAGE_SIZE = 40
+
 interface TaskFlowPanelProps {
   taskId: string
   active: boolean
   refreshKey?: number | string
+  liveRefresh?: boolean
 }
 
 function FlowNode({
@@ -183,64 +186,174 @@ function FlowNode({
   )
 }
 
-export default function TaskFlowPanel({ taskId, active, refreshKey = 0 }: TaskFlowPanelProps) {
-  const [data, setData] = useState<TaskFlowResponse | null>(null)
+export default function TaskFlowPanel({
+  taskId,
+  active,
+  refreshKey = 0,
+  liveRefresh = false,
+}: TaskFlowPanelProps) {
+  const [meta, setMeta] = useState<Omit<TaskFlowResponse, 'nodes'> | null>(null)
+  const [nodes, setNodes] = useState<TaskFlowNode[]>([])
   const [error, setError] = useState<string | null>(null)
-  const [loading, setLoading] = useState(false)
+  const [initialLoading, setInitialLoading] = useState(false)
+  const [loadingMore, setLoadingMore] = useState(false)
+  const [hasMoreOlder, setHasMoreOlder] = useState(false)
+  const offsetRef = useRef(0)
+  const scrollRef = useRef<HTMLDivElement>(null)
+  const nodesRef = useRef(nodes)
+  nodesRef.current = nodes
+
+  const applyResponse = useCallback((res: TaskFlowResponse, mode: 'replace' | 'append' | 'refresh') => {
+    setMeta({
+      taskId: res.taskId,
+      traces: res.traces,
+      count: res.count,
+      totalCount: res.totalCount,
+      includeFull: res.includeFull,
+      workItemIndex: res.workItemIndex,
+      totals: res.totals,
+      agentWorkItems: res.agentWorkItems,
+      suggestedFocusWorkItemId: res.suggestedFocusWorkItemId,
+      offset: res.offset,
+      limit: res.limit,
+      order: res.order,
+      hasMoreOlder: res.hasMoreOlder,
+    })
+    setHasMoreOlder(Boolean(res.hasMoreOlder))
+    if (mode === 'append') {
+      setNodes((prev) => {
+        const seen = new Set(prev.map((n) => n.id))
+        const older = (res.nodes || []).filter((n) => !seen.has(n.id))
+        return [...prev, ...older]
+      })
+    } else if (mode === 'refresh') {
+      setNodes((prev) => {
+        const fresh = res.nodes || []
+        const freshIds = new Set(fresh.map((n) => n.id))
+        return [...fresh, ...prev.filter((n) => !freshIds.has(n.id))]
+      })
+    } else {
+      setNodes(res.nodes || [])
+    }
+  }, [])
+
+  const loadPage = useCallback(
+    async (offset: number, mode: 'replace' | 'append' | 'refresh', limit = PAGE_SIZE) => {
+      const res = await fetchTaskFlow(taskId, {
+        limit,
+        offset,
+        order: 'desc',
+        includeFull: true,
+      })
+      applyResponse(res, mode)
+      if (mode === 'append') {
+        offsetRef.current = offset + (res.nodes?.length ?? 0)
+      } else if (mode === 'replace') {
+        offsetRef.current = res.nodes?.length ?? 0
+      }
+      setHasMoreOlder(Boolean(res.hasMoreOlder))
+      return res
+    },
+    [applyResponse, taskId],
+  )
 
   useEffect(() => {
     if (!active || !taskId) return
     let cancelled = false
-    setLoading(true)
+    setInitialLoading(true)
     setError(null)
-    void fetchTaskFlow(taskId, { limit: 80, includeFull: true })
-      .then((res) => {
-        if (!cancelled) setData(res)
-      })
+    offsetRef.current = 0
+    void loadPage(0, 'replace')
       .catch((err: unknown) => {
         if (!cancelled) setError(err instanceof Error ? err.message : String(err))
       })
       .finally(() => {
-        if (!cancelled) setLoading(false)
+        if (!cancelled) setInitialLoading(false)
       })
     return () => {
       cancelled = true
     }
-  }, [active, taskId, refreshKey])
+  }, [active, taskId])
+
+  useEffect(() => {
+    if (!active || !taskId || initialLoading) return
+    let cancelled = false
+    const limit = Math.max(PAGE_SIZE, nodesRef.current.length)
+    void loadPage(0, 'refresh', limit).catch(() => {
+      if (!cancelled) {
+        /* keep existing nodes on soft refresh failure */
+      }
+    })
+    return () => {
+      cancelled = true
+    }
+  }, [refreshKey, active, taskId, initialLoading, loadPage])
+
+  useEffect(() => {
+    if (!active || !liveRefresh || !taskId) return
+    const interval = window.setInterval(() => {
+      const limit = Math.max(PAGE_SIZE, nodesRef.current.length)
+      void loadPage(0, 'refresh', limit)
+    }, 3500)
+    return () => window.clearInterval(interval)
+  }, [active, liveRefresh, taskId, loadPage])
+
+  const onScroll = useCallback(() => {
+    const el = scrollRef.current
+    if (!el || loadingMore || !hasMoreOlder) return
+    const nearBottom = el.scrollTop + el.clientHeight >= el.scrollHeight - 48
+    if (!nearBottom) return
+    setLoadingMore(true)
+    void loadPage(offsetRef.current, 'append')
+      .catch((err: unknown) => setError(err instanceof Error ? err.message : String(err)))
+      .finally(() => setLoadingMore(false))
+  }, [hasMoreOlder, loadPage, loadingMore])
 
   if (!active) return null
 
-  const totalsCounts = formatWorkItemCounts(data?.totals)
-  const totalsTiming = formatTimeSplit(data?.totals)
+  const totalsCounts = formatWorkItemCounts(meta?.totals)
+  const totalsTiming = formatTimeSplit(meta?.totals)
 
   return (
     <div className="space-y-2" data-testid="task-flow-panel">
       <p className="text-[10px] text-cat-overlay leading-relaxed">
-        Loaded on demand from persisted LLM/tool logs and step diagnostics — not kept in board memory.
-        Expand a node for full prompt / response / tool output. Agent progress counts use the same
-        aggregation; nodes may show read-only tags for matching progress rows.
+        Newest LLM/tool steps at the top — scroll down for older events. Updates while this section
+        is open during an active step on this card. Expand a node for full prompt / response /
+        tool output.
       </p>
-      {loading && <p className="text-[11px] text-cat-subtext">Loading flow…</p>}
+      {initialLoading && nodes.length === 0 && (
+        <p className="text-[11px] text-cat-subtext">Loading flow…</p>
+      )}
       {error && <p className="text-[11px] text-rose-300">{error}</p>}
-      {!loading && !error && data && (
+      {!initialLoading && !error && meta && (
         <>
           <p className="text-[10px] text-cat-overlay font-mono">
-            {data.count ?? data.nodes.length} nodes
-            {(data.totalCount ?? 0) > (data.count ?? 0) ? ` of ${data.totalCount}` : ''}
+            Showing {nodes.length} node{nodes.length === 1 ? '' : 's'}
+            {(meta.totalCount ?? 0) > nodes.length ? ` of ${meta.totalCount}` : ''}
             {totalsCounts ? ` · ${totalsCounts}` : ''}
             {totalsTiming ? ` · ${totalsTiming}` : ''}
-            {(data.traces?.length ?? 0) > 0 ? ` · ${data.traces!.length} step trace(s)` : ''}
+            {(meta.traces?.length ?? 0) > 0 ? ` · ${meta.traces!.length} step trace(s)` : ''}
           </p>
-          <div className="relative pl-3 space-y-2 before:absolute before:left-1 before:top-2 before:bottom-2 before:w-px before:bg-cat-surface1">
-            {data.nodes.length === 0 ? (
+          <div
+            ref={scrollRef}
+            onScroll={onScroll}
+            className="relative pl-3 max-h-[min(55vh,28rem)] overflow-y-auto space-y-2 before:absolute before:left-1 before:top-2 before:bottom-2 before:w-px before:bg-cat-surface1"
+          >
+            {nodes.length === 0 ? (
               <p className="text-[11px] text-cat-overlay italic">No LLM/tool events for this card yet.</p>
             ) : (
-              data.nodes.map((node) => (
+              nodes.map((node) => (
                 <div key={node.id} className="relative">
                   <span className="absolute -left-3 top-3 h-2 w-2 rounded-full bg-cat-overlay/80" />
-                  <FlowNode node={node} workItemIndex={data.workItemIndex} />
+                  <FlowNode node={node} workItemIndex={meta.workItemIndex} />
                 </div>
               ))
+            )}
+            {loadingMore && (
+              <p className="text-[10px] text-cat-subtext text-center py-2">Loading older events…</p>
+            )}
+            {!hasMoreOlder && nodes.length > 0 && (meta.totalCount ?? 0) > PAGE_SIZE && (
+              <p className="text-[10px] text-cat-overlay text-center py-2">Oldest events shown</p>
             )}
           </div>
         </>

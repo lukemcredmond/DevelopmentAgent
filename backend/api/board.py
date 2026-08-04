@@ -453,7 +453,7 @@ def escape_subtasks_route(task_id: str, payload: EscapeSubtaskPayload):
 
 
 @router.get("/api/tasks/{task_id}/flow")
-def get_task_flow(task_id: str, limit: int = 80, includeFull: int = 1):
+def get_task_flow(task_id: str, limit: int = 80, offset: int = 0, order: str = "desc", includeFull: int = 1):
     """Ordered LLM↔tool flow for a card (from SQLite logs + diagnostics; not board memory)."""
     with state.STATE_LOCK:
         task = find_task_by_id(task_id)
@@ -462,7 +462,14 @@ def get_task_flow(task_id: str, limit: int = 80, includeFull: int = 1):
     from backend.services.task_flow import build_task_flow
 
     lim = max(1, min(int(limit or 80), 200))
-    return build_task_flow(task_id, limit=lim, include_full=bool(includeFull))
+    off = max(0, min(int(offset or 0), 5000))
+    return build_task_flow(
+        task_id,
+        limit=lim,
+        offset=off,
+        order=order or "desc",
+        include_full=bool(includeFull),
+    )
 
 
 @router.get("/api/tasks/{task_id}/flow/summary")

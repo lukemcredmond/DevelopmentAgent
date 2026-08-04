@@ -177,6 +177,10 @@ export interface TaskFlowResponse {
   }>
   count?: number
   totalCount?: number
+  offset?: number
+  limit?: number
+  order?: 'asc' | 'desc' | string
+  hasMoreOlder?: boolean
   includeFull?: boolean
   workItemIndex?: Record<string, TaskFlowWorkItemIndexEntry>
   totals?: TaskFlowTotals

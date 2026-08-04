@@ -213,6 +213,7 @@ export default function App() {
     activityWasCleared,
     sseLive,
     lastToolEventAt,
+    toolStartTick,
     planOutline,
     setPlanOutline,
     planOutlineStreaming,
@@ -2162,6 +2163,7 @@ export default function App() {
             activeRun.status !== 'completed' &&
             activeRun.status !== 'failed',
         )}
+        flowActivityKey={`${toolStartTick}-${lastToolEventAt ?? ''}`}
       />
 
       {fileDiffModal && (

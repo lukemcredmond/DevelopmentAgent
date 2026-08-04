@@ -112,9 +112,14 @@ def build_task_flow(
     task_id: str,
     *,
     limit: int = 80,
+    offset: int = 0,
+    order: str = "desc",
     include_full: bool = True,
 ) -> Dict[str, Any]:
-    """Ordered LLM↔tool nodes for Task Detail Flow tab (not board memory)."""
+    """Ordered LLM↔tool nodes for Task Detail Flow tab (not board memory).
+
+    Default order desc: newest nodes first. offset skips that many newest nodes (scroll pagination).
+    """
     _ensure_logs_loaded()
     tid = str(task_id)
 
@@ -271,7 +276,15 @@ def build_task_flow(
         filtered.append(n)
 
     filtered.sort(key=lambda x: _sort_key(str(x.get("timestamp") or "")))
-    trimmed = filtered[-limit:] if len(filtered) > limit else filtered
+    total = len(filtered)
+    off = max(0, int(offset or 0))
+    lim = max(1, min(int(limit or 80), 200))
+    end_idx = max(0, total - off)
+    start_idx = max(0, end_idx - lim)
+    trimmed = filtered[start_idx:end_idx]
+    if str(order or "desc").lower() != "asc":
+        trimmed = list(reversed(trimmed))
+    has_more_older = start_idx > 0
 
     # Associate agent work items ↔ nodes (counts span every node, links use the trimmed slice)
     work_items: List[Dict[str, Any]] = []
@@ -310,7 +323,11 @@ def build_task_flow(
         "nodes": trimmed,
         "traces": traces_meta,
         "count": len(trimmed),
-        "totalCount": len(filtered),
+        "totalCount": total,
+        "offset": off,
+        "limit": lim,
+        "order": "desc" if str(order or "desc").lower() != "asc" else "asc",
+        "hasMoreOlder": has_more_older,
         "includeFull": include_full,
         "workItemIndex": work_item_index,
         "totals": _flow_totals(filtered),

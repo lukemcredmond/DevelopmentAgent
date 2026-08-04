@@ -106,6 +106,29 @@ def test_counts_span_nodes_dropped_by_the_trim_limit():
     assert len(entry["nodeIds"]) == 2  # links only point at rendered nodes
 
 
+def test_flow_newest_first_and_pagination_offset():
+    initialize()
+    from backend import state
+
+    _seed_card("T-PAGE")
+    for i in range(5):
+        state.TOOL_EXECUTION_LOG.append(
+            _tool_event(f"ev{i}", f"2026-01-01 10:00:0{i}", "read_file", "T-PAGE")
+        )
+    with patch("backend.services.task_flow.list_step_traces_for_task", return_value=[]):
+        page1 = build_task_flow("T-PAGE", limit=2, offset=0, order="desc", include_full=False)
+        page2 = build_task_flow("T-PAGE", limit=2, offset=2, order="desc", include_full=False)
+
+    assert page1["totalCount"] == 5
+    assert page1["hasMoreOlder"] is True
+    assert len(page1["nodes"]) == 2
+    ts0 = str(page1["nodes"][0].get("timestamp") or "")
+    ts1 = str(page1["nodes"][1].get("timestamp") or "")
+    assert ts0 >= ts1
+    assert page2["hasMoreOlder"] is True
+    assert page1["nodes"][0]["id"] != page2["nodes"][0]["id"]
+
+
 def test_duplicate_skip_is_logged_for_the_active_card_and_links_to_work_items():
     initialize()
     from backend import state
