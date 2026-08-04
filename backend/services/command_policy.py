@@ -80,7 +80,10 @@ def validate_command(command: str) -> Tuple[bool, str]:
     if allow_chain:
         for token in BLOCKED_ALWAYS:
             if token in cmd:
-                return False, f"Blocked shell operator '{token}' is not allowed."
+                reason = f"Blocked shell operator '{token}' is not allowed."
+                if token == "|":
+                    reason += " Use the grep tool with limit instead."
+                return False, reason
         lower = cmd.lower()
         if "cd " in lower or lower.strip().startswith("cd"):
             return False, "Directory changes are not allowed; commands run in workspace root."
@@ -88,7 +91,13 @@ def validate_command(command: str) -> Tuple[bool, str]:
 
     for token in BLOCKED_ALWAYS + ("&&", "||", ";"):
         if token in cmd:
-            return False, f"Chained or redirected commands are not allowed (enable allowChainedCommands for && and ;)."
+            reason = (
+                "Chained or redirected commands are not allowed "
+                "(enable allowChainedCommands for && and ;)."
+            )
+            if token == "|":
+                reason += " Use the grep tool with limit instead."
+            return False, reason
     lower = cmd.lower()
     if "cd " in lower or lower.strip().startswith("cd"):
         return False, "Directory changes are not allowed; commands run in workspace root."

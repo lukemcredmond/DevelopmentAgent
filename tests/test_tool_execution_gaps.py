@@ -51,6 +51,15 @@ def test_command_validate_blocks_chaining_when_disabled():
     assert "Chained" in reason or "chained" in reason.lower()
 
 
+def test_command_validate_pipe_suggests_grep_tool():
+    reset_workflow_settings()
+    save_workflow_settings({"allowChainedCommands": True})
+    ok, reason = validate_command('grep -r "meal" . | head -n 20')
+    assert not ok
+    assert "|" in reason or "Blocked" in reason
+    assert "grep tool with limit" in reason.lower()
+
+
 def test_command_chaining_when_enabled():
     reset_workflow_settings()
     save_workflow_settings({"allowChainedCommands": True})

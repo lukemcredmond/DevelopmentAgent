@@ -78,6 +78,8 @@ DEFAULT_STEP_INSTRUCTIONS: Dict[str, str] = {
         "against files that do not exist.\n"
         "Implement: use apply_patch and write_file immediately after structure is OK. "
         "Do not output implementation plans. "
+        "For content search use the grep tool (set limit to cap matches); "
+        "do not use shell grep or pipes in run_command — pipes are blocked.\n"
         "Verify imports and package usage via read_file/grep — do not ask the user to confirm them. "
         "Read each tool result before update_board — on write_file/apply_patch failure, "
         "try a different path or approach (do not repeat the same failing arguments).\n"

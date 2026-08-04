@@ -268,7 +268,9 @@ tool_grep = Tool(
     name="grep",
     description=(
         "Search file contents with regex pattern (ripgrep when available). "
-        "Returns path, line number, and matching line."
+        "Returns path, line number, and matching line. "
+        "Use instead of shell grep; set limit to cap matches (e.g. 20). "
+        "Pipes are blocked in run_command."
     ),
     parameters={
         "type": "object",
