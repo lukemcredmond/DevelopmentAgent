@@ -220,6 +220,9 @@ class WorkflowSettingsPayload(BaseModel):
     ollamaNumCtx: Optional[int] = None
     ollamaNumCtxByRole: Optional[Dict[str, int]] = None
     ollamaNumCtxAuto: Optional[bool] = None
+    ollamaNumCtxAdaptive: Optional[bool] = None
+    ollamaNumCtxAdaptiveStart: Optional[int] = None
+    ollamaNumCtxAdaptiveStep: Optional[int] = None
     ollamaKeepAlive: Optional[str] = None
     ollamaRequestTimeoutSec: Optional[int] = None
     terminalTimeoutSec: Optional[int] = None

@@ -1641,6 +1641,39 @@ export default function WorkflowPanel({
       <label className="flex items-center gap-2 text-[11px] text-cat-subtext cursor-pointer">
         <input
           type="checkbox"
+          checked={settings.ollamaNumCtxAdaptive ?? false}
+          onChange={(e) => onSettingsChange({ ollamaNumCtxAdaptive: e.target.checked })}
+        />
+        Adaptive context (start low, auto-increase on overflow)
+        <SettingHint hint="Each sprint step begins at the start size below (capped by global/role num_ctx). If Ollama returns exceed_context_size, num_ctx is increased and the call is retried until the ceiling is reached." />
+      </label>
+      {settings.ollamaNumCtxAdaptive && (
+        <div className="grid grid-cols-2 gap-2 text-[11px] pl-0.5">
+          <label>
+            <span className="text-[10px] text-cat-overlay block">Adaptive start num_ctx</span>
+            <NumberSettingInput
+              value={settings.ollamaNumCtxAdaptiveStart ?? 8192}
+              min={2048}
+              max={131072}
+              onCommit={(ollamaNumCtxAdaptiveStart) => onSettingsChange({ ollamaNumCtxAdaptiveStart })}
+              className="w-full bg-cat-base border border-cat-surface1 rounded p-1 text-white"
+            />
+          </label>
+          <label>
+            <span className="text-[10px] text-cat-overlay block">Adaptive bump step</span>
+            <NumberSettingInput
+              value={settings.ollamaNumCtxAdaptiveStep ?? 8192}
+              min={1024}
+              max={131072}
+              onCommit={(ollamaNumCtxAdaptiveStep) => onSettingsChange({ ollamaNumCtxAdaptiveStep })}
+              className="w-full bg-cat-base border border-cat-surface1 rounded p-1 text-white"
+            />
+          </label>
+        </div>
+      )}
+      <label className="flex items-center gap-2 text-[11px] text-cat-subtext cursor-pointer">
+        <input
+          type="checkbox"
           checked={settings.enableVramAwareModelSwap ?? true}
           onChange={(e) => onSettingsChange({ enableVramAwareModelSwap: e.target.checked })}
         />

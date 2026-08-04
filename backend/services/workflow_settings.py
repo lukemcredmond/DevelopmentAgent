@@ -85,6 +85,10 @@ DEFAULT_WORKFLOW_SETTINGS: Dict[str, Any] = {
     "ollamaNumCtxByRole": {},
     # When true, halve Dev ctx on low/minimal VRAM tiers.
     "ollamaNumCtxAuto": True,
+    # Start each step at ollamaNumCtxAdaptiveStart; on exceed_context errors, increase and retry.
+    "ollamaNumCtxAdaptive": False,
+    "ollamaNumCtxAdaptiveStart": 8192,
+    "ollamaNumCtxAdaptiveStep": 8192,
     "ollamaKeepAlive": "30m",
     "ollamaRequestTimeoutSec": 300,
     "terminalTimeoutSec": 600,

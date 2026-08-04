@@ -289,6 +289,7 @@ class ScrumAgent:
         self._decisions_in_prompt: int = 0
         self._last_chat_error_type: Optional[str] = None
         self._last_chat_error: Optional[str] = None
+        self._step_num_ctx: Optional[int] = None
 
     def register_tool(self, tool) -> None:
         self.registry.register(tool)
@@ -322,7 +323,7 @@ class ScrumAgent:
         if not self.assigned_skills:
             return ""
 
-        from backend.services.prompt_budget import resolve_ollama_num_ctx, skills_context_max_chars
+        from backend.services.prompt_budget import skills_context_max_chars
 
         skill_files = list(self.assigned_skills)
         task_id = state.ACTIVE_SPRINT_TASK_ID
@@ -342,7 +343,7 @@ class ScrumAgent:
         if not skill_files:
             return ""
 
-        max_chars = skills_context_max_chars(resolve_ollama_num_ctx(self.role))
+        max_chars = skills_context_max_chars(self._effective_num_ctx())
         skills_context = "\n=== SPECIALIZED AGENT SKILLS ===\n"
         used = len(skills_context)
         truncated = False
@@ -689,13 +690,44 @@ class ScrumAgent:
         except Exception:
             pass
 
-    def _chat_options(self) -> Dict[str, Any]:
+    def _num_ctx_ceiling(self) -> int:
         from backend.services.prompt_budget import resolve_ollama_num_ctx
 
+        return resolve_ollama_num_ctx(self.role)
+
+    def _effective_num_ctx(self) -> int:
+        from backend.services.prompt_budget import initial_ollama_num_ctx
+
+        ws = get_workflow_settings()
+        if not ws.get("ollamaNumCtxAdaptive"):
+            return self._num_ctx_ceiling()
+        if self._step_num_ctx is None:
+            self._step_num_ctx = initial_ollama_num_ctx(self.role)
+        return min(self._num_ctx_ceiling(), self._step_num_ctx)
+
+    def _bump_num_ctx_on_overflow(self) -> bool:
+        from backend.services.prompt_budget import bump_ollama_num_ctx
+
+        ws = get_workflow_settings()
+        if not ws.get("ollamaNumCtxAdaptive"):
+            return False
+        ceiling = self._num_ctx_ceiling()
+        current = self._effective_num_ctx()
+        try:
+            step = int(ws.get("ollamaNumCtxAdaptiveStep") or 8192)
+        except (TypeError, ValueError):
+            step = 8192
+        nxt = bump_ollama_num_ctx(current, ceiling, step=step)
+        if nxt is None:
+            return False
+        self._step_num_ctx = nxt
+        return True
+
+    def _chat_options(self) -> Dict[str, Any]:
         ws = get_workflow_settings()
         opts: Dict[str, Any] = {
             "temperature": 0.1,
-            "num_ctx": resolve_ollama_num_ctx(self.role),
+            "num_ctx": self._effective_num_ctx(),
         }
         keep_alive = ws.get("ollamaKeepAlive")
         if keep_alive:
@@ -719,11 +751,13 @@ class ScrumAgent:
         return "other"
 
     def _context_overflow_message(self) -> str:
-        from backend.services.prompt_budget import resolve_ollama_num_ctx
-
-        num_ctx = resolve_ollama_num_ctx(self.role)
+        num_ctx = self._effective_num_ctx()
+        ceiling = self._num_ctx_ceiling()
+        extra = ""
+        if get_workflow_settings().get("ollamaNumCtxAdaptive") and num_ctx >= ceiling:
+            extra = " Adaptive context is already at the configured ceiling."
         return (
-            f"Request exceeded Ollama context (num_ctx={num_ctx}). "
+            f"Request exceeded Ollama context (num_ctx={num_ctx}, ceiling={ceiling}).{extra} "
             "Increase Ollama context size in Workflow settings, or shorten the project brief / remove assigned skills."
         )
 
@@ -859,29 +893,38 @@ class ScrumAgent:
                 if delay:
                     time.sleep(delay)
                 attempt_num = idx + 1
-                result, err, err_type, duration_ms = self._single_chat_attempt(
-                    client,
-                    messages,
-                    stream=stream,
-                    tools=tools,
-                    iteration=iteration,
-                    task_id=tid,
-                    agent_id=agent_id or "dev",
-                    run_id=run_id,
-                    tool_names=tool_names,
-                )
-                if result is not None:
-                    self._last_chat_error = None
-                    self._last_chat_error_type = None
-                    return result
-                last_error = err
-                last_error_type = err_type
-                if err_type == "context_overflow":
-                    overflow_msg = self._context_overflow_message()
-                    add_system_log(self.role, "error", overflow_msg)
-                    self._last_chat_error = err
-                    self._last_chat_error_type = err_type
-                    return None
+                while True:
+                    result, err, err_type, duration_ms = self._single_chat_attempt(
+                        client,
+                        messages,
+                        stream=stream,
+                        tools=tools,
+                        iteration=iteration,
+                        task_id=tid,
+                        agent_id=agent_id or "dev",
+                        run_id=run_id,
+                        tool_names=tool_names,
+                    )
+                    if result is not None:
+                        self._last_chat_error = None
+                        self._last_chat_error_type = None
+                        return result
+                    last_error = err
+                    last_error_type = err_type
+                    if err_type == "context_overflow":
+                        if self._bump_num_ctx_on_overflow():
+                            add_system_log(
+                                self.role,
+                                "info",
+                                f"Context overflow — increasing num_ctx to {self._effective_num_ctx()} and retrying",
+                            )
+                            continue
+                        overflow_msg = self._context_overflow_message()
+                        add_system_log(self.role, "error", overflow_msg)
+                        self._last_chat_error = err
+                        self._last_chat_error_type = err_type
+                        return None
+                    break
                 reason = err_type or "error"
                 if err_type == "timeout":
                     detail = f"timeout after {timeout_sec}s"
@@ -1533,6 +1576,7 @@ class ScrumAgent:
             )
         self._last_memories_used = []
         self._decisions_in_prompt = 0
+        self._step_num_ctx = None
         ws = get_workflow_settings()
         max_tool_failures = int(ws.get("maxToolFailuresPerStep", 5))
         max_duration_sec = int(ws.get("maxAgentStepDurationSec", 2700) or 2700)

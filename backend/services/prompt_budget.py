@@ -73,6 +73,41 @@ def resolve_ollama_num_ctx(
     return ctx
 
 
+def initial_ollama_num_ctx(
+    role: Optional[str] = None,
+    *,
+    settings: Optional[Dict[str, Any]] = None,
+) -> int:
+    """num_ctx for a new agent step (adaptive low start, or full ceiling when adaptive is off)."""
+    ceiling = resolve_ollama_num_ctx(role, settings=settings)
+    try:
+        from backend.services.workflow_settings import get_workflow_settings
+
+        ws = settings if settings is not None else get_workflow_settings()
+    except Exception:
+        ws = settings or {}
+    if not ws.get("ollamaNumCtxAdaptive"):
+        return ceiling
+    try:
+        start = int(ws.get("ollamaNumCtxAdaptiveStart") or 8192)
+    except (TypeError, ValueError):
+        start = 8192
+    return min(ceiling, max(2048, start))
+
+
+def bump_ollama_num_ctx(current: int, ceiling: int, *, step: int = 8192) -> Optional[int]:
+    """Next num_ctx after overflow, or None if already at ceiling."""
+    if current >= ceiling:
+        return None
+    step = max(1024, int(step))
+    doubled = min(ceiling, current * 2)
+    stepped = min(ceiling, current + step)
+    nxt = doubled if doubled > stepped else stepped
+    if nxt <= current:
+        return None
+    return nxt
+
+
 def sprint_file_context_max_chars(num_ctx: int) -> int:
     """Max chars for pre-loaded sprint file context (~60% of token budget as chars)."""
     return min(12000, max(2000, (num_ctx // 4) * 3))

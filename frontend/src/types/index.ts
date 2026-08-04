@@ -524,6 +524,9 @@ export interface WorkflowSettings {
   ollamaNumCtx?: number
   ollamaNumCtxByRole?: Partial<Record<'po' | 'dev' | 'cr' | 'qa', number>>
   ollamaNumCtxAuto?: boolean
+  ollamaNumCtxAdaptive?: boolean
+  ollamaNumCtxAdaptiveStart?: number
+  ollamaNumCtxAdaptiveStep?: number
   ollamaKeepAlive?: string
   ollamaRequestTimeoutSec?: number
   terminalTimeoutSec?: number
@@ -1161,6 +1164,9 @@ export interface WorkflowSettingsPayload {
   ollamaNumCtx?: number
   ollamaNumCtxByRole?: Partial<Record<'po' | 'dev' | 'cr' | 'qa', number>>
   ollamaNumCtxAuto?: boolean
+  ollamaNumCtxAdaptive?: boolean
+  ollamaNumCtxAdaptiveStart?: number
+  ollamaNumCtxAdaptiveStep?: number
   ollamaKeepAlive?: string
   ollamaRequestTimeoutSec?: number
   terminalTimeoutSec?: number
@@ -1495,6 +1501,9 @@ export const DEFAULT_WORKFLOW_SETTINGS: WorkflowSettings = {
   ollamaNumCtx: 32768,
   ollamaNumCtxByRole: {},
   ollamaNumCtxAuto: true,
+  ollamaNumCtxAdaptive: false,
+  ollamaNumCtxAdaptiveStart: 8192,
+  ollamaNumCtxAdaptiveStep: 8192,
   ollamaKeepAlive: '30m',
   ollamaRequestTimeoutSec: 300,
   terminalTimeoutSec: 600,

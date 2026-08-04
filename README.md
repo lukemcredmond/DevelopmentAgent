@@ -467,6 +467,9 @@ Persisted per project. Update via sidebar **Workflow** or `POST /api/workflow/se
 | ollamaNumCtx | 32768 | Context window hint for Ollama (Dev default) |
 | ollamaNumCtxByRole | `{}` | Optional per-role `{po,dev,cr,qa}` overrides; unset PO/CR/QA use min(global, 16384) |
 | ollamaNumCtxAuto | **On** | When On, halve Dev num_ctx on low/minimal VRAM tiers |
+| ollamaNumCtxAdaptive | **Off** | Start each step at **ollamaNumCtxAdaptiveStart**; on `exceed_context` errors, bump by **ollamaNumCtxAdaptiveStep** (or 2×) and retry until role/global ceiling |
+| ollamaNumCtxAdaptiveStart | 8192 | First `num_ctx` per step when adaptive is on |
+| ollamaNumCtxAdaptiveStep | 8192 | Minimum increase on each overflow retry |
 | ollamaKeepAlive | 30m | Ollama model keep-alive duration |
 | ollamaRequestTimeoutSec | 300 | Per-request timeout for Ollama calls |
 | ollamaMaxRetries | 4 | Retries on transient Ollama failures |

@@ -1292,7 +1292,7 @@ def _inject_sprint_context(
 ) -> str:
     """Build sprint prompt with pre-loaded file contents (no Tools log row per step)."""
     from backend.services.prompt_budget import (
-        resolve_ollama_num_ctx,
+        initial_ollama_num_ctx,
         semantic_sprint_context_max_chars,
         sprint_file_context_max_chars,
     )
@@ -1300,7 +1300,7 @@ def _inject_sprint_context(
 
     task_id = active_task["id"]
     normalize_task(active_task)
-    num_ctx = resolve_ollama_num_ctx(agent_role)
+    num_ctx = initial_ollama_num_ctx(agent_role)
     total_budget = sprint_file_context_max_chars(num_ctx)
     semantic_block, sem_paths = build_semantic_sprint_context(
         active_task,
