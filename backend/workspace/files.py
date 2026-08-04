@@ -12,6 +12,56 @@ from backend.services.logs import add_system_log
 from backend.services.project_service import save_current_project_state
 from backend.services.workflow_settings import get_workflow_settings
 
+_PATH_ASCII = re.compile(r"[A-Za-z0-9]")
+
+
+def _invalid_path_message(raw: str, detail: str) -> str:
+    return (
+        f"Invalid path '{raw}': {detail}. "
+        "Use list_dir('.') or glob_file_search to find real workspace paths — "
+        "do not retry this path."
+    )
+
+
+def assert_plausible_workspace_path(normalized: str, raw: str) -> None:
+    """Reject obvious garbage paths (token corruption, stray punctuation)."""
+    if normalized in (".", ""):
+        return
+    base = normalized.rstrip("/").split("/")[-1]
+    if base in (".", ".."):
+        return
+    _name, ext = os.path.splitext(base)
+    ext_lower = ext.lower()
+    # e.g. "망." or "x." — trailing dot with no extension
+    if base.endswith(".") and ext_lower in ("", ".") and len(base) <= 16:
+        raise ValueError(_invalid_path_message(raw, "looks like corrupted text (trailing dot)"))
+    if len(base) <= 2 and "/" not in normalized.replace("\\", "/"):
+        raise ValueError(_invalid_path_message(raw, "too short to be a project file path"))
+    if not _PATH_ASCII.search(normalized):
+        if ext_lower not in _plausible_path_extensions():
+            raise ValueError(
+                _invalid_path_message(raw, "no ASCII file name or known source extension")
+            )
+
+
+def _plausible_path_extensions() -> frozenset[str]:
+    return INDEXABLE_EXTENSIONS | frozenset(
+        {".csproj", ".sln", ".gradle", ".kts", ".xml", ".props", ".targets", ".mdc"}
+    )
+
+
+def _path_tool_failure_message(tool: str, safe_path: str, base_message: str) -> str:
+    key = f"{tool}\0{safe_path}"
+    count = state.STEP_PATH_TOOL_FAILURES.get(key, 0) + 1
+    state.STEP_PATH_TOOL_FAILURES[key] = count
+    if count >= 2:
+        return (
+            f"Error: {base_message.lstrip('Error: ').strip()} "
+            f"(repeat {count} this step). STOP calling {tool} on '{safe_path}' — "
+            "use list_dir('.') or glob_file_search instead."
+        )
+    return base_message
+
 
 def resolve_workspace_path(path: str) -> str:
     """Returns a safe relative path within the workspace root."""
@@ -66,6 +116,7 @@ def resolve_workspace_path(path: str) -> str:
             f"Path escapes workspace: {path}. "
             f"Use relative paths like lib/main.dart (workspace: {state.WORKSPACE_DIR})"
         )
+    assert_plausible_workspace_path(normalized, raw)
     return normalized
 
 
@@ -261,6 +312,7 @@ def write_workspace_file(path: str, content: str, author: Optional[str] = None) 
 
 def clear_step_file_reads() -> None:
     state.STEP_FILE_READS.clear()
+    state.STEP_PATH_TOOL_FAILURES.clear()
     state.STEP_PATCH_FAILURES.clear()
 
 
@@ -516,7 +568,14 @@ def read_workspace_file(
     try:
         safe_path = resolve_workspace_path(path)
     except ValueError as e:
-        return str(e)
+        msg = str(e)
+        if not msg.startswith("Error:"):
+            msg = f"Error: {msg}"
+        try:
+            safe_for_key = os.path.normpath(str(path or "").strip()).replace("\\", "/")
+        except Exception:
+            safe_for_key = str(path or "")
+        return _path_tool_failure_message("read_file", safe_for_key, msg)
 
     phys_path = os.path.join(state.WORKSPACE_DIR, safe_path)
     content: Optional[str] = None
@@ -530,7 +589,11 @@ def read_workspace_file(
     if content is None:
         content = state.VIRTUAL_FILESYSTEM.get(safe_path)
     if content is None:
-        return f"Error: File '{safe_path}' not found."
+        base = (
+            f"File '{safe_path}' not found. "
+            "Use list_dir('.') or glob_file_search — do not retry this path."
+        )
+        return _path_tool_failure_message("read_file", safe_path, f"Error: {base}")
 
     if state.ACTIVE_SPRINT_TASK_ID:
         record_task_file(state.ACTIVE_SPRINT_TASK_ID, safe_path, "read", persist=True)
@@ -555,10 +618,15 @@ def list_workspace_dir(path: str = ".", limit: int = 200) -> str:
     try:
         safe_path = resolve_workspace_path(path or ".")
     except ValueError as e:
-        return str(e)
+        msg = str(e)
+        if not msg.startswith("Error:"):
+            msg = f"Error: {msg}"
+        key = str(path or ".").strip() or "."
+        return _path_tool_failure_message("list_dir", key, msg)
     root = os.path.join(state.WORKSPACE_DIR, safe_path)
     if not os.path.isdir(root):
-        return f"Error: '{safe_path}' is not a directory."
+        base = f"'{safe_path}' is not a directory."
+        return _path_tool_failure_message("list_dir", safe_path, f"Error: {base}")
     entries: List[str] = []
     try:
         for name in sorted(os.listdir(root)):

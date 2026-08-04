@@ -86,6 +86,8 @@ STEP_TOOL_FINGERPRINT_KEYS: List[Any] = []
 STEP_TOOL_BLOCK_KEYS: List[Any] = []
 
 STEP_FILE_READS: Dict[str, str] = {}
+# Per-step repeats of path-based tool failures (read_file/list_dir/etc.) — key tool\\0path
+STEP_PATH_TOOL_FAILURES: Dict[str, int] = {}
 
 # apply_patch failure counts per path within current sprint step.
 STEP_PATCH_FAILURES: Dict[str, int] = {}

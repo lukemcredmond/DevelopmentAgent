@@ -42,6 +42,8 @@ from backend.storage.memory_engine import create_memory_engine
 ChatMessage = Union[Mapping[str, Any], Message]
 
 SAME_ARGS_FAILURE_LIMIT = 3
+PATH_TOOL_SAME_ARGS_FAILURE_LIMIT = 2
+PATH_TOOL_NAMES = frozenset({"read_file", "list_dir", "grep", "glob_file_search", "apply_patch", "write_file"})
 SAME_ARGS_SUCCESS_LIMIT = 3  # early-stop after repeated identical successes
 _FAILURE_LOCK = threading.Lock()
 
@@ -1179,7 +1181,16 @@ class ScrumAgent:
                 same_count = failed_tool_keys.count(key)
                 fail_total = total_failures[0]
             _track_fingerprint()
-            if same_count >= SAME_ARGS_FAILURE_LIMIT:
+            if same_count >= SAME_ARGS_FAILURE_LIMIT or (
+                tool_name in PATH_TOOL_NAMES
+                and same_count >= PATH_TOOL_SAME_ARGS_FAILURE_LIMIT
+                and (
+                    "invalid path" in (result.tool_output or "").lower()
+                    or "do not retry" in (result.tool_output or "").lower()
+                    or "not found" in (result.tool_output or "").lower()
+                    or "stop calling" in (result.tool_output or "").lower()
+                )
+            ):
                 stop_msg = (
                     f"Stopped: tool '{tool_name}' failed repeatedly with the same arguments. "
                     f"Last error: {result.tool_output[:200]}"

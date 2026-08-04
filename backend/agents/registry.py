@@ -89,7 +89,9 @@ tool_read = Tool(
     name="read_file",
     description=(
         "Reads plain text source code from a workspace path. "
-        "Use start_line/end_line (1-based) to read a slice of large files."
+        "Use start_line/end_line (1-based) to read a slice of large files. "
+        "Path must be a real relative path (e.g. lib/main.dart) from list_dir or glob_file_search — "
+        "never invent or guess paths."
     ),
     parameters={
         "type": "object",
@@ -136,6 +138,16 @@ def _format_grep_results(
     context_lines=0,
     limit=100,
 ) -> str:
+    if path:
+        from backend.workspace.files import _path_tool_failure_message, resolve_workspace_path
+
+        try:
+            resolve_workspace_path(str(path))
+        except ValueError as e:
+            msg = str(e)
+            if not msg.startswith("Error:"):
+                msg = f"Error: {msg}"
+            return _path_tool_failure_message("grep", str(path).strip(), msg)
     results = grep_workspace(
         pattern,
         path=path,

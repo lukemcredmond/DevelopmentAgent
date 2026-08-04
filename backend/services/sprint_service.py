@@ -1248,6 +1248,7 @@ def _mark_sprint_step_start() -> str:
     except Exception:
         state.SPRINT_STEP_STARTED_MONO = None
     state.STEP_FILE_READS.clear()
+    state.STEP_PATH_TOOL_FAILURES.clear()
     state.STEP_PATCH_FAILURES.clear()
     state.DEV_STEP_READ_ONLY_NO_EDITS = False
     from backend.services.tool_cache import clear_tool_cache

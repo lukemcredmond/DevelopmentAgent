@@ -345,6 +345,10 @@ def is_tool_failure(name: str, output: str) -> bool:
         return True
     if "path escapes" in lower:
         return True
+    if "invalid path" in lower:
+        return True
+    if "do not retry" in lower or "stop calling" in lower:
+        return True
     if "validation failure" in lower:
         return True
     if lower.startswith("error:"):
@@ -354,6 +358,10 @@ def is_tool_failure(name: str, output: str) -> bool:
     if "user denied" in lower or "approval timed out" in lower:
         return True
     if name == "read_file" and lower.startswith("error: file"):
+        return True
+    if name == "read_file" and "not found" in lower:
+        return True
+    if name in ("list_dir", "grep") and "not a directory" in lower:
         return True
     return False
 
