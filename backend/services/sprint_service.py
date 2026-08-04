@@ -2988,40 +2988,17 @@ def _run_developer_step(active_task: Dict[str, Any], brief: str) -> None:
         lint_cmd = derive_project_lint_command()
         lint_hint = f" (e.g. '{lint_cmd}')" if lint_cmd else ""
         max_in_card = int(get_workflow_settings().get("maxInCardLintFixes", 5))
-        instructions = (
-            "Tools: read_file, write_file, apply_patch, run_command, update_board, "
-            "list_dir, grep, glob_file_search, git_status, git_diff, git_commit, search_code.\n"
-            "Edits: use apply_patch for existing files; write_file for new files. "
-            "Before apply_patch, read_file the same path in this step and copy old_text "
-            "verbatim from that result — never from pre-loaded context or analyze output.\n"
-            "Structure: call list_dir on '.' (and glob_file_search for stack markers) when the "
-            "WORKSPACE STRUCTURE AUDIT shows MISSING or the workspace is unfamiliar. "
-            "If critical files are MISSING for the detected stack, write_file minimal valid stubs "
-            "(or rely on auto-scaffold) BEFORE implementing this card's AC — do not invent APIs "
-            "against files that do not exist.\n"
-            "Implement: use apply_patch and write_file immediately after structure is OK. "
-            "Do not output implementation plans. "
-            "Verify imports and package usage via read_file/grep — do not ask the user to confirm them. "
-            "Read each tool result before update_board — on write_file/apply_patch failure, "
-            "try a different path or approach (do not repeat the same failing arguments).\n"
-            f"Lint: use run_command with the project lint command{lint_hint}. "
-            "Findings are expected — don't treat lint output as a tool failure. "
-            f"Fix at most {max_in_card} highest-severity findings relevant to this card's AC "
-            "(in-card lint budget). Do not clear the whole project on this card — "
-            "leftover project lint is split into related Backlog cards automatically. "
-            "Fix syntax/parse errors before logic changes. "
-            "After edits, run the lint command once to verify. "
-            "Do NOT re-run the same lint command without fixing code first.\n"
-            "Hygiene/build commands (e.g. clean): run each command at most once per step; "
-            "after success, run project lint/analyze to satisfy remaining AC — do not repeat the same hygiene command.\n"
-            "Escalation: unclear requirements → move to 'Needs PO' (not Needs User). "
-            "Needs User ONLY for: secrets/credentials you cannot invent, irreversible external "
-            "actions (production deploy, billing), or product choices with no default in brief/AC. "
-            "Set a specific userQuestion when moving to Needs User. "
-            "Do NOT move to Needs User for lint errors or implementation questions — "
-            "create missing scaffold files yourself instead of asking the user.\n"
-            f"Done: when complete and files are written → move to '{target}'."
-            f"{_autonomous_instruction_suffix()}"
+        from backend.services.prompt_defaults import get_effective_step_instructions
+
+        instructions = get_effective_step_instructions(
+            "Developer",
+            get_workflow_settings(),
+            {
+                "lint_hint": lint_hint,
+                "max_in_card_lint": max_in_card,
+                "target_lane": target,
+                "autonomous_suffix": _autonomous_instruction_suffix(),
+            },
         )
         prompt = _inject_sprint_context(active_task, brief, "Developer", instructions)
         from backend.services.fix_verify_loop import run_fix_verify_loop
@@ -3238,10 +3215,9 @@ def _run_code_review_step(active_task: Dict[str, Any], brief: str) -> None:
     except Exception:
         pass
     add_system_log("Code Reviewer", "info", f"Reviewing '{active_task['title']}'…")
-    instructions = (
-        "Registered tools: read_file, apply_patch, update_board, grep, glob_file_search, git_diff, search_code. "
-        "Review with read_file. Pass → 'QA'. Fail → 'In Progress'."
-    )
+    from backend.services.prompt_defaults import get_effective_step_instructions
+
+    instructions = get_effective_step_instructions("Code Reviewer", get_workflow_settings(), {})
     prompt = _inject_sprint_context(active_task, brief, "Code Reviewer", instructions)
     result = agent_cr.execute_step(prompt, max_iterations=_llm_iterations())
 
@@ -3310,14 +3286,16 @@ def _run_qa_step(active_task: Dict[str, Any], brief: str) -> None:
 
     ac = active_task.get("acceptanceCriteria") or []
     ac_block = "\n".join(f"- {c}" for c in ac) if ac else "(see description)"
-    instructions = (
-        f"Validate acceptance criteria:\n{ac_block}\n"
-        f"{build_dod_block()}"
-        f"{_format_playbook_block(playbook)}"
-        "Registered tools: read_file, run_test, run_command, update_board, grep, glob_file_search, search_code. "
-        "Review the automated test results above. Use read_file and run_test for additional checks. "
-        "Pass → 'Done'. Fail → 'In Progress' with failure details. "
-        "You cannot move to Done without passing automated tests or successful run_test/run_command."
+    from backend.services.prompt_defaults import get_effective_step_instructions
+
+    instructions = get_effective_step_instructions(
+        "QA Tester",
+        get_workflow_settings(),
+        {
+            "ac_block": ac_block,
+            "dod_block": build_dod_block(),
+            "playbook_block": _format_playbook_block(playbook),
+        },
     )
     prompt = _inject_sprint_context(active_task, brief, "QA Tester", instructions)
     result = agent_qa.execute_step(prompt, max_iterations=_llm_iterations())

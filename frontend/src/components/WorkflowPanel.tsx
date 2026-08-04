@@ -9,6 +9,7 @@ import {
   testPhoneNotify,
 } from '../api/client'
 import AgentToolsPanel from './AgentToolsPanel'
+import AgentPromptsPanel from './AgentPromptsPanel'
 import NumberSettingInput from './NumberSettingInput'
 import { SettingHint } from './SettingHint'
 import type {
@@ -78,7 +79,7 @@ export default function WorkflowPanel({
   const [trainingExportStatus, setTrainingExportStatus] = useState<string | null>(null)
   const [trainingExporting, setTrainingExporting] = useState(false)
   const [workflowTab, setWorkflowTab] = useState<
-    'gates' | 'autonomy' | 'rag' | 'tools' | 'discord'
+    'gates' | 'autonomy' | 'rag' | 'tools' | 'prompts' | 'discord'
   >('gates')
   const [mcpProbeStatus, setMcpProbeStatus] = useState<string | null>(null)
   const [mcpBusy, setMcpBusy] = useState(false)
@@ -260,6 +261,7 @@ export default function WorkflowPanel({
             ['autonomy', 'Autonomy'],
             ['rag', 'RAG / Memory'],
             ['tools', 'Tools / MCP'],
+            ['prompts', 'Prompts'],
             ['discord', 'Phone / Discord'],
           ] as const
         ).map(([id, label]) => (
@@ -712,6 +714,10 @@ export default function WorkflowPanel({
         onOpenCustomTools={onOpenCustomTools}
       />
       </>
+      )}
+
+      {(workflowTab === 'prompts') && (
+        <AgentPromptsPanel settings={settings} onSettingsChange={onSettingsChange} />
       )}
 
       {(workflowTab === 'discord') && (

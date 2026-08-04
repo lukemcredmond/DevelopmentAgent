@@ -429,6 +429,16 @@ export interface McpServerConfig {
   disabledTools?: string[]
 }
 
+export interface AgentPromptRoleConfig {
+  system?: string | null
+  stepInstructions?: string | null
+}
+
+export type AgentPromptDefaults = Record<
+  string,
+  { system: string; stepInstructions: string }
+>
+
 export interface CustomToolDef {
   id?: string
   name: string
@@ -581,6 +591,7 @@ export interface WorkflowSettings {
   autoSprintSessionRefreshEnabled?: boolean
   autoSprintSessionRefreshMinutes?: number
   autoSprintHardReload?: boolean
+  agentPrompts?: Record<string, AgentPromptRoleConfig>
 }
 
 export interface RecentToolEntry {
@@ -1214,6 +1225,7 @@ export interface WorkflowSettingsPayload {
   contextPackerMaxChars?: number
   repomixCommand?: string
   code2promptCommand?: string
+  agentPrompts?: Record<string, AgentPromptRoleConfig>
 }
 
 export interface SkillsResponse {
@@ -1505,6 +1517,12 @@ export const DEFAULT_WORKFLOW_SETTINGS: WorkflowSettings = {
   autoSprintSessionRefreshEnabled: true,
   autoSprintSessionRefreshMinutes: 60,
   autoSprintHardReload: true,
+  agentPrompts: {
+    'Product Owner': { system: null, stepInstructions: null },
+    Developer: { system: null, stepInstructions: null },
+    'Code Reviewer': { system: null, stepInstructions: null },
+    'QA Tester': { system: null, stepInstructions: null },
+  },
 }
 
 export const EMPTY_BOARD: Board = {

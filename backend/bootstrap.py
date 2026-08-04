@@ -80,9 +80,10 @@ def load_project_into_state(project_id: str) -> bool:
     from backend.services.mcp_tools import register_mcp_tools_from_settings
 
     register_mcp_tools_from_settings()
-    from backend.agents.registry import configure_agent_tools
+    from backend.agents.registry import configure_agent_tools, configure_agent_prompts
 
     configure_agent_tools()
+    configure_agent_prompts()
     from backend.services.sprint_session import detect_recovery_on_startup
 
     detect_recovery_on_startup(project_id)
@@ -112,9 +113,10 @@ def initialize() -> None:
         save_current_project_state()
         state.storage.set_active_project_id(state.CURRENT_PROJECT_ID)
 
-    from backend.agents.registry import configure_agent_tools
+    from backend.agents.registry import configure_agent_tools, configure_agent_prompts
 
     configure_agent_tools()
+    configure_agent_prompts()
     from backend.config import diagnostics_dir
 
     add_system_log(

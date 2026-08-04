@@ -4,9 +4,9 @@ from backend import state
 from backend.agents.scrum_agent import ScrumAgent
 from backend.agents.task_context import record_task_git_commit
 from backend.agents.tools import Tool
-from backend.services.brief_service import PO_EPIC_DECOMPOSITION_GUIDANCE, PO_SMALLEST_TASKS_GUIDANCE
 from backend.services.board_service import append_backlog_tasks, move_board_stage
 from backend.services.subtask_service import append_subtasks, escape_subtask_loop
+from backend.services.prompt_defaults import DEFAULT_AGENT_SYSTEM, get_effective_system_prompt
 from backend.services.git_service import git_commit, git_diff, git_init, git_status
 from backend.workspace.files import (
     apply_workspace_patch,
@@ -27,63 +27,25 @@ from backend.workspace.web_search import web_search
 agent_po = ScrumAgent(
     role="Product Owner",
     model="llama3:8b",
-    system_prompt=(
-        "You are the Product Owner. You decompose project briefs into backlog features (user stories) "
-        "as JSON arrays. When developers ask questions, you clarify requirements and acceptance criteria. "
-        "When the user adds features, refine them into clear developer-ready stories. "
-        "Use update_board to move tasks from 'Needs PO' back to 'In Progress' when clarification is done. "
-        "For cards in 'Refinement', answer developer questions, update AC/description, use add_backlog_tasks "
-        "to split scope, then move to 'Backlog' when refinementComplete. "
-        "Use add_backlog_tasks to add new stories to the Backlog; when splitting a large or stuck card, "
-        "pass split_from_task_id so the original moves to Done with a split note. "
-        "Use add_subtasks for ordered child todos under a parent card (during refinement set executionOrder). "
-        "Invoke add_backlog_tasks yourself — never instruct the user to call it. "
-        "If a card already covers the same request, do not recreate it — reuse that card and its outcomes. "
-        "Prefer acting (split, move board) over asking clarifying questions when acceptance criteria exist. "
-        "Use grep and glob_file_search to explore the codebase; prefer grep over search_code for patterns. "
-        "When planning Features (epics), prefer many focused product epics with multiple small children — "
-        "not a handful of audit/meta mega-epics. "
-        f"{PO_EPIC_DECOMPOSITION_GUIDANCE} "
-        f"{PO_SMALLEST_TASKS_GUIDANCE}"
-    ),
+    system_prompt=DEFAULT_AGENT_SYSTEM["Product Owner"],
 )
 
 agent_dev = ScrumAgent(
     role="Developer",
     model="qwen2.5-coder:14b",
-    system_prompt=(
-        "You implement features from the backlog. Use apply_patch for edits to existing files "
-        "and write_file for new files. Use list_dir and glob_file_search to inventory the workspace "
-        "when it is unfamiliar or STRUCTURE AUDIT reports MISSING — create missing entrypoints "
-        "before feature work. Use grep and glob_file_search to find symbols and files. "
-        "Never reply with a numbered plan or 'steps remain' list during implementation. "
-        "Use native Ollama tool calls for read_file, apply_patch, and write_file — "
-        "do not put tool JSON inside triple quotes or markdown fences. "
-        "If requirements are unclear, escalate to the Product Owner by moving the task to 'Needs PO'. "
-        "When implementation is complete, move the task to 'QA' for validation. "
-        "Continue iterating on test failures without asking the user unless blocked repeatedly. "
-        "Verify imports, packages, and dependencies with read_file/grep on manifests and source — "
-        "do not ask the user to confirm whether a package is installed or imported."
-    ),
+    system_prompt=DEFAULT_AGENT_SYSTEM["Developer"],
 )
 
 agent_cr = ScrumAgent(
     role="Code Reviewer",
     model="qwen2.5-coder:7b",
-    system_prompt=(
-        "You sit between Developer and QA. Audit the newly written files for logical bugs, layout problems, "
-        "styling issues, or security flaws. Use grep to locate relevant code. "
-        "On success, advance the task to QA. On failure, return to Developer."
-    ),
+    system_prompt=DEFAULT_AGENT_SYSTEM["Code Reviewer"],
 )
 
 agent_qa = ScrumAgent(
     role="QA Tester",
     model="qwen2.5-coder:7b",
-    system_prompt=(
-        "You validate completed features against the project brief. "
-        "Use read_file and run_test. Approve to 'Done' or return failures to 'In Progress'."
-    ),
+    system_prompt=DEFAULT_AGENT_SYSTEM["QA Tester"],
 )
 
 tool_write = Tool(
@@ -737,6 +699,15 @@ def configure_agent_tools(ws: dict | None = None) -> None:
         add_system_log("System", "info", f"Re-attached {mcp_count} MCP tool(s) to agents")
 
 
+def configure_agent_prompts(ws: dict | None = None) -> None:
+    """Apply per-project system prompt overrides to registry agents."""
+    from backend.services.workflow_settings import get_workflow_settings
+
+    settings = ws or get_workflow_settings()
+    for agent in (agent_po, agent_dev, agent_cr, agent_qa):
+        agent.system_prompt = get_effective_system_prompt(agent.role, settings)
+
+
 # Catalog of built-in tools (name → Tool). Populated after tool_* defs above.
 BUILTIN_TOOL_CATALOG: dict[str, Tool] = {
     "write_file": tool_write,
@@ -762,6 +733,7 @@ BUILTIN_TOOL_CATALOG: dict[str, Tool] = {
 }
 
 configure_agent_tools()
+configure_agent_prompts()
 
 AGENT_MAP = {
     "po": agent_po,

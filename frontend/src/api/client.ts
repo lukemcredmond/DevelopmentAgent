@@ -1,6 +1,7 @@
 import type {
   AppEvent,
   AppState,
+  AgentPromptDefaults,
   BriefPayload,
   ChatPayload,
   ChatResponse,
@@ -772,6 +773,19 @@ export async function updateWorkflowSettings(
   return request<AppState>('/api/workflow/settings', {
     method: 'POST',
     body: JSON.stringify(payload),
+  })
+}
+
+export async function fetchAgentPromptDefaults(): Promise<{
+  agentPromptDefaults: AgentPromptDefaults
+}> {
+  return request('/api/workflow/agent-prompt-defaults')
+}
+
+export async function restoreAgentPrompts(role?: string): Promise<AppState> {
+  return request<AppState>('/api/workflow/settings/restore-agent-prompts', {
+    method: 'POST',
+    body: JSON.stringify(role ? { role } : {}),
   })
 }
 

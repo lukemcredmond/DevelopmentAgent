@@ -149,6 +149,13 @@ DEFAULT_WORKFLOW_SETTINGS: Dict[str, Any] = {
     "contextPackerMaxChars": 12000,
     "repomixCommand": "repomix",
     "code2promptCommand": "code2prompt",
+    # Per-role prompt overrides (null/empty → shipped defaults in prompt_defaults.py).
+    "agentPrompts": {
+        "Product Owner": {"system": None, "stepInstructions": None},
+        "Developer": {"system": None, "stepInstructions": None},
+        "Code Reviewer": {"system": None, "stepInstructions": None},
+        "QA Tester": {"system": None, "stepInstructions": None},
+    },
 }
 
 DEFAULT_SPRINT_SUMMARY: Dict[str, Any] = {
@@ -183,9 +190,23 @@ def get_workflow_settings(project_id: str | None = None) -> Dict[str, Any]:
 
 
 def save_workflow_settings(settings: Dict[str, Any], project_id: str | None = None) -> Dict[str, Any]:
+    from backend.services.prompt_defaults import validate_agent_prompts_patch
+
     pid = project_id or state.CURRENT_PROJECT_ID
     current = get_workflow_settings(pid)
     updates = dict(settings)
+    validate_agent_prompts_patch(updates)
+    if "agentPrompts" in updates and isinstance(updates["agentPrompts"], dict):
+        base_ap = dict(current.get("agentPrompts") or DEFAULT_WORKFLOW_SETTINGS.get("agentPrompts") or {})
+        for role, cfg in updates["agentPrompts"].items():
+            if not isinstance(cfg, dict):
+                continue
+            prev = dict(base_ap.get(role) or {"system": None, "stepInstructions": None})
+            for key in ("system", "stepInstructions"):
+                if key in cfg:
+                    prev[key] = cfg[key]
+            base_ap[role] = prev
+        updates["agentPrompts"] = base_ap
     if not str(updates.get("qdrantApiKey") or "").strip():
         updates.pop("qdrantApiKey", None)
     if not str(updates.get("phoneNotifyDiscordWebhookUrl") or "").strip():
@@ -210,6 +231,23 @@ def reset_workflow_settings(project_id: str | None = None) -> Dict[str, Any]:
     defaults = dict(DEFAULT_WORKFLOW_SETTINGS)
     state.storage.set_setting(_settings_key(pid), json.dumps(defaults))
     return defaults
+
+
+def restore_agent_prompt_overrides(
+    project_id: str | None = None,
+    role: str | None = None,
+) -> Dict[str, Any]:
+    """Clear per-project agent prompt overrides and persist."""
+    from backend.services.prompt_defaults import AGENT_ROLES, clear_agent_prompt_overrides
+
+    if role is not None and role not in AGENT_ROLES:
+        raise ValueError(f"Unknown agent role: {role}")
+
+    pid = project_id or state.CURRENT_PROJECT_ID
+    current = get_workflow_settings(pid)
+    merged = clear_agent_prompt_overrides(current, role=role)
+    state.storage.set_setting(_settings_key(pid), json.dumps(merged))
+    return merged
 
 
 def get_last_sprint_summary(project_id: str | None = None) -> Dict[str, Any]:

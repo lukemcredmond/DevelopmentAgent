@@ -131,6 +131,7 @@ def get_tools_catalog():
         AGENT_MAP,
         BUILTIN_TOOL_CATALOG,
         configure_agent_tools,
+        configure_agent_prompts,
     )
     from backend.services.custom_tools import QUERY_SQL_PRESET, list_custom_tool_defs
     from backend.services.workflow_settings import get_workflow_settings
@@ -149,6 +150,7 @@ def get_tools_catalog():
         customs = [{**d, "kind": "custom"} for d in list_custom_tool_defs(ws)]
         # Ensure registries reflect current settings
         configure_agent_tools(ws)
+        configure_agent_prompts(ws)
         agents_out = {}
         for key, agent in AGENT_MAP.items():
             role = AGENT_LABELS.get(key, agent.role)
@@ -233,6 +235,7 @@ def put_custom_tools(payload: CustomToolsSavePayload):
             save_workflow_settings(ws)
             saved = list_project_custom_tool_defs(ws)
         configure_agent_tools()
+        configure_agent_prompts()
         return {
             "ok": True,
             "scope": scope_norm,

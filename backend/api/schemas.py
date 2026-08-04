@@ -270,6 +270,7 @@ class WorkflowSettingsPayload(BaseModel):
     autoSprintSessionRefreshEnabled: Optional[bool] = None
     autoSprintSessionRefreshMinutes: Optional[int] = None
     autoSprintHardReload: Optional[bool] = None
+    agentPrompts: Optional[Dict[str, Dict[str, Optional[str]]]] = None
 
 
 class DiagnoseTaskPayload(BaseModel):

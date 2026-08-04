@@ -14,7 +14,11 @@ from backend.services.sprint_service import (
     run_po_plan_outline,
     run_sprint_step,
 )
-from backend.services.workflow_settings import get_workflow_settings, save_workflow_settings
+from backend.services.workflow_settings import (
+    get_workflow_settings,
+    restore_agent_prompt_overrides,
+    save_workflow_settings,
+)
 
 router = APIRouter()
 
@@ -25,6 +29,10 @@ class PhoneNotifyTestPayload(BaseModel):
     phone_notify_discord_webhook_url: str | None = Field(
         default=None, alias="phoneNotifyDiscordWebhookUrl"
     )
+
+
+class RestoreAgentPromptsPayload(BaseModel):
+    role: str | None = None
 
 
 @router.post("/api/plan")
@@ -108,11 +116,15 @@ def cancel_auto_sprint():
 def update_workflow_settings(payload: WorkflowSettingsPayload):
     with state.STATE_LOCK:
         updates = payload.model_dump(exclude_none=True)
-        saved = save_workflow_settings(updates)
+        try:
+            saved = save_workflow_settings(updates)
+        except ValueError as e:
+            raise HTTPException(status_code=400, detail=str(e)) from e
         normalize_board_lanes(state.SHARED_BOARD)
-        from backend.agents.registry import configure_agent_tools
+        from backend.agents.registry import configure_agent_tools, configure_agent_prompts
 
         configure_agent_tools(saved)
+        configure_agent_prompts(saved)
     # Reload optional Discord Gateway bot when enable/token/allowlist change.
     try:
         from backend.services.discord_bot import schedule_discord_bot_reload
@@ -128,6 +140,26 @@ def get_workflow_settings_route():
     from backend.services.qdrant_auth import sanitize_workflow_settings_for_client
 
     return {"workflowSettings": sanitize_workflow_settings_for_client(get_workflow_settings())}
+
+
+@router.get("/api/workflow/agent-prompt-defaults")
+def get_agent_prompt_defaults_route():
+    from backend.services.prompt_defaults import agent_prompt_defaults_for_client
+
+    return {"agentPromptDefaults": agent_prompt_defaults_for_client()}
+
+
+@router.post("/api/workflow/settings/restore-agent-prompts")
+def post_restore_agent_prompts(payload: RestoreAgentPromptsPayload):
+    with state.STATE_LOCK:
+        try:
+            saved = restore_agent_prompt_overrides(role=payload.role)
+        except ValueError as e:
+            raise HTTPException(status_code=400, detail=str(e)) from e
+        from backend.agents.registry import configure_agent_prompts
+
+        configure_agent_prompts(saved)
+    return build_state_response()
 
 
 @router.post("/api/workflow/phone-notify/test")
