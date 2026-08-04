@@ -1034,6 +1034,7 @@ export default function TaskDetailModal({
               <TaskFlowPanel
                 taskId={task.id}
                 active={flowOpen}
+                refreshKey={flowRefreshKey}
                 highlightWorkItemId={highlightWorkItemId}
                 onHighlightWorkItem={(wid) => {
                   setHighlightWorkItemManual(Boolean(wid))

@@ -23,6 +23,7 @@ from backend.services.tool_cache import (
     is_probe_command,
     store_cached_result,
 )
+from backend.workspace.files import record_step_file_read
 
 
 def _clear_board():
@@ -179,6 +180,9 @@ def test_same_args_success_limit_skips_then_stops():
     clear_tool_cache()
     args = {"path": "pubspec.yaml"}
     store_cached_result("read_file", args, "name: app\n", True)
+
+    state.STEP_FILE_READS.clear()
+    record_step_file_read("pubspec.yaml", "name: app\n")
 
     key = ("read_file", json.dumps(args, sort_keys=True, default=str))
     successful.append(key)

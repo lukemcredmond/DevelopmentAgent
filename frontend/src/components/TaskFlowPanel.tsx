@@ -11,6 +11,7 @@ import { llmCollapsedPreview, llmToolCallCount } from '../utils/flowLlmPreview'
 interface TaskFlowPanelProps {
   taskId: string
   active: boolean
+  refreshKey?: number | string
   highlightWorkItemId?: string | null
   onHighlightWorkItem?: (workItemId: string | null) => void
 }
@@ -217,6 +218,7 @@ function FlowNode({
 export default function TaskFlowPanel({
   taskId,
   active,
+  refreshKey = 0,
   highlightWorkItemId = null,
   onHighlightWorkItem,
 }: TaskFlowPanelProps) {
@@ -243,7 +245,7 @@ export default function TaskFlowPanel({
     return () => {
       cancelled = true
     }
-  }, [active, taskId])
+  }, [active, taskId, refreshKey])
 
   useEffect(() => {
     if (!highlightWorkItemId || !data) return

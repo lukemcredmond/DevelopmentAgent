@@ -27,6 +27,41 @@ def filter_tool_keys_for_in_step_seed(keys: List[tuple[str, str]]) -> List[tuple
     return [k for k in keys if k[0] not in exempt]
 
 
+def purge_read_file_success_keys_for_path(
+    successful_tool_keys: List[Tuple[str, str]],
+    path: str,
+) -> None:
+    """Drop in-step duplicate keys for read_file on path after apply_patch/write_file."""
+    import json
+
+    from backend.workspace.files import resolve_workspace_path
+
+    if not path.strip():
+        return
+    try:
+        target_safe = resolve_workspace_path(path)
+    except ValueError:
+        target_safe = path.strip()
+    keep: List[Tuple[str, str]] = []
+    for name, args_json in successful_tool_keys:
+        if name != "read_file":
+            keep.append((name, args_json))
+            continue
+        try:
+            args = json.loads(args_json)
+        except json.JSONDecodeError:
+            keep.append((name, args_json))
+            continue
+        p = str(args.get("path") or "")
+        try:
+            if resolve_workspace_path(p) != target_safe:
+                keep.append((name, args_json))
+        except ValueError:
+            if p != path.strip():
+                keep.append((name, args_json))
+    successful_tool_keys[:] = keep
+
+
 def normalize_run_command_for_duplicate(command: str) -> str:
     """Stable key for in-step duplicate detection on run_command."""
     text = str(command or "").strip()

@@ -991,7 +991,18 @@ class ScrumAgent:
             duplicate_in_step_soft_skip_applies,
         )
 
-        if duplicate_in_step_hard_stop_applies(tool_name) and same_success >= SAME_ARGS_SUCCESS_LIMIT - 1:
+        def _read_file_dup_skip_ok() -> bool:
+            if tool_name != "read_file":
+                return True
+            from backend.workspace.files import read_file_in_step_duplicate_skip_allowed
+
+            return read_file_in_step_duplicate_skip_allowed(arguments)
+
+        if (
+            _read_file_dup_skip_ok()
+            and duplicate_in_step_hard_stop_applies(tool_name)
+            and same_success >= SAME_ARGS_SUCCESS_LIMIT - 1
+        ):
             # Already succeeded once and skipped once (count >= 2) → stop like failure stuck-loop
             cmd_hint = ""
             if tool_name == "run_command" and isinstance(arguments, dict):
@@ -1038,7 +1049,11 @@ class ScrumAgent:
             )
             return tool_name, arguments, result, stop_msg
 
-        if duplicate_in_step_soft_skip_applies(tool_name) and same_success >= 1:
+        if (
+            _read_file_dup_skip_ok()
+            and duplicate_in_step_soft_skip_applies(tool_name)
+            and same_success >= 1
+        ):
             from backend.services.tool_cache import get_cached_result
 
             cached = get_cached_result(tool_name, arguments)
@@ -1147,6 +1162,14 @@ class ScrumAgent:
         if result.success and not result.pending_approval:
             with _FAILURE_LOCK:
                 successful_tool_keys.append(dup_key)
+                if tool_name in ("apply_patch", "write_file"):
+                    from backend.services.duplicate_tool_policy import (
+                        purge_read_file_success_keys_for_path,
+                    )
+
+                    path_key = str(arguments.get("path") or "")
+                    if path_key:
+                        purge_read_file_success_keys_for_path(successful_tool_keys, path_key)
             _track_fingerprint()
 
         if not result.success and not result.pending_approval:

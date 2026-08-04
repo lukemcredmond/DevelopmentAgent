@@ -302,6 +302,18 @@ def invalidate_step_file_read(path: str) -> None:
     state.STEP_FILE_READS.pop(safe_path, None)
 
 
+def read_file_in_step_duplicate_skip_allowed(arguments: dict) -> bool:
+    """When False, in-step duplicate skip must not run — execute read_file on disk."""
+    path = str((arguments or {}).get("path") or "")
+    if not path.strip():
+        return True
+    try:
+        safe_path = resolve_workspace_path(path)
+    except ValueError:
+        return True
+    return safe_path in state.STEP_FILE_READS
+
+
 def _normalize_for_patch_match(text: str) -> str:
     return text.replace("\r\n", "\n").replace("\r", "\n")
 
