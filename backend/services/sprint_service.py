@@ -2470,6 +2470,38 @@ def run_po_split_task(task_id: str, ollama_url: str, guidance: str = "") -> Dict
         clear_active_sprint_context()
 
 
+def _po_clarification_retry_prompt_block(task: Dict[str, Any]) -> str:
+    """Surface prior incomplete PO replies so the next step is not a blank slate."""
+    attempts: List[Dict[str, Any]] = []
+    for decision in reversed(task.get("decisions") or []):
+        if not isinstance(decision, dict):
+            continue
+        if decision.get("agent") != "Product Owner":
+            continue
+        if decision.get("type") not in ("clarification", "clarification_incomplete"):
+            continue
+        attempts.append(decision)
+        if len(attempts) >= 2:
+            break
+    if not attempts:
+        return ""
+    lines = [
+        "\n=== PRIOR PO CLARIFICATION ATTEMPTS (incomplete — do not repeat verbatim) ===",
+        "The Developer is blocked until you provide clarification JSON and move the card to In Progress.",
+    ]
+    for decision in reversed(attempts):
+        body = str(decision.get("detail") or decision.get("summary") or "").strip()
+        if not body:
+            continue
+        ts = decision.get("timestamp") or "?"
+        lines.append(f"[{ts}] {body[:1500]}")
+    lines.append(
+        "Required now: JSON with description + acceptanceCriteria (+ optional briefAddition), "
+        "then update_board → In Progress. Do not output Developer implementation steps.\n"
+    )
+    return "\n".join(lines)
+
+
 def _apply_po_clarification_result(active_task: Dict[str, Any], result: str) -> bool:
     obj = extract_json_object_from_text(result)
     if not obj:
@@ -2869,8 +2901,10 @@ def _run_po_clarification(active_task: Dict[str, Any], brief: str) -> None:
     except Exception:
         pass
     add_system_log("Product Owner", "info", f"Clarifying '{active_task['title']}'…")
+    task_for_prompt = find_task_by_id(task_id) or active_task
     prompt = (
-        build_task_prompt(active_task, brief)
+        build_task_prompt(task_for_prompt, brief)
+        + _po_clarification_retry_prompt_block(task_for_prompt)
         + "\nDeveloper needs clarification. Reply with a JSON object: "
         '{"description": "...", "acceptanceCriteria": ["..."], "briefAddition": "..."}\n'
         "Then use update_board to move back to 'In Progress'."
@@ -2906,7 +2940,17 @@ def _run_po_clarification(active_task: Dict[str, Any], brief: str) -> None:
                 record_task_decision(task_id, "Product Owner", "clarification", "Offline clarification")
                 clarified = True
         else:
-            record_task_decision(task_id, "Product Owner", "clarification", result[:500], result)
+            obj = extract_json_object_from_text(result)
+            if obj and (obj.get("description") or obj.get("acceptanceCriteria")):
+                record_task_decision(task_id, "Product Owner", "clarification", result[:500], result)
+            elif result and result.strip():
+                record_task_decision(
+                    task_id,
+                    "Product Owner",
+                    "clarification_incomplete",
+                    result[:500],
+                    result,
+                )
             clarified = _apply_po_clarification_result(task, result)
         if not deferred_sim and _task_in_lane(task_id, "Needs PO"):
             if clarified:

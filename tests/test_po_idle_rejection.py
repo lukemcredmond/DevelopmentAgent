@@ -3,6 +3,7 @@
 from backend import state
 from backend.agents.scrum_agent import (
     _looks_like_po_idle_greeting,
+    _looks_like_po_implementation_plan,
     _looks_like_po_work_product,
     _po_step_should_reject_text_only,
 )
@@ -42,3 +43,22 @@ def test_po_accepts_json_after_tools():
         )
     finally:
         state.ACTIVE_SPRINT_AGENT = None
+
+
+def test_po_rejects_dev_step_list_in_needs_po(monkeypatch):
+    from backend.agents.task_context import init_new_task
+
+    state.ACTIVE_SPRINT_AGENT = "Product Owner"
+    state.SHARED_BOARD.setdefault("Needs PO", [])
+    task = init_new_task({"id": "T-PO-PLAN", "title": "Meal backup", "description": "d", "status": "Needs PO"})
+    state.SHARED_BOARD["Needs PO"] = [task]
+    text = (
+        "Develop the backup functionality for meal data. Follow these steps:\n"
+        "1. Add export service\n2. Wire UI\n"
+    )
+    try:
+        assert _looks_like_po_implementation_plan(text, "T-PO-PLAN")
+        assert _po_step_should_reject_text_only(text, set(), "T-PO-PLAN")
+    finally:
+        state.ACTIVE_SPRINT_AGENT = None
+        state.SHARED_BOARD["Needs PO"] = []

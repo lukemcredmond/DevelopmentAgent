@@ -218,6 +218,35 @@ _PO_IDLE_REJECTION_MESSAGE = (
     "add_backlog_tasks, add_subtasks, or reply with the JSON format requested in Task Detail."
 )
 
+_PO_CLARIFICATION_PLAN_REJECTION = (
+    "You are the Product Owner clarifying requirements for the Developer — not implementing code. "
+    "Do not list development steps or tell the Developer how to build the feature. "
+    'Reply with a JSON object: {"description": "...", "acceptanceCriteria": ["..."], '
+    '"briefAddition": "..."} then call update_board to move the task back to In Progress.'
+)
+
+
+def _looks_like_po_implementation_plan(content: str, task_id: Optional[str] = None) -> bool:
+    """Dev-style step lists while acting as PO (especially Needs PO clarification)."""
+    if _looks_like_po_work_product(content):
+        return False
+    lower = (content or "").lower()
+    if "follow these steps" in lower or "follow theses steps" in lower:
+        return True
+    if "develop the" in lower and re.search(r"(?m)^\s*\d+\.", content or ""):
+        return True
+    lane = get_task_lane(task_id) if task_id else get_task_lane(state.ACTIVE_SPRINT_TASK_ID or "")
+    if lane == "Needs PO":
+        return _looks_like_plan_response(content)
+    return False
+
+
+def _po_rejection_system_message(content: str, task_id: Optional[str]) -> str:
+    lane = get_task_lane(task_id) if task_id else ""
+    if lane == "Needs PO" and _looks_like_po_implementation_plan(content, task_id):
+        return _PO_CLARIFICATION_PLAN_REJECTION
+    return _PO_IDLE_REJECTION_MESSAGE
+
 
 def _looks_like_po_idle_greeting(content: str) -> bool:
     lower = (content or "").lower()
@@ -256,6 +285,8 @@ def _po_step_should_reject_text_only(
         return False
     if _looks_like_po_work_product(content):
         return False
+    if task_id and get_task_lane(task_id) == "Needs PO" and _looks_like_po_implementation_plan(content, task_id):
+        return True
     if _looks_like_po_idle_greeting(content):
         return bool(task_id or tools_used)
     explored = bool(tools_used & _PO_READONLY_TOOLS)
@@ -1955,7 +1986,12 @@ class ScrumAgent:
                         f"continuing to iter {min(iteration + 1, max_iterations)}/{max_iterations}.",
                     )
                     log_event("po_idle_rejected", content[:200])
-                    messages.append({"role": "system", "content": _PO_IDLE_REJECTION_MESSAGE})
+                    messages.append(
+                        {
+                            "role": "system",
+                            "content": _po_rejection_system_message(content, task_id),
+                        }
+                    )
                     continue
 
                 if content and _dev_step_needs_more_tools(tools_used, task_id):
