@@ -28,6 +28,7 @@ def save_current_project_state() -> None:
         backup.get("dev") or "",
         backup.get("cr") or "",
         backup.get("qa") or "",
+        plan_outline=getattr(state, "PROJECT_PLAN_OUTLINE", "") or "",
     )
     try:
         write_board_snapshot(

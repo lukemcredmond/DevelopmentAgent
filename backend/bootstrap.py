@@ -28,6 +28,7 @@ def load_project_into_state(project_id: str) -> bool:
     state.CURRENT_PROJECT_ID = proj["id"]
     state.PROJECT_NAME = proj["name"]
     state.PROJECT_BRIEF = proj.get("brief") or ""
+    state.PROJECT_PLAN_OUTLINE = proj.get("plan_outline") or ""
     state.WORKSPACE_DIR = proj["workspace_dir"]
     state.SHARED_BOARD = normalize_board_lanes(proj["board_state"])
     normalize_board_tasks()

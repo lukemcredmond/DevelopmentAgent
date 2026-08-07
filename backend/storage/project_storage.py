@@ -55,6 +55,10 @@ class ProjectStorage:
                     conn.execute(f"ALTER TABLE projects ADD COLUMN {col} TEXT")
                 except sqlite3.OperationalError:
                     pass
+            try:
+                conn.execute("ALTER TABLE projects ADD COLUMN plan_outline TEXT")
+            except sqlite3.OperationalError:
+                pass
             conn.execute(
                 """
                 CREATE TABLE IF NOT EXISTS settings (
@@ -147,6 +151,7 @@ class ProjectStorage:
         dev_backup_model: str = "",
         cr_backup_model: str = "",
         qa_backup_model: str = "",
+        plan_outline: str = "",
     ) -> None:
         with sqlite3.connect(self.db_path) as conn:
             conn.execute(
@@ -156,9 +161,10 @@ class ProjectStorage:
                     po_skills, dev_skills, cr_skills, qa_skills,
                     po_model, dev_model, cr_model, qa_model,
                     po_backup_model, dev_backup_model, cr_backup_model, qa_backup_model,
+                    plan_outline,
                     updated_at
                 )
-                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, CURRENT_TIMESTAMP)
+                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, CURRENT_TIMESTAMP)
                 ON CONFLICT(id) DO UPDATE SET
                     name=excluded.name,
                     brief=excluded.brief,
@@ -177,6 +183,7 @@ class ProjectStorage:
                     dev_backup_model=excluded.dev_backup_model,
                     cr_backup_model=excluded.cr_backup_model,
                     qa_backup_model=excluded.qa_backup_model,
+                    plan_outline=excluded.plan_outline,
                     updated_at=CURRENT_TIMESTAMP
                 """,
                 (
@@ -198,6 +205,7 @@ class ProjectStorage:
                     dev_backup_model or "",
                     cr_backup_model or "",
                     qa_backup_model or "",
+                    plan_outline or "",
                 ),
             )
             conn.commit()
@@ -245,6 +253,9 @@ class ProjectStorage:
                     else "",
                     "qa_backup_model": row["qa_backup_model"]
                     if "qa_backup_model" in row.keys() and row["qa_backup_model"]
+                    else "",
+                    "plan_outline": row["plan_outline"]
+                    if "plan_outline" in row.keys() and row["plan_outline"]
                     else "",
                 }
         return None

@@ -48,7 +48,8 @@ from backend.services.brief_service import (
     append_brief_text,
     existing_backlog_titles,
     record_brief_changelog,
-    set_project_brief,
+    resolve_brief_for_sprint,
+    set_project_plan_outline,
 )
 from backend.services.prompt_profile import is_local_slm_profile, po_planning_guidance_block
 from backend.services.events import publish_event
@@ -2007,7 +2008,7 @@ def run_po_plan_outline(brief: str, ollama_url: str) -> str:
     from backend.services.events import publish_event
     from backend.services.prompt_budget import truncate_brief
 
-    set_project_brief(brief, source="user")
+    brief = resolve_brief_for_sprint(brief)
     agent_po.ollama_url = ollama_url
     normalize_board_lanes(state.SHARED_BOARD)
     ws = get_workflow_settings()
@@ -2069,20 +2070,19 @@ def run_po_plan_outline(brief: str, ollama_url: str) -> str:
             )
 
     if outline:
-        state.PROJECT_PLAN_OUTLINE = outline
+        set_project_plan_outline(outline, source="po_plan_outline")
         for block in outline.split("\n\n"):
             stripped = block.strip()
             if stripped:
                 publish_event("plan_chunk", {"chunk": stripped + "\n\n"})
         publish_event("plan_chunk", {"phase": "done", "outline": outline})
         add_system_log("Product Owner", "success", "Plan outline ready — review before generating backlog.")
-        save_current_project_state()
     return outline
 
 
 def run_po_plan_backlog(brief: str, ollama_url: str, outline: Optional[str] = None) -> int:
     """Convert an approved plan outline into backlog JSON tasks (phase 2)."""
-    set_project_brief(brief, source="user")
+    brief = resolve_brief_for_sprint(brief)
     agent_po.ollama_url = ollama_url
     normalize_board_lanes(state.SHARED_BOARD)
     existing = existing_backlog_titles()
@@ -2155,7 +2155,7 @@ def run_po_plan(brief: str, ollama_url: str) -> None:
         )
         return
 
-    set_project_brief(brief, source="user")
+    brief = resolve_brief_for_sprint(brief)
     agent_po.ollama_url = ollama_url
     normalize_board_lanes(state.SHARED_BOARD)
     existing = existing_backlog_titles()
@@ -3684,7 +3684,7 @@ def has_sprint_work() -> bool:
 
 
 def run_sprint_step(brief: str, ollama_url: str) -> None:
-    set_project_brief(brief, source="user")
+    brief = resolve_brief_for_sprint(brief)
     agent_dev.ollama_url = ollama_url
     agent_po.ollama_url = ollama_url
     agent_qa.ollama_url = ollama_url
@@ -3860,7 +3860,7 @@ def run_in_progress_step(
     """Run Dev on an In Progress card only — skips Needs PO, Backlog, and Refinement."""
     from backend.services.logs import add_system_log
 
-    set_project_brief(brief, source="user")
+    brief = resolve_brief_for_sprint(brief)
     agent_dev.ollama_url = ollama_url
     agent_po.ollama_url = ollama_url
     agent_qa.ollama_url = ollama_url
@@ -3984,12 +3984,15 @@ def _build_sprint_summary(steps: int, status: str = "completed") -> Dict[str, An
 def run_auto_sprint(brief: str, ollama_url: str, max_steps: int | None = None) -> Dict[str, Any]:
     import time
 
+    from backend.services.backlog_preflight import log_backlog_preflight_warnings
     from backend.services.sprint_session import set_sprint_mode
 
     set_sprint_mode("auto")
     state.SPRINT_CANCEL = False
     state.SPRINT_CANCEL_INTENT = None
     state.SPRINT_NEEDS_USER_COUNT = 0
+    brief = resolve_brief_for_sprint(brief)
+    log_backlog_preflight_warnings()
     ws = get_workflow_settings()
     limit = max_steps if max_steps is not None else int(ws.get("maxSprintSteps", 20))
     state.SPRINT_PROGRESS_MAX = limit

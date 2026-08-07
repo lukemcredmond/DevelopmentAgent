@@ -207,6 +207,20 @@ export default function WorkflowPanel({
         {(
           [
             {
+              id: 'fast-dev',
+              label: 'Fast first code',
+              patch: {
+                prioritizeImplementationOverRefinement: true,
+                requireBacklogRefinement: false,
+                enableFocusMicroSteps: false,
+                maxLlmIterationsPerStep: 8,
+                promptProfile: 'local_slm',
+                localSlmSprintPreload: true,
+                toolOutputEchoStopAfter: 2,
+                enableLlmDecisionTrace: true,
+              },
+            },
+            {
               id: 'solo',
               label: 'Solo',
               patch: {

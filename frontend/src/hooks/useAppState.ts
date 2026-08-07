@@ -451,6 +451,7 @@ export function useAppState() {
   const agentRunFlushTimerRef = useRef<number | null>(null)
   const sseStatePendingRef = useRef<AppState | null>(null)
   const sseStateFlushTimerRef = useRef<number | null>(null)
+  const planStreamFirstChunkRef = useRef(true)
   const [sseLive, setSseLive] = useState(true)
   const [lastToolEventAt, setLastToolEventAt] = useState<string | null>(null)
 
@@ -949,14 +950,21 @@ export function useAppState() {
         const d = event.data as Record<string, unknown>
         if (d.phase === 'start') {
           setPlanOutlineStreaming(true)
-          setPlanOutline('')
+          planStreamFirstChunkRef.current = true
         } else if (d.phase === 'done') {
           setPlanOutlineStreaming(false)
+          planStreamFirstChunkRef.current = true
           if (d.outline != null) {
             setPlanOutline(String(d.outline))
           }
         } else if (d.chunk != null) {
-          setPlanOutline((prev) => prev + String(d.chunk))
+          const chunk = String(d.chunk)
+          if (planStreamFirstChunkRef.current) {
+            planStreamFirstChunkRef.current = false
+            setPlanOutline(chunk)
+          } else {
+            setPlanOutline((prev) => prev + chunk)
+          }
         }
       } else if (event.type === 'activity' && event.data) {
         appendActivityRef.current(event.data as ActivityEvent)

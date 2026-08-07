@@ -189,6 +189,16 @@ export default memo(function Sidebar({
           <p className="text-[9px] text-cat-overlay leading-relaxed">
             Plan → Features → sprint. Use Settings for models and workflow.
           </p>
+          {state.backlogPreflight &&
+            (state.backlogPreflight.implementationReady != null ||
+              (state.backlogPreflight.warnings?.length ?? 0) > 0) && (
+              <p className="text-[9px] text-amber-200/90 leading-relaxed">
+                Ready for Dev: {state.backlogPreflight.implementationReady ?? 0}
+                {typeof state.backlogPreflight.planningOnly === 'number' &&
+                  state.backlogPreflight.planningOnly > 0 &&
+                  ` · planning-only: ${state.backlogPreflight.planningOnly}`}
+              </p>
+            )}
           <div className="space-y-1.5">
             <button
               type="button"

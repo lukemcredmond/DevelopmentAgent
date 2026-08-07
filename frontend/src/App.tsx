@@ -19,6 +19,7 @@ import {
   importProject,
   loadProject,
   moveTask,
+  patchProjectDocuments,
   planAndRun,
   removeSkill,
   escapeSubtaskLoop,
@@ -225,6 +226,62 @@ export default function App() {
 
   const [ollamaUrl, setOllamaUrl] = useState('http://localhost:11434')
   const [brief, setBrief] = useState('')
+  const briefDirtyRef = useRef(false)
+  const planDirtyRef = useRef(false)
+  const documentsSaveTimerRef = useRef<number | null>(null)
+
+  const handleBriefChange = useCallback((v: string) => {
+    briefDirtyRef.current = true
+    setBrief(v)
+  }, [])
+
+  const handlePlanOutlineChange = useCallback(
+    (v: string) => {
+      planDirtyRef.current = true
+      setPlanOutline(v)
+    },
+    [setPlanOutline],
+  )
+
+  useEffect(() => {
+    if (documentsSaveTimerRef.current) {
+      window.clearTimeout(documentsSaveTimerRef.current)
+    }
+    if (!briefDirtyRef.current && !planDirtyRef.current) {
+      return
+    }
+    documentsSaveTimerRef.current = window.setTimeout(() => {
+      documentsSaveTimerRef.current = null
+      const payload: { brief?: string; projectPlanOutline?: string } = {}
+      if (briefDirtyRef.current) payload.brief = brief
+      if (planDirtyRef.current) payload.projectPlanOutline = planOutline
+      void patchProjectDocuments(payload)
+        .then((data) => {
+          applyState(data)
+          briefDirtyRef.current = false
+          planDirtyRef.current = false
+        })
+        .catch(() => {})
+    }, 1500)
+    return () => {
+      if (documentsSaveTimerRef.current) {
+        window.clearTimeout(documentsSaveTimerRef.current)
+      }
+    }
+  }, [brief, planOutline, applyState])
+
+  useEffect(() => {
+    if (briefDirtyRef.current) return
+    const server = state.brief ?? ''
+    if (server !== brief) setBrief(server)
+  }, [state.brief, brief])
+
+  useEffect(() => {
+    if (planDirtyRef.current || planOutlineStreaming) return
+    const server = state.projectPlanOutline
+    if (server != null && server !== planOutline) setPlanOutline(server)
+  }, [state.projectPlanOutline, planOutline, planOutlineStreaming, setPlanOutline])
+
   const [projectName, setProjectName] = useState('My Local Scrum Project')
   const [workspaceDir, setWorkspaceDir] = useState('./workspace')
   const [skillsDir, setSkillsDir] = useState('./global_skills')
@@ -472,6 +529,11 @@ export default function App() {
 
   useEffect(() => {
     applyStateFields(state, setters)
+    briefDirtyRef.current = false
+    planDirtyRef.current = false
+    if (state.projectPlanOutline != null) {
+      setPlanOutline(String(state.projectPlanOutline))
+    }
     if (workspaceOpen || selectedFile) {
       setLocalFiles(state.files)
     } else {
@@ -1508,7 +1570,7 @@ export default function App() {
 
         <BriefPanel
           brief={brief}
-          onBriefChange={setBrief}
+          onBriefChange={handleBriefChange}
           open={briefOpen}
           onOpenChange={setBriefOpen}
           onOpenManualTask={() => {
@@ -1520,7 +1582,7 @@ export default function App() {
           }}
           autonomousMode={state.workflowSettings?.autonomousMode ?? false}
           planOutline={planOutline}
-          onPlanOutlineChange={setPlanOutline}
+          onPlanOutlineChange={handlePlanOutlineChange}
           planOutlineStreaming={planOutlineStreaming}
           onGenerateBacklog={() =>
             void withLoading(async () =>

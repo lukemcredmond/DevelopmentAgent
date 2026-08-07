@@ -105,4 +105,7 @@ def build_state_response(*, include_files: bool = True) -> dict:
     if pending_sim is not None:
         response["pendingSimulation"] = pending_sim
         response["sprintPausedForSimulation"] = True
+    from backend.services.backlog_preflight import build_backlog_preflight
+
+    response["backlogPreflight"] = build_backlog_preflight()
     return response

@@ -110,6 +110,16 @@ export async function updateConfig(payload: ConfigPayload): Promise<AppState> {
   })
 }
 
+export async function patchProjectDocuments(payload: {
+  brief?: string
+  projectPlanOutline?: string
+}): Promise<AppState> {
+  return request<AppState>('/api/project/documents', {
+    method: 'PATCH',
+    body: JSON.stringify(payload),
+  })
+}
+
 export async function createProject(
   payload: CreateProjectPayload,
 ): Promise<AppState> {

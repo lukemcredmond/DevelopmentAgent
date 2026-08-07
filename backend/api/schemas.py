@@ -15,6 +15,11 @@ class PlanBacklogPayload(BaseModel):
     outline: Optional[str] = None
 
 
+class ProjectDocumentsPayload(BaseModel):
+    brief: Optional[str] = None
+    projectPlanOutline: Optional[str] = None
+
+
 class ConfigPayload(BaseModel):
     projectName: str
     workspaceDir: str

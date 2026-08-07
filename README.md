@@ -1251,6 +1251,15 @@ flowchart LR
 | Never see Qdrant / semantic preload | Docker Qdrant up → Workflow **Reindex codebase** → chunk count &gt; 0. Console: `Pre-loaded N semantic chunk(s)`. Dev can also call `semantic_search`. With **`local_slm`**, preload uses smaller budgets unless **Sprint retrieval preload** is off under Workflow → Prompts. |
 | Repomix / code2prompt never runs | Set **contextPacker** to `repomix` or `code2prompt`, install CLI on PATH, run a **Developer** step. Console: `Codebase packer (repomix): N chars`. Works under `local_slm` when sprint retrieval preload is on (bounded char cap). Task detail shows **Last step context sources**. |
 | Model repeats `read_file` in `<tool_response>` loops | Backend **tool-output echo guard** stops after `toolOutputEchoStopAfter` (default 2). Enable **LLM decision trace** on Flow to see `tool_output_echo` / `echoDetected`. |
+
+### First code in ~30 minutes (checklist)
+
+1. Write the **brief** (auto-saves after edit) and run **Plan outline** — plan is persisted to the project DB.
+2. Edit **Proposed epics** in the Plan tab, then **Generate Features** — prefer small implementation children (`requiresDev: true`), not planning-only cards.
+3. Workflow → Presets → **Fast first code** (local SLM + bounded preload, micro-steps off).
+4. **Claim** or move one small card to **In Progress** (≤3 AC). Use **Run In Progress** before full auto-sprint.
+5. Confirm sidebar **Ready for Dev** count &gt; 0. If only planning-only cards, Dev will explore tools without `apply_patch`.
+6. Qdrant: Reindex if using semantic preload; set **contextPacker** if you want repomix on Dev steps.
 | Graphify missing | `graph_query` tool skipped; install Graphify CLI on PATH. |
 | Dev blocked by Needs PO | Use **Run In Progress** to run Dev without waiting for PO. |
 | Duplicate memories | Enable **Group duplicates** in Memory tab; delete grouped entries. New saves dedupe automatically. |

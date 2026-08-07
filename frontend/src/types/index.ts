@@ -942,6 +942,13 @@ export interface WorkflowNotifications {
   qaFailures: number
 }
 
+export interface BacklogPreflight {
+  implementationReady?: number
+  planningOnly?: number
+  fatAcTaskIds?: string[]
+  warnings?: string[]
+}
+
 export interface SystemLog {
   source: string
   type: LogType | string
@@ -1041,6 +1048,7 @@ export interface AppState {
   lastStepDiagnostics?: LastStepDiagnostics | null
   activeStepDiagnostics?: ActiveStepDiagnostics | null
   lastSprintContextSources?: LastSprintContextSources | null
+  backlogPreflight?: BacklogPreflight | null
   recovery?: RecoveryContext | null
   pendingSimulation?: PendingSimulation | null
   sprintPausedForSimulation?: boolean

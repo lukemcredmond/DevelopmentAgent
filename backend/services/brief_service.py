@@ -1,5 +1,7 @@
 """Project brief helpers — append user features and keep PO context in sync."""
 
+from typing import Optional
+
 from backend import state
 from backend.services.project_service import save_current_project_state
 
@@ -76,10 +78,48 @@ def append_brief_text(text: str, source: str, summary: str) -> str:
 
 
 def set_project_brief(brief: str, source: str = "user") -> None:
+    incoming = (brief or "").strip()
+    existing = (state.PROJECT_BRIEF or "").strip()
+    if not incoming and existing:
+        from backend.services.logs import add_system_log
+
+        add_system_log(
+            "System",
+            "warning",
+            "Ignored empty brief from client — keeping saved project brief.",
+        )
+        return
     if brief != state.PROJECT_BRIEF:
-        record_brief_changelog(source, "Project brief updated", brief[:300])
+        record_brief_changelog(source, "Project brief updated", (brief or "")[:300])
     state.PROJECT_BRIEF = brief
     save_current_project_state()
+
+
+def resolve_brief_for_sprint(client_brief: str) -> str:
+    """Use client brief when non-empty; otherwise keep server copy."""
+    incoming = (client_brief or "").strip()
+    if incoming:
+        set_project_brief(client_brief, source="user")
+        return client_brief
+    return state.PROJECT_BRIEF or ""
+
+
+def set_project_plan_outline(outline: str, *, source: str = "user") -> None:
+    state.PROJECT_PLAN_OUTLINE = outline or ""
+    save_current_project_state()
+    if outline and outline.strip():
+        record_brief_changelog(source, "Project plan outline updated", outline[:300])
+
+
+def patch_project_documents(
+    *,
+    brief: Optional[str] = None,
+    project_plan_outline: Optional[str] = None,
+) -> None:
+    if brief is not None:
+        set_project_brief(brief, source="user")
+    if project_plan_outline is not None:
+        set_project_plan_outline(project_plan_outline, source="user")
 
 
 def record_brief_changelog(source: str, summary: str, snippet: str = "") -> None:

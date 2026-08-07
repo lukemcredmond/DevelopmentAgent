@@ -19,7 +19,7 @@ from backend.agents.task_context import (
 )
 from backend.services.llm_debug_log import get_llm_logs
 from backend.services.project_service import save_current_project_state
-from backend.services.sprint_service import set_project_brief
+from backend.services.brief_service import set_project_brief
 from backend.services.workflow_settings import get_workflow_settings
 
 

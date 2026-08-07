@@ -10,7 +10,7 @@ from fastapi import APIRouter, HTTPException, UploadFile, File
 from backend import state
 from backend.agents.registry import agent_cr, agent_dev, agent_po, agent_qa
 from backend.api.helpers import build_state_response
-from backend.api.schemas import ConfigPayload, CreateProjectPayload
+from backend.api.schemas import ConfigPayload, CreateProjectPayload, ProjectDocumentsPayload
 from backend.bootstrap import load_project_into_state
 from backend.config import DEFAULT_BOARD, DEFAULT_VIRTUAL_FS
 from backend.services.logs import add_system_log
@@ -130,6 +130,7 @@ async def import_project_zip(file: UploadFile = File(...)):
                     meta.get("dev_backup_model", ""),
                     meta.get("cr_backup_model", ""),
                     meta.get("qa_backup_model", ""),
+                    plan_outline=meta.get("plan_outline", meta.get("projectPlanOutline", "")),
                 )
                 if "logs.json" in zf.namelist():
                     logs = json.loads(zf.read("logs.json"))
@@ -138,6 +139,20 @@ async def import_project_zip(file: UploadFile = File(...)):
                 add_system_log("System", "success", f"Imported project '{state.PROJECT_NAME}'")
         except zipfile.BadZipFile as e:
             raise HTTPException(status_code=400, detail=f"Invalid zip file: {e}") from e
+    return build_state_response()
+
+
+@router.patch("/api/project/documents")
+def patch_project_documents(payload: ProjectDocumentsPayload):
+    from backend.services.brief_service import patch_project_documents as apply_documents
+
+    with state.STATE_LOCK:
+        if payload.brief is None and payload.projectPlanOutline is None:
+            raise HTTPException(status_code=400, detail="No document fields to update.")
+        apply_documents(
+            brief=payload.brief,
+            project_plan_outline=payload.projectPlanOutline,
+        )
     return build_state_response()
 
 
