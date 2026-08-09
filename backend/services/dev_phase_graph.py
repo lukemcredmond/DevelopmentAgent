@@ -126,8 +126,12 @@ class DevPhaseGraph:
     pending_stop_after_nudge: bool = False
     cycle: int = 1
     status_text: str = ""
+    step_label: str = ""
+    prior_summary: str = ""
 
     def __post_init__(self) -> None:
+        if not self.step_label:
+            self.step_label = f"Cycle {int(self.cycle or 1)}"
         if not self.status_text:
             self.refresh_status_text()
 
@@ -152,12 +156,17 @@ class DevPhaseGraph:
         *,
         prior_snap: Optional[Dict[str, Any]] = None,
         steps_on_card: int = 0,
+        focus_ac_index: Optional[int] = None,
     ) -> Optional["DevPhaseGraph"]:
         """Create a graph for a new Developer step, seeding cycle + restart status text."""
         g = cls.from_settings(ws)
         if g is None:
             return None
-        g.seed_step_context(prior_snap=prior_snap, steps_on_card=steps_on_card)
+        g.seed_step_context(
+            prior_snap=prior_snap,
+            steps_on_card=steps_on_card,
+            focus_ac_index=focus_ac_index,
+        )
         return g
 
     def seed_step_context(
@@ -165,11 +174,24 @@ class DevPhaseGraph:
         *,
         prior_snap: Optional[Dict[str, Any]] = None,
         steps_on_card: int = 0,
+        focus_ac_index: Optional[int] = None,
     ) -> None:
-        """Set cycle and initial statusText for a freshly started step."""
+        """Set cycle, stepLabel, priorSummary, and initial statusText for a freshly started step."""
         self.cycle = compute_cycle_from_prior(prior_snap=prior_snap, steps_on_card=steps_on_card)
+        self.prior_summary = ""
+        label = f"Cycle {self.cycle}"
+        if focus_ac_index is not None:
+            try:
+                ac_n = int(focus_ac_index) + 1
+                if ac_n > 0:
+                    label = f"{label} · AC {ac_n}"
+            except (TypeError, ValueError):
+                pass
+        self.step_label = label
+
         if prior_snap and isinstance(prior_snap, dict) and prior_snap.get("phase"):
             prev = _prior_phase_summary(prior_snap)
+            self.prior_summary = prev
             self.status_text = (
                 f"New Developer step on this card — Explore→Patch→Verify budgets reset "
                 f"(previous step: {prev}). Card is still In Progress."
@@ -241,6 +263,8 @@ class DevPhaseGraph:
             self.status_text = self.label()
 
     def snapshot(self) -> Dict[str, Any]:
+        if not self.step_label:
+            self.step_label = f"Cycle {int(self.cycle or 1)}"
         return {
             "phase": self.phase,
             "label": self.label(),
@@ -253,6 +277,8 @@ class DevPhaseGraph:
             "writeSucceeded": self.write_succeeded,
             "cycle": int(self.cycle or 1),
             "statusText": self.status_text or "",
+            "stepLabel": self.step_label or f"Cycle {int(self.cycle or 1)}",
+            "priorSummary": self.prior_summary or "",
         }
 
     def record_batch(self, tools: Sequence[Tuple[str, bool]]) -> PhaseAction:

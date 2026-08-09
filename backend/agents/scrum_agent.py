@@ -2196,6 +2196,7 @@ class ScrumAgent:
         if DevPhaseGraph.applies_to(role=self.role, lane=lane_for_phase):
             prior_snap = None
             steps_on_card = 0
+            focus_ac_index = None
             if task_id:
                 try:
                     from backend.agents.task_context import find_task_by_id, normalize_task
@@ -2213,12 +2214,16 @@ class ScrumAgent:
                                 steps_on_card = int(cp.get("stepsOnCard") or cp.get("steps_on_card") or 0)
                         if not steps_on_card:
                             steps_on_card = int(prior_task.get("stuckLoops") or 0)
+                        if prior_task.get("focusMode") == "ac" and prior_task.get("focusAcIndex") is not None:
+                            focus_ac_index = int(prior_task.get("focusAcIndex"))
                 except Exception:
                     prior_snap = None
                     steps_on_card = 0
+                    focus_ac_index = None
             self._dev_phase_graph = DevPhaseGraph.for_new_step(
                 prior_snap=prior_snap,
                 steps_on_card=steps_on_card,
+                focus_ac_index=focus_ac_index,
             )
             if task_id:
                 try:

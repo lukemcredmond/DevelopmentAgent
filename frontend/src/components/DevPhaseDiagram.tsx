@@ -1,5 +1,6 @@
 import {
   diagramNodeStates,
+  doneExploreLoopMeta,
   resolveDevPhaseSnapshot,
   type DevPhaseGraphSnapshot,
   type DevPhaseSegmentState,
@@ -50,6 +51,7 @@ export default function DevPhaseDiagram({
   const nodes = diagramNodeStates(snap)
   const byId = Object.fromEntries(nodes.map((n) => [n.id, n]))
   const phase = String(snap.phase || '').toLowerCase()
+  const loop = doneExploreLoopMeta(snap)
 
   const layout: Record<string, { x: number; y: number; w: number; h: number }> = {
     explore: { x: 24, y: 36, w: 88, h: 44 },
@@ -170,13 +172,32 @@ export default function DevPhaseDiagram({
   const patchActive = phase === 'patch' || (phase === 'stuck' && byId.patch?.state === 'stuck')
   const verifyActive = phase === 'verify' || phase === 'done'
 
+  // Curved Done → Explore under the machine (cycle restart).
+  const doneBox = layout.done
+  const exploreBox = layout.explore
+  const loopX1 = doneBox.x
+  const loopY1 = doneBox.y + doneBox.h / 2
+  const loopX2 = exploreBox.x + exploreBox.w / 2
+  const loopY2 = exploreBox.y + exploreBox.h
+  const loopCx = 40
+  const loopCy = 158
+  const loopStroke = loop.active ? 'rgb(56, 189, 248)' : 'rgb(88, 91, 112)'
+
   return (
     <div className={className} data-testid="dev-phase-diagram">
+      {loop.caption && (
+        <p
+          className="text-[10px] text-sky-200/90 font-mono mb-0.5"
+          data-testid="dev-phase-diagram-step-label"
+        >
+          {loop.caption}
+        </p>
+      )}
       <svg
-        viewBox="0 0 400 168"
+        viewBox="0 0 400 178"
         className="w-full max-w-md h-auto"
         role="img"
-        aria-label={`Dev phase diagram: ${snap.label || snap.phase}`}
+        aria-label={`Dev phase diagram: ${snap.label || snap.phase}${loop.caption ? ` · ${loop.caption}` : ''}`}
       >
         <defs>
           <marker
@@ -188,6 +209,16 @@ export default function DevPhaseDiagram({
             orient="auto"
           >
             <path d="M0,0 L6,3 L0,6 Z" fill="rgb(88, 91, 112)" />
+          </marker>
+          <marker
+            id="ah-phase-arrow-active"
+            markerWidth="8"
+            markerHeight="8"
+            refX="6"
+            refY="3"
+            orient="auto"
+          >
+            <path d="M0,0 L6,3 L0,6 Z" fill="rgb(56, 189, 248)" />
           </marker>
         </defs>
         {edge('explore', 'patch', {
@@ -233,6 +264,28 @@ export default function DevPhaseDiagram({
           strokeDasharray="3 3"
           markerEnd="url(#ah-phase-arrow)"
         />
+        {/* Done → Explore cycle restart */}
+        <g data-testid="dev-phase-done-explore-loop" data-active={loop.active ? 'true' : 'false'}>
+          <path
+            d={`M ${loopX1} ${loopY1} Q ${loopCx} ${loopCy} ${loopX2} ${loopY2}`}
+            fill="none"
+            stroke={loopStroke}
+            strokeWidth={loop.active ? 1.75 : 1.25}
+            strokeDasharray={loop.dashed ? '4 3' : undefined}
+            markerEnd={loop.active ? 'url(#ah-phase-arrow-active)' : 'url(#ah-phase-arrow)'}
+          />
+          <text
+            x={90}
+            y={168}
+            fill={loop.active ? 'rgb(125, 211, 252)' : 'rgb(108, 112, 134)'}
+            fontSize={8}
+            textAnchor="start"
+            fontFamily="ui-monospace, monospace"
+            data-testid="dev-phase-done-explore-label"
+          >
+            {loop.edgeLabel.length > 42 ? `${loop.edgeLabel.slice(0, 40)}…` : loop.edgeLabel}
+          </text>
+        </g>
         {box('explore')}
         {box('patch')}
         {box('verify')}
@@ -241,11 +294,6 @@ export default function DevPhaseDiagram({
       </svg>
       {snap.label && (
         <p className="text-[10px] text-cat-overlay font-mono mt-1">{snap.label}</p>
-      )}
-      {Number(snap.cycle ?? 0) > 1 && (
-        <p className="text-[10px] text-sky-200/90 font-mono" data-testid="dev-phase-diagram-cycle">
-          Cycle {snap.cycle}
-        </p>
       )}
       {snap.statusText && (
         <p className="text-[10px] text-cat-subtext leading-snug mt-0.5" data-testid="dev-phase-diagram-status">

@@ -261,6 +261,8 @@ function mapDevPhaseGraph(raw: unknown): AgentRunState['devPhaseGraph'] {
   if (!phase) return null
   const cycleRaw = Number(d.cycle ?? 0)
   const statusRaw = d.statusText ?? d.status_text
+  const stepLabelRaw = d.stepLabel ?? d.step_label
+  const priorRaw = d.priorSummary ?? d.prior_summary
   return {
     phase,
     label: d.label != null ? String(d.label) : undefined,
@@ -273,6 +275,8 @@ function mapDevPhaseGraph(raw: unknown): AgentRunState['devPhaseGraph'] {
     writeSucceeded: Boolean(d.writeSucceeded ?? d.write_succeeded),
     cycle: cycleRaw > 0 ? cycleRaw : undefined,
     statusText: statusRaw != null && String(statusRaw).trim() ? String(statusRaw) : undefined,
+    stepLabel: stepLabelRaw != null && String(stepLabelRaw).trim() ? String(stepLabelRaw) : undefined,
+    priorSummary: priorRaw != null && String(priorRaw).trim() ? String(priorRaw) : undefined,
   }
 }
 

@@ -2,6 +2,7 @@ import { describe, expect, it } from 'vitest'
 import {
   buildDevPhaseSegments,
   diagramNodeStates,
+  doneExploreLoopMeta,
   parseDevPhaseSnapshot,
   resolveDevPhaseSnapshot,
   snapshotFromPhaseLabel,
@@ -150,17 +151,66 @@ describe('devPhaseStepper helpers', () => {
       verifyMax: 2,
       cycle: 2,
       statusText: 'New Developer step — budgets reset',
+      stepLabel: 'Cycle 2 · AC 1',
+      priorSummary: 'Verify Done',
     })
     expect(snap?.cycle).toBe(2)
     expect(snap?.statusText).toContain('budgets reset')
+    expect(snap?.stepLabel).toBe('Cycle 2 · AC 1')
+    expect(snap?.priorSummary).toBe('Verify Done')
 
     const snake = parseDevPhaseSnapshot({
       phase: 'done',
       cycle: 1,
       status_text: 'Verify budget finished for this step (not board Done).',
       write_succeeded: true,
+      step_label: 'Cycle 1',
+      prior_summary: '',
     })
     expect(snake?.statusText).toContain('not board Done')
     expect(snake?.cycle).toBe(1)
+    expect(snake?.stepLabel).toBe('Cycle 1')
+  })
+
+  it('doneExploreLoopMeta labels Done→Explore restart and teach edge', () => {
+    const restart = doneExploreLoopMeta({
+      phase: 'explore',
+      cycle: 2,
+      stepLabel: 'Cycle 2',
+      priorSummary: 'Verify Done',
+      exploreCount: 0,
+      exploreMax: 3,
+    })
+    expect(restart.active).toBe(true)
+    expect(restart.dashed).toBe(false)
+    expect(restart.edgeLabel).toBe('Cycle 2 · after Verify Done')
+    expect(restart.caption).toBe('Cycle 2')
+
+    const atDone = doneExploreLoopMeta({
+      phase: 'done',
+      cycle: 1,
+      stepLabel: 'Cycle 1',
+      exploreCount: 1,
+      exploreMax: 3,
+      verifyCount: 2,
+      verifyMax: 2,
+      writeSucceeded: true,
+    })
+    expect(atDone.active).toBe(false)
+    expect(atDone.dashed).toBe(true)
+    expect(atDone.edgeLabel).toBe('next step → Explore')
+    expect(atDone.caption).toBe('Cycle 1')
+
+    const first = doneExploreLoopMeta({
+      phase: 'patch',
+      cycle: 1,
+      stepLabel: 'Cycle 1',
+      exploreCount: 2,
+      exploreMax: 3,
+      patchCount: 1,
+      patchMax: 4,
+    })
+    expect(first.active).toBe(false)
+    expect(first.edgeLabel).toBe('next step')
   })
 })

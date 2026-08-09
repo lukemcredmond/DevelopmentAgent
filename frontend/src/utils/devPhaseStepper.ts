@@ -16,6 +16,10 @@ export interface DevPhaseGraphSnapshot {
   cycle?: number
   /** Human-readable what this phase means / why budgets reset. */
   statusText?: string
+  /** Short cycle caption e.g. "Cycle 2" or "Cycle 2 · AC 1". */
+  stepLabel?: string
+  /** Prior step outcome when budgets reset e.g. "Verify Done". */
+  priorSummary?: string
 }
 
 export type DevPhaseSegmentState = 'done' | 'current' | 'upcoming' | 'stuck'
@@ -38,6 +42,8 @@ export function parseDevPhaseSnapshot(raw: unknown): DevPhaseGraphSnapshot | nul
   if (!phase) return null
   const cycleRaw = Number(d.cycle ?? 0)
   const statusRaw = d.statusText ?? d.status_text
+  const stepLabelRaw = d.stepLabel ?? d.step_label
+  const priorRaw = d.priorSummary ?? d.prior_summary
   return {
     phase,
     label: d.label != null ? String(d.label) : undefined,
@@ -50,6 +56,8 @@ export function parseDevPhaseSnapshot(raw: unknown): DevPhaseGraphSnapshot | nul
     writeSucceeded: Boolean(d.writeSucceeded ?? d.write_succeeded),
     cycle: cycleRaw > 0 ? cycleRaw : undefined,
     statusText: statusRaw != null && String(statusRaw).trim() ? String(statusRaw) : undefined,
+    stepLabel: stepLabelRaw != null && String(stepLabelRaw).trim() ? String(stepLabelRaw) : undefined,
+    priorSummary: priorRaw != null && String(priorRaw).trim() ? String(priorRaw) : undefined,
   }
 }
 
@@ -159,6 +167,49 @@ export interface DiagramNodeState {
   state: DevPhaseSegmentState | 'idle'
   count?: number
   max?: number
+}
+
+export interface DoneExploreLoopMeta {
+  /** Edge is sky-highlighted (restart in progress). */
+  active: boolean
+  /** Dashed when teaching next-step at Done, or idle first cycle. */
+  dashed: boolean
+  /** Short label drawn on the Done→Explore edge. */
+  edgeLabel: string
+  /** Caption above the diagram. */
+  caption: string
+}
+
+/** Label / highlight for the Done → Explore cycle-restart edge. */
+export function doneExploreLoopMeta(snap: DevPhaseGraphSnapshot): DoneExploreLoopMeta {
+  const phase = String(snap.phase || '').toLowerCase()
+  const cycle = Number(snap.cycle ?? 0) || 1
+  const stepLabel = (snap.stepLabel || '').trim() || `Cycle ${cycle}`
+  const prior = (snap.priorSummary || '').trim()
+  const restartLive = cycle > 1 && phase !== 'done' && phase !== 'stuck'
+
+  if (restartLive) {
+    return {
+      active: true,
+      dashed: false,
+      edgeLabel: prior ? `${stepLabel} · after ${prior}` : stepLabel,
+      caption: stepLabel,
+    }
+  }
+  if (phase === 'done') {
+    return {
+      active: false,
+      dashed: true,
+      edgeLabel: 'next step → Explore',
+      caption: stepLabel,
+    }
+  }
+  return {
+    active: false,
+    dashed: true,
+    edgeLabel: 'next step',
+    caption: stepLabel,
+  }
 }
 
 /** Node highlight map for the SVG state-machine diagram. */

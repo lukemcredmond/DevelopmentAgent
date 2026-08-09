@@ -119,6 +119,8 @@ def test_snapshot_includes_cycle_and_status_text():
     g = DevPhaseGraph(explore_max=3, verify_max=2)
     snap = g.snapshot()
     assert snap["cycle"] == 1
+    assert snap["stepLabel"] == "Cycle 1"
+    assert snap["priorSummary"] == ""
     assert snap["statusText"]
     assert "Exploring" in snap["statusText"] or "Explore" in snap["statusText"]
 
@@ -129,6 +131,7 @@ def test_snapshot_includes_cycle_and_status_text():
     assert done_snap["phase"] == "done"
     assert "not board Done" in done_snap["statusText"]
     assert done_snap["cycle"] == 1
+    assert done_snap["stepLabel"] == "Cycle 1"
 
 
 def test_for_new_step_seeds_restart_after_done():
@@ -148,12 +151,15 @@ def test_for_new_step_seeds_restart_after_done():
         {"enableDevPhaseGraph": True, "devExploreMaxTools": 3, "devPatchMaxTools": 4, "devVerifyMaxTools": 2},
         prior_snap=prior,
         steps_on_card=0,
+        focus_ac_index=1,
     )
     assert g is not None
     assert g.phase == "explore"
     assert g.cycle >= 2
     snap = g.snapshot()
     assert snap["cycle"] >= 2
+    assert snap["stepLabel"] == "Cycle 2 · AC 2"
+    assert snap["priorSummary"] == "Verify Done"
     assert "budgets reset" in snap["statusText"].lower()
     assert "Verify Done" in snap["statusText"]
     assert "In Progress" in snap["statusText"]

@@ -31,6 +31,8 @@ export default function DevPhaseStepper({
   const showDone = phase === 'done'
   const cycle = Number(snap.cycle ?? 0)
   const statusText = (snap.statusText || '').trim()
+  const stepLabel = (snap.stepLabel || '').trim() || (cycle > 0 ? `Cycle ${cycle}` : '')
+  const showCycleBadge = cycle > 1
 
   return (
     <div className={showStatus ? `space-y-1 ${className}` : className}>
@@ -42,13 +44,17 @@ export default function DevPhaseStepper({
           'Dev phase graph: Explore → Patch → Verify (Done = this step’s verify budget, not card Done)'
         }
       >
-        {cycle > 1 && (
+        {showCycleBadge && (
           <span
             className={`${segmentClassName('current', compact)} mr-0.5`}
             data-testid="dev-phase-cycle"
-            title={`Developer step cycle ${cycle} on this card`}
+            title={
+              snap.priorSummary
+                ? `${stepLabel} — after ${snap.priorSummary}`
+                : `Developer step ${stepLabel} on this card`
+            }
           >
-            Cycle {cycle}
+            {stepLabel}
           </span>
         )}
         {segments.map((seg, i) => (

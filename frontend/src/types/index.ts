@@ -779,6 +779,10 @@ export interface DevPhaseGraphSnapshot {
   cycle?: number
   /** Human-readable what this phase means / why budgets reset. */
   statusText?: string
+  /** Short cycle caption e.g. "Cycle 2" or "Cycle 2 · AC 1". */
+  stepLabel?: string
+  /** Prior step outcome when budgets reset e.g. "Verify Done". */
+  priorSummary?: string
 }
 
 export interface PendingToolApproval {
