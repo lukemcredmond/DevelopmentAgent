@@ -1213,8 +1213,22 @@ class ScrumAgent:
 
         log_event(action.stop_reason, stop_msg)
         self._log_step_exit(stop_msg, "warning")
-        finish_run(status="failed", error=stop_msg)
+        self._finish_run(status="failed", error=stop_msg)
         return action.stop_reason, stop_msg
+
+    def _finish_run(self, *, status: str = "completed", error: Optional[str] = None) -> None:
+        """Sync live DevPhaseGraph onto the agent run, then finish (persists lastStepProgress)."""
+        phase_graph = getattr(self, "_dev_phase_graph", None)
+        if phase_graph is not None:
+            try:
+                snap = phase_graph.snapshot()
+                update_run(
+                    dev_phase=str(snap.get("label") or phase_graph.label()),
+                    dev_phase_graph=snap,
+                )
+            except Exception:
+                pass
+        finish_run(status=status, error=error)  # type: ignore[arg-type]
 
     def _log_step_exit(self, message: str, log_type: str = "warning") -> None:
         # Agent loop stop: duplicate tools, max failures, max iterations, or step duration.
@@ -1470,7 +1484,7 @@ class ScrumAgent:
                     run_status="failed",
                     clear_tool=True,
                 )
-                finish_run(status="failed", error=stop_msg)
+                self._finish_run(status="failed", error=stop_msg)
                 _track_fingerprint(block=True)
                 _log_duplicate_skip(
                     agent=self.role,
@@ -1559,7 +1573,7 @@ class ScrumAgent:
                 run_status="failed",
                 clear_tool=True,
             )
-            finish_run(status="failed", error=stop_msg)
+            self._finish_run(status="failed", error=stop_msg)
             _track_fingerprint(block=True)
             _log_duplicate_skip(
                 agent=self.role,
@@ -1598,7 +1612,7 @@ class ScrumAgent:
             if duplicate_loop_should_hard_stop(same_success, limit=SAME_ARGS_SUCCESS_LIMIT):
                 stop_msg = _duplicate_loop_stop_message(tool_name, arguments, same_success)
                 self._log_step_exit(stop_msg, "warning")
-                finish_run(status="failed", error=stop_msg)
+                self._finish_run(status="failed", error=stop_msg)
                 _track_fingerprint(block=True)
                 safe_args = sanitize_tool_args_for_log(tool_name, arguments)
                 result = ToolExecutionResult(
@@ -1713,7 +1727,7 @@ class ScrumAgent:
 
         if result.pending_approval:
             stop_msg = result.tool_output
-            finish_run(status="awaiting_approval", error=stop_msg)
+            self._finish_run(status="awaiting_approval", error=stop_msg)
             return tool_name, arguments, result, stop_msg
 
         if result.success and not result.pending_approval:
@@ -1761,7 +1775,7 @@ class ScrumAgent:
                     f"Last error: {result.tool_output[:200]}"
                 )
                 self._log_step_exit(stop_msg, "error")
-                finish_run(status="failed", error=stop_msg)
+                self._finish_run(status="failed", error=stop_msg)
                 _track_fingerprint(block=True)
                 return tool_name, arguments, result, stop_msg
             if fail_total >= max_tool_failures:
@@ -1770,7 +1784,7 @@ class ScrumAgent:
                     f"Last error ({tool_name}): {result.tool_output[:200]}"
                 )
                 self._log_step_exit(stop_msg, "error")
-                finish_run(status="failed", error=stop_msg)
+                self._finish_run(status="failed", error=stop_msg)
                 return tool_name, arguments, result, stop_msg
         return tool_name, arguments, result, None
 
@@ -1927,6 +1941,22 @@ class ScrumAgent:
                     from backend.services.step_diagnostics import log_event
 
                     log_event("context_rewind", f"removed={removed}")
+                    phase_graph = getattr(self, "_dev_phase_graph", None)
+                    if phase_graph is not None:
+                        try:
+                            phase_graph.record_context_rewind(removed_messages=int(removed))
+                            self._publish_work_progress(
+                                task_id=task_id,
+                                intent=phase_graph.label(),
+                                status=phase_graph.label(),
+                                iteration=iteration,
+                                max_iterations=max_iterations,
+                                run_status="tool_executing",
+                                publish_activity_event=True,
+                                dev_phase=phase_graph.label(),
+                            )
+                        except Exception:
+                            pass
 
         # Durable post-rewind / post-fail recovery: must read_file then apply_patch.
         from backend.services.patch_recovery import (
@@ -2068,7 +2098,7 @@ class ScrumAgent:
                 add_system_log(self.role, "warning", stop_msg)
                 log_event(phase_action.stop_reason, stop_msg)
                 self._log_step_exit(stop_msg, "warning")
-                finish_run(status="failed", error=stop_msg)
+                self._finish_run(status="failed", error=stop_msg)
                 return stop_msg
 
         tool_summary = ", ".join(
@@ -2209,15 +2239,25 @@ class ScrumAgent:
                                 prior_snap = raw_graph
                             cp = lsp.get("cardProgress") or lsp.get("card_progress") or {}
                             if isinstance(cp, dict):
-                                steps_on_card = int(cp.get("stepsOnCard") or cp.get("steps_on_card") or 0)
+                                try:
+                                    steps_on_card = int(
+                                        cp.get("stepsOnCard") or cp.get("steps_on_card") or 0
+                                    )
+                                except (TypeError, ValueError):
+                                    steps_on_card = 0
                         if not steps_on_card:
-                            steps_on_card = int(prior_task.get("stuckLoops") or 0)
+                            try:
+                                steps_on_card = int(prior_task.get("stuckLoops") or 0)
+                            except (TypeError, ValueError):
+                                steps_on_card = 0
                         if prior_task.get("focusMode") == "ac" and prior_task.get("focusAcIndex") is not None:
-                            focus_ac_index = int(prior_task.get("focusAcIndex"))
+                            try:
+                                focus_ac_index = int(prior_task.get("focusAcIndex"))
+                            except (TypeError, ValueError):
+                                focus_ac_index = None
                 except Exception:
-                    prior_snap = None
-                    steps_on_card = 0
-                    focus_ac_index = None
+                    # Keep any prior_snap already resolved; do not wipe history on focus/stuck parse errors.
+                    pass
             self._dev_phase_graph = DevPhaseGraph.for_new_step(
                 prior_snap=prior_snap,
                 steps_on_card=steps_on_card,
@@ -2250,14 +2290,14 @@ class ScrumAgent:
                         )
                     except Exception:
                         pass
-                    finish_run(status="failed", error=stop_msg)
+                    self._finish_run(status="failed", error=stop_msg)
                     pending_lesson = ("step_timeout", set(tools_used), stop_msg)
                     return stop_msg
                 if task_id and is_task_done(task_id) and not state.ALLOW_DONE_RETRY:
                     stop_msg = "Stopped: task already Done"
                     add_system_log(self.role, "info", stop_msg)
                     self._log_step_exit(stop_msg, "info")
-                    finish_run(status="completed")
+                    self._finish_run(status="completed")
                     pending_lesson = ("task_done", set(tools_used), stop_msg)
                     return stop_msg
                 intent = build_live_intent(
@@ -2386,7 +2426,7 @@ class ScrumAgent:
                         error_type=err_type,
                     )
                     self._log_step_exit("Ollama unavailable — SIMULATION_FALLBACK", "warning")
-                    finish_run(status="failed", error="SIMULATION_FALLBACK")
+                    self._finish_run(status="failed", error="SIMULATION_FALLBACK")
                     pending_lesson = ("ollama_unavailable", set(tools_used), "SIMULATION_FALLBACK")
                     return "SIMULATION_FALLBACK"
 
@@ -2500,7 +2540,7 @@ class ScrumAgent:
                         stop_msg = "Stopped: task already Done"
                         add_system_log(self.role, "info", stop_msg)
                         self._log_step_exit(stop_msg, "info")
-                        finish_run(status="completed")
+                        self._finish_run(status="completed")
                         pending_lesson = ("task_done", set(tools_used), stop_msg)
                         return stop_msg
                     continue
@@ -2537,7 +2577,7 @@ class ScrumAgent:
                         add_system_log(self.role, "warning", stop_msg)
                         self._log_step_exit(stop_msg, "warning")
                         log_event("tool_output_echo_stop", stop_msg)
-                        finish_run(status="failed", error=stop_msg)
+                        self._finish_run(status="failed", error=stop_msg)
                         pending_lesson = ("tool_output_echo", set(tools_used), stop_msg)
                         return stop_msg
                     messages.append({"role": "system", "content": ECHO_REJECTION_MESSAGE})
@@ -2559,7 +2599,7 @@ class ScrumAgent:
                         stop_msg = "Stopped: task already Done"
                         add_system_log(self.role, "info", stop_msg)
                         self._log_step_exit(stop_msg, "info")
-                        finish_run(status="completed")
+                        self._finish_run(status="completed")
                         return stop_msg
                     if iteration >= max_iterations:
                         add_system_log(
@@ -2567,7 +2607,7 @@ class ScrumAgent:
                             "warning",
                             "PO returned idle/onboarding text after exploration tools — max iterations.",
                         )
-                        finish_run(status="failed", error=content[:300])
+                        self._finish_run(status="failed", error=content[:300])
                         return content or "Task completed."
                     messages.append({"role": "assistant", "content": content})
                     add_system_log(
@@ -2590,7 +2630,7 @@ class ScrumAgent:
                         stop_msg = "Stopped: task already Done"
                         add_system_log(self.role, "info", stop_msg)
                         self._log_step_exit(stop_msg, "info")
-                        finish_run(status="completed")
+                        self._finish_run(status="completed")
                         return stop_msg
                     if iteration >= max_iterations:
                         max_msg = "Max tool iterations reached without completing the task."
@@ -2630,7 +2670,7 @@ class ScrumAgent:
                             )
                         )
                         self._log_step_exit(max_msg, "warning")
-                        finish_run(status="failed", error=max_msg)
+                        self._finish_run(status="failed", error=max_msg)
                         pending_lesson = ("max_iterations", set(tools_used), max_msg)
                         return max_msg
 
@@ -2787,7 +2827,7 @@ class ScrumAgent:
                     "info",
                     f"Step exit: {exit_reason} tools=[{', '.join(sorted(tools_used)) or 'none'}]",
                 )
-                finish_run(status="completed")
+                self._finish_run(status="completed")
                 pending_lesson = (exit_reason, set(tools_used), content or "")
                 return content or "Task completed."
 
@@ -2821,11 +2861,11 @@ class ScrumAgent:
                 )
             )
             self._log_step_exit(max_msg, "warning")
-            finish_run(status="failed", error=max_msg)
+            self._finish_run(status="failed", error=max_msg)
             pending_lesson = ("max_iterations", set(tools_used), max_msg)
             return max_msg
         except Exception as exc:
-            finish_run(status="failed", error=str(exc))
+            self._finish_run(status="failed", error=str(exc))
             pending_lesson = ("exception", set(tools_used), str(exc))
             raise
         finally:

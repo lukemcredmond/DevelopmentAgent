@@ -154,6 +154,13 @@ def finish_run(*, status: RunStatus = "completed", error: Optional[str] = None) 
     run = state.ACTIVE_AGENT_RUN
     if not run:
         return
+    # Persist phase graph / cycleHistory before clearing the live run (UI falls back to lastStepProgress).
+    try:
+        from backend.services.step_diagnostics import persist_step_progress_from_active_run
+
+        persist_step_progress_from_active_run()
+    except Exception:
+        pass
     run.status = status
     run.current_tool = None
     run.current_tool_detail = None

@@ -214,6 +214,9 @@ export default function DevPhaseDiagram({
           fontFamily="ui-monospace, monospace"
         >
           {row.stepLabel}
+          {row.live && row.rewindCount
+            ? ` · Rewind ×${row.rewindCount}`
+            : ''}
         </text>
         {hEdge(
           `${row.key}-ep`,
@@ -345,6 +348,15 @@ export default function DevPhaseDiagram({
           data-testid="dev-phase-diagram-status"
         >
           {snap.statusText}
+        </p>
+      )}
+      {Number(snap.rewindCount ?? 0) > 0 && (
+        <p
+          className="text-[10px] text-amber-200/90 leading-snug mt-0.5"
+          data-testid="dev-phase-diagram-rewind"
+          title={snap.lastRewindDetail || undefined}
+        >
+          {snap.lastRewindDetail || `Context rewind ×${snap.rewindCount} (phase budgets unchanged)`}
         </p>
       )}
     </div>

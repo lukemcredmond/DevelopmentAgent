@@ -273,4 +273,27 @@ describe('devPhaseStepper helpers', () => {
     expect(snap?.cycleHistory).toHaveLength(1)
     expect(snap?.cycleHistory?.[0].terminalPhase).toBe('done')
   })
+
+  it('parses rewindCount and attaches to live unrolled row', () => {
+    const snap = parseDevPhaseSnapshot({
+      phase: 'patch',
+      cycle: 2,
+      rewindCount: 2,
+      lastRewindDetail: 'Context rewind ×2 — removed 3 message(s)',
+      cycleHistory: [
+        {
+          cycle: 1,
+          stepLabel: 'Cycle 1',
+          terminalPhase: 'done',
+        },
+      ],
+    })
+    expect(snap?.rewindCount).toBe(2)
+    expect(snap?.lastRewindDetail).toContain('rewind')
+    const rows = buildUnrolledPhaseRows(snap!)
+    expect(rows).toHaveLength(2)
+    expect(rows[1].live).toBe(true)
+    expect(rows[1].rewindCount).toBe(2)
+    expect(rows[0].rewindCount).toBeUndefined()
+  })
 })

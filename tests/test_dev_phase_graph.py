@@ -219,3 +219,99 @@ def test_stuck_sets_status_text():
     assert a.stop_reason == "explore_budget_exhausted"
     assert g.phase == "stuck"
     assert "explore tool budget" in g.status_text.lower()
+
+
+def test_record_context_rewind_stamps_snapshot():
+    g = DevPhaseGraph(explore_max=3)
+    g.record_batch([("apply_patch", False)])
+    assert g.phase == "patch"
+    g.record_context_rewind(removed_messages=3)
+    snap = g.snapshot()
+    assert snap["rewindCount"] == 1
+    assert "rewind" in snap["lastRewindDetail"].lower()
+    assert "3" in snap["lastRewindDetail"]
+    assert g.phase == "patch"  # budgets/phase unchanged
+    g.record_context_rewind(removed_messages=1)
+    assert g.snapshot()["rewindCount"] == 2
+
+
+def test_prefer_richer_phase_graph():
+    from backend.services.step_diagnostics import prefer_richer_phase_graph
+
+    poor = {"phase": "explore", "cycle": 1, "cycleHistory": []}
+    rich = {
+        "phase": "done",
+        "cycle": 2,
+        "cycleHistory": [{"cycle": 1, "terminalPhase": "done"}],
+        "label": "Done",
+    }
+    assert prefer_richer_phase_graph(rich, poor)["cycle"] == 2
+    assert prefer_richer_phase_graph(poor, rich)["cycle"] == 2
+    assert prefer_richer_phase_graph(None, rich)["cycle"] == 2
+
+
+def test_persist_step_progress_from_active_run_keeps_history(monkeypatch):
+    from backend import state
+    from backend.agents.agent_run import AgentRunState
+    from backend.services.step_diagnostics import persist_step_progress_from_active_run
+
+    task = {
+        "id": "T-PHASE-PERSIST",
+        "title": "persist",
+        "status": "In Progress",
+        "lastStepProgress": {
+            "taskId": "T-PHASE-PERSIST",
+            "iterationsUsed": 1,
+            "iterationsMax": 8,
+            "devPhaseGraph": {
+                "phase": "done",
+                "cycle": 1,
+                "stepLabel": "Cycle 1",
+                "cycleHistory": [],
+                "label": "Done",
+            },
+        },
+    }
+    monkeypatch.setattr(
+        "backend.agents.task_context.find_task_by_id",
+        lambda tid: task if str(tid) == "T-PHASE-PERSIST" else None,
+    )
+    run = AgentRunState(
+        run_id="R1",
+        task_id="T-PHASE-PERSIST",
+        agent="Developer",
+        status="tool_executing",
+        current_tool=None,
+        started_at="now",
+        iteration=3,
+        max_iterations=8,
+        dev_phase_graph={
+            "phase": "explore",
+            "cycle": 2,
+            "stepLabel": "Cycle 2",
+            "label": "Explore 0/3",
+            "cycleHistory": [
+                {
+                    "cycle": 1,
+                    "stepLabel": "Cycle 1",
+                    "terminalPhase": "done",
+                    "exploreCount": 1,
+                    "patchCount": 1,
+                    "verifyCount": 2,
+                    "writeSucceeded": True,
+                }
+            ],
+        },
+    )
+    state.ACTIVE_AGENT_RUN = run
+    state.LAST_STEP_PROGRESS = dict(task["lastStepProgress"])
+    try:
+        progress = persist_step_progress_from_active_run()
+        assert progress is not None
+        graph = progress["devPhaseGraph"]
+        assert graph["cycle"] == 2
+        assert len(graph["cycleHistory"]) == 1
+        assert task["lastStepProgress"]["devPhaseGraph"]["cycle"] == 2
+    finally:
+        state.ACTIVE_AGENT_RUN = None
+        state.LAST_STEP_PROGRESS = None

@@ -759,6 +759,107 @@ def store_step_progress(progress: Dict[str, Any]) -> None:
         task["lastStepProgress"] = progress
 
 
+def _phase_graph_richness(snap: Optional[Dict[str, Any]]) -> tuple:
+    """Sort key: prefer higher cycle, longer history, then terminal progress."""
+    if not snap or not isinstance(snap, dict):
+        return (0, 0, 0, 0)
+    hist = snap.get("cycleHistory") or snap.get("cycle_history") or []
+    hist_len = len(hist) if isinstance(hist, list) else 0
+    cycle = int(snap.get("cycle") or 0)
+    phase = str(snap.get("phase") or "").lower()
+    phase_rank = {"done": 4, "stuck": 3, "verify": 2, "patch": 1, "explore": 0}.get(phase, 0)
+    tools = (
+        int(snap.get("exploreCount") or snap.get("explore_count") or 0)
+        + int(snap.get("patchCount") or snap.get("patch_count") or 0)
+        + int(snap.get("verifyCount") or snap.get("verify_count") or 0)
+    )
+    return (cycle, hist_len, phase_rank, tools)
+
+
+def prefer_richer_phase_graph(
+    incoming: Optional[Dict[str, Any]],
+    existing: Optional[Dict[str, Any]],
+) -> Optional[Dict[str, Any]]:
+    """Keep the graph with more cycle/history signal; never replace richer with poorer."""
+    if incoming and not existing:
+        return dict(incoming)
+    if existing and not incoming:
+        return dict(existing)
+    if not incoming and not existing:
+        return None
+    if _phase_graph_richness(incoming) >= _phase_graph_richness(existing):
+        return dict(incoming)  # type: ignore[arg-type]
+    return dict(existing)  # type: ignore[arg-type]
+
+
+def persist_step_progress_from_active_run(
+    *,
+    dev_phase_graph: Optional[Dict[str, Any]] = None,
+) -> Optional[Dict[str, Any]]:
+    """
+    Merge current agent-run phase graph into task.lastStepProgress before finish_run clears the run.
+    Prefer richer graphs so stale Cycle 1 blobs cannot wipe Cycle 2 history.
+    """
+    run = getattr(state, "ACTIVE_AGENT_RUN", None)
+    task_id = getattr(run, "task_id", None) if run is not None else None
+    phase_snap = dev_phase_graph
+    if phase_snap is None and run is not None:
+        raw = getattr(run, "dev_phase_graph", None)
+        if isinstance(raw, dict) and raw.get("phase"):
+            phase_snap = dict(raw)
+
+    existing: Optional[Dict[str, Any]] = None
+    if isinstance(getattr(state, "LAST_STEP_PROGRESS", None), dict):
+        existing = state.LAST_STEP_PROGRESS
+    if task_id:
+        from backend.agents.task_context import find_task_by_id, normalize_task
+
+        task = find_task_by_id(str(task_id))
+        if task:
+            normalize_task(task)
+            lsp = task.get("lastStepProgress")
+            if isinstance(lsp, dict):
+                existing = lsp if existing is None else existing
+
+    existing_graph = None
+    if isinstance(existing, dict):
+        eg = existing.get("devPhaseGraph") or existing.get("dev_phase_graph")
+        if isinstance(eg, dict) and eg.get("phase"):
+            existing_graph = eg
+
+    chosen = prefer_richer_phase_graph(phase_snap, existing_graph)
+    if chosen is None and existing is None:
+        return None
+
+    # Start from existing progress when present; refresh counters from active trace/run.
+    base = dict(existing) if isinstance(existing, dict) else {}
+    iterations_used = int(base.get("iterationsUsed") or base.get("iterations_used") or 0)
+    iterations_max = int(base.get("iterationsMax") or base.get("iterations_max") or 0)
+    if run is not None:
+        iterations_used = max(iterations_used, int(getattr(run, "iteration", 0) or 0))
+        iterations_max = max(iterations_max, int(getattr(run, "max_iterations", 0) or 0))
+        task_id = task_id or getattr(run, "task_id", None)
+
+    progress = build_step_progress(
+        task_id=str(task_id) if task_id else None,
+        iterations_used=iterations_used,
+        iterations_max=iterations_max,
+        tools_used=set(base.get("toolsUsed") or base.get("tools_used") or []) or None,
+        stuck_loop=bool(base.get("stuckLoop") or base.get("stuck_loop")),
+        intent=base.get("intent") or (getattr(run, "intent", None) if run else None),
+        why_card_stayed=base.get("whyCardStayed") or base.get("why_card_stayed"),
+        suggested_action=base.get("suggestedAction") or base.get("suggested_action"),
+        card_progress=base.get("cardProgress") or base.get("card_progress"),
+        dev_phase_graph=chosen,
+    )
+    # Preserve richer graph even if build_step_progress pulled a poorer run snap
+    if chosen:
+        progress["devPhaseGraph"] = chosen
+        if chosen.get("label"):
+            progress["devPhase"] = chosen.get("label")
+    store_step_progress(progress)
+    return progress
+
 
 def derive_exit_reason(
     *,

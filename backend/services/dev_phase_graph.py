@@ -194,12 +194,26 @@ class DevPhaseGraph:
     step_label: str = ""
     prior_summary: str = ""
     cycle_history: List[Dict[str, Any]] = field(default_factory=list)
+    rewind_count: int = 0
+    last_rewind_detail: str = ""
 
     def __post_init__(self) -> None:
         if not self.step_label:
             self.step_label = f"Cycle {int(self.cycle or 1)}"
         if not self.status_text:
             self.refresh_status_text()
+
+    def record_context_rewind(self, *, removed_messages: int = 0) -> None:
+        """Stamp a context cut/rewind on the live cycle (does not reset phase budgets)."""
+        self.rewind_count = int(self.rewind_count or 0) + 1
+        removed = max(0, int(removed_messages or 0))
+        self.last_rewind_detail = (
+            f"Context rewind ×{self.rewind_count}"
+            + (f" — removed {removed} message(s)" if removed else "")
+            + " after failed write (phase budgets unchanged)."
+        )
+        # Surface on status line; keep until next phase progress overwrites.
+        self.status_text = self.last_rewind_detail
 
     @classmethod
     def from_settings(cls, ws: Optional[Dict[str, Any]] = None) -> Optional["DevPhaseGraph"]:
@@ -347,6 +361,8 @@ class DevPhaseGraph:
             "stepLabel": self.step_label or f"Cycle {int(self.cycle or 1)}",
             "priorSummary": self.prior_summary or "",
             "cycleHistory": list(self.cycle_history or [])[-CYCLE_HISTORY_MAX:],
+            "rewindCount": int(self.rewind_count or 0),
+            "lastRewindDetail": self.last_rewind_detail or "",
         }
 
     def record_batch(self, tools: Sequence[Tuple[str, bool]]) -> PhaseAction:

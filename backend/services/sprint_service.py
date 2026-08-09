@@ -460,7 +460,10 @@ def _build_last_step_outcome(
             tools_used=set(tools_used) if tools_used else None,
         )
     if progress:
-        from backend.services.step_diagnostics import store_step_progress
+        from backend.services.step_diagnostics import (
+            prefer_richer_phase_graph,
+            store_step_progress,
+        )
 
         progress = dict(progress)
         if why_card_stayed:
@@ -474,6 +477,18 @@ def _build_last_step_outcome(
             )
             progress["suggestedAction"] = suggested_action
             outcome["suggestedAction"] = suggested_action
+        # Do not let a stale Cycle 1 blob overwrite a richer graph already on the task.
+        if task and isinstance(task.get("lastStepProgress"), dict):
+            existing_g = (task["lastStepProgress"] or {}).get("devPhaseGraph")
+            incoming_g = progress.get("devPhaseGraph")
+            chosen = prefer_richer_phase_graph(
+                incoming_g if isinstance(incoming_g, dict) else None,
+                existing_g if isinstance(existing_g, dict) else None,
+            )
+            if chosen:
+                progress["devPhaseGraph"] = chosen
+                if chosen.get("label"):
+                    progress["devPhase"] = chosen.get("label")
         store_step_progress(progress)
         outcome["stepProgress"] = progress
     return outcome

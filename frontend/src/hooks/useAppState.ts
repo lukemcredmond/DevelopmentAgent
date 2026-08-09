@@ -305,6 +305,14 @@ function mapDevPhaseGraph(raw: unknown): AgentRunState['devPhaseGraph'] {
     stepLabel: stepLabelRaw != null && String(stepLabelRaw).trim() ? String(stepLabelRaw) : undefined,
     priorSummary: priorRaw != null && String(priorRaw).trim() ? String(priorRaw) : undefined,
     cycleHistory: cycleHistory && cycleHistory.length ? cycleHistory : undefined,
+    rewindCount: (() => {
+      const n = Number(d.rewindCount ?? d.rewind_count ?? 0)
+      return n > 0 ? n : undefined
+    })(),
+    lastRewindDetail: (() => {
+      const raw = d.lastRewindDetail ?? d.last_rewind_detail
+      return raw != null && String(raw).trim() ? String(raw) : undefined
+    })(),
   }
 }
 

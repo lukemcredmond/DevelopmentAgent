@@ -796,6 +796,9 @@ export interface DevPhaseGraphSnapshot {
   priorSummary?: string
   /** Completed/abandoned prior cycles for unrolled path diagram (max 5). */
   cycleHistory?: DevPhaseCycleHistoryEntry[]
+  /** Context cut/rewinds during this live cycle (failed-write recovery). */
+  rewindCount?: number
+  lastRewindDetail?: string
 }
 
 export interface PendingToolApproval {

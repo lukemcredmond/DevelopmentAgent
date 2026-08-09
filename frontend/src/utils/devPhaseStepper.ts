@@ -33,6 +33,9 @@ export interface DevPhaseGraphSnapshot {
   priorSummary?: string
   /** Completed/abandoned prior cycles for unrolled path diagram (max 5). */
   cycleHistory?: DevPhaseCycleHistoryEntry[]
+  /** Context cut/rewinds during this live cycle (failed-write recovery). */
+  rewindCount?: number
+  lastRewindDetail?: string
 }
 
 export const CYCLE_HISTORY_MAX = 5
@@ -89,6 +92,8 @@ export function parseDevPhaseSnapshot(raw: unknown): DevPhaseGraphSnapshot | nul
   const stepLabelRaw = d.stepLabel ?? d.step_label
   const priorRaw = d.priorSummary ?? d.prior_summary
   const history = parseCycleHistory(d.cycleHistory ?? d.cycle_history)
+  const rewindRaw = Number(d.rewindCount ?? d.rewind_count ?? 0)
+  const rewindDetailRaw = d.lastRewindDetail ?? d.last_rewind_detail
   return {
     phase,
     label: d.label != null ? String(d.label) : undefined,
@@ -104,6 +109,11 @@ export function parseDevPhaseSnapshot(raw: unknown): DevPhaseGraphSnapshot | nul
     stepLabel: stepLabelRaw != null && String(stepLabelRaw).trim() ? String(stepLabelRaw) : undefined,
     priorSummary: priorRaw != null && String(priorRaw).trim() ? String(priorRaw) : undefined,
     cycleHistory: history,
+    rewindCount: rewindRaw > 0 ? rewindRaw : undefined,
+    lastRewindDetail:
+      rewindDetailRaw != null && String(rewindDetailRaw).trim()
+        ? String(rewindDetailRaw)
+        : undefined,
   }
 }
 
@@ -320,6 +330,8 @@ export interface UnrolledPhaseRow {
   nodes: UnrolledPhaseNode[]
   /** Connect this row's Done/Stuck into the next row's Explore. */
   connectsToNext: boolean
+  rewindCount?: number
+  lastRewindDetail?: string
 }
 
 function historyEntryAsSnapshot(
@@ -376,6 +388,7 @@ export function buildUnrolledPhaseRows(snap: DevPhaseGraphSnapshot): UnrolledPha
 
   const cycle = Number(snap.cycle ?? 0) || 1
   const stepLabel = (snap.stepLabel || '').trim() || `Cycle ${cycle}`
+  const rewindCount = Number(snap.rewindCount ?? 0) || 0
   rows.push({
     key: `live-${cycle}`,
     cycle,
@@ -384,6 +397,8 @@ export function buildUnrolledPhaseRows(snap: DevPhaseGraphSnapshot): UnrolledPha
     phase: String(snap.phase || 'explore').toLowerCase(),
     nodes: nodesForRowSnap(snap, false),
     connectsToNext: false,
+    rewindCount: rewindCount > 0 ? rewindCount : undefined,
+    lastRewindDetail: (snap.lastRewindDetail || '').trim() || undefined,
   })
 
   for (let i = 0; i < rows.length; i++) {
