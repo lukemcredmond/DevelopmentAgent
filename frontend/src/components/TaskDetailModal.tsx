@@ -1512,6 +1512,14 @@ export default function TaskDetailModal({
                     {safeTask.lastStepOutcome.whyCardStayed}
                   </p>
                 )}
+                {safeTask.lastStepDiagnostics?.hint && (
+                  <p
+                    className="text-amber-200/90 whitespace-pre-wrap"
+                    data-testid="task-step-diagnostics-hint"
+                  >
+                    {safeTask.lastStepDiagnostics.hint}
+                  </p>
+                )}
               </div>
             </CollapsibleSection>
           )}

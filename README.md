@@ -1256,10 +1256,12 @@ flowchart LR
 
 1. Write the **brief** (auto-saves after edit) and run **Plan outline** — plan is persisted to the project DB.
 2. Edit **Proposed epics** in the Plan tab, then **Generate Features** — prefer small implementation children (`requiresDev: true`), not planning-only cards.
-3. Workflow → Presets → **Fast first code** (local SLM + bounded preload, micro-steps off).
+3. Workflow → Presets → **Fast first code** (local SLM + bounded preload, micro-steps off, **Dev phase graph** on).
 4. **Claim** or move one small card to **In Progress** (≤3 AC). Use **Run In Progress** before full auto-sprint.
 5. Confirm sidebar **Ready for Dev** count &gt; 0. If only planning-only cards, Dev will explore tools without `apply_patch`.
 6. Qdrant: Reindex if using semantic preload; set **contextPacker** if you want repomix on Dev steps.
+
+**Dev phase graph:** On Developer **In Progress** steps, AllHands runs Explore → Patch → Verify with hard tool budgets (defaults: 3 explore / 4 patch / 2 verify). When explore is spent without `apply_patch`/`write_file`, the step nudges once then stops (`explore_budget_exhausted`) instead of burning max LLM iterations on reads. Live phase shows on the Agent Run bar; disable or tune under Workflow → Autonomy (`enableDevPhaseGraph`, `devExploreMaxTools`, …).
 | Graphify missing | `graph_query` tool skipped; install Graphify CLI on PATH. |
 | Dev blocked by Needs PO | Use **Run In Progress** to run Dev without waiting for PO. |
 | Duplicate memories | Enable **Group duplicates** in Memory tab; delete grouped entries. New saves dedupe automatically. |

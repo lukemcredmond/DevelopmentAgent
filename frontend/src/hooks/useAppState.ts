@@ -246,6 +246,10 @@ function mapAgentRun(raw: Record<string, unknown>): AgentRunState {
       raw.focusSubtaskId != null || raw.focus_subtask_id != null
         ? String(raw.focusSubtaskId ?? raw.focus_subtask_id)
         : null,
+    devPhase:
+      raw.devPhase != null || raw.dev_phase != null
+        ? String(raw.devPhase ?? raw.dev_phase)
+        : null,
   }
 }
 

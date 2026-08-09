@@ -134,7 +134,17 @@ export default function AgentRunBar({
     typeof timing.durationMs === 'number' &&
     (timing.durationMs > 0 || (timing.ollamaMsTotal ?? 0) > 0)
 
-  const showIdleWhy = !hasActiveRun && !showMaxIterPanel && (whyStayed || suggested)
+  const stuckPhaseHint =
+    lastStepDiagnostics?.exitReason === 'explore_budget_exhausted' ||
+    lastStepDiagnostics?.exitReason === 'patch_budget_exhausted'
+      ? lastStepDiagnostics.hint ||
+        (lastStepDiagnostics.exitReason === 'explore_budget_exhausted'
+          ? 'Spent explore budget with no edits — Split card or Run In Progress after narrowing AC.'
+          : 'Patch attempts exhausted without a successful write — check tool errors or Split card.')
+      : null
+
+  const showIdleWhy =
+    !hasActiveRun && !showMaxIterPanel && (whyStayed || suggested || stuckPhaseHint)
 
   if (!hasActiveRun && !showMaxIterPanel && !showTiming && !showIdleWhy) {
     return (
@@ -211,6 +221,15 @@ export default function AgentRunBar({
               {focusHint}
             </span>
           )}
+          {activeRun.devPhase && isRunning && (
+            <span
+              className="text-[10px] px-1.5 py-0.5 rounded border border-sky-500/40 text-sky-200 bg-sky-950/40"
+              title="Dev phase graph (Explore → Patch → Verify)"
+              data-testid="dev-phase-badge"
+            >
+              {activeRun.devPhase}
+            </span>
+          )}
           <span className={isWaitingApproval ? 'text-amber-300' : 'text-cat-subtext'}>
             {statusLabel}
           </span>
@@ -261,13 +280,18 @@ export default function AgentRunBar({
           {cardLine}
         </p>
       )}
-      {showIdleWhy && (whyStayed || suggested) && (
+      {showIdleWhy && (whyStayed || suggested || stuckPhaseHint) && (
         <div className="mx-4 mb-2 space-y-0.5 border border-amber-500/30 bg-amber-950/20 rounded px-2.5 py-1.5">
           {whyStayed && (
             <p className="text-[10px] text-amber-200">Stayed In Progress: {whyStayed}</p>
           )}
           {suggested && (
             <p className="text-[10px] text-cat-subtext">Suggested: {suggested}</p>
+          )}
+          {stuckPhaseHint && (
+            <p className="text-[10px] text-amber-200" data-testid="dev-phase-stuck-hint">
+              {stuckPhaseHint}
+            </p>
           )}
         </div>
       )}

@@ -178,10 +178,12 @@ export default function ChatPanel({
           ? `iter ${activeRun.iteration}`
           : ''
     const intent = activeRun?.intent || activeRun?.status
+    const phase = activeRun?.devPhase
     const parts = [
+      phase ? String(phase) : '',
       toolName ? `tool: ${toolName}` : '',
       iter,
-      intent && intent !== 'idle' ? String(intent) : '',
+      intent && intent !== 'idle' && intent !== phase ? String(intent) : '',
     ].filter(Boolean)
     if (parts.length === 0) {
       return 'Working… (tools may take a few minutes). You can switch tabs — the request keeps running.'

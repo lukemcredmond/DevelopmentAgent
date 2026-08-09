@@ -155,6 +155,14 @@ class StepDiagnosticsTracker:
             "tool_output_echo": (
                 "Model repeated prior tool output in assistant text instead of calling edit tools — stopped to save GPU."
             ),
+            "explore_budget_exhausted": (
+                "Dev Explore budget reached without apply_patch/write_file. "
+                "Split the card or narrow AC, then Run In Progress."
+            ),
+            "patch_budget_exhausted": (
+                "Dev Patch budget reached without a successful write. "
+                "Check apply_patch errors or Split the card."
+            ),
             "tool_failure_stop": "Tool failures exceeded the step limit.",
             "ollama_fallback": "Ollama was unavailable during the step.",
             "completed_text_only": (

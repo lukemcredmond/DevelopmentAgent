@@ -1197,6 +1197,25 @@ class ScrumAgent:
         )
         return None
 
+    def _maybe_stop_after_dev_phase_nudge(
+        self, tools_used: set[str]
+    ) -> Optional[Tuple[str, str]]:
+        """After explore nudge, stop if the model still did not write."""
+        phase_graph = getattr(self, "_dev_phase_graph", None)
+        if phase_graph is None:
+            return None
+        action = phase_graph.after_llm_turn_without_write()
+        if not action.stop_reason:
+            return None
+        stop_msg = action.stop_message or action.stop_reason
+        add_system_log(self.role, "warning", stop_msg)
+        from backend.services.step_diagnostics import log_event
+
+        log_event(action.stop_reason, stop_msg)
+        self._log_step_exit(stop_msg, "warning")
+        finish_run(status="failed", error=stop_msg)
+        return action.stop_reason, stop_msg
+
     def _log_step_exit(self, message: str, log_type: str = "warning") -> None:
         # Agent loop stop: duplicate tools, max failures, max iterations, or step duration.
         if message.startswith(("Stopped:", "Timed out:", "Max tool iterations")):
@@ -1225,6 +1244,7 @@ class ScrumAgent:
         clear_tool: bool = False,
         publish_activity_event: bool = False,
         prompt_section: Optional[str] = None,
+        dev_phase: Optional[str] = None,
     ) -> None:
         """Emit intent + cardProgress on agent_run and sprint_progress."""
         from backend.services.step_diagnostics import build_card_work_snapshot
@@ -1241,10 +1261,16 @@ class ScrumAgent:
                     pass
             if active.get("focusSubtaskId"):
                 focus_sub = str(active.get("focusSubtaskId"))
+        phase_graph = getattr(self, "_dev_phase_graph", None)
+        phase_label = dev_phase
+        if phase_label is None and phase_graph is not None:
+            phase_label = phase_graph.label()
         update_kwargs: Dict[str, Any] = {
             "intent": intent,
             "card_progress": card,
         }
+        if phase_label is not None:
+            update_kwargs["dev_phase"] = phase_label
         if prompt_section is not None:
             update_kwargs["prompt_section"] = prompt_section
         if focus_ac is not None:
@@ -1896,6 +1922,60 @@ class ScrumAgent:
                 if cmd:
                     apply_run_command_ac_ticks(task_id, cmd, success=True)
 
+        phase_graph = getattr(self, "_dev_phase_graph", None)
+        if phase_graph is not None:
+            batch_pairs = [
+                (results_by_id[id(call)][0], bool(results_by_id[id(call)][2].success))
+                for call in all_calls
+            ]
+            phase_action = phase_graph.record_batch(batch_pairs)
+            from backend.services.step_diagnostics import log_event
+
+            log_event("dev_phase", phase_graph.label())
+            try:
+                from backend.services.llm_decision_trace import (
+                    build_decision_trace,
+                    decision_trace_enabled,
+                )
+                from backend.services.llm_debug_log import amend_llm_log_entry
+
+                if decision_trace_enabled() and task_id:
+                    detail = phase_graph.label()
+                    if phase_action.nudge:
+                        detail += " · explore nudge"
+                    if phase_action.stop_reason:
+                        detail += f" · stop={phase_action.stop_reason}"
+                    amend_llm_log_entry(
+                        task_id,
+                        iteration,
+                        decision_trace=build_decision_trace(
+                            outcome="dev_phase",
+                            detail=detail,
+                        ),
+                    )
+            except Exception:
+                pass
+            if phase_action.nudge:
+                messages.append({"role": "system", "content": phase_action.nudge})
+                add_system_log(self.role, "warning", "Dev explore budget — nudged model to apply_patch")
+            self._publish_work_progress(
+                task_id=task_id,
+                intent=phase_graph.label(),
+                status=phase_graph.label(),
+                iteration=iteration,
+                max_iterations=max_iterations,
+                run_status="tool_executing",
+                publish_activity_event=True,
+                dev_phase=phase_graph.label(),
+            )
+            if phase_action.stop_reason:
+                stop_msg = phase_action.stop_message or phase_action.stop_reason
+                add_system_log(self.role, "warning", stop_msg)
+                log_event(phase_action.stop_reason, stop_msg)
+                self._log_step_exit(stop_msg, "warning")
+                finish_run(status="failed", error=stop_msg)
+                return stop_msg
+
         tool_summary = ", ".join(
             call.function.name for call in all_calls if hasattr(call, "function")
         )
@@ -2010,6 +2090,12 @@ class ScrumAgent:
         set_llm_iterations_max(max_iterations)
         pending_lesson: Optional[Tuple[str, set, str]] = None
         self._consecutive_echo_count = 0
+        self._dev_phase_graph = None
+        from backend.services.dev_phase_graph import DevPhaseGraph
+
+        lane_for_phase = get_task_lane(task_id) if task_id else None
+        if DevPhaseGraph.applies_to(role=self.role, lane=lane_for_phase):
+            self._dev_phase_graph = DevPhaseGraph.from_settings()
 
         try:
             for iteration in range(1, max_iterations + 1):
@@ -2045,6 +2131,9 @@ class ScrumAgent:
                     iteration=iteration,
                     max_iterations=max_iterations,
                 )
+                phase_graph = getattr(self, "_dev_phase_graph", None)
+                if phase_graph is not None:
+                    intent = f"{phase_graph.label()} · {intent}"
                 bundle_name = _apply_rotation_for_iteration(iteration)
                 from backend.services.llm_context import maybe_inject_unchanged_prompt_progress
 
@@ -2267,6 +2356,10 @@ class ScrumAgent:
                             reason = "duplicate_tool"
                         elif "approval" in low:
                             reason = "awaiting_approval"
+                        elif "explore tool budget" in low:
+                            reason = "explore_budget_exhausted"
+                        elif "patch tool budget" in low:
+                            reason = "patch_budget_exhausted"
                         pending_lesson = (reason, set(tools_used), early_stop)
                         return early_stop
                     if task_id and is_task_done(task_id) and not state.ALLOW_DONE_RETRY:
@@ -2314,6 +2407,14 @@ class ScrumAgent:
                         pending_lesson = ("tool_output_echo", set(tools_used), stop_msg)
                         return stop_msg
                     messages.append({"role": "system", "content": ECHO_REJECTION_MESSAGE})
+                    phase_stop = self._maybe_stop_after_dev_phase_nudge(tools_used)
+                    if phase_stop:
+                        pending_lesson = (
+                            phase_stop[0],
+                            set(tools_used),
+                            phase_stop[1],
+                        )
+                        return phase_stop[1]
                     continue
 
                 if content:
@@ -2521,6 +2622,14 @@ class ScrumAgent:
                                         )
                         except Exception:
                             pass
+                    phase_stop = self._maybe_stop_after_dev_phase_nudge(tools_used)
+                    if phase_stop:
+                        pending_lesson = (
+                            phase_stop[0],
+                            set(tools_used),
+                            phase_stop[1],
+                        )
+                        return phase_stop[1]
                     continue
 
                 if task_id and content:

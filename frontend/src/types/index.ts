@@ -615,6 +615,10 @@ export interface WorkflowSettings {
   duplicateToolHardStopExclude?: string[]
   duplicateRunCommandPolicy?: string
   enableFocusMicroSteps?: boolean
+  enableDevPhaseGraph?: boolean
+  devExploreMaxTools?: number
+  devPatchMaxTools?: number
+  devVerifyMaxTools?: number
   maxFocusStepsPerCard?: number
   enablePromptSectionRotation?: boolean
   splitCardWhenAcOver?: number
@@ -750,6 +754,8 @@ export interface AgentRunState {
   promptSection?: string | null
   focusAcIndex?: number | null
   focusSubtaskId?: string | null
+  /** Dev Explore/Patch/Verify phase label when enableDevPhaseGraph is on. */
+  devPhase?: string | null
 }
 
 export interface PendingToolApproval {
@@ -1271,6 +1277,10 @@ export interface WorkflowSettingsPayload {
   duplicateToolHardStopExclude?: string[]
   duplicateRunCommandPolicy?: string
   enableFocusMicroSteps?: boolean
+  enableDevPhaseGraph?: boolean
+  devExploreMaxTools?: number
+  devPatchMaxTools?: number
+  devVerifyMaxTools?: number
   maxFocusStepsPerCard?: number
   enablePromptSectionRotation?: boolean
   splitCardWhenAcOver?: number
@@ -1605,6 +1615,10 @@ export const DEFAULT_WORKFLOW_SETTINGS: WorkflowSettings = {
   duplicateToolHardStopExclude: [],
   duplicateRunCommandPolicy: 'strict',
   enableFocusMicroSteps: true,
+  enableDevPhaseGraph: true,
+  devExploreMaxTools: 3,
+  devPatchMaxTools: 4,
+  devVerifyMaxTools: 2,
   maxFocusStepsPerCard: 8,
   enablePromptSectionRotation: true,
   splitCardWhenAcOver: 5,

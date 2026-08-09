@@ -40,6 +40,7 @@ class AgentRunState:
     prompt_section: Optional[str] = None
     focus_ac_index: Optional[int] = None
     focus_subtask_id: Optional[str] = None
+    dev_phase: Optional[str] = None
 
     def to_dict(self) -> Dict[str, Any]:
         data = asdict(self)
@@ -50,6 +51,7 @@ class AgentRunState:
         data["promptSection"] = data.pop("prompt_section", None)
         data["focusAcIndex"] = data.pop("focus_ac_index", None)
         data["focusSubtaskId"] = data.pop("focus_subtask_id", None)
+        data["devPhase"] = data.pop("dev_phase", None)
         return data
 
 
@@ -98,6 +100,7 @@ def update_run(
     prompt_section: Optional[str] = None,
     focus_ac_index: Optional[int] = None,
     focus_subtask_id: Optional[str] = None,
+    dev_phase: Optional[str] = None,
 ) -> None:
     run = state.ACTIVE_AGENT_RUN
     if not run:
@@ -129,6 +132,8 @@ def update_run(
         run.focus_ac_index = focus_ac_index
     if focus_subtask_id is not None:
         run.focus_subtask_id = focus_subtask_id
+    if dev_phase is not None:
+        run.dev_phase = dev_phase
     _publish_run(run)
 
 

@@ -213,6 +213,10 @@ export default function WorkflowPanel({
                 prioritizeImplementationOverRefinement: true,
                 requireBacklogRefinement: false,
                 enableFocusMicroSteps: false,
+                enableDevPhaseGraph: true,
+                devExploreMaxTools: 3,
+                devPatchMaxTools: 4,
+                devVerifyMaxTools: 2,
                 maxLlmIterationsPerStep: 8,
                 promptProfile: 'local_slm',
                 localSlmSprintPreload: true,
@@ -1280,6 +1284,49 @@ export default function WorkflowPanel({
         />
         Dev focus micro-steps (one AC per sprint tick when ≥2 AC)
       </label>
+      <label className="flex items-center gap-2 text-[11px] text-cat-subtext cursor-pointer pl-5">
+        <input
+          type="checkbox"
+          checked={settings.enableDevPhaseGraph !== false}
+          onChange={(e) => onSettingsChange({ enableDevPhaseGraph: e.target.checked })}
+        />
+        Dev phase graph (Explore → Patch → Verify budgets)
+        <SettingHint hint="Stops open-ended read_file loops after a small explore budget and shows phase progress in the run bar." />
+      </label>
+      {(settings.enableDevPhaseGraph !== false) && (
+        <div className="grid grid-cols-3 gap-2 pl-5 text-[11px]">
+          <label>
+            <span className="text-[10px] text-cat-overlay">Explore max</span>
+            <NumberSettingInput
+              value={settings.devExploreMaxTools ?? 3}
+              min={1}
+              max={20}
+              onCommit={(devExploreMaxTools) => onSettingsChange({ devExploreMaxTools })}
+              className="w-full bg-cat-base border border-cat-surface1 rounded p-1 text-white font-mono text-[10px]"
+            />
+          </label>
+          <label>
+            <span className="text-[10px] text-cat-overlay">Patch max</span>
+            <NumberSettingInput
+              value={settings.devPatchMaxTools ?? 4}
+              min={1}
+              max={20}
+              onCommit={(devPatchMaxTools) => onSettingsChange({ devPatchMaxTools })}
+              className="w-full bg-cat-base border border-cat-surface1 rounded p-1 text-white font-mono text-[10px]"
+            />
+          </label>
+          <label>
+            <span className="text-[10px] text-cat-overlay">Verify max</span>
+            <NumberSettingInput
+              value={settings.devVerifyMaxTools ?? 2}
+              min={1}
+              max={20}
+              onCommit={(devVerifyMaxTools) => onSettingsChange({ devVerifyMaxTools })}
+              className="w-full bg-cat-base border border-cat-surface1 rounded p-1 text-white font-mono text-[10px]"
+            />
+          </label>
+        </div>
+      )}
       <label className="flex items-center gap-2 text-[11px] text-cat-subtext cursor-pointer pl-5">
         <input
           type="checkbox"
