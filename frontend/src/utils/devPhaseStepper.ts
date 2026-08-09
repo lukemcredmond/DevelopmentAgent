@@ -12,6 +12,10 @@ export interface DevPhaseGraphSnapshot {
   verifyCount?: number
   verifyMax?: number
   writeSucceeded?: boolean
+  /** 1-based Developer step cycle on this card for the phase graph. */
+  cycle?: number
+  /** Human-readable what this phase means / why budgets reset. */
+  statusText?: string
 }
 
 export type DevPhaseSegmentState = 'done' | 'current' | 'upcoming' | 'stuck'
@@ -32,6 +36,8 @@ export function parseDevPhaseSnapshot(raw: unknown): DevPhaseGraphSnapshot | nul
   const d = raw as Record<string, unknown>
   const phase = String(d.phase ?? '').toLowerCase()
   if (!phase) return null
+  const cycleRaw = Number(d.cycle ?? 0)
+  const statusRaw = d.statusText ?? d.status_text
   return {
     phase,
     label: d.label != null ? String(d.label) : undefined,
@@ -42,6 +48,8 @@ export function parseDevPhaseSnapshot(raw: unknown): DevPhaseGraphSnapshot | nul
     verifyCount: Number(d.verifyCount ?? d.verify_count ?? 0) || 0,
     verifyMax: Number(d.verifyMax ?? d.verify_max ?? 2) || 2,
     writeSucceeded: Boolean(d.writeSucceeded ?? d.write_succeeded),
+    cycle: cycleRaw > 0 ? cycleRaw : undefined,
+    statusText: statusRaw != null && String(statusRaw).trim() ? String(statusRaw) : undefined,
   }
 }
 

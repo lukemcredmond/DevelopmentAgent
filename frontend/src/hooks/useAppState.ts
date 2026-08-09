@@ -259,6 +259,8 @@ function mapDevPhaseGraph(raw: unknown): AgentRunState['devPhaseGraph'] {
   const d = raw as Record<string, unknown>
   const phase = d.phase != null ? String(d.phase) : ''
   if (!phase) return null
+  const cycleRaw = Number(d.cycle ?? 0)
+  const statusRaw = d.statusText ?? d.status_text
   return {
     phase,
     label: d.label != null ? String(d.label) : undefined,
@@ -269,6 +271,8 @@ function mapDevPhaseGraph(raw: unknown): AgentRunState['devPhaseGraph'] {
     verifyCount: Number(d.verifyCount ?? d.verify_count ?? 0) || 0,
     verifyMax: Number(d.verifyMax ?? d.verify_max ?? 2) || 2,
     writeSucceeded: Boolean(d.writeSucceeded ?? d.write_succeeded),
+    cycle: cycleRaw > 0 ? cycleRaw : undefined,
+    statusText: statusRaw != null && String(statusRaw).trim() ? String(statusRaw) : undefined,
   }
 }
 

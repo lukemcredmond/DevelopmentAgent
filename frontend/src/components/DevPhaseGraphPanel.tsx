@@ -117,13 +117,20 @@ export default function DevPhaseGraphPanel({
   const snapshot = activeRun?.devPhaseGraph ?? lastSnapshot
   const label = activeRun?.devPhase ?? lastLabel
   const forThisTask = !activeRun?.taskId || activeRun.taskId === taskId
+  const liveStatus = (forThisTask && snapshot?.statusText?.trim()) || ''
 
   return (
     <div className="space-y-2" data-testid="dev-phase-graph-panel">
       <div className="flex flex-wrap items-center gap-2">
-        <p className="text-[10px] text-cat-overlay flex-1 min-w-[12rem]">
-          Explore → Patch → Verify loop. Setting: Workflow → Autonomy → Dev phase graph.
-        </p>
+        <div className="flex-1 min-w-[12rem] space-y-0.5">
+          <p className="text-[10px] text-cat-subtext" data-testid="phase-graph-blurb">
+            {liveStatus ||
+              'Explore → Patch → Verify loop. Done = this step’s verify budget, not card Done.'}
+          </p>
+          <p className="text-[9px] text-cat-overlay">
+            Setting: Workflow → Autonomy → Dev phase graph.
+          </p>
+        </div>
         <div
           className="inline-flex rounded border border-cat-surface1 overflow-hidden shrink-0"
           role="group"

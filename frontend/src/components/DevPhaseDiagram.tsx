@@ -242,6 +242,16 @@ export default function DevPhaseDiagram({
       {snap.label && (
         <p className="text-[10px] text-cat-overlay font-mono mt-1">{snap.label}</p>
       )}
+      {Number(snap.cycle ?? 0) > 1 && (
+        <p className="text-[10px] text-sky-200/90 font-mono" data-testid="dev-phase-diagram-cycle">
+          Cycle {snap.cycle}
+        </p>
+      )}
+      {snap.statusText && (
+        <p className="text-[10px] text-cat-subtext leading-snug mt-0.5" data-testid="dev-phase-diagram-status">
+          {snap.statusText}
+        </p>
+      )}
     </div>
   )
 }

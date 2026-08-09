@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 from dataclasses import dataclass
-from typing import Any, Dict, List, Optional, Sequence, Tuple
+from typing import Any, Dict, Optional, Sequence, Tuple
 
 EXPLORE_TOOLS = frozenset(
     {
@@ -24,6 +24,11 @@ EXPLORE_NUDGE = (
     "You already have enough context from explore tools. "
     "Do NOT call more read_file/grep/list_dir. "
     "Next message MUST call apply_patch or write_file for this card's acceptance criteria."
+)
+
+DONE_STATUS = (
+    "Verify budget finished for this step (not board Done). "
+    "Another step may restart at Explore if the card stays In Progress."
 )
 
 PhaseName = str  # explore | patch | verify | stuck | done
@@ -65,6 +70,38 @@ def live_phase_stamp(*, tool_name: Optional[str] = None) -> Dict[str, Optional[s
         label = tag.capitalize()
     return {"devPhase": label, "devPhaseTag": tag}
 
+
+def _prior_phase_summary(prior: Optional[Dict[str, Any]]) -> str:
+    if not prior or not isinstance(prior, dict):
+        return "unknown"
+    phase = str(prior.get("phase") or "").lower()
+    if phase == "done":
+        return "Verify Done"
+    if phase == "stuck":
+        return "Stuck"
+    if phase == "verify":
+        return f"Verify {prior.get('verifyCount', 0)}/{prior.get('verifyMax', 2)}"
+    if phase == "patch":
+        return f"Patch {prior.get('patchCount', 0)}/{prior.get('patchMax', 4)}"
+    if phase == "explore":
+        return f"Explore {prior.get('exploreCount', 0)}/{prior.get('exploreMax', 3)}"
+    return phase.capitalize() or "unknown"
+
+
+def compute_cycle_from_prior(
+    *,
+    prior_snap: Optional[Dict[str, Any]] = None,
+    steps_on_card: int = 0,
+) -> int:
+    """1-based cycle index for a new Developer step on the same card."""
+    if prior_snap and isinstance(prior_snap, dict):
+        prior_cycle = int(prior_snap.get("cycle") or 1)
+        return max(prior_cycle + 1, int(steps_on_card or 0) + 1, 2)
+    if int(steps_on_card or 0) > 0:
+        return int(steps_on_card) + 1
+    return 1
+
+
 @dataclass
 class PhaseAction:
     """Result of recording tools / checking after an LLM turn."""
@@ -87,6 +124,12 @@ class DevPhaseGraph:
     write_succeeded: bool = False
     explore_nudge_sent: bool = False
     pending_stop_after_nudge: bool = False
+    cycle: int = 1
+    status_text: str = ""
+
+    def __post_init__(self) -> None:
+        if not self.status_text:
+            self.refresh_status_text()
 
     @classmethod
     def from_settings(cls, ws: Optional[Dict[str, Any]] = None) -> Optional["DevPhaseGraph"]:
@@ -102,6 +145,46 @@ class DevPhaseGraph:
             verify_max=max(1, int(ws.get("devVerifyMaxTools") or 2)),
         )
 
+    @classmethod
+    def for_new_step(
+        cls,
+        ws: Optional[Dict[str, Any]] = None,
+        *,
+        prior_snap: Optional[Dict[str, Any]] = None,
+        steps_on_card: int = 0,
+    ) -> Optional["DevPhaseGraph"]:
+        """Create a graph for a new Developer step, seeding cycle + restart status text."""
+        g = cls.from_settings(ws)
+        if g is None:
+            return None
+        g.seed_step_context(prior_snap=prior_snap, steps_on_card=steps_on_card)
+        return g
+
+    def seed_step_context(
+        self,
+        *,
+        prior_snap: Optional[Dict[str, Any]] = None,
+        steps_on_card: int = 0,
+    ) -> None:
+        """Set cycle and initial statusText for a freshly started step."""
+        self.cycle = compute_cycle_from_prior(prior_snap=prior_snap, steps_on_card=steps_on_card)
+        if prior_snap and isinstance(prior_snap, dict) and prior_snap.get("phase"):
+            prev = _prior_phase_summary(prior_snap)
+            self.status_text = (
+                f"New Developer step on this card — Explore→Patch→Verify budgets reset "
+                f"(previous step: {prev}). Card is still In Progress."
+            )
+        elif self.cycle > 1:
+            self.status_text = (
+                f"New Developer step (cycle {self.cycle}) — Explore→Patch→Verify budgets reset. "
+                "Card is still In Progress."
+            )
+        else:
+            self.status_text = (
+                "Step cycle 1 — reading context (Explore budget). "
+                "Done here means this step's verify budget, not card Done."
+            )
+
     @staticmethod
     def applies_to(*, role: str, lane: Optional[str]) -> bool:
         return role == "Developer" and lane == "In Progress"
@@ -115,6 +198,48 @@ class DevPhaseGraph:
             return f"Verify {self.verify_count}/{self.verify_max}"
         return self.phase.capitalize()
 
+    def refresh_status_text(self, *, stuck_message: Optional[str] = None) -> None:
+        """Update statusText from current phase / counts (preserves restart text until progress)."""
+        if self.phase == "done":
+            self.status_text = DONE_STATUS
+            return
+        if self.phase == "stuck":
+            if stuck_message:
+                # One short line for the UI
+                msg = stuck_message.strip().split("\n")[0]
+                if msg.lower().startswith("stopped:"):
+                    msg = msg[8:].strip()
+                self.status_text = msg[:220] if msg else "Stuck — phase budget exhausted."
+            elif not self.status_text:
+                self.status_text = "Stuck — phase budget exhausted."
+            return
+        if self.phase == "explore":
+            # Keep restart / first-cycle seed until explore tools actually run
+            if self.explore_count == 0 and self.status_text:
+                return
+            left = max(0, self.explore_max - self.explore_count)
+            self.status_text = (
+                f"Exploring codebase ({self.explore_count}/{self.explore_max} tools; {left} left). "
+                "Next: apply_patch/write_file when you have enough context."
+            )
+            return
+        if self.phase == "patch":
+            left = max(0, self.patch_max - self.patch_count)
+            self.status_text = (
+                f"Patching ({self.patch_count}/{self.patch_max} write attempts; {left} left). "
+                "Need a successful apply_patch/write_file to enter Verify."
+            )
+            return
+        if self.phase == "verify":
+            left = max(0, self.verify_max - self.verify_count)
+            self.status_text = (
+                f"Verifying after write ({self.verify_count}/{self.verify_max} tools; {left} left). "
+                "Done means this step's verify budget, not board Done."
+            )
+            return
+        if not self.status_text:
+            self.status_text = self.label()
+
     def snapshot(self) -> Dict[str, Any]:
         return {
             "phase": self.phase,
@@ -126,6 +251,8 @@ class DevPhaseGraph:
             "verifyCount": self.verify_count,
             "verifyMax": self.verify_max,
             "writeSucceeded": self.write_succeeded,
+            "cycle": int(self.cycle or 1),
+            "statusText": self.status_text or "",
         }
 
     def record_batch(self, tools: Sequence[Tuple[str, bool]]) -> PhaseAction:
@@ -216,6 +343,7 @@ class DevPhaseGraph:
                 "Split the card or narrow AC, then Run In Progress.",
             )
 
+        self.refresh_status_text()
         action.phase_changed = prev != self.phase
         return action
 
@@ -231,6 +359,7 @@ class DevPhaseGraph:
 
     def _stuck(self, reason: str, message: str) -> PhaseAction:
         self.phase = "stuck"
+        self.refresh_status_text(stuck_message=message)
         return PhaseAction(stop_reason=reason, stop_message=message)
 
 

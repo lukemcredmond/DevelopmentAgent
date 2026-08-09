@@ -2194,7 +2194,32 @@ class ScrumAgent:
 
         lane_for_phase = get_task_lane(task_id) if task_id else None
         if DevPhaseGraph.applies_to(role=self.role, lane=lane_for_phase):
-            self._dev_phase_graph = DevPhaseGraph.from_settings()
+            prior_snap = None
+            steps_on_card = 0
+            if task_id:
+                try:
+                    from backend.agents.task_context import find_task_by_id, normalize_task
+
+                    prior_task = find_task_by_id(str(task_id))
+                    if prior_task:
+                        normalize_task(prior_task)
+                        lsp = prior_task.get("lastStepProgress") or {}
+                        if isinstance(lsp, dict):
+                            raw_graph = lsp.get("devPhaseGraph") or lsp.get("dev_phase_graph")
+                            if isinstance(raw_graph, dict) and raw_graph.get("phase"):
+                                prior_snap = raw_graph
+                            cp = lsp.get("cardProgress") or lsp.get("card_progress") or {}
+                            if isinstance(cp, dict):
+                                steps_on_card = int(cp.get("stepsOnCard") or cp.get("steps_on_card") or 0)
+                        if not steps_on_card:
+                            steps_on_card = int(prior_task.get("stuckLoops") or 0)
+                except Exception:
+                    prior_snap = None
+                    steps_on_card = 0
+            self._dev_phase_graph = DevPhaseGraph.for_new_step(
+                prior_snap=prior_snap,
+                steps_on_card=steps_on_card,
+            )
             if task_id:
                 try:
                     from backend.services.task_spec_markdown import ensure_task_spec_for_work

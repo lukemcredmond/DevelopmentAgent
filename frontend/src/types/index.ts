@@ -775,6 +775,10 @@ export interface DevPhaseGraphSnapshot {
   verifyCount?: number
   verifyMax?: number
   writeSucceeded?: boolean
+  /** 1-based Developer step cycle on this card for the phase graph. */
+  cycle?: number
+  /** Human-readable what this phase means / why budgets reset. */
+  statusText?: string
 }
 
 export interface PendingToolApproval {

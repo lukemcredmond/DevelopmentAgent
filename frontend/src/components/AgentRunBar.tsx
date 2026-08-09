@@ -227,6 +227,7 @@ export default function AgentRunBar({
             <DevPhaseStepper
               snapshot={activeRun.devPhaseGraph}
               label={activeRun.devPhase}
+              compact
             />
           )}
           <span className={isWaitingApproval ? 'text-amber-300' : 'text-cat-subtext'}>

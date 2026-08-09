@@ -138,4 +138,29 @@ describe('devPhaseStepper helpers', () => {
       true,
     )
   })
+
+  it('parses cycle and statusText from camel or snake case', () => {
+    const snap = parseDevPhaseSnapshot({
+      phase: 'explore',
+      exploreCount: 0,
+      exploreMax: 3,
+      patchCount: 0,
+      patchMax: 4,
+      verifyCount: 0,
+      verifyMax: 2,
+      cycle: 2,
+      statusText: 'New Developer step — budgets reset',
+    })
+    expect(snap?.cycle).toBe(2)
+    expect(snap?.statusText).toContain('budgets reset')
+
+    const snake = parseDevPhaseSnapshot({
+      phase: 'done',
+      cycle: 1,
+      status_text: 'Verify budget finished for this step (not board Done).',
+      write_succeeded: true,
+    })
+    expect(snake?.statusText).toContain('not board Done')
+    expect(snake?.cycle).toBe(1)
+  })
 })

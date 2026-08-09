@@ -113,3 +113,65 @@ def test_hint_for_exit_reason():
     assert "explore budget" in (hint_for_exit_reason("explore_budget_exhausted") or "").lower()
     assert "patch" in (hint_for_exit_reason("patch_budget_exhausted") or "").lower()
     assert hint_for_exit_reason("max_iterations") is None
+
+
+def test_snapshot_includes_cycle_and_status_text():
+    g = DevPhaseGraph(explore_max=3, verify_max=2)
+    snap = g.snapshot()
+    assert snap["cycle"] == 1
+    assert snap["statusText"]
+    assert "Exploring" in snap["statusText"] or "Explore" in snap["statusText"]
+
+    g.record_batch([("apply_patch", True)])
+    g.record_batch([("run_test", True), ("run_command", True)])
+    assert g.phase == "done"
+    done_snap = g.snapshot()
+    assert done_snap["phase"] == "done"
+    assert "not board Done" in done_snap["statusText"]
+    assert done_snap["cycle"] == 1
+
+
+def test_for_new_step_seeds_restart_after_done():
+    prior = {
+        "phase": "done",
+        "cycle": 1,
+        "label": "Done",
+        "exploreCount": 1,
+        "exploreMax": 3,
+        "patchCount": 1,
+        "patchMax": 4,
+        "verifyCount": 2,
+        "verifyMax": 2,
+        "writeSucceeded": True,
+    }
+    g = DevPhaseGraph.for_new_step(
+        {"enableDevPhaseGraph": True, "devExploreMaxTools": 3, "devPatchMaxTools": 4, "devVerifyMaxTools": 2},
+        prior_snap=prior,
+        steps_on_card=0,
+    )
+    assert g is not None
+    assert g.phase == "explore"
+    assert g.cycle >= 2
+    snap = g.snapshot()
+    assert snap["cycle"] >= 2
+    assert "budgets reset" in snap["statusText"].lower()
+    assert "Verify Done" in snap["statusText"]
+    assert "In Progress" in snap["statusText"]
+
+
+def test_compute_cycle_from_prior():
+    from backend.services.dev_phase_graph import compute_cycle_from_prior
+
+    assert compute_cycle_from_prior() == 1
+    assert compute_cycle_from_prior(prior_snap={"phase": "done", "cycle": 1}) == 2
+    assert compute_cycle_from_prior(prior_snap={"phase": "stuck"}, steps_on_card=3) == 4
+    assert compute_cycle_from_prior(steps_on_card=2) == 3
+
+
+def test_stuck_sets_status_text():
+    g = DevPhaseGraph(explore_max=1)
+    g.record_batch([("read_file", True)])
+    a = g.record_batch([("grep", True)])
+    assert a.stop_reason == "explore_budget_exhausted"
+    assert g.phase == "stuck"
+    assert "explore tool budget" in g.status_text.lower()
