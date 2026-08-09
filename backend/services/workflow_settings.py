@@ -113,6 +113,9 @@ DEFAULT_WORKFLOW_SETTINGS: Dict[str, Any] = {
     "enableAgentStepRecap": True,
     "enableEpisodeSummary": True,
     "enableMessageHistoryPrune": True,
+    # Cursor-style rewind: drop last assistant/tool turn(s) after failed writes.
+    "enableContextRewind": True,
+    "contextRewindTurns": 1,
     "enableLlmDecisionTrace": False,
     "enableLlmModelRationale": False,
     "toolOutputEchoStopAfter": 2,

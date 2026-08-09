@@ -1893,11 +1893,35 @@ class ScrumAgent:
             iteration=iteration,
             max_iterations=max_iterations,
         )
+        write_attempted = any(
+            results_by_id[id(call)][0] in ("write_file", "apply_patch") for call in all_calls
+        )
         write_success = any(
             results_by_id[id(call)][0] in ("write_file", "apply_patch")
             and results_by_id[id(call)][2].success
             for call in all_calls
         )
+        if write_attempted and not write_success:
+            from backend.services.llm_context import maybe_rewind_after_failed_writes
+
+            rewinds_used = int(getattr(self, "_context_rewinds", 0) or 0)
+            if rewinds_used < 2:
+                removed = maybe_rewind_after_failed_writes(
+                    messages,
+                    write_attempted=True,
+                    write_succeeded=False,
+                )
+                if removed:
+                    self._context_rewinds = rewinds_used + 1
+                    add_system_log(
+                        self.role,
+                        "info",
+                        f"Context rewind after failed write — removed {removed} message(s) "
+                        f"(rewind {self._context_rewinds}/2)",
+                    )
+                    from backend.services.step_diagnostics import log_event
+
+                    log_event("context_rewind", f"removed={removed}")
         command_success = any(
             results_by_id[id(call)][0] == "run_command"
             and results_by_id[id(call)][2].success
@@ -2090,6 +2114,7 @@ class ScrumAgent:
         set_llm_iterations_max(max_iterations)
         pending_lesson: Optional[Tuple[str, set, str]] = None
         self._consecutive_echo_count = 0
+        self._context_rewinds = 0
         self._dev_phase_graph = None
         from backend.services.dev_phase_graph import DevPhaseGraph
 

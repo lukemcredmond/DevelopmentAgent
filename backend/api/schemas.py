@@ -250,6 +250,8 @@ class WorkflowSettingsPayload(BaseModel):
     enableAgentStepRecap: Optional[bool] = None
     enableEpisodeSummary: Optional[bool] = None
     enableMessageHistoryPrune: Optional[bool] = None
+    enableContextRewind: Optional[bool] = None
+    contextRewindTurns: Optional[int] = None
     enableLlmDecisionTrace: Optional[bool] = None
     enableLlmModelRationale: Optional[bool] = None
     toolOutputEchoStopAfter: Optional[int] = None
@@ -320,6 +322,15 @@ class ChatPayload(BaseModel):
     context_files: List[str] = Field(default_factory=list, alias="contextFiles")
     task_id: Optional[str] = Field(default=None, alias="taskId")
     allow_done_retry: bool = Field(default=False, alias="allowDoneRetry")
+
+
+class ChatRewindPayload(BaseModel):
+    """Drop recent persisted chat turns (user+assistant pairs), keep earlier messages."""
+
+    model_config = ConfigDict(populate_by_name=True)
+
+    drop_turns: int = Field(default=1, alias="dropTurns", ge=1, le=50)
+    mode: str = "turns"  # turns | before_last_error
 
 
 class SaveFilePayload(BaseModel):

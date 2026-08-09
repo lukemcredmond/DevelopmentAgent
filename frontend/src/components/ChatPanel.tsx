@@ -43,6 +43,11 @@ interface ChatPanelProps {
   onSplitTask?: (taskId: string) => void
   toolEvents?: ToolExecutionEvent[]
   onClearChat?: () => void | Promise<void>
+  /** Cursor-style /rewind — drop recent chat turns, keep earlier context. */
+  onRewindChat?: (opts?: {
+    dropTurns?: number
+    mode?: 'turns' | 'before_last_error'
+  }) => void | Promise<void>
   hidden?: boolean
   /** Live agent run (same SSE as sprint) for waiting status. */
   activeRun?: AgentRunState | null
@@ -125,6 +130,7 @@ export default function ChatPanel({
   onSplitTask,
   toolEvents = [],
   onClearChat,
+  onRewindChat,
   hidden = false,
   activeRun = null,
 }: ChatPanelProps) {
@@ -257,6 +263,14 @@ export default function ChatPanel({
     const text = input.trim()
     if (!text || streaming) return
 
+    const rewindOpts = parseRewindCommand(text)
+    if (rewindOpts) {
+      onInputChange('')
+      if (!onRewindChat) return
+      await handleRewindChat(rewindOpts)
+      return
+    }
+
     const userMsg: ChatUiMessage = {
       id: crypto.randomUUID(),
       role: 'user',
@@ -365,6 +379,35 @@ export default function ChatPanel({
     }
   }
 
+  const handleRewindChat = async (opts?: {
+    dropTurns?: number
+    mode?: 'turns' | 'before_last_error'
+  }) => {
+    if (!onRewindChat || streaming || clearing || messages.length === 0) return
+    setClearing(true)
+    try {
+      await onRewindChat(opts)
+    } finally {
+      setClearing(false)
+    }
+  }
+
+  const parseRewindCommand = (
+    text: string,
+  ): { dropTurns?: number; mode?: 'turns' | 'before_last_error' } | null => {
+    const trimmed = text.trim()
+    const m = trimmed.match(/^\/rewind(?:\s+(\d+|error|before[-_]?error))?$/i)
+    if (!m) return null
+    const arg = (m[1] || '').toLowerCase()
+    if (!arg) return { dropTurns: 1, mode: 'turns' }
+    if (arg === 'error' || arg.startsWith('before')) {
+      return { mode: 'before_last_error', dropTurns: 1 }
+    }
+    const n = Number(arg)
+    if (!Number.isFinite(n) || n < 1) return { dropTurns: 1, mode: 'turns' }
+    return { dropTurns: Math.min(50, Math.floor(n)), mode: 'turns' }
+  }
+
   return (
     <div
       className={`flex flex-col h-full bg-cat-base overflow-hidden ${hidden ? 'hidden' : ''}`}
@@ -388,6 +431,18 @@ export default function ChatPanel({
             </option>
           ))}
         </select>
+        {onRewindChat && messages.length > 0 && (
+          <button
+            type="button"
+            onClick={() => void handleRewindChat({ dropTurns: 1 })}
+            disabled={streaming || clearing}
+            title="Drop last chat turn (/rewind). Use /rewind 2 or /rewind error"
+            className="text-[10px] px-2 py-0.5 rounded border border-cat-surface1 text-cat-subtext hover:text-white hover:bg-cat-surface0 disabled:opacity-50"
+            data-testid="chat-rewind"
+          >
+            Rewind
+          </button>
+        )}
         {onClearChat && messages.length > 0 && (
           <button
             type="button"
@@ -504,8 +559,8 @@ export default function ChatPanel({
           }}
           placeholder={
             taskActionMode
-              ? `Ask ${AGENT_LABELS[agent]} about ${pinnedTask?.id ?? 'this card'}… (@file to attach)`
-              : `Message ${AGENT_LABELS[agent]}… Use @path or @folder/ to attach context`
+              ? `Ask ${AGENT_LABELS[agent]} about ${pinnedTask?.id ?? 'this card'}… (/rewind to jump back)`
+              : `Message ${AGENT_LABELS[agent]}… @file · /rewind · /rewind error`
           }
           disabled={streaming}
           className="flex-1 bg-cat-surface0 border border-cat-surface1 rounded-lg px-3 py-2 text-xs text-white focus:outline-none focus:border-indigo-500"

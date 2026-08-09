@@ -329,6 +329,30 @@ export default function WorkflowPanel({
           Enable message history prune
           <SettingHint hint="When chat history exceeds the prune threshold, drop oldest tool messages before each LLM call." />
         </label>
+        <label className="flex items-center gap-2 text-[11px] text-cat-subtext cursor-pointer">
+          <input
+            type="checkbox"
+            checked={settings.enableContextRewind !== false}
+            onChange={(e) => onSettingsChange({ enableContextRewind: e.target.checked })}
+          />
+          Enable context rewind
+          <SettingHint hint="After a failed apply_patch/write_file, drop the last assistant/tool turn(s) so the model retries from earlier good context (Cursor-style rewind). Chat: type /rewind." />
+        </label>
+        {(settings.enableContextRewind !== false) && (
+          <label className="text-[11px] text-cat-subtext block">
+            <span className="text-[10px] text-cat-overlay inline-flex items-center">
+              Rewind turns
+              <SettingHint hint="How many recent assistant-led turns to cut on auto-rewind (default 1)." />
+            </span>
+            <NumberSettingInput
+              value={settings.contextRewindTurns ?? 1}
+              min={1}
+              max={5}
+              onCommit={(contextRewindTurns) => onSettingsChange({ contextRewindTurns })}
+              className="w-full bg-cat-base border border-cat-surface1 rounded p-1 text-white"
+            />
+          </label>
+        )}
         <label className="text-[11px] text-cat-subtext block">
           <span className="text-[10px] text-cat-overlay inline-flex items-center">
             Message prune threshold (% of num_ctx)

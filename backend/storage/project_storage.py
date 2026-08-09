@@ -402,6 +402,89 @@ class ProjectStorage:
             conn.commit()
             return cursor.rowcount
 
+    def rewind_chat_messages(
+        self,
+        project_id: str,
+        *,
+        drop_turns: int = 1,
+        mode: str = "turns",
+    ) -> Dict[str, Any]:
+        """
+        Cut recent chat turns while keeping earlier messages.
+        A turn starts at a user message and includes following non-user rows.
+        mode=before_last_error: drop from the user turn that precedes the last
+        assistant message that looks like an error/failure.
+        """
+        drop_turns = max(1, int(drop_turns or 1))
+        mode = (mode or "turns").strip().lower()
+        with sqlite3.connect(self.db_path) as conn:
+            conn.row_factory = sqlite3.Row
+            cursor = conn.cursor()
+            cursor.execute(
+                "SELECT id, project_id, role, agent, content, created_at "
+                "FROM chat_messages WHERE project_id = ? ORDER BY created_at ASC, rowid ASC",
+                (project_id,),
+            )
+            rows = [dict(r) for r in cursor.fetchall()]
+            if not rows:
+                return {"ok": True, "deleted": 0, "chatMessages": []}
+
+            user_idxs = [i for i, m in enumerate(rows) if str(m.get("role") or "") == "user"]
+            if not user_idxs:
+                return {
+                    "ok": True,
+                    "deleted": 0,
+                    "chatMessages": rows[-100:],
+                }
+
+            cut_at: Optional[int] = None
+            if mode == "before_last_error":
+                err_markers = (
+                    "error",
+                    "failed",
+                    "stopped:",
+                    "traceback",
+                    "exception",
+                    "max tool iterations",
+                    "explore_budget",
+                    "patch_budget",
+                    "simulation_fallback",
+                )
+                for i in range(len(rows) - 1, -1, -1):
+                    role = str(rows[i].get("role") or "")
+                    content = str(rows[i].get("content") or "").lower()
+                    if role != "assistant":
+                        continue
+                    if any(m in content for m in err_markers):
+                        prior_users = [u for u in user_idxs if u <= i]
+                        if prior_users:
+                            cut_at = prior_users[-1]
+                        break
+                if cut_at is None:
+                    cut_at = user_idxs[-1]
+            else:
+                # Drop last N user-led turns
+                if drop_turns >= len(user_idxs):
+                    cut_at = user_idxs[0]
+                else:
+                    cut_at = user_idxs[-drop_turns]
+
+            to_delete = rows[cut_at:]
+            keep = rows[:cut_at]
+            if to_delete:
+                ids = [str(m["id"]) for m in to_delete]
+                placeholders = ",".join("?" * len(ids))
+                cursor.execute(
+                    f"DELETE FROM chat_messages WHERE project_id = ? AND id IN ({placeholders})",
+                    [project_id, *ids],
+                )
+                conn.commit()
+            return {
+                "ok": True,
+                "deleted": len(to_delete),
+                "chatMessages": keep[-100:],
+            }
+
     def save_file_revision(
         self,
         project_id: str,

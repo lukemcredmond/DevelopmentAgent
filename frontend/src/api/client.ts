@@ -509,6 +509,29 @@ export async function clearChatHistory(): Promise<{ ok: boolean; deleted: number
   })
 }
 
+export async function rewindChatHistory(payload?: {
+  dropTurns?: number
+  mode?: 'turns' | 'before_last_error'
+}): Promise<{
+  ok: boolean
+  deleted: number
+  chatMessages: Array<{
+    id: string
+    role: string
+    content: string
+    agent?: string | null
+    created_at?: string
+  }>
+}> {
+  return request('/api/chat/rewind', {
+    method: 'POST',
+    body: JSON.stringify({
+      dropTurns: payload?.dropTurns ?? 1,
+      mode: payload?.mode ?? 'turns',
+    }),
+  })
+}
+
 export async function* streamChat(
   payload: ChatPayload,
   signal?: AbortSignal,

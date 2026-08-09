@@ -490,6 +490,9 @@ Persisted per project. Update via sidebar **Workflow** or `POST /api/workflow/se
 | autoFormatAfterEdit | On | Format files after agent edits when supported |
 | maxToolOutputCharsForLlm | 32000 | Truncate tool output in LLM context (0 = auto cap from num_ctx) |
 | messagePruneThresholdPct | 60 | Prune message history when context fills |
+| enableContextRewind | On | After failed `apply_patch`/`write_file`, drop the last assistant/tool turn(s) and keep earlier good context (Cursor-style rewind; max 2/step) |
+| contextRewindTurns | 1 | How many recent turns auto-rewind removes |
+| Chat `/rewind` | — | In Agent Chat: `/rewind`, `/rewind 2`, or `/rewind error` (or **Rewind** button) drops recent persisted turns |
 | promptProfile | full | `full` = legacy monolithic PO prompts + full skills/memories; `local_slm` = lean static prompts for all roles (PO/Dev/CR/QA). With **localSlmSprintPreload** (default on), also injects **bounded** Qdrant/file/graph/packer and 2 memory hits. Tool messages in the agent loop are unchanged. |
 
 #### Phone alerts (outbound Discord)
@@ -1105,6 +1108,7 @@ Key code: `backend/agents/scrum_agent.py`, `backend/services/parallel_tools.py`,
 **What each Dev sprint LLM call includes (order):** role system prompt + skills → optional memory search hits → `build_task_prompt` (brief, DoD, card fields, evidence, outcomes, answers, decisions, transcript) → semantic + Graphify + pre-loaded files (optionally **LLM-compressed**) → structure audit → lane instructions → tool loop with truncated outputs and char prune.
 
 - **Char prune** of old tool/observation messages when history exceeds `%` of `num_ctx` (`messagePruneThresholdPct`).
+- **Context rewind** (opposite direction): on failed writes, drop the *newest* assistant/tool turn(s) so the model retries from earlier good context (`enableContextRewind`). Chat UI: `/rewind`.
 - Optional **episode summary** lines for pruned chunks (text fold — not an embedding summarizer).
 - Optional **LLM context compress** for bulky sprint inject only (`enableLlmContextCompress`, **off** by default) — one extra Ollama call before the step; card identity fields stay verbatim.
 - **Tool-output truncation** before re-injection (`maxToolOutputCharsForLlm`).

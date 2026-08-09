@@ -6,6 +6,7 @@ import {
   ApiError,
   checkOllamaHealth,
   clearChatHistory,
+  rewindChatHistory,
   clearTaskTranscript,
   createProject,
   deleteProject,
@@ -605,6 +606,20 @@ export default function App() {
     await clearChatHistory()
     setChatMessages([])
   }, [])
+
+  const handleRewindChat = useCallback(
+    async (opts?: { dropTurns?: number; mode?: 'turns' | 'before_last_error' }) => {
+      const res = await rewindChatHistory(opts)
+      const next = (res.chatMessages ?? []).map((m) => ({
+        id: String(m.id),
+        role: (m.role === 'assistant' ? 'assistant' : 'user') as 'user' | 'assistant',
+        content: String(m.content ?? ''),
+        agent: (m.agent as AgentId | undefined) ?? undefined,
+      }))
+      setChatMessages(next)
+    },
+    [],
+  )
 
   const withLoading = async (fn: () => Promise<void>) => {
     setLoading(true)
@@ -1978,6 +1993,7 @@ export default function App() {
                       onSplitTask={(taskId) => void handleSplitTask(taskId)}
                       toolEvents={toolEvents}
                       onClearChat={handleClearChat}
+                      onRewindChat={handleRewindChat}
                       hidden={bottomTab !== 'chat'}
                       activeRun={activeRun}
                     />

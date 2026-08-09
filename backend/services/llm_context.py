@@ -103,6 +103,85 @@ def _index_of_last_assistant(messages: Sequence[Dict[str, Any]]) -> int:
     return max(2, len(messages) - tail_keep)
 
 
+def _assistant_turn_starts(messages: Sequence[Dict[str, Any]], *, head: int = 2) -> List[int]:
+    """Indices of assistant messages that start a turn (after preserved head)."""
+    starts: List[int] = []
+    for i in range(head, len(messages)):
+        if str(messages[i].get("role") or "") == "assistant":
+            starts.append(i)
+    return starts
+
+
+def rewind_recent_turns(
+    messages: MutableSequence[Dict[str, Any]],
+    turns: int = 1,
+    *,
+    note: Optional[str] = None,
+    head: int = 2,
+) -> int:
+    """
+    Cursor-style rewind: drop the last N assistant-led turns (assistant + trailing
+    tool/system follow-ups), keeping earlier good context (system + user + prior turns).
+
+    Returns the number of messages removed. Opposite of prune_messages_if_needed
+    (which drops *oldest* tool messages for budget).
+    """
+    turns = max(1, int(turns or 1))
+    starts = _assistant_turn_starts(messages, head=head)
+    if not starts:
+        return 0
+    cut_from = starts[-turns] if turns < len(starts) else starts[0]
+    if cut_from < head:
+        return 0
+    removed = list(messages[cut_from:])
+    del messages[cut_from:]
+    removed_n = len(removed)
+    if removed_n == 0:
+        return 0
+    fail_bits: List[str] = []
+    for msg in removed:
+        if not isinstance(msg, dict):
+            continue
+        if str(msg.get("role") or "") != "tool":
+            continue
+        out = str(msg.get("content") or "")
+        name = str(msg.get("tool_name") or "?")
+        if out and (
+            "error" in out.lower()
+            or "fail" in out.lower()
+            or "not found" in out.lower()
+            or msg.get("tool_success") is False
+        ):
+            fail_bits.append(f"{name}: {out.replace(chr(10), ' ').strip()[:120]}")
+        if len(fail_bits) >= 3:
+            break
+    default_note = (
+        f"[Context rewound: removed last {min(turns, len(starts))} turn(s) "
+        f"({removed_n} message(s)) — kept earlier context. "
+        "Do not repeat the same failing tool args; try a different approach.]"
+    )
+    if fail_bits:
+        default_note += "\nRecent failures:\n- " + "\n- ".join(fail_bits)
+    messages.append({"role": "system", "content": (note or default_note).strip()})
+    return removed_n
+
+
+def maybe_rewind_after_failed_writes(
+    messages: MutableSequence[Dict[str, Any]],
+    *,
+    write_attempted: bool,
+    write_succeeded: bool,
+) -> int:
+    """Auto-rewind last turn after a failed apply_patch/write_file batch when enabled."""
+    if not write_attempted or write_succeeded:
+        return 0
+    ws = get_workflow_settings()
+    if ws.get("enableContextRewind", True) is False:
+        return 0
+    turns = max(1, int(ws.get("contextRewindTurns") or 1))
+    return rewind_recent_turns(messages, turns=turns)
+
+
 def _summarize_removed(msg: Dict[str, Any]) -> str:
     role = str(msg.get("role") or "")
     name = str(msg.get("tool_name") or "")

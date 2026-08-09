@@ -6,7 +6,7 @@ from fastapi.responses import StreamingResponse
 from backend import state
 from backend.agents.registry import AGENT_MAP
 from backend.agents.task_context import build_task_prompt, find_task_by_id, is_task_done
-from backend.api.schemas import ChatPayload
+from backend.api.schemas import ChatPayload, ChatRewindPayload
 from backend.services.brief_service import PO_SMALLEST_TASKS_GUIDANCE
 from backend.services.logs import add_system_log
 from backend.services.events import publish_event
@@ -235,6 +235,26 @@ def clear_chat_history():
     with state.STATE_LOCK:
         deleted = state.storage.clear_chat_messages(state.CURRENT_PROJECT_ID)
         return {"ok": True, "deleted": deleted, "chatMessages": []}
+
+
+@router.post("/api/chat/rewind")
+def rewind_chat_history(payload: ChatRewindPayload):
+    """Drop recent chat turns (Cursor-style /rewind) while keeping earlier messages."""
+    mode = (payload.mode or "turns").strip().lower()
+    if mode not in ("turns", "before_last_error"):
+        raise HTTPException(status_code=400, detail="mode must be 'turns' or 'before_last_error'")
+    with state.STATE_LOCK:
+        result = state.storage.rewind_chat_messages(
+            state.CURRENT_PROJECT_ID,
+            drop_turns=payload.drop_turns,
+            mode=mode,
+        )
+        add_system_log(
+            "System",
+            "info",
+            f"Chat rewind mode={mode} dropTurns={payload.drop_turns} deleted={result.get('deleted', 0)}",
+        )
+        return result
 
 
 @router.post("/api/chat/stream")

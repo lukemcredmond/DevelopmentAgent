@@ -573,6 +573,8 @@ export interface WorkflowSettings {
   enableAgentStepRecap?: boolean
   enableEpisodeSummary?: boolean
   enableMessageHistoryPrune?: boolean
+  enableContextRewind?: boolean
+  contextRewindTurns?: number
   enableLlmDecisionTrace?: boolean
   enableLlmModelRationale?: boolean
   toolOutputEchoStopAfter?: number
@@ -1234,6 +1236,8 @@ export interface WorkflowSettingsPayload {
   enableAgentStepRecap?: boolean
   enableEpisodeSummary?: boolean
   enableMessageHistoryPrune?: boolean
+  enableContextRewind?: boolean
+  contextRewindTurns?: number
   enableLlmDecisionTrace?: boolean
   enableLlmModelRationale?: boolean
   toolOutputEchoStopAfter?: number
@@ -1581,6 +1585,8 @@ export const DEFAULT_WORKFLOW_SETTINGS: WorkflowSettings = {
   enableAgentStepRecap: true,
   enableEpisodeSummary: true,
   enableMessageHistoryPrune: true,
+  enableContextRewind: true,
+  contextRewindTurns: 1,
   enableLlmDecisionTrace: false,
   enableLlmModelRationale: false,
   toolOutputEchoStopAfter: 2,
