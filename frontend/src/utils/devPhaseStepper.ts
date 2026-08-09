@@ -2,6 +2,17 @@
 
 export type DevPhaseName = 'explore' | 'patch' | 'verify' | 'stuck' | 'done'
 
+export interface DevPhaseCycleHistoryEntry {
+  cycle: number
+  stepLabel?: string
+  terminalPhase: string
+  priorSummary?: string
+  exploreCount?: number
+  patchCount?: number
+  verifyCount?: number
+  writeSucceeded?: boolean
+}
+
 export interface DevPhaseGraphSnapshot {
   phase: DevPhaseName | string
   label?: string
@@ -20,7 +31,11 @@ export interface DevPhaseGraphSnapshot {
   stepLabel?: string
   /** Prior step outcome when budgets reset e.g. "Verify Done". */
   priorSummary?: string
+  /** Completed/abandoned prior cycles for unrolled path diagram (max 5). */
+  cycleHistory?: DevPhaseCycleHistoryEntry[]
 }
+
+export const CYCLE_HISTORY_MAX = 5
 
 export type DevPhaseSegmentState = 'done' | 'current' | 'upcoming' | 'stuck'
 
@@ -34,6 +49,35 @@ export interface DevPhaseSegment {
 
 const PHASE_ORDER = ['explore', 'patch', 'verify'] as const
 
+function parseCycleHistory(raw: unknown): DevPhaseCycleHistoryEntry[] | undefined {
+  const list = Array.isArray(raw) ? raw : null
+  if (!list) return undefined
+  const out: DevPhaseCycleHistoryEntry[] = []
+  for (const item of list) {
+    if (!item || typeof item !== 'object') continue
+    const d = item as Record<string, unknown>
+    const terminal = String(d.terminalPhase ?? d.terminal_phase ?? '').toLowerCase()
+    if (!terminal) continue
+    out.push({
+      cycle: Number(d.cycle ?? 0) || 1,
+      stepLabel:
+        d.stepLabel != null || d.step_label != null
+          ? String(d.stepLabel ?? d.step_label)
+          : undefined,
+      terminalPhase: terminal,
+      priorSummary:
+        d.priorSummary != null || d.prior_summary != null
+          ? String(d.priorSummary ?? d.prior_summary)
+          : undefined,
+      exploreCount: Number(d.exploreCount ?? d.explore_count ?? 0) || 0,
+      patchCount: Number(d.patchCount ?? d.patch_count ?? 0) || 0,
+      verifyCount: Number(d.verifyCount ?? d.verify_count ?? 0) || 0,
+      writeSucceeded: Boolean(d.writeSucceeded ?? d.write_succeeded),
+    })
+  }
+  return out.length ? out.slice(-CYCLE_HISTORY_MAX) : undefined
+}
+
 /** Normalize camel/snake API payloads into a snapshot. */
 export function parseDevPhaseSnapshot(raw: unknown): DevPhaseGraphSnapshot | null {
   if (!raw || typeof raw !== 'object') return null
@@ -44,6 +88,7 @@ export function parseDevPhaseSnapshot(raw: unknown): DevPhaseGraphSnapshot | nul
   const statusRaw = d.statusText ?? d.status_text
   const stepLabelRaw = d.stepLabel ?? d.step_label
   const priorRaw = d.priorSummary ?? d.prior_summary
+  const history = parseCycleHistory(d.cycleHistory ?? d.cycle_history)
   return {
     phase,
     label: d.label != null ? String(d.label) : undefined,
@@ -58,6 +103,7 @@ export function parseDevPhaseSnapshot(raw: unknown): DevPhaseGraphSnapshot | nul
     statusText: statusRaw != null && String(statusRaw).trim() ? String(statusRaw) : undefined,
     stepLabel: stepLabelRaw != null && String(stepLabelRaw).trim() ? String(stepLabelRaw) : undefined,
     priorSummary: priorRaw != null && String(priorRaw).trim() ? String(priorRaw) : undefined,
+    cycleHistory: history,
   }
 }
 
@@ -180,7 +226,7 @@ export interface DoneExploreLoopMeta {
   caption: string
 }
 
-/** Label / highlight for the Done → Explore cycle-restart edge. */
+/** Label / highlight for the Done → Explore cycle-restart edge (legacy single-loop UI). */
 export function doneExploreLoopMeta(snap: DevPhaseGraphSnapshot): DoneExploreLoopMeta {
   const phase = String(snap.phase || '').toLowerCase()
   const cycle = Number(snap.cycle ?? 0) || 1
@@ -212,7 +258,7 @@ export function doneExploreLoopMeta(snap: DevPhaseGraphSnapshot): DoneExploreLoo
   }
 }
 
-/** Node highlight map for the SVG state-machine diagram. */
+/** Node highlight map for one cycle lane (live or history). */
 export function diagramNodeStates(snap: DevPhaseGraphSnapshot): DiagramNodeState[] {
   const segments = buildDevPhaseSegments(snap)
   const phase = String(snap.phase || 'explore').toLowerCase()
@@ -252,4 +298,96 @@ export function diagramNodeStates(snap: DevPhaseGraphSnapshot): DiagramNodeState
     { id: 'stuck', label: 'Stuck', state: endState('stuck') },
     { id: 'done', label: 'Done', state: endState('done') },
   ]
+}
+
+export type UnrolledPhaseNodeId = 'explore' | 'patch' | 'verify' | 'stuck' | 'done'
+
+export interface UnrolledPhaseNode {
+  id: UnrolledPhaseNodeId
+  label: string
+  state: DevPhaseSegmentState | 'idle'
+  count?: number
+  max?: number
+}
+
+export interface UnrolledPhaseRow {
+  key: string
+  cycle: number
+  stepLabel: string
+  live: boolean
+  /** Terminal for history rows; live phase for current row. */
+  phase: string
+  nodes: UnrolledPhaseNode[]
+  /** Connect this row's Done/Stuck into the next row's Explore. */
+  connectsToNext: boolean
+}
+
+function historyEntryAsSnapshot(
+  entry: DevPhaseCycleHistoryEntry,
+  liveMax?: DevPhaseGraphSnapshot,
+): DevPhaseGraphSnapshot {
+  const terminal = String(entry.terminalPhase || '').toLowerCase()
+  return {
+    phase: terminal,
+    cycle: entry.cycle,
+    stepLabel: entry.stepLabel || `Cycle ${entry.cycle}`,
+    priorSummary: entry.priorSummary,
+    exploreCount: entry.exploreCount ?? 0,
+    exploreMax: liveMax?.exploreMax ?? 3,
+    patchCount: entry.patchCount ?? 0,
+    patchMax: liveMax?.patchMax ?? 4,
+    verifyCount: entry.verifyCount ?? 0,
+    verifyMax: liveMax?.verifyMax ?? 2,
+    writeSucceeded: Boolean(entry.writeSucceeded),
+  }
+}
+
+function nodesForRowSnap(snap: DevPhaseGraphSnapshot, history: boolean): UnrolledPhaseNode[] {
+  const base = diagramNodeStates(snap)
+  if (!history) return base
+  // History rows: no "current" pulse — completed path only.
+  return base.map((n) => {
+    if (n.state === 'current') return { ...n, state: 'done' as const }
+    return n
+  })
+}
+
+/**
+ * Build stacked unrolled lanes: prior cycles + live cycle.
+ * Done/Stuck of row i connects to Explore of row i+1 (new Explore, not a loop).
+ */
+export function buildUnrolledPhaseRows(snap: DevPhaseGraphSnapshot): UnrolledPhaseRow[] {
+  const history = (snap.cycleHistory || []).slice(-CYCLE_HISTORY_MAX)
+  const rows: UnrolledPhaseRow[] = []
+
+  for (const entry of history) {
+    const histSnap = historyEntryAsSnapshot(entry, snap)
+    const terminal = String(entry.terminalPhase || '').toLowerCase()
+    rows.push({
+      key: `hist-${entry.cycle}-${terminal}`,
+      cycle: entry.cycle,
+      stepLabel: (entry.stepLabel || `Cycle ${entry.cycle}`).trim(),
+      live: false,
+      phase: terminal,
+      nodes: nodesForRowSnap(histSnap, true),
+      connectsToNext: true,
+    })
+  }
+
+  const cycle = Number(snap.cycle ?? 0) || 1
+  const stepLabel = (snap.stepLabel || '').trim() || `Cycle ${cycle}`
+  rows.push({
+    key: `live-${cycle}`,
+    cycle,
+    stepLabel,
+    live: true,
+    phase: String(snap.phase || 'explore').toLowerCase(),
+    nodes: nodesForRowSnap(snap, false),
+    connectsToNext: false,
+  })
+
+  for (let i = 0; i < rows.length; i++) {
+    rows[i].connectsToNext = i < rows.length - 1
+  }
+  return rows
 }

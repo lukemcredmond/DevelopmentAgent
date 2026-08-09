@@ -765,6 +765,17 @@ export interface AgentRunState {
   devPhaseGraph?: DevPhaseGraphSnapshot | null
 }
 
+export interface DevPhaseCycleHistoryEntry {
+  cycle: number
+  stepLabel?: string
+  terminalPhase: string
+  priorSummary?: string
+  exploreCount?: number
+  patchCount?: number
+  verifyCount?: number
+  writeSucceeded?: boolean
+}
+
 export interface DevPhaseGraphSnapshot {
   phase: string
   label?: string
@@ -783,6 +794,8 @@ export interface DevPhaseGraphSnapshot {
   stepLabel?: string
   /** Prior step outcome when budgets reset e.g. "Verify Done". */
   priorSummary?: string
+  /** Completed/abandoned prior cycles for unrolled path diagram (max 5). */
+  cycleHistory?: DevPhaseCycleHistoryEntry[]
 }
 
 export interface PendingToolApproval {

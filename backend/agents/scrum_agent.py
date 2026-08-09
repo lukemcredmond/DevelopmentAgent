@@ -2199,8 +2199,6 @@ class ScrumAgent:
             focus_ac_index = None
             if task_id:
                 try:
-                    from backend.agents.task_context import find_task_by_id, normalize_task
-
                     prior_task = find_task_by_id(str(task_id))
                     if prior_task:
                         normalize_task(prior_task)

@@ -2,8 +2,10 @@
 
 from __future__ import annotations
 
-from dataclasses import dataclass
-from typing import Any, Dict, Optional, Sequence, Tuple
+from dataclasses import dataclass, field
+from typing import Any, Dict, List, Optional, Sequence, Tuple
+
+CYCLE_HISTORY_MAX = 5
 
 EXPLORE_TOOLS = frozenset(
     {
@@ -102,6 +104,69 @@ def compute_cycle_from_prior(
     return 1
 
 
+def summarize_cycle_entry(snap: Optional[Dict[str, Any]]) -> Optional[Dict[str, Any]]:
+    """Compact finished/abandoned cycle for unrolled path history."""
+    if not snap or not isinstance(snap, dict) or not snap.get("phase"):
+        return None
+    phase = str(snap.get("phase") or "").lower()
+    cycle = int(snap.get("cycle") or 1)
+    step_label = str(snap.get("stepLabel") or snap.get("step_label") or f"Cycle {cycle}").strip()
+    prior = str(snap.get("priorSummary") or snap.get("prior_summary") or "").strip()
+    return {
+        "cycle": cycle,
+        "stepLabel": step_label or f"Cycle {cycle}",
+        "terminalPhase": phase,
+        "priorSummary": prior,
+        "exploreCount": int(snap.get("exploreCount") or snap.get("explore_count") or 0),
+        "patchCount": int(snap.get("patchCount") or snap.get("patch_count") or 0),
+        "verifyCount": int(snap.get("verifyCount") or snap.get("verify_count") or 0),
+        "writeSucceeded": bool(snap.get("writeSucceeded") or snap.get("write_succeeded")),
+    }
+
+
+def merge_cycle_history(
+    prior_snap: Optional[Dict[str, Any]],
+    *,
+    max_entries: int = CYCLE_HISTORY_MAX,
+) -> List[Dict[str, Any]]:
+    """Carry forward prior history and append a summary of the prior cycle."""
+    history: List[Dict[str, Any]] = []
+    if prior_snap and isinstance(prior_snap, dict):
+        raw = prior_snap.get("cycleHistory") or prior_snap.get("cycle_history") or []
+        if isinstance(raw, list):
+            for item in raw:
+                if not isinstance(item, dict):
+                    continue
+                terminal = str(item.get("terminalPhase") or item.get("terminal_phase") or "").lower()
+                if not terminal:
+                    continue
+                history.append(
+                    {
+                        "cycle": int(item.get("cycle") or 0) or 1,
+                        "stepLabel": str(
+                            item.get("stepLabel") or item.get("step_label") or f"Cycle {item.get('cycle') or 1}"
+                        ),
+                        "terminalPhase": terminal,
+                        "priorSummary": str(item.get("priorSummary") or item.get("prior_summary") or ""),
+                        "exploreCount": int(item.get("exploreCount") or item.get("explore_count") or 0),
+                        "patchCount": int(item.get("patchCount") or item.get("patch_count") or 0),
+                        "verifyCount": int(item.get("verifyCount") or item.get("verify_count") or 0),
+                        "writeSucceeded": bool(item.get("writeSucceeded") or item.get("write_succeeded")),
+                    }
+                )
+        summary = summarize_cycle_entry(prior_snap)
+        if summary:
+            # Avoid duplicating if prior snap was already recorded as last history entry
+            last = history[-1] if history else None
+            if not last or int(last.get("cycle") or 0) != int(summary["cycle"]):
+                history.append(summary)
+            elif last and last.get("terminalPhase") != summary["terminalPhase"]:
+                history[-1] = summary
+    if len(history) > max_entries:
+        history = history[-max_entries:]
+    return history
+
+
 @dataclass
 class PhaseAction:
     """Result of recording tools / checking after an LLM turn."""
@@ -128,6 +193,7 @@ class DevPhaseGraph:
     status_text: str = ""
     step_label: str = ""
     prior_summary: str = ""
+    cycle_history: List[Dict[str, Any]] = field(default_factory=list)
 
     def __post_init__(self) -> None:
         if not self.step_label:
@@ -176,9 +242,10 @@ class DevPhaseGraph:
         steps_on_card: int = 0,
         focus_ac_index: Optional[int] = None,
     ) -> None:
-        """Set cycle, stepLabel, priorSummary, and initial statusText for a freshly started step."""
+        """Set cycle, stepLabel, priorSummary, history, and initial statusText for a new step."""
         self.cycle = compute_cycle_from_prior(prior_snap=prior_snap, steps_on_card=steps_on_card)
         self.prior_summary = ""
+        self.cycle_history = merge_cycle_history(prior_snap)
         label = f"Cycle {self.cycle}"
         if focus_ac_index is not None:
             try:
@@ -279,6 +346,7 @@ class DevPhaseGraph:
             "statusText": self.status_text or "",
             "stepLabel": self.step_label or f"Cycle {int(self.cycle or 1)}",
             "priorSummary": self.prior_summary or "",
+            "cycleHistory": list(self.cycle_history or [])[-CYCLE_HISTORY_MAX:],
         }
 
     def record_batch(self, tools: Sequence[Tuple[str, bool]]) -> PhaseAction:

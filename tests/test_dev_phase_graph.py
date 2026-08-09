@@ -163,6 +163,44 @@ def test_for_new_step_seeds_restart_after_done():
     assert "budgets reset" in snap["statusText"].lower()
     assert "Verify Done" in snap["statusText"]
     assert "In Progress" in snap["statusText"]
+    hist = snap["cycleHistory"]
+    assert len(hist) == 1
+    assert hist[0]["terminalPhase"] == "done"
+    assert hist[0]["cycle"] == 1
+    assert hist[0]["stepLabel"] == "Cycle 1"
+
+
+def test_cycle_history_carries_forward_and_caps():
+    prior = {
+        "phase": "done",
+        "cycle": 2,
+        "stepLabel": "Cycle 2",
+        "exploreCount": 1,
+        "patchCount": 1,
+        "verifyCount": 2,
+        "writeSucceeded": True,
+        "cycleHistory": [
+            {
+                "cycle": 1,
+                "stepLabel": "Cycle 1",
+                "terminalPhase": "stuck",
+                "exploreCount": 3,
+                "patchCount": 0,
+                "verifyCount": 0,
+                "writeSucceeded": False,
+            }
+        ],
+    }
+    g = DevPhaseGraph.for_new_step(
+        {"enableDevPhaseGraph": True},
+        prior_snap=prior,
+    )
+    assert g is not None
+    snap = g.snapshot()
+    assert snap["cycle"] == 3
+    assert [h["cycle"] for h in snap["cycleHistory"]] == [1, 2]
+    assert snap["cycleHistory"][0]["terminalPhase"] == "stuck"
+    assert snap["cycleHistory"][1]["terminalPhase"] == "done"
 
 
 def test_compute_cycle_from_prior():

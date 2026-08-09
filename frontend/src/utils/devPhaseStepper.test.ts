@@ -1,6 +1,7 @@
 import { describe, expect, it } from 'vitest'
 import {
   buildDevPhaseSegments,
+  buildUnrolledPhaseRows,
   diagramNodeStates,
   doneExploreLoopMeta,
   parseDevPhaseSnapshot,
@@ -212,5 +213,64 @@ describe('devPhaseStepper helpers', () => {
     })
     expect(first.active).toBe(false)
     expect(first.edgeLabel).toBe('next step')
+  })
+
+  it('buildUnrolledPhaseRows stacks history then live; Done connects to next Explore', () => {
+    const rows = buildUnrolledPhaseRows({
+      phase: 'explore',
+      cycle: 2,
+      stepLabel: 'Cycle 2',
+      priorSummary: 'Verify Done',
+      exploreCount: 0,
+      exploreMax: 3,
+      patchCount: 0,
+      patchMax: 4,
+      verifyCount: 0,
+      verifyMax: 2,
+      cycleHistory: [
+        {
+          cycle: 1,
+          stepLabel: 'Cycle 1',
+          terminalPhase: 'done',
+          exploreCount: 1,
+          patchCount: 1,
+          verifyCount: 2,
+          writeSucceeded: true,
+        },
+      ],
+    })
+    expect(rows).toHaveLength(2)
+    expect(rows[0].live).toBe(false)
+    expect(rows[0].phase).toBe('done')
+    expect(rows[0].connectsToNext).toBe(true)
+    expect(rows[0].nodes.find((n) => n.id === 'done')?.state).toBe('done')
+    expect(rows[1].live).toBe(true)
+    expect(rows[1].stepLabel).toBe('Cycle 2')
+    expect(rows[1].phase).toBe('explore')
+    expect(rows[1].connectsToNext).toBe(false)
+    expect(rows[1].nodes.find((n) => n.id === 'explore')?.state).toBe('current')
+    // Path is Cycle1 Done → Cycle2 Explore (new Explore), not back to Cycle1 Explore
+    expect(rows[0].cycle).toBe(1)
+    expect(rows[1].cycle).toBe(2)
+  })
+
+  it('parses cycleHistory from snapshot payload', () => {
+    const snap = parseDevPhaseSnapshot({
+      phase: 'explore',
+      cycle: 2,
+      cycleHistory: [
+        {
+          cycle: 1,
+          stepLabel: 'Cycle 1',
+          terminalPhase: 'done',
+          exploreCount: 2,
+          patchCount: 1,
+          verifyCount: 2,
+          writeSucceeded: true,
+        },
+      ],
+    })
+    expect(snap?.cycleHistory).toHaveLength(1)
+    expect(snap?.cycleHistory?.[0].terminalPhase).toBe('done')
   })
 })

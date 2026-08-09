@@ -1,9 +1,10 @@
 import {
-  diagramNodeStates,
-  doneExploreLoopMeta,
+  buildUnrolledPhaseRows,
   resolveDevPhaseSnapshot,
   type DevPhaseGraphSnapshot,
   type DevPhaseSegmentState,
+  type UnrolledPhaseNode,
+  type UnrolledPhaseRow,
 } from '../utils/devPhaseStepper'
 
 interface DevPhaseDiagramProps {
@@ -33,7 +34,35 @@ function textFill(state: DevPhaseSegmentState | 'idle'): string {
   return 'rgb(166, 173, 200)'
 }
 
-/** Lightweight SVG state machine for Explore → Patch → Verify. */
+const ROW_H = 88
+const LABEL_H = 14
+const NODE_W = 72
+const NODE_H = 36
+const MAIN_Y = 18
+const STUCK_DONE_Y = 56
+
+type Box = { x: number; y: number; w: number; h: number }
+
+function rowLayout(rowIndex: number): Record<string, Box> {
+  const y0 = rowIndex * ROW_H + LABEL_H + 4
+  return {
+    explore: { x: 56, y: y0 + MAIN_Y, w: NODE_W, h: NODE_H },
+    patch: { x: 156, y: y0 + MAIN_Y, w: NODE_W, h: NODE_H },
+    verify: { x: 256, y: y0 + MAIN_Y, w: NODE_W, h: NODE_H },
+    stuck: { x: 120, y: y0 + STUCK_DONE_Y, w: 56, h: 28 },
+    done: { x: 280, y: y0 + STUCK_DONE_Y, w: 56, h: 28 },
+  }
+}
+
+function mid(box: Box) {
+  return { x: box.x + box.w / 2, y: box.y + box.h / 2 }
+}
+
+function terminalId(phase: string): 'done' | 'stuck' {
+  return phase === 'stuck' ? 'stuck' : 'done'
+}
+
+/** Unrolled Explore→Patch→Verify path: each Developer step is its own lane. */
 export default function DevPhaseDiagram({
   snapshot,
   label,
@@ -48,82 +77,32 @@ export default function DevPhaseDiagram({
     )
   }
 
-  const nodes = diagramNodeStates(snap)
-  const byId = Object.fromEntries(nodes.map((n) => [n.id, n]))
-  const phase = String(snap.phase || '').toLowerCase()
-  const loop = doneExploreLoopMeta(snap)
+  const rows = buildUnrolledPhaseRows(snap)
+  const height = Math.max(ROW_H + 8, rows.length * ROW_H + 12)
+  const liveLabel = rows.find((r) => r.live)?.stepLabel || snap.stepLabel || `Cycle ${snap.cycle ?? 1}`
 
-  const layout: Record<string, { x: number; y: number; w: number; h: number }> = {
-    explore: { x: 24, y: 36, w: 88, h: 44 },
-    patch: { x: 156, y: 36, w: 88, h: 44 },
-    verify: { x: 288, y: 36, w: 88, h: 44 },
-    stuck: { x: 90, y: 118, w: 72, h: 36 },
-    done: { x: 300, y: 118, w: 72, h: 36 },
-  }
-
-  const mid = (id: string) => {
-    const b = layout[id]
-    return { x: b.x + b.w / 2, y: b.y + b.h / 2 }
-  }
-
-  const edge = (
-    from: string,
-    to: string,
-    opts?: { dashed?: boolean; active?: boolean; label?: string; bend?: number },
+  const drawBox = (
+    rowKey: string,
+    id: string,
+    box: Box,
+    node: UnrolledPhaseNode | undefined,
   ) => {
-    const a = mid(from)
-    const b = mid(to)
-    const aw = layout[from].w / 2
-    const bw = layout[to].w / 2
-    const leftToRight = b.x > a.x
-    const x1 = leftToRight ? a.x + aw : a.x - aw
-    const x2 = leftToRight ? b.x - bw : b.x + bw
-    const y1 = a.y + (opts?.bend ?? 0)
-    const y2 = b.y + (opts?.bend ?? 0)
-    const stroke = opts?.active ? 'rgb(56, 189, 248)' : 'rgb(88, 91, 112)'
-    return (
-      <g key={`${from}-${to}-${opts?.label ?? ''}`}>
-        <line
-          x1={x1}
-          y1={y1}
-          x2={x2}
-          y2={y2}
-          stroke={stroke}
-          strokeWidth={opts?.active ? 1.75 : 1.25}
-          strokeDasharray={opts?.dashed ? '4 3' : undefined}
-          markerEnd="url(#ah-phase-arrow)"
-        />
-        {opts?.label && (
-          <text
-            x={(x1 + x2) / 2}
-            y={(y1 + y2) / 2 - 4}
-            fill="rgb(108, 112, 134)"
-            fontSize={8}
-            textAnchor="middle"
-            fontFamily="ui-monospace, monospace"
-          >
-            {opts.label}
-          </text>
-        )}
-      </g>
-    )
-  }
-
-  const box = (id: keyof typeof layout) => {
-    const n = byId[id]
-    const b = layout[id]
-    const state = (n?.state ?? 'idle') as DevPhaseSegmentState | 'idle'
+    const state = (node?.state ?? 'idle') as DevPhaseSegmentState | 'idle'
     const budget =
-      n?.count != null && n?.max != null ? `${n.count}/${n.max}` : undefined
+      node?.count != null && node?.max != null ? `${node.count}/${node.max}` : undefined
     return (
-      <g key={id} data-testid={`dev-phase-diagram-node-${id}`} data-state={state}>
+      <g
+        key={`${rowKey}-${id}`}
+        data-testid={`dev-phase-diagram-node-${rowKey}-${id}`}
+        data-state={state}
+      >
         {state === 'current' && (
           <rect
-            x={b.x - 3}
-            y={b.y - 3}
-            width={b.w + 6}
-            height={b.h + 6}
-            rx={10}
+            x={box.x - 2}
+            y={box.y - 2}
+            width={box.w + 4}
+            height={box.h + 4}
+            rx={8}
             fill="none"
             stroke="rgb(56, 189, 248)"
             strokeWidth={1.5}
@@ -132,32 +111,32 @@ export default function DevPhaseDiagram({
           />
         )}
         <rect
-          x={b.x}
-          y={b.y}
-          width={b.w}
-          height={b.h}
-          rx={8}
+          x={box.x}
+          y={box.y}
+          width={box.w}
+          height={box.h}
+          rx={7}
           fill={nodeFill(state)}
           stroke={nodeStroke(state)}
-          strokeWidth={1.5}
+          strokeWidth={1.35}
         />
         <text
-          x={b.x + b.w / 2}
-          y={b.y + (budget ? b.h / 2 - 4 : b.h / 2 + 4)}
+          x={box.x + box.w / 2}
+          y={box.y + (budget ? box.h / 2 - 3 : box.h / 2 + 3)}
           fill={textFill(state)}
-          fontSize={11}
+          fontSize={10}
           fontWeight={600}
           textAnchor="middle"
           fontFamily="ui-sans-serif, system-ui, sans-serif"
         >
-          {n?.label ?? id}
+          {node?.label ?? id}
         </text>
         {budget && (
           <text
-            x={b.x + b.w / 2}
-            y={b.y + b.h / 2 + 12}
+            x={box.x + box.w / 2}
+            y={box.y + box.h / 2 + 10}
             fill={textFill(state)}
-            fontSize={9}
+            fontSize={8}
             textAnchor="middle"
             fontFamily="ui-monospace, monospace"
           >
@@ -168,36 +147,169 @@ export default function DevPhaseDiagram({
     )
   }
 
-  const exploreActive = phase === 'explore' || (phase === 'stuck' && byId.explore?.state === 'stuck')
-  const patchActive = phase === 'patch' || (phase === 'stuck' && byId.patch?.state === 'stuck')
-  const verifyActive = phase === 'verify' || phase === 'done'
+  const hEdge = (
+    key: string,
+    from: Box,
+    to: Box,
+    active: boolean,
+    edgeLabel?: string,
+  ) => {
+    const a = mid(from)
+    const b = mid(to)
+    const x1 = a.x + from.w / 2
+    const x2 = b.x - to.w / 2
+    const y = a.y
+    return (
+      <g key={key}>
+        <line
+          x1={x1}
+          y1={y}
+          x2={x2}
+          y2={y}
+          stroke={active ? 'rgb(56, 189, 248)' : 'rgb(88, 91, 112)'}
+          strokeWidth={active ? 1.6 : 1.2}
+          markerEnd={active ? 'url(#ah-phase-arrow-active)' : 'url(#ah-phase-arrow)'}
+        />
+        {edgeLabel && (
+          <text
+            x={(x1 + x2) / 2}
+            y={y - 4}
+            fill="rgb(108, 112, 134)"
+            fontSize={7}
+            textAnchor="middle"
+            fontFamily="ui-monospace, monospace"
+          >
+            {edgeLabel}
+          </text>
+        )}
+      </g>
+    )
+  }
 
-  // Curved Done → Explore under the machine (cycle restart).
-  const doneBox = layout.done
-  const exploreBox = layout.explore
-  const loopX1 = doneBox.x
-  const loopY1 = doneBox.y + doneBox.h / 2
-  const loopX2 = exploreBox.x + exploreBox.w / 2
-  const loopY2 = exploreBox.y + exploreBox.h
-  const loopCx = 40
-  const loopCy = 158
-  const loopStroke = loop.active ? 'rgb(56, 189, 248)' : 'rgb(88, 91, 112)'
+  const renderRow = (row: UnrolledPhaseRow, idx: number) => {
+    const layout = rowLayout(idx)
+    const byId = Object.fromEntries(row.nodes.map((n) => [n.id, n])) as Record<
+      string,
+      UnrolledPhaseNode
+    >
+    const phase = row.phase
+    const exploreOn =
+      phase === 'explore' || (phase === 'stuck' && byId.explore?.state === 'stuck')
+    const patchOn = phase === 'patch' || (phase === 'stuck' && byId.patch?.state === 'stuck')
+    const verifyOn = phase === 'verify' || phase === 'done'
+    const showStuck = phase === 'stuck' || byId.stuck?.state === 'stuck'
+    const showDone = phase === 'done' || byId.done?.state === 'done' || (!row.live && phase !== 'stuck')
+
+    const stuckFrom =
+      phase === 'stuck' && byId.patch?.state === 'stuck' ? layout.patch : layout.explore
+    const stuckActive = phase === 'stuck'
+
+    return (
+      <g key={row.key} data-testid={`dev-phase-row-${row.key}`} data-live={row.live ? 'true' : 'false'}>
+        <text
+          x={8}
+          y={idx * ROW_H + 12}
+          fill={row.live ? 'rgb(125, 211, 252)' : 'rgb(147, 153, 178)'}
+          fontSize={9}
+          fontFamily="ui-monospace, monospace"
+        >
+          {row.stepLabel}
+        </text>
+        {hEdge(
+          `${row.key}-ep`,
+          layout.explore,
+          layout.patch,
+          exploreOn || patchOn || verifyOn || showDone,
+          'context',
+        )}
+        {hEdge(
+          `${row.key}-pv`,
+          layout.patch,
+          layout.verify,
+          patchOn || verifyOn || showDone,
+          'write',
+        )}
+        {(showDone || phase === 'verify') &&
+          hEdge(`${row.key}-vd`, layout.verify, layout.done, showDone || phase === 'verify', 'ok')}
+        {showStuck && (
+          <line
+            x1={mid(stuckFrom).x}
+            y1={stuckFrom.y + stuckFrom.h}
+            x2={mid(layout.stuck).x}
+            y2={layout.stuck.y}
+            stroke={stuckActive ? 'rgb(251, 113, 133)' : 'rgb(88, 91, 112)'}
+            strokeWidth={1.2}
+            strokeDasharray="3 3"
+            markerEnd="url(#ah-phase-arrow)"
+          />
+        )}
+        {drawBox(row.key, 'explore', layout.explore, byId.explore)}
+        {drawBox(row.key, 'patch', layout.patch, byId.patch)}
+        {drawBox(row.key, 'verify', layout.verify, byId.verify)}
+        {showStuck && drawBox(row.key, 'stuck', layout.stuck, byId.stuck)}
+        {(showDone || phase === 'verify' || phase === 'done') &&
+          drawBox(row.key, 'done', layout.done, byId.done)}
+      </g>
+    )
+  }
+
+  const crossRowLinks = rows.flatMap((row, idx) => {
+    if (!row.connectsToNext || idx >= rows.length - 1) return []
+    const fromLayout = rowLayout(idx)
+    const toLayout = rowLayout(idx + 1)
+    const term = terminalId(row.phase)
+    const fromBox = fromLayout[term]
+    const toBox = toLayout.explore
+    const a = mid(fromBox)
+    const b = mid(toBox)
+    const nextLabel = rows[idx + 1].stepLabel
+    const x1 = a.x
+    const y1 = fromBox.y + fromBox.h
+    const x2 = b.x
+    const y2 = toBox.y
+    const midY = (y1 + y2) / 2
+    return [
+      <g
+        key={`link-${row.key}-to-${rows[idx + 1].key}`}
+        data-testid="dev-phase-cross-cycle-link"
+        data-from-cycle={row.cycle}
+        data-to-cycle={rows[idx + 1].cycle}
+      >
+        <path
+          d={`M ${x1} ${y1} C ${x1} ${midY}, ${x2} ${midY}, ${x2} ${y2}`}
+          fill="none"
+          stroke="rgb(56, 189, 248)"
+          strokeWidth={1.6}
+          markerEnd="url(#ah-phase-arrow-active)"
+        />
+        <text
+          x={(x1 + x2) / 2}
+          y={midY - 2}
+          fill="rgb(125, 211, 252)"
+          fontSize={7}
+          textAnchor="middle"
+          fontFamily="ui-monospace, monospace"
+        >
+          {`→ ${nextLabel}`}
+        </text>
+      </g>,
+    ]
+  })
 
   return (
     <div className={className} data-testid="dev-phase-diagram">
-      {loop.caption && (
-        <p
-          className="text-[10px] text-sky-200/90 font-mono mb-0.5"
-          data-testid="dev-phase-diagram-step-label"
-        >
-          {loop.caption}
-        </p>
-      )}
+      <p
+        className="text-[10px] text-sky-200/90 font-mono mb-0.5"
+        data-testid="dev-phase-diagram-step-label"
+      >
+        {liveLabel}
+        {rows.length > 1 ? ` · ${rows.length} steps` : ''}
+      </p>
       <svg
-        viewBox="0 0 400 178"
+        viewBox={`0 0 360 ${height}`}
         className="w-full max-w-md h-auto"
         role="img"
-        aria-label={`Dev phase diagram: ${snap.label || snap.phase}${loop.caption ? ` · ${loop.caption}` : ''}`}
+        aria-label={`Dev phase path: ${rows.map((r) => r.stepLabel).join(' → ')}`}
       >
         <defs>
           <marker
@@ -221,82 +333,17 @@ export default function DevPhaseDiagram({
             <path d="M0,0 L6,3 L0,6 Z" fill="rgb(56, 189, 248)" />
           </marker>
         </defs>
-        {edge('explore', 'patch', {
-          active: exploreActive || patchActive || verifyActive,
-          label: 'context',
-        })}
-        {edge('patch', 'verify', {
-          active: patchActive || verifyActive,
-          label: 'write ok',
-        })}
-        {edge('verify', 'done', {
-          active: phase === 'done' || phase === 'verify',
-          label: 'ok',
-        })}
-        {edge('patch', 'explore', {
-          dashed: true,
-          bend: 18,
-          label: 'need ctx',
-        })}
-        {edge('verify', 'patch', {
-          dashed: true,
-          bend: -14,
-          label: 'retry',
-        })}
-        {/* Stuck branches */}
-        <line
-          x1={mid('explore').x}
-          y1={layout.explore.y + layout.explore.h}
-          x2={layout.stuck.x + layout.stuck.w / 2}
-          y2={layout.stuck.y}
-          stroke={phase === 'stuck' && byId.explore?.state === 'stuck' ? 'rgb(251, 113, 133)' : 'rgb(88, 91, 112)'}
-          strokeWidth={1.25}
-          strokeDasharray="3 3"
-          markerEnd="url(#ah-phase-arrow)"
-        />
-        <line
-          x1={mid('patch').x}
-          y1={layout.patch.y + layout.patch.h}
-          x2={layout.stuck.x + layout.stuck.w / 2 + 10}
-          y2={layout.stuck.y}
-          stroke={phase === 'stuck' && byId.patch?.state === 'stuck' ? 'rgb(251, 113, 133)' : 'rgb(88, 91, 112)'}
-          strokeWidth={1.25}
-          strokeDasharray="3 3"
-          markerEnd="url(#ah-phase-arrow)"
-        />
-        {/* Done → Explore cycle restart */}
-        <g data-testid="dev-phase-done-explore-loop" data-active={loop.active ? 'true' : 'false'}>
-          <path
-            d={`M ${loopX1} ${loopY1} Q ${loopCx} ${loopCy} ${loopX2} ${loopY2}`}
-            fill="none"
-            stroke={loopStroke}
-            strokeWidth={loop.active ? 1.75 : 1.25}
-            strokeDasharray={loop.dashed ? '4 3' : undefined}
-            markerEnd={loop.active ? 'url(#ah-phase-arrow-active)' : 'url(#ah-phase-arrow)'}
-          />
-          <text
-            x={90}
-            y={168}
-            fill={loop.active ? 'rgb(125, 211, 252)' : 'rgb(108, 112, 134)'}
-            fontSize={8}
-            textAnchor="start"
-            fontFamily="ui-monospace, monospace"
-            data-testid="dev-phase-done-explore-label"
-          >
-            {loop.edgeLabel.length > 42 ? `${loop.edgeLabel.slice(0, 40)}…` : loop.edgeLabel}
-          </text>
-        </g>
-        {box('explore')}
-        {box('patch')}
-        {box('verify')}
-        {box('stuck')}
-        {box('done')}
+        {rows.map((row, idx) => renderRow(row, idx))}
+        {crossRowLinks}
       </svg>
       {snap.label && (
         <p className="text-[10px] text-cat-overlay font-mono mt-1">{snap.label}</p>
       )}
       {snap.statusText && (
-        <p className="text-[10px] text-cat-subtext leading-snug mt-0.5" data-testid="dev-phase-diagram-status">
+        <p
+          className="text-[10px] text-cat-subtext leading-snug mt-0.5"
+          data-testid="dev-phase-diagram-status"
+        >
           {snap.statusText}
         </p>
       )}

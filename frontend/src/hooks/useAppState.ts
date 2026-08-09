@@ -263,6 +263,33 @@ function mapDevPhaseGraph(raw: unknown): AgentRunState['devPhaseGraph'] {
   const statusRaw = d.statusText ?? d.status_text
   const stepLabelRaw = d.stepLabel ?? d.step_label
   const priorRaw = d.priorSummary ?? d.prior_summary
+  const histRaw = d.cycleHistory ?? d.cycle_history
+  const cycleHistory = Array.isArray(histRaw)
+    ? histRaw
+        .filter((item): item is Record<string, unknown> => !!item && typeof item === 'object')
+        .map((item) => {
+          const terminal = String(item.terminalPhase ?? item.terminal_phase ?? '').toLowerCase()
+          if (!terminal) return null
+          return {
+            cycle: Number(item.cycle ?? 0) || 1,
+            stepLabel:
+              item.stepLabel != null || item.step_label != null
+                ? String(item.stepLabel ?? item.step_label)
+                : undefined,
+            terminalPhase: terminal,
+            priorSummary:
+              item.priorSummary != null || item.prior_summary != null
+                ? String(item.priorSummary ?? item.prior_summary)
+                : undefined,
+            exploreCount: Number(item.exploreCount ?? item.explore_count ?? 0) || 0,
+            patchCount: Number(item.patchCount ?? item.patch_count ?? 0) || 0,
+            verifyCount: Number(item.verifyCount ?? item.verify_count ?? 0) || 0,
+            writeSucceeded: Boolean(item.writeSucceeded ?? item.write_succeeded),
+          }
+        })
+        .filter((x): x is NonNullable<typeof x> => x != null)
+        .slice(-5)
+    : undefined
   return {
     phase,
     label: d.label != null ? String(d.label) : undefined,
@@ -277,6 +304,7 @@ function mapDevPhaseGraph(raw: unknown): AgentRunState['devPhaseGraph'] {
     statusText: statusRaw != null && String(statusRaw).trim() ? String(statusRaw) : undefined,
     stepLabel: stepLabelRaw != null && String(stepLabelRaw).trim() ? String(stepLabelRaw) : undefined,
     priorSummary: priorRaw != null && String(priorRaw).trim() ? String(priorRaw) : undefined,
+    cycleHistory: cycleHistory && cycleHistory.length ? cycleHistory : undefined,
   }
 }
 
