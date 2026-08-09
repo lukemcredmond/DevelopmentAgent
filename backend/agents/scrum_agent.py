@@ -1927,6 +1927,72 @@ class ScrumAgent:
                     from backend.services.step_diagnostics import log_event
 
                     log_event("context_rewind", f"removed={removed}")
+
+        # Durable post-rewind / post-fail recovery: must read_file then apply_patch.
+        from backend.services.patch_recovery import (
+            apply_batch_to_recovery_state,
+            build_patch_recovery_nudge,
+            build_patch_recovery_reminder,
+            failed_apply_patch_paths,
+            paths_needing_read_before_patch,
+        )
+
+        recovery_batch = [
+            (
+                results_by_id[id(call)][0],
+                results_by_id[id(call)][1],
+                results_by_id[id(call)][2],
+            )
+            for call in all_calls
+        ]
+        pending_paths: set = getattr(self, "_patch_recovery_paths", None) or set()
+        read_ok: set = getattr(self, "_patch_recovery_read_ok", None) or set()
+        injects = int(getattr(self, "_patch_recovery_injects", 0) or 0)
+
+        failed_paths = failed_apply_patch_paths(recovery_batch)
+        offenders = [
+            p
+            for p in paths_needing_read_before_patch(pending_paths, read_ok, recovery_batch)
+            if p not in set(failed_paths)
+        ]
+        if offenders and injects < 2:
+            messages.append(
+                {"role": "system", "content": build_patch_recovery_reminder(offenders)}
+            )
+            injects += 1
+            add_system_log(
+                self.role,
+                "warning",
+                f"Patch recovery: apply_patch without fresh read_file on {', '.join(offenders)}",
+            )
+            from backend.services.step_diagnostics import log_event
+
+            log_event("patch_recovery", f"blocked={','.join(offenders)}")
+
+        if failed_paths and injects < 2:
+            for p in failed_paths:
+                pending_paths.add(p)
+                read_ok.discard(p)
+            messages.append(
+                {"role": "system", "content": build_patch_recovery_nudge(failed_paths)}
+            )
+            injects += 1
+            add_system_log(
+                self.role,
+                "warning",
+                f"Patch recovery: must read_file then apply_patch on {', '.join(failed_paths)}",
+            )
+            from backend.services.step_diagnostics import log_event
+
+            log_event("patch_recovery", f"paths={','.join(failed_paths)}")
+
+        pending_paths, read_ok = apply_batch_to_recovery_state(
+            pending_paths, read_ok, recovery_batch
+        )
+        self._patch_recovery_paths = pending_paths
+        self._patch_recovery_read_ok = read_ok
+        self._patch_recovery_injects = injects
+
         command_success = any(
             results_by_id[id(call)][0] == "run_command"
             and results_by_id[id(call)][2].success
@@ -2120,6 +2186,9 @@ class ScrumAgent:
         pending_lesson: Optional[Tuple[str, set, str]] = None
         self._consecutive_echo_count = 0
         self._context_rewinds = 0
+        self._patch_recovery_paths = set()
+        self._patch_recovery_read_ok = set()
+        self._patch_recovery_injects = 0
         self._dev_phase_graph = None
         from backend.services.dev_phase_graph import DevPhaseGraph
 

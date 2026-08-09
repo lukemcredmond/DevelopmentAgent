@@ -396,6 +396,9 @@ export default function WorkflowPanel({
             </label>
           </div>
         )}
+        <p className="text-[10px] text-cat-overlay">
+          Phase graph UI: Task detail → Phase graph
+        </p>
         <label className="text-[11px] text-cat-subtext block">
           <span className="text-[10px] text-cat-overlay inline-flex items-center">
             Message prune threshold (% of num_ctx)
