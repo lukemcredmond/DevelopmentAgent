@@ -375,6 +375,43 @@ class ScrumAgent:
     def register_tool(self, tool) -> None:
         self.registry.register(tool)
 
+    @staticmethod
+    def _role_to_model_key(role: str) -> Optional[str]:
+        return {
+            "Product Owner": "po",
+            "Developer": "dev",
+            "Code Reviewer": "cr",
+            "QA Tester": "qa",
+        }.get(role)
+
+    def set_primary_model(self, model: str) -> None:
+        """Set the configured primary model (project/config). Updates live model too."""
+        name = str(model or "").strip()
+        if not name:
+            return
+        self._role_primary_model = name
+        self.model = name
+
+    def sync_role_primary_model(self) -> str:
+        """
+        Align with project PRIMARY_MODELS so registry defaults (e.g. llama3:8b)
+        never override a project-configured PO/Dev model after load/config update.
+        """
+        key = self._role_to_model_key(self.role)
+        primary = ""
+        if key:
+            try:
+                primary = str((getattr(state, "PRIMARY_MODELS", None) or {}).get(key) or "").strip()
+            except Exception:
+                primary = ""
+        if primary:
+            self.set_primary_model(primary)
+            return primary
+        current = str(self.model or getattr(self, "_role_primary_model", "") or "").strip()
+        if current:
+            self._role_primary_model = current
+        return current
+
     def _ollama_timeout_sec(self) -> float:
         return float(get_workflow_settings().get("ollamaRequestTimeoutSec", 300))
 
@@ -1232,21 +1269,27 @@ class ScrumAgent:
         finish_run(status=status, error=error)  # type: ignore[arg-type]
 
     def _resolve_backup_model(self) -> str:
+        key = self._role_to_model_key(self.role)
+        if key:
+            try:
+                backup = str((getattr(state, "BACKUP_MODELS", None) or {}).get(key) or "").strip()
+                if backup:
+                    return backup
+            except Exception:
+                pass
         try:
-            from backend import state as app_state
-
-            pid = getattr(app_state, "CURRENT_PROJECT_ID", None)
-            storage = getattr(app_state, "storage", None)
+            pid = getattr(state, "CURRENT_PROJECT_ID", None)
+            storage = getattr(state, "storage", None)
             if storage and pid and hasattr(storage, "load_project"):
                 meta = storage.load_project(pid)
                 if isinstance(meta, dict):
-                    key = {
+                    meta_key = {
                         "Product Owner": "po_backup_model",
                         "Developer": "dev_backup_model",
                         "Code Reviewer": "cr_backup_model",
                         "QA Tester": "qa_backup_model",
                     }.get(self.role, "dev_backup_model")
-                    return str(meta.get(key) or "").strip()
+                    return str(meta.get(meta_key) or "").strip()
         except Exception:
             pass
         return ""
@@ -1261,15 +1304,9 @@ class ScrumAgent:
         phase_graph = getattr(self, "_dev_phase_graph", None)
         if phase_graph is not None:
             phase = getattr(phase_graph, "phase", None)
-        primary = str(
-            getattr(self, "_role_primary_model", None)
-            or getattr(self, "_primary_model", None)
-            or self.model
-            or ""
-        )
-        if not getattr(self, "_role_primary_model", None):
-            self._role_primary_model = primary
-        self._primary_model = str(self._role_primary_model)
+        # Always prefer live project primary over registry init defaults.
+        primary = self.sync_role_primary_model()
+        self._primary_model = str(primary or self.model or "")
         chosen, reason = resolve_step_model(
             role=self.role,
             phase=phase,
@@ -2319,8 +2356,8 @@ class ScrumAgent:
         self._patch_recovery_injects = 0
         self._tool_batch_index = 0
         self._model_switches = 0
-        if getattr(self, "_role_primary_model", None):
-            self.model = str(self._role_primary_model)
+        # Prefer project PRIMARY_MODELS over registry init defaults.
+        self.sync_role_primary_model()
         self._dev_phase_graph = None
         from backend.services.dev_phase_graph import DevPhaseGraph
 

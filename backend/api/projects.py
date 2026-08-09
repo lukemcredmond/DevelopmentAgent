@@ -163,10 +163,10 @@ def update_config(payload: ConfigPayload):
         state.WORKSPACE_DIR = payload.workspaceDir
         state.SKILLS_DIR = payload.skillsDir
 
-        agent_po.model = payload.poModel
-        agent_dev.model = payload.devModel
-        agent_cr.model = payload.crModel
-        agent_qa.model = payload.qaModel
+        agent_po.set_primary_model(payload.poModel)
+        agent_dev.set_primary_model(payload.devModel)
+        agent_cr.set_primary_model(payload.crModel)
+        agent_qa.set_primary_model(payload.qaModel)
         state.PRIMARY_MODELS = {
             "po": payload.poModel,
             "dev": payload.devModel,

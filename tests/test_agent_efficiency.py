@@ -172,6 +172,26 @@ def test_fast_first_code_preset_keys_match_mvp():
     assert get_prompt_profile(DEFAULT_WORKFLOW_SETTINGS) == "local_slm"
 
 
+def test_sync_role_primary_model_prefers_project_over_registry_default():
+    """Regression: PO must not fall back to registry llama3:8b after project load."""
+    from backend.agents.scrum_agent import ScrumAgent
+    from backend import state
+
+    agent = ScrumAgent(role="Product Owner", model="llama3:8b", system_prompt="x")
+    assert agent._role_primary_model == "llama3:8b"
+    state.PRIMARY_MODELS = {
+        **(getattr(state, "PRIMARY_MODELS", None) or {}),
+        "po": "llama3-uncensored:8b",
+    }
+    # Simulate old bug path: bootstrap only set .model, not _role_primary_model
+    agent.model = "llama3-uncensored:8b"
+    agent._role_primary_model = "llama3:8b"
+    synced = agent.sync_role_primary_model()
+    assert synced == "llama3-uncensored:8b"
+    assert agent.model == "llama3-uncensored:8b"
+    assert agent._role_primary_model == "llama3-uncensored:8b"
+
+
 def test_tool_turn_cap_soft_rejects_excess_calls():
     ws = {"agentEfficiencyMode": "high", "maxToolsPerLlmTurn": 3}
     calls = ["a", "b", "c", "d", "e"]

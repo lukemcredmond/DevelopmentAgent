@@ -41,10 +41,10 @@ def load_project_into_state(project_id: str) -> bool:
     agent_cr.assigned_skills = proj.get("cr_skills", [])
     agent_qa.assigned_skills = proj["qa_skills"]
 
-    agent_po.model = proj["po_model"]
-    agent_dev.model = proj["dev_model"]
-    agent_cr.model = proj["cr_model"]
-    agent_qa.model = proj["qa_model"]
+    agent_po.set_primary_model(proj["po_model"])
+    agent_dev.set_primary_model(proj["dev_model"])
+    agent_cr.set_primary_model(proj["cr_model"])
+    agent_qa.set_primary_model(proj["qa_model"])
     state.PRIMARY_MODELS = {
         "po": proj["po_model"],
         "dev": proj["dev_model"],

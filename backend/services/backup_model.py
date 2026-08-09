@@ -73,7 +73,10 @@ def restore_primary_model(agent, agent_key: str) -> str:
     """Set agent.model back to the configured primary for this role."""
     primary = primary_model(agent_key)
     if primary:
-        agent.model = primary
+        if hasattr(agent, "set_primary_model"):
+            agent.set_primary_model(primary)
+        else:
+            agent.model = primary
     return str(getattr(agent, "model", "") or "")
 
 
@@ -91,7 +94,10 @@ def restore_all_primary_models(*, reason: str = "") -> Dict[str, str]:
             continue
         primary = primary_model(key)
         if primary and str(getattr(agent, "model", "") or "") != primary:
-            agent.model = primary
+            if hasattr(agent, "set_primary_model"):
+                agent.set_primary_model(primary)
+            else:
+                agent.model = primary
             restored[key] = primary
     if restored:
         summary = ", ".join(f"{_ROLE_LABEL.get(k, k)} → {m}" for k, m in restored.items())
