@@ -132,6 +132,17 @@ def _build_history_event(
     }
     if duplicate_skip:
         event["duplicateSkip"] = True
+    try:
+        from backend.services.dev_phase_graph import live_phase_stamp, phase_tag_for_tool
+
+        stamp = live_phase_stamp(tool_name=tool_name)
+        tag = stamp.get("devPhaseTag") or phase_tag_for_tool(tool_name)
+        if stamp.get("devPhase"):
+            event["devPhase"] = stamp["devPhase"]
+        if tag:
+            event["devPhaseTag"] = tag
+    except Exception:
+        pass
     if tool_name == "run_command":
         if command:
             event["command"] = command

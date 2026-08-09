@@ -94,6 +94,13 @@ def _apply_chat_task_context(payload: ChatPayload) -> None:
     agent = AGENT_MAP.get(payload.agent)
     if agent:
         state.ACTIVE_SPRINT_AGENT = agent.role
+    if payload.task_id and payload.agent == "dev":
+        try:
+            from backend.services.task_spec_markdown import ensure_task_spec_for_work
+
+            ensure_task_spec_for_work(payload.task_id)
+        except Exception:
+            pass
 
 
 def _finalize_chat_task_context(payload: ChatPayload) -> None:

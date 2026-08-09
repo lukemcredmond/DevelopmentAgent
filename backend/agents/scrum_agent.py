@@ -2126,6 +2126,13 @@ class ScrumAgent:
         lane_for_phase = get_task_lane(task_id) if task_id else None
         if DevPhaseGraph.applies_to(role=self.role, lane=lane_for_phase):
             self._dev_phase_graph = DevPhaseGraph.from_settings()
+            if task_id:
+                try:
+                    from backend.services.task_spec_markdown import ensure_task_spec_for_work
+
+                    ensure_task_spec_for_work(task_id)
+                except Exception:
+                    pass
 
         try:
             for iteration in range(1, max_iterations + 1):

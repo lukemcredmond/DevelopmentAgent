@@ -164,6 +164,12 @@ def build_task_flow(
             continue
         if event_id:
             seen_tool.add(event_id)
+        tool_name = ev.get("toolName")
+        tag = ev.get("devPhaseTag")
+        if not tag:
+            from backend.services.dev_phase_graph import phase_tag_for_tool
+
+            tag = phase_tag_for_tool(str(tool_name or ""))
         nodes.append(
             {
                 "kind": "tool",
@@ -172,7 +178,7 @@ def build_task_flow(
                 "agent": ev.get("agent"),
                 "taskId": tid,
                 "runId": ev.get("runId"),
-                "toolName": ev.get("toolName"),
+                "toolName": tool_name,
                 "toolArgs": ev.get("toolArgs") or {},
                 "toolOutput": _cap_text(ev.get("toolOutput") or "", include_full=include_full),
                 "success": ev.get("toolSuccess") is not False,
@@ -180,6 +186,8 @@ def build_task_flow(
                 "durationMs": ev.get("durationMs"),
                 "duplicateSkip": bool(ev.get("duplicateSkip")),
                 "source": "tool_log",
+                "devPhase": ev.get("devPhase"),
+                "devPhaseTag": tag,
             }
         )
 
@@ -218,6 +226,10 @@ def build_task_flow(
         for tool in data.get("toolsLog") or []:
             if not isinstance(tool, dict):
                 continue
+            tname = tool.get("toolName")
+            from backend.services.dev_phase_graph import phase_tag_for_tool
+
+            tag = tool.get("devPhaseTag") or phase_tag_for_tool(str(tname or ""))
             nodes.append(
                 {
                     "kind": "tool",
@@ -225,7 +237,7 @@ def build_task_flow(
                     "timestamp": tool.get("timestamp") or data.get("startedAt"),
                     "agent": data.get("agent"),
                     "taskId": tid,
-                    "toolName": tool.get("toolName"),
+                    "toolName": tname,
                     "toolArgs": {},
                     "toolOutput": _cap_text(tool.get("summary") or "", include_full=include_full, default_cap=300),
                     "success": tool.get("success") is not False,
@@ -233,6 +245,8 @@ def build_task_flow(
                     "durationMs": tool.get("durationMs"),
                     "source": "diagnostics",
                     "traceId": data.get("traceId"),
+                    "devPhase": tool.get("devPhase"),
+                    "devPhaseTag": tag,
                 }
             )
         # The step exit reason belongs to the last node of the trace so lane/blocked

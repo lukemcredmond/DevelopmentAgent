@@ -62,6 +62,29 @@ function FlowNode({
               {llmToolCount} tool{llmToolCount === 1 ? '' : 's'}
             </span>
           )}
+          {!isLlm && node.devPhaseTag && (
+            <span
+              className={`rounded px-1 border font-mono ${
+                node.devPhaseTag === 'explore'
+                  ? 'border-sky-500/40 text-sky-200'
+                  : node.devPhaseTag === 'patch'
+                    ? 'border-amber-500/40 text-amber-200'
+                    : node.devPhaseTag === 'verify'
+                      ? 'border-emerald-500/40 text-emerald-200'
+                      : 'border-cat-surface1 text-cat-overlay'
+              }`}
+              title={node.devPhase || node.devPhaseTag}
+              data-testid="flow-dev-phase-tag"
+            >
+              {node.devPhaseTag === 'explore'
+                ? 'Explore'
+                : node.devPhaseTag === 'patch'
+                  ? 'Patch'
+                  : node.devPhaseTag === 'verify'
+                    ? 'Verify'
+                    : node.devPhaseTag}
+            </span>
+          )}
           {!isLlm && node.success === false && <span className="text-rose-400">failed</span>}
           {node.echoDetected && (
             <span className="text-rose-300/90 border border-rose-500/40 rounded px-1">

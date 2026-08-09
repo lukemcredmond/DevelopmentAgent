@@ -141,6 +141,9 @@ export interface TaskFlowNode {
     toolsConsidered?: string[]
   }
   echoDetected?: boolean
+  /** Explore | Patch | Verify taxonomy or live loop stamp. */
+  devPhaseTag?: 'explore' | 'patch' | 'verify' | string | null
+  devPhase?: string | null
 }
 
 export interface LastSprintContextSources {

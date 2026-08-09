@@ -228,3 +228,93 @@ def sync_task_spec_docs(task_id: str) -> None:
         update_task_spec_markdown(str(task_id))
     except Exception:
         pass
+
+
+def _read_spec_file_content(path: str) -> Optional[str]:
+    """Return spec content from VFS or workspace disk, if present."""
+    import os
+
+    from backend import state
+
+    if not path:
+        return None
+    content = state.VIRTUAL_FILESYSTEM.get(path)
+    if content and str(content).strip():
+        return str(content)
+    # Try slash-normalized alternate key
+    alt = path.replace("\\", "/")
+    if alt != path:
+        content = state.VIRTUAL_FILESYSTEM.get(alt)
+        if content and str(content).strip():
+            return str(content)
+    phys = os.path.join(state.WORKSPACE_DIR, alt.replace("/", os.sep))
+    try:
+        if os.path.isfile(phys):
+            with open(phys, "r", encoding="utf-8") as handle:
+                text = handle.read()
+            if text.strip():
+                state.VIRTUAL_FILESYSTEM[alt] = text
+                return text
+    except OSError:
+        pass
+    return None
+
+
+def ensure_task_spec_for_work(task_id: Optional[str]) -> Optional[str]:
+    """
+    Ensure SDD markdown exists for a card being worked:
+    card path → default file on disk/VFS → build+sync.
+    Soft readiness warnings only (never blocks).
+    Returns the spec path used, or None.
+    """
+    if not task_id:
+        return None
+    from backend.agents.task_context import find_task_by_id, normalize_task
+    from backend.services.logs import add_system_log
+
+    task = find_task_by_id(str(task_id))
+    if not task:
+        return None
+    normalize_task(task)
+
+    path = str(task.get("specMarkdownPath") or "").strip()
+    default_path = task_spec_markdown_path(str(task.get("id") or task_id))
+
+    if path:
+        content = _read_spec_file_content(path)
+        if content:
+            return path.replace("\\", "/")
+
+    content = _read_spec_file_content(default_path)
+    if content:
+        task["specMarkdownPath"] = default_path.replace("\\", "/")
+        return task["specMarkdownPath"]
+
+    # Build and persist from card fields
+    try:
+        synced = update_task_spec_markdown(str(task.get("id") or task_id))
+    except Exception as exc:
+        add_system_log(
+            "System",
+            "warning",
+            f"Spec ensure failed for {task_id}: {type(exc).__name__}",
+        )
+        return None
+
+    try:
+        from backend.services.task_spec_validation import spec_readiness
+
+        ready = spec_readiness(task)
+        if not ready.get("ok") or ready.get("warnings"):
+            missing = ", ".join(ready.get("missing") or []) or "none"
+            warns = "; ".join((ready.get("warnings") or [])[:3])
+            add_system_log(
+                "System",
+                "warning",
+                f"Spec soft readiness for {task_id}: missing=[{missing}]"
+                + (f" warnings={warns}" if warns else ""),
+            )
+    except Exception:
+        pass
+
+    return synced

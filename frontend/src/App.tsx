@@ -2241,6 +2241,7 @@ export default function App() {
             activeRun.status !== 'completed' &&
             activeRun.status !== 'failed',
         )}
+        activeRun={activeRun}
         flowActivityKey={`${toolStartTick}-${lastToolEventAt ?? ''}`}
         lastSprintContextSources={state.lastSprintContextSources ?? null}
       />

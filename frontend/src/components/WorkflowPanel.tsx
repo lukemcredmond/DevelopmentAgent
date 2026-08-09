@@ -1315,7 +1315,7 @@ export default function WorkflowPanel({
           onChange={(e) => onSettingsChange({ enableDevPhaseGraph: e.target.checked })}
         />
         Dev phase graph (Explore → Patch → Verify budgets)
-        <SettingHint hint="Stops open-ended read_file loops after a small explore budget and shows phase progress in the run bar." />
+        <SettingHint hint="Live stepper on Agent Run bar and board card; Phase Graph + Flow tags in Task detail. Stops open-ended read_file loops after a small explore budget." />
       </label>
       {(settings.enableDevPhaseGraph !== false) && (
         <div className="grid grid-cols-3 gap-2 pl-5 text-[11px]">

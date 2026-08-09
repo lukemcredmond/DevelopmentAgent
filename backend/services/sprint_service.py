@@ -1304,6 +1304,13 @@ def _inject_sprint_context(
 
     task_id = active_task["id"]
     normalize_task(active_task)
+    if agent_role == "Developer":
+        try:
+            from backend.services.task_spec_markdown import ensure_task_spec_for_work
+
+            ensure_task_spec_for_work(str(task_id))
+        except Exception:
+            pass
     from backend.services.prompt_sections import FocusContext, compose_prompt
 
     ws = get_workflow_settings()

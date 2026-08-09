@@ -1265,7 +1265,7 @@ flowchart LR
 5. Confirm sidebar **Ready for Dev** count &gt; 0. If only planning-only cards, Dev will explore tools without `apply_patch`.
 6. Qdrant: Reindex if using semantic preload; set **contextPacker** if you want repomix on Dev steps.
 
-**Dev phase graph:** On Developer **In Progress** steps, AllHands runs Explore → Patch → Verify with hard tool budgets (defaults: 3 explore / 4 patch / 2 verify). When explore is spent without `apply_patch`/`write_file`, the step nudges once then stops (`explore_budget_exhausted`) instead of burning max LLM iterations on reads. Live phase shows on the Agent Run bar; disable or tune under Workflow → Autonomy (`enableDevPhaseGraph`, `devExploreMaxTools`, …).
+**Dev phase graph:** On Developer **In Progress** steps, AllHands runs Explore → Patch → Verify with hard tool budgets (defaults: 3 explore / 4 patch / 2 verify). When explore is spent without `apply_patch`/`write_file`, the step nudges once then stops (`explore_budget_exhausted`) instead of burning max LLM iterations on reads. Live stepper shows on the Agent Run bar and active board card; open the card’s **Phase graph** / **Flow** sections for Explore|Patch|Verify tool tags (synced). Setting: Workflow → Autonomy (`enableDevPhaseGraph`, `devExploreMaxTools`, …). Works on old cards the next time they run as Developer In Progress.
 | Graphify missing | `graph_query` tool skipped; install Graphify CLI on PATH. |
 | Dev blocked by Needs PO | Use **Run In Progress** to run Dev without waiting for PO. |
 | Duplicate memories | Enable **Group duplicates** in Memory tab; delete grouped entries. New saves dedupe automatically. |

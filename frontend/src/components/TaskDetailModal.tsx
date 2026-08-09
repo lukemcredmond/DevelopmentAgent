@@ -1,5 +1,6 @@
 import { useEffect, useMemo, useState, type ReactNode } from 'react'
 import type {
+  AgentRunState,
   BoardLane,
   CommandDiagnostic,
   LastSprintContextSources,
@@ -20,6 +21,7 @@ import { formatToolBreakdown, formatWorkItemCounts } from '../utils/flowCounts'
 import SlideOver from './SlideOver'
 import TaskFlowPanel from './TaskFlowPanel'
 import DevPhaseStepper from './DevPhaseStepper'
+import DevPhaseGraphPanel from './DevPhaseGraphPanel'
 
 function getCommandDiagnostics(task: Task): CommandDiagnostic[] {
   if (task.lastCommandDiagnostics?.length) {
@@ -199,6 +201,8 @@ interface TaskDetailModalProps {
   onClearToolFingerprints?: (taskId: string) => void | Promise<void>
   /** True while an agent step is actively running on this card (for suggested focus highlight). */
   isAgentRunningOnTask?: boolean
+  /** Live agent run (for Phase Graph stepper). */
+  activeRun?: AgentRunState | null
   /** Bumps when tools/LLM events fire (SSE) so Flow can refresh without closing the section. */
   flowActivityKey?: string | number
   /** Last sprint step prompt inject snapshot (Qdrant / file preload / packer). */
@@ -345,6 +349,7 @@ export default function TaskDetailModal({
   onFocusReset,
   onClearToolFingerprints,
   isAgentRunningOnTask = false,
+  activeRun = null,
   flowActivityKey = '',
   lastSprintContextSources = null,
 }: TaskDetailModalProps) {
@@ -372,6 +377,7 @@ export default function TaskDetailModal({
   const [movingToProgress, setMovingToProgress] = useState(false)
   const [runningDevStep, setRunningDevStep] = useState(false)
   const [flowOpen, setFlowOpen] = useState(false)
+  const [phaseGraphOpen, setPhaseGraphOpen] = useState(false)
   const [flowSummary, setFlowSummary] = useState<TaskFlowSummaryResponse | null>(null)
 
   useEffect(() => {
@@ -391,6 +397,7 @@ export default function TaskDetailModal({
     setInjectOutput('')
     setInjectNote('')
     setFlowOpen(false)
+    setPhaseGraphOpen(false)
     try {
       const draft = sessionStorage.getItem(`needs-user-draft-${task.id}`)
       setUserAnswer(draft ?? '')
@@ -1043,9 +1050,38 @@ export default function TaskDetailModal({
             >
               <TaskFlowPanel
                 taskId={task.id}
-                active={flowOpen}
+                active={flowOpen || phaseGraphOpen}
                 refreshKey={flowRefreshKey}
-                liveRefresh={flowOpen}
+                liveRefresh={flowOpen || phaseGraphOpen}
+              />
+            </CollapsibleSection>
+          </div>
+
+          <div id="task-phase-graph-section">
+            <CollapsibleSection
+              title="Phase graph"
+              badge="Explore → Patch → Verify"
+              defaultOpen={false}
+              open={phaseGraphOpen}
+              onOpenChange={setPhaseGraphOpen}
+            >
+              <DevPhaseGraphPanel
+                taskId={task.id}
+                active={phaseGraphOpen || flowOpen}
+                refreshKey={flowRefreshKey}
+                liveRefresh={phaseGraphOpen || flowOpen}
+                activeRun={
+                  activeRun && activeRun.taskId === task.id ? activeRun : null
+                }
+                lastSnapshot={safeTask.lastStepProgress?.devPhaseGraph ?? null}
+                lastLabel={safeTask.lastStepProgress?.devPhase ?? null}
+                onSelectNode={(nodeId) => {
+                  setFlowOpen(true)
+                  window.setTimeout(() => {
+                    const el = document.getElementById(`flow-node-${nodeId}`)
+                    el?.scrollIntoView({ behavior: 'smooth', block: 'nearest' })
+                  }, 80)
+                }}
               />
             </CollapsibleSection>
           </div>

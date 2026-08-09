@@ -29,6 +29,42 @@ EXPLORE_NUDGE = (
 PhaseName = str  # explore | patch | verify | stuck | done
 
 
+def phase_tag_for_tool(tool_name: Optional[str]) -> Optional[str]:
+    """Classify a tool as explore | patch | verify for Flow tags (taxonomy fallback)."""
+    name = str(tool_name or "").strip()
+    if not name:
+        return None
+    if name in EXPLORE_TOOLS:
+        return "explore"
+    if name in WRITE_TOOLS:
+        return "patch"
+    if name in VERIFY_TOOLS:
+        return "verify"
+    return None
+
+
+def live_phase_stamp(*, tool_name: Optional[str] = None) -> Dict[str, Optional[str]]:
+    """Stamp from active agent run phase graph; tag falls back to tool taxonomy."""
+    from backend.agents.agent_run import get_active_run
+
+    run = get_active_run()
+    label: Optional[str] = None
+    phase: Optional[str] = None
+    if run is not None:
+        label = getattr(run, "dev_phase", None)
+        snap = getattr(run, "dev_phase_graph", None) or {}
+        if isinstance(snap, dict):
+            phase = str(snap.get("phase") or "") or None
+            label = label or (str(snap.get("label")) if snap.get("label") else None)
+    tag: Optional[str] = None
+    if phase in ("explore", "patch", "verify"):
+        tag = phase
+    else:
+        tag = phase_tag_for_tool(tool_name)
+    if label is None and tag:
+        label = tag.capitalize()
+    return {"devPhase": label, "devPhaseTag": tag}
+
 @dataclass
 class PhaseAction:
     """Result of recording tools / checking after an LLM turn."""
