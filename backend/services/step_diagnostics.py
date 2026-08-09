@@ -649,6 +649,7 @@ def build_step_progress(
     why_card_stayed: Optional[str] = None,
     suggested_action: Optional[str] = None,
     card_progress: Optional[Dict[str, Any]] = None,
+    dev_phase_graph: Optional[Dict[str, Any]] = None,
 ) -> Dict[str, Any]:
     """Snapshot of what the agent did — used for max-iter Extend UX + card observability."""
     trace = get_active_trace()
@@ -712,6 +713,12 @@ def build_step_progress(
             max_iterations=iterations_max,
         )
 
+    phase_snap = dev_phase_graph
+    if phase_snap is None:
+        run = getattr(state, "ACTIVE_AGENT_RUN", None)
+        if run is not None and getattr(run, "dev_phase_graph", None):
+            phase_snap = dict(run.dev_phase_graph)
+
     progress: Dict[str, Any] = {
         "taskId": resolved_task_id,
         "iterationsUsed": iterations_used,
@@ -732,6 +739,10 @@ def build_step_progress(
         progress["whyCardStayed"] = why_card_stayed
     if suggested_action:
         progress["suggestedAction"] = suggested_action
+    if phase_snap:
+        progress["devPhaseGraph"] = phase_snap
+        if phase_snap.get("label"):
+            progress["devPhase"] = phase_snap.get("label")
     return progress
 
 

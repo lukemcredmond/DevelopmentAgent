@@ -250,6 +250,25 @@ function mapAgentRun(raw: Record<string, unknown>): AgentRunState {
       raw.devPhase != null || raw.dev_phase != null
         ? String(raw.devPhase ?? raw.dev_phase)
         : null,
+    devPhaseGraph: mapDevPhaseGraph(raw.devPhaseGraph ?? raw.dev_phase_graph),
+  }
+}
+
+function mapDevPhaseGraph(raw: unknown): AgentRunState['devPhaseGraph'] {
+  if (!raw || typeof raw !== 'object') return null
+  const d = raw as Record<string, unknown>
+  const phase = d.phase != null ? String(d.phase) : ''
+  if (!phase) return null
+  return {
+    phase,
+    label: d.label != null ? String(d.label) : undefined,
+    exploreCount: Number(d.exploreCount ?? d.explore_count ?? 0) || 0,
+    exploreMax: Number(d.exploreMax ?? d.explore_max ?? 3) || 3,
+    patchCount: Number(d.patchCount ?? d.patch_count ?? 0) || 0,
+    patchMax: Number(d.patchMax ?? d.patch_max ?? 4) || 4,
+    verifyCount: Number(d.verifyCount ?? d.verify_count ?? 0) || 0,
+    verifyMax: Number(d.verifyMax ?? d.verify_max ?? 2) || 2,
+    writeSucceeded: Boolean(d.writeSucceeded ?? d.write_succeeded),
   }
 }
 

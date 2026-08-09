@@ -1263,14 +1263,19 @@ class ScrumAgent:
                 focus_sub = str(active.get("focusSubtaskId"))
         phase_graph = getattr(self, "_dev_phase_graph", None)
         phase_label = dev_phase
-        if phase_label is None and phase_graph is not None:
-            phase_label = phase_graph.label()
+        phase_snap: Optional[Dict[str, Any]] = None
+        if phase_graph is not None:
+            phase_snap = phase_graph.snapshot()
+            if phase_label is None:
+                phase_label = phase_snap.get("label") or phase_graph.label()
         update_kwargs: Dict[str, Any] = {
             "intent": intent,
             "card_progress": card,
         }
         if phase_label is not None:
             update_kwargs["dev_phase"] = phase_label
+        if phase_snap is not None:
+            update_kwargs["dev_phase_graph"] = phase_snap
         if prompt_section is not None:
             update_kwargs["prompt_section"] = prompt_section
         if focus_ac is not None:

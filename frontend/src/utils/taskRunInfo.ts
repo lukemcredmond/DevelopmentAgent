@@ -5,6 +5,7 @@ import type {
   SprintProgress,
   StepProgress,
   Task,
+  DevPhaseGraphSnapshot,
 } from '../types'
 
 export interface TaskRunInfo {
@@ -24,6 +25,8 @@ export interface TaskRunInfo {
   cardProgress?: CardWorkProgress | null
   whyCardStayed?: string | null
   suggestedAction?: string | null
+  devPhase?: string | null
+  devPhaseGraph?: DevPhaseGraphSnapshot | null
 }
 
 function formatCardProgressLine(cp: CardWorkProgress | null | undefined): string | null {
@@ -84,6 +87,8 @@ export function buildTaskRunInfo(args: {
     cardProgress,
     whyCardStayed: lastProgress?.whyCardStayed ?? null,
     suggestedAction: lastProgress?.suggestedAction ?? null,
+    devPhase: activeRun?.devPhase ?? lastProgress?.devPhase ?? null,
+    devPhaseGraph: activeRun?.devPhaseGraph ?? lastProgress?.devPhaseGraph ?? null,
   }
 }
 

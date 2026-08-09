@@ -6,6 +6,7 @@ import type {
   StepProgress,
 } from '../types'
 import { formatFixVerifyHint } from '../utils/taskRunInfo'
+import DevPhaseStepper from './DevPhaseStepper'
 
 interface AgentRunBarProps {
   activeRun: AgentRunState | null
@@ -221,14 +222,12 @@ export default function AgentRunBar({
               {focusHint}
             </span>
           )}
-          {activeRun.devPhase && isRunning && (
-            <span
-              className="text-[10px] px-1.5 py-0.5 rounded border border-sky-500/40 text-sky-200 bg-sky-950/40"
-              title="Dev phase graph (Explore → Patch → Verify)"
-              data-testid="dev-phase-badge"
-            >
-              {activeRun.devPhase}
-            </span>
+          {((activeRun.devPhaseGraph && activeRun.devPhaseGraph.phase) || activeRun.devPhase) &&
+            (isRunning || activeRun.status === 'failed') && (
+            <DevPhaseStepper
+              snapshot={activeRun.devPhaseGraph}
+              label={activeRun.devPhase}
+            />
           )}
           <span className={isWaitingApproval ? 'text-amber-300' : 'text-cat-subtext'}>
             {statusLabel}

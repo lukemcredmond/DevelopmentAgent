@@ -19,6 +19,7 @@ import {
 import { formatToolBreakdown, formatWorkItemCounts } from '../utils/flowCounts'
 import SlideOver from './SlideOver'
 import TaskFlowPanel from './TaskFlowPanel'
+import DevPhaseStepper from './DevPhaseStepper'
 
 function getCommandDiagnostics(task: Task): CommandDiagnostic[] {
   if (task.lastCommandDiagnostics?.length) {
@@ -1142,6 +1143,8 @@ export default function TaskDetailModal({
             const filesStep = lsp?.filesThisStep ?? cp?.filesThisStep ?? []
             const acCount = cp?.acCount ?? (safeTask.acceptanceCriteria ?? []).length
             const stuck = safeTask.stuckLoops ?? cp?.stuckLoops ?? 0
+            const phaseSnap = lsp?.devPhaseGraph
+            const phaseLabel = lsp?.devPhase
             const showStrip =
               subtasksTotal > 0 ||
               (gates && gates.length > 0) ||
@@ -1149,11 +1152,15 @@ export default function TaskDetailModal({
               Boolean(lsp?.whyCardStayed) ||
               Boolean(lsp?.intent) ||
               filesStep.length > 0 ||
-              acCount > 0
+              acCount > 0 ||
+              Boolean(phaseSnap?.phase || phaseLabel)
             if (!showStrip) return null
             return (
               <div className="bg-sky-950/20 border border-sky-500/30 rounded-lg p-3 space-y-1.5">
                 <h4 className="text-xs font-bold text-sky-200">Work progress</h4>
+                {(phaseSnap || phaseLabel) && (
+                  <DevPhaseStepper snapshot={phaseSnap} label={phaseLabel} />
+                )}
                 {lsp?.intent && (
                   <p className="text-[11px] text-violet-200">Last intent: {lsp.intent}</p>
                 )}

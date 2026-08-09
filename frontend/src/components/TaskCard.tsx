@@ -6,6 +6,7 @@ import { formatCardProgressBrief, formatFixVerifyHint, formatRunStatus } from '.
 import { deriveTaskFiles, formatTaskText } from '../utils/taskFormat'
 import { taskLooksIncompleteOnDone } from '../utils/taskDoneAudit'
 import { formatAgentUsageBrief } from '../utils/agentUsageFormat'
+import DevPhaseStepper from './DevPhaseStepper'
 
 interface TaskCardProps {
   task: Task
@@ -80,7 +81,7 @@ export default function TaskCard({
               : 'border-cat-surface1 hover:border-indigo-500/50 cursor-grab active:cursor-grabbing'
       } ${isFeature ? 'cursor-pointer' : ''}`}
     >
-      {isActiveRun && (
+          {isActiveRun && (
         <div className="mb-2 rounded-md bg-indigo-950/50 border border-indigo-500/40 px-2 py-1.5 space-y-1">
           <div className="flex items-center gap-1.5 text-[10px] text-indigo-200">
             <span className="inline-block w-1.5 h-1.5 rounded-full bg-indigo-400 animate-pulse shrink-0" />
@@ -88,6 +89,13 @@ export default function TaskCard({
             <span className="text-indigo-300/80">·</span>
             <span className="text-indigo-100">{statusLabel}</span>
           </div>
+          {(runInfo.devPhaseGraph || runInfo.devPhase) && (
+            <DevPhaseStepper
+              snapshot={runInfo.devPhaseGraph}
+              label={runInfo.devPhase}
+              compact
+            />
+          )}
           {runInfo.intent && (
             <p className="text-[9px] text-violet-100/90 truncate" title={runInfo.intent}>
               {runInfo.intent}

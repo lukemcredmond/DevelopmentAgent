@@ -758,6 +758,20 @@ export interface AgentRunState {
   focusSubtaskId?: string | null
   /** Dev Explore/Patch/Verify phase label when enableDevPhaseGraph is on. */
   devPhase?: string | null
+  /** Structured Explore/Patch/Verify budget snapshot for the stepper UI. */
+  devPhaseGraph?: DevPhaseGraphSnapshot | null
+}
+
+export interface DevPhaseGraphSnapshot {
+  phase: string
+  label?: string
+  exploreCount?: number
+  exploreMax?: number
+  patchCount?: number
+  patchMax?: number
+  verifyCount?: number
+  verifyMax?: number
+  writeSucceeded?: boolean
 }
 
 export interface PendingToolApproval {
@@ -830,6 +844,9 @@ export interface StepProgress {
   filesThisStep?: string[]
   whyCardStayed?: string
   suggestedAction?: string
+  /** Last Dev phase graph snapshot from the step (Explore/Patch/Verify). */
+  devPhaseGraph?: DevPhaseGraphSnapshot | null
+  devPhase?: string | null
 }
 
 export interface LastStepOutcome {
