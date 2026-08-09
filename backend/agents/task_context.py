@@ -279,9 +279,13 @@ def normalize_task(task: Dict[str, Any]) -> Dict[str, Any]:
         task["id"] = str(raw_id)
     if not str(task.get("id", "")).strip():
         task["id"] = generate_task_id()
-    if "title" in task:
+    if "title" not in task:
+        task["title"] = ""
+    else:
         task["title"] = coerce_task_text(task["title"])
-    if "description" in task:
+    if "description" not in task:
+        task["description"] = ""
+    else:
         task["description"] = coerce_task_text(task["description"])
     if task.get("userQuestion") is not None:
         task["userQuestion"] = coerce_task_text(task["userQuestion"])
@@ -1382,8 +1386,8 @@ def build_task_prompt_legacy(task: Dict[str, Any], brief: str, *, agent_role: Op
         prompt += wc + "\n"
     prompt += (
         f"Task ID: {task['id']}\n"
-        f"Title: {task['title']}\n"
-        f"Description: {task['description']}\n"
+        f"Title: {task.get('title', '')}\n"
+        f"Description: {task.get('description', '')}\n"
         f"Acceptance criteria:\n{ac_str}\n"
         f"Blocked by (must be Done first): {blocked_str}\n"
         f"Current status: {task.get('status', 'unknown')}\n"
