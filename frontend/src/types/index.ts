@@ -624,6 +624,12 @@ export interface WorkflowSettings {
   devExploreMaxTools?: number
   devPatchMaxTools?: number
   devVerifyMaxTools?: number
+  /** high = lean prompts + phase routing defaults; standard = full prompts. */
+  agentEfficiencyMode?: 'high' | 'standard' | string
+  enablePhaseModelRouting?: boolean
+  devExploreModel?: string
+  devPatchModel?: string
+  maxToolsPerLlmTurn?: number
   maxFocusStepsPerCard?: number
   enablePromptSectionRotation?: boolean
   splitCardWhenAcOver?: number
@@ -1329,6 +1335,11 @@ export interface WorkflowSettingsPayload {
   devExploreMaxTools?: number
   devPatchMaxTools?: number
   devVerifyMaxTools?: number
+  agentEfficiencyMode?: 'high' | 'standard' | string
+  enablePhaseModelRouting?: boolean
+  devExploreModel?: string
+  devPatchModel?: string
+  maxToolsPerLlmTurn?: number
   maxFocusStepsPerCard?: number
   enablePromptSectionRotation?: boolean
   splitCardWhenAcOver?: number
@@ -1586,12 +1597,12 @@ export const DEFAULT_WORKFLOW_SETTINGS: WorkflowSettings = {
   customTools: [],
   definitionOfDone: [],
   maxSprintSteps: 20,
-  maxLlmIterationsPerStep: 8,
+  maxLlmIterationsPerStep: 6,
   maxPoRoundTrips: 3,
   maxStuckSteps: 3,
   maxAgentStepDurationSec: 2700,
   enableBlockedLane: true,
-  maxToolFailuresPerStep: 5,
+  maxToolFailuresPerStep: 4,
   autoStartSprint: true,
   autonomousMode: false,
   maxNeedsUserPerSprint: 2,
@@ -1666,11 +1677,16 @@ export const DEFAULT_WORKFLOW_SETTINGS: WorkflowSettings = {
   duplicateRunCommandPolicy: 'strict',
   enableFocusMicroSteps: true,
   enableDevPhaseGraph: true,
+  agentEfficiencyMode: 'high',
+  enablePhaseModelRouting: true,
+  devExploreModel: '',
+  devPatchModel: '',
+  maxToolsPerLlmTurn: 3,
   devExploreMaxTools: 3,
   devPatchMaxTools: 4,
   devVerifyMaxTools: 2,
   maxFocusStepsPerCard: 8,
-  enablePromptSectionRotation: true,
+  enablePromptSectionRotation: false,
   splitCardWhenAcOver: 5,
   contextPacker: 'off',
   contextPackerMaxChars: 12000,

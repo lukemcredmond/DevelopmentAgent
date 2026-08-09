@@ -318,8 +318,15 @@ def fingerprint_llm_messages(messages: Sequence[Dict[str, Any]]) -> str:
     return hashlib.sha256(blob.encode("utf-8")).hexdigest()
 
 
-def _tail_tool_summaries(messages: Sequence[Dict[str, Any]], *, max_items: int = 6) -> List[str]:
+def _tail_tool_summaries(
+    messages: Sequence[Dict[str, Any]],
+    *,
+    max_items: int = 6,
+    summary_chars: int = 400,
+) -> List[str]:
+    """Short digests only — never re-inject full tool bodies (prompt-bloat guard)."""
     lines: List[str] = []
+    cap = max(80, int(summary_chars or 400))
     for msg in reversed(messages):
         role = str(msg.get("role") or "")
         content = str(msg.get("content") or "").strip()
@@ -327,11 +334,16 @@ def _tail_tool_summaries(messages: Sequence[Dict[str, Any]], *, max_items: int =
             continue
         if role == "tool":
             name = str(msg.get("name") or msg.get("tool_name") or "tool")
-            cap = max_tool_output_chars_for_llm()
-            preview = content if len(content) <= cap else content[: cap - 40] + "\n...[tail in tool message above]\n"
-            lines.append(f"- tool {name}:\n{preview}")
+            preview = content if len(content) <= cap else content[: cap - 20] + "…[truncated]"
+            # Collapse huge whitespace so digests stay short
+            preview = " ".join(preview.split())
+            if len(preview) > cap:
+                preview = preview[: cap - 1] + "…"
+            lines.append(f"- tool {name}: {preview}")
         elif role == "assistant":
-            lines.append(f"- assistant: {content[:2000]}")
+            preview = content if len(content) <= min(cap, 240) else content[: min(cap, 240) - 1] + "…"
+            preview = " ".join(preview.split())
+            lines.append(f"- assistant: {preview}")
         if len(lines) >= max_items:
             break
     return list(reversed(lines))

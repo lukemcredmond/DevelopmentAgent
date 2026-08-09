@@ -355,6 +355,7 @@ class ScrumAgent:
     ):
         self.role = role
         self.model = model
+        self._role_primary_model = model
         self.system_prompt = system_prompt
         self.ollama_url = ollama_url.rstrip("/")
         from backend.storage.memory_engine import create_memory_engine
@@ -1230,6 +1231,73 @@ class ScrumAgent:
                 pass
         finish_run(status=status, error=error)  # type: ignore[arg-type]
 
+    def _resolve_backup_model(self) -> str:
+        try:
+            from backend import state as app_state
+
+            pid = getattr(app_state, "CURRENT_PROJECT_ID", None)
+            storage = getattr(app_state, "storage", None)
+            if storage and pid and hasattr(storage, "load_project"):
+                meta = storage.load_project(pid)
+                if isinstance(meta, dict):
+                    key = {
+                        "Product Owner": "po_backup_model",
+                        "Developer": "dev_backup_model",
+                        "Code Reviewer": "cr_backup_model",
+                        "QA Tester": "qa_backup_model",
+                    }.get(self.role, "dev_backup_model")
+                    return str(meta.get(key) or "").strip()
+        except Exception:
+            pass
+        return ""
+
+    def _apply_phase_model_routing(self) -> str:
+        """Select Explore vs Patch Ollama model; return model name in use."""
+        from backend.services.agent_efficiency import resolve_step_model
+        from backend.services.workflow_settings import get_workflow_settings
+
+        ws = get_workflow_settings()
+        phase = None
+        phase_graph = getattr(self, "_dev_phase_graph", None)
+        if phase_graph is not None:
+            phase = getattr(phase_graph, "phase", None)
+        primary = str(
+            getattr(self, "_role_primary_model", None)
+            or getattr(self, "_primary_model", None)
+            or self.model
+            or ""
+        )
+        if not getattr(self, "_role_primary_model", None):
+            self._role_primary_model = primary
+        self._primary_model = str(self._role_primary_model)
+        chosen, reason = resolve_step_model(
+            role=self.role,
+            phase=phase,
+            primary_model=str(self._primary_model or primary),
+            backup_model=self._resolve_backup_model(),
+            ws=ws,
+        )
+        prev = str(self.model or "")
+        if chosen and chosen != prev:
+            try:
+                from backend.services.ollama_warmup import maybe_vram_unload_primary, warm_model
+
+                if ws.get("enableVramAwareModelSwap", True):
+                    maybe_vram_unload_primary(prev, backup=chosen)
+                warm_model(chosen, timeout_sec=2.0)
+            except Exception:
+                pass
+            self.model = chosen
+            self._model_switches = int(getattr(self, "_model_switches", 0) or 0) + 1
+            add_system_log(
+                self.role,
+                "info",
+                f"Phase model routing: {prev or '?'} → {chosen} ({reason})",
+            )
+        elif chosen:
+            self.model = chosen
+        return str(self.model or primary)
+
     def _log_step_exit(self, message: str, log_type: str = "warning") -> None:
         # Agent loop stop: duplicate tools, max failures, max iterations, or step duration.
         if message.startswith(("Stopped:", "Timed out:", "Max tool iterations")):
@@ -1811,6 +1879,33 @@ class ScrumAgent:
         agent_id = next((aid for aid, a in AGENT_MAP.items() if a is self), "dev")
         run_id = run.run_id if run else "NO-RUN"
         all_calls = list(message.tool_calls or [])
+        from backend.services.agent_efficiency import apply_tool_turn_cap
+
+        phase_name = None
+        phase_graph = getattr(self, "_dev_phase_graph", None)
+        if phase_graph is not None:
+            phase_name = getattr(phase_graph, "phase", None)
+        all_calls, deferred, turn_cap = apply_tool_turn_cap(all_calls, phase=phase_name)
+        if deferred:
+            names = ", ".join(
+                getattr(c.function, "name", "?") for c in deferred if hasattr(c, "function")
+            )
+            messages.append(
+                {
+                    "role": "system",
+                    "content": (
+                        f"=== TOOL TURN CAP ({turn_cap}) ===\n"
+                        f"Executed the first {turn_cap} tool call(s) this turn. "
+                        f"Deferred: {names or 'additional tools'}. "
+                        "Continue with those next turn if still needed."
+                    ),
+                }
+            )
+            add_system_log(
+                self.role,
+                "info",
+                f"Tool turn cap {turn_cap}: deferred {len(deferred)} call(s) ({names})",
+            )
         parallel_calls, sequential_calls = partition_tool_calls(all_calls)
         results_by_id: Dict[int, Tuple[str, Dict[str, Any], ToolExecutionResult, Optional[str]]] = {}
 
@@ -1902,6 +1997,7 @@ class ScrumAgent:
         self._append_observation_summary(messages, batch)
         from backend.services.step_recap import append_step_recap_after_batch_if_enabled
 
+        self._tool_batch_index = int(getattr(self, "_tool_batch_index", 0) or 0) + 1
         append_step_recap_after_batch_if_enabled(
             messages,
             agent_role=self.role,
@@ -1911,6 +2007,8 @@ class ScrumAgent:
             successful_tool_keys=successful_tool_keys,
             iteration=iteration,
             max_iterations=max_iterations,
+            tool_batch_index=self._tool_batch_index,
+            phase_graph_active=getattr(self, "_dev_phase_graph", None) is not None,
         )
         write_attempted = any(
             results_by_id[id(call)][0] in ("write_file", "apply_patch") for call in all_calls
@@ -2219,6 +2317,10 @@ class ScrumAgent:
         self._patch_recovery_paths = set()
         self._patch_recovery_read_ok = set()
         self._patch_recovery_injects = 0
+        self._tool_batch_index = 0
+        self._model_switches = 0
+        if getattr(self, "_role_primary_model", None):
+            self.model = str(self._role_primary_model)
         self._dev_phase_graph = None
         from backend.services.dev_phase_graph import DevPhaseGraph
 
@@ -2351,12 +2453,27 @@ class ScrumAgent:
                 from backend.services.llm_context import prune_messages_if_needed
 
                 prune_messages_if_needed(messages)
+                from backend.services.agent_efficiency import max_tools_per_llm_turn
+
+                model_in_use = self._apply_phase_model_routing()
+                phase_for_cap = None
+                phase_graph_live = getattr(self, "_dev_phase_graph", None)
+                if phase_graph_live is not None:
+                    phase_for_cap = getattr(phase_graph_live, "phase", None)
+                turn_cap = max_tools_per_llm_turn(phase=phase_for_cap)
+                phase_budget = (
+                    phase_graph_live.label() if phase_graph_live is not None else ""
+                )
                 await_intent = build_live_intent(
                     phase="awaiting_ollama",
                     iteration=iteration,
                     max_iterations=max_iterations,
-                    model=str(self.model or ""),
+                    model=str(model_in_use or ""),
                 )
+                await_intent = (
+                    f"{await_intent} · tools this turn ≤{turn_cap}"
+                    + (f" · {phase_budget}" if phase_budget else "")
+                )[:220]
                 self._publish_work_progress(
                     task_id=task_id,
                     intent=await_intent,
@@ -2369,13 +2486,14 @@ class ScrumAgent:
                     self.role,
                     "info",
                     f"Waiting for model (Ollama) — iter {iteration}/{max_iterations}, "
-                    f"model={self.model} num_ctx={self._chat_options().get('num_ctx')} "
+                    f"model={model_in_use} num_ctx={self._chat_options().get('num_ctx')} "
                     f"keep_alive={get_workflow_settings().get('ollamaKeepAlive', '30m')} "
+                    f"tools/turn≤{turn_cap} "
                     f"(LLM call in flight)",
                 )
                 log_event(
                     "ollama_wait",
-                    f"iter {iteration}/{max_iterations} model={self.model}",
+                    f"iter {iteration}/{max_iterations} model={model_in_use}",
                 )
                 ollama_started = time.time()
                 ollama_wait_done = threading.Event()
@@ -2387,9 +2505,13 @@ class ScrumAgent:
                             phase="awaiting_ollama",
                             iteration=iteration,
                             max_iterations=max_iterations,
-                            model=str(self.model or ""),
+                            model=str(model_in_use or self.model or ""),
                             elapsed_sec=elapsed,
                         )
+                        tick_intent = (
+                            f"{tick_intent} · tools this turn ≤{turn_cap}"
+                            + (f" · {phase_budget}" if phase_budget else "")
+                        )[:220]
                         self._publish_work_progress(
                             task_id=task_id,
                             intent=tick_intent,
@@ -2667,6 +2789,7 @@ class ScrumAgent:
                                 iterations_max=max_iterations,
                                 tools_used=tools_used,
                                 failed_tool_keys=failed_tool_keys,
+                                model_switches=int(getattr(self, "_model_switches", 0) or 0),
                             )
                         )
                         self._log_step_exit(max_msg, "warning")
@@ -2858,6 +2981,7 @@ class ScrumAgent:
                     iterations_max=max_iterations,
                     tools_used=tools_used,
                     failed_tool_keys=failed_tool_keys,
+                    model_switches=int(getattr(self, "_model_switches", 0) or 0),
                 )
             )
             self._log_step_exit(max_msg, "warning")

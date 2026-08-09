@@ -259,6 +259,11 @@ class WorkflowSettingsPayload(BaseModel):
     devExploreMaxTools: Optional[int] = None
     devPatchMaxTools: Optional[int] = None
     devVerifyMaxTools: Optional[int] = None
+    agentEfficiencyMode: Optional[str] = None
+    enablePhaseModelRouting: Optional[bool] = None
+    devExploreModel: Optional[str] = None
+    devPatchModel: Optional[str] = None
+    maxToolsPerLlmTurn: Optional[int] = None
     enableStepLessonMemory: Optional[bool] = None
     enableLlmContextCompress: Optional[bool] = None
     contextCompressMinChars: Optional[int] = None

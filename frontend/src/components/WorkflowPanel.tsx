@@ -214,10 +214,16 @@ export default function WorkflowPanel({
                 requireBacklogRefinement: false,
                 enableFocusMicroSteps: false,
                 enableDevPhaseGraph: true,
+                agentEfficiencyMode: 'high',
+                enablePhaseModelRouting: true,
+                enablePromptSectionRotation: false,
+                maxToolsPerLlmTurn: 3,
+                maxLlmIterationsPerStep: 6,
+                maxToolFailuresPerStep: 4,
+                duplicateToolPolicy: 'strict',
                 devExploreMaxTools: 3,
                 devPatchMaxTools: 4,
                 devVerifyMaxTools: 2,
-                maxLlmIterationsPerStep: 8,
                 promptProfile: 'local_slm',
                 localSlmSprintPreload: true,
                 toolOutputEchoStopAfter: 2,
@@ -396,6 +402,63 @@ export default function WorkflowPanel({
             </label>
           </div>
         )}
+        <label className="flex items-center gap-2 text-[11px] text-cat-subtext cursor-pointer">
+          <input
+            type="checkbox"
+            checked={(settings.agentEfficiencyMode ?? 'high') === 'high'}
+            onChange={(e) =>
+              onSettingsChange({ agentEfficiencyMode: e.target.checked ? 'high' : 'standard' })
+            }
+          />
+          Agent efficiency (lean prompts + turn caps)
+          <SettingHint hint="High: local_slm budgets, summary-only unchanged-prompt inject, tighter iteration/tool defaults. Use Fast first code preset for the full MVP bundle." />
+        </label>
+        <label className="flex items-center gap-2 text-[11px] text-cat-subtext cursor-pointer">
+          <input
+            type="checkbox"
+            checked={settings.enablePhaseModelRouting !== false}
+            onChange={(e) => onSettingsChange({ enablePhaseModelRouting: e.target.checked })}
+          />
+          Phase model routing (Explore small → Patch strong)
+          <SettingHint hint="Dev Explore uses a smaller/faster Ollama model; Patch/Verify use the primary coder. Empty Explore model falls back to Dev backup or 7B preset." />
+        </label>
+        {(settings.enablePhaseModelRouting !== false) && (
+          <div className="grid grid-cols-2 gap-2 text-[11px]">
+            <label>
+              <span className="text-[10px] text-cat-overlay">Explore model</span>
+              <input
+                type="text"
+                value={settings.devExploreModel ?? ''}
+                placeholder="backup or qwen2.5-coder:7b"
+                onChange={(e) => onSettingsChange({ devExploreModel: e.target.value })}
+                className="w-full bg-cat-base border border-cat-surface1 rounded p-1 text-white font-mono text-[10px]"
+              />
+            </label>
+            <label>
+              <span className="text-[10px] text-cat-overlay">Patch model</span>
+              <input
+                type="text"
+                value={settings.devPatchModel ?? ''}
+                placeholder="Dev primary"
+                onChange={(e) => onSettingsChange({ devPatchModel: e.target.value })}
+                className="w-full bg-cat-base border border-cat-surface1 rounded p-1 text-white font-mono text-[10px]"
+              />
+            </label>
+          </div>
+        )}
+        <label className="text-[11px] text-cat-subtext block">
+          <span className="text-[10px] text-cat-overlay inline-flex items-center">
+            Max tools per LLM turn
+            <SettingHint hint="Soft-cap: only the first N tool calls in one assistant message run; the rest defer to the next turn. High efficiency uses 3 in Explore and ≤2 in Patch/Verify." />
+          </span>
+          <NumberSettingInput
+            value={settings.maxToolsPerLlmTurn ?? 3}
+            min={1}
+            max={12}
+            onCommit={(maxToolsPerLlmTurn) => onSettingsChange({ maxToolsPerLlmTurn })}
+            className="w-full bg-cat-base border border-cat-surface1 rounded p-1 text-white font-mono text-[10px]"
+          />
+        </label>
         <p className="text-[10px] text-cat-overlay">
           Phase graph UI: Task detail → Phase graph
         </p>
@@ -1573,6 +1636,7 @@ export default function WorkflowPanel({
           onChange={(e) => onSettingsChange({ enableLlmContextCompress: e.target.checked })}
         />
         LLM compress bulky sprint context (off by default — extra Ollama call per step)
+        <SettingHint hint="Keep off for efficiency high. Enable only when sprint inject is huge (semantic + files) and you prefer one shrink pass over raising ollamaNumCtx or trimming preload." />
       </label>
       {settings.enableLlmContextCompress === true && (
         <div className="grid grid-cols-2 gap-2 pl-5 text-[10px] text-cat-overlay">

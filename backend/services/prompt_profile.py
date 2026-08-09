@@ -75,6 +75,14 @@ def get_prompt_profile(ws: Optional[Dict[str, Any]] = None) -> str:
         from backend.services.workflow_settings import get_workflow_settings
 
         ws = get_workflow_settings()
+    # Efficiency high forces lean budgets (local_slm).
+    try:
+        from backend.services.agent_efficiency import efficiency_high
+
+        if efficiency_high(ws):
+            return PROMPT_PROFILE_LOCAL_SLM
+    except Exception:
+        pass
     raw = str(ws.get("promptProfile") or PROMPT_PROFILE_FULL).strip().lower()
     if raw in (PROMPT_PROFILE_LOCAL_SLM, "local", "slm", "lean"):
         return PROMPT_PROFILE_LOCAL_SLM

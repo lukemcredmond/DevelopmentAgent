@@ -1260,7 +1260,7 @@ flowchart LR
 
 1. Write the **brief** (auto-saves after edit) and run **Plan outline** — plan is persisted to the project DB.
 2. Edit **Proposed epics** in the Plan tab, then **Generate Features** — prefer small implementation children (`requiresDev: true`), not planning-only cards.
-3. Workflow → Presets → **Fast first code** (local SLM + bounded preload, micro-steps off, **Dev phase graph** on).
+3. Workflow → Presets → **Fast first code** (efficiency high, phase model routing, local SLM + lean preload, rotation off, micro-steps off, **Dev phase graph** on, turn/iteration caps).
 4. **Claim** or move one small card to **In Progress** (≤3 AC). Use **Run In Progress** before full auto-sprint.
 5. Confirm sidebar **Ready for Dev** count &gt; 0. If only planning-only cards, Dev will explore tools without `apply_patch`.
 6. Qdrant: Reindex if using semantic preload; set **contextPacker** if you want repomix on Dev steps.

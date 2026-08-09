@@ -63,14 +63,20 @@ DEFAULT_WORKFLOW_SETTINGS: Dict[str, Any] = {
     "autoSprintSessionRefreshEnabled": True,
     "autoSprintSessionRefreshMinutes": 60,
     "autoSprintHardReload": True,
-    "maxLlmIterationsPerStep": 8,
+    "maxLlmIterationsPerStep": 6,
     "maxPoRoundTrips": 3,
     "maxStuckSteps": 3,
     # Wall-clock cap for one agent tool loop (LLM+tools). Default 45 minutes.
     "maxAgentStepDurationSec": 2700,
     # Auto-move cards with unmet blockedBy into the Blocked lane (healthy wait).
     "enableBlockedLane": True,
-    "maxToolFailuresPerStep": 5,
+    "maxToolFailuresPerStep": 4,
+    # Agent efficiency (local Ollama): lean prompts, phase model routing, per-turn tool caps.
+    "agentEfficiencyMode": "high",
+    "enablePhaseModelRouting": True,
+    "devExploreModel": "",
+    "devPatchModel": "",
+    "maxToolsPerLlmTurn": 3,
     "autoStartSprint": True,
     "autonomousMode": False,
     "maxNeedsUserPerSprint": 2,
@@ -162,7 +168,7 @@ DEFAULT_WORKFLOW_SETTINGS: Dict[str, Any] = {
     # Focus micro-steps: one AC/subtask per Dev sprint tick; rotate prompt sections per LLM iter.
     "enableFocusMicroSteps": True,
     "maxFocusStepsPerCard": 8,
-    "enablePromptSectionRotation": True,
+    "enablePromptSectionRotation": False,
     "splitCardWhenAcOver": 5,
     "contextPacker": "off",
     "contextPackerMaxChars": 12000,

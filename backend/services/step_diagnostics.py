@@ -650,6 +650,7 @@ def build_step_progress(
     suggested_action: Optional[str] = None,
     card_progress: Optional[Dict[str, Any]] = None,
     dev_phase_graph: Optional[Dict[str, Any]] = None,
+    model_switches: int = 0,
 ) -> Dict[str, Any]:
     """Snapshot of what the agent did — used for max-iter Extend UX + card observability."""
     trace = get_active_trace()
@@ -719,6 +720,17 @@ def build_step_progress(
         if run is not None and getattr(run, "dev_phase_graph", None):
             phase_snap = dict(run.dev_phase_graph)
 
+    llm_calls = len(trace.ollama_calls) if trace else int(iterations_used or 0)
+    tool_calls = len(trace.tools_log) if trace else len(tools_ordered)
+    failed_tools = int(trace.tool_failures) if trace else 0
+    prompt_chars_approx = 0
+    if trace and trace.ollama_calls:
+        for call in trace.ollama_calls:
+            prompt_chars_approx += int(call.get("textChars") or 0)
+            # Prefer token-based estimate when available (~4 chars/token)
+            pt = int(call.get("promptTokens") or 0)
+            if pt:
+                prompt_chars_approx = max(prompt_chars_approx, pt * 4)
     progress: Dict[str, Any] = {
         "taskId": resolved_task_id,
         "iterationsUsed": iterations_used,
@@ -732,6 +744,11 @@ def build_step_progress(
         "intent": intent,
         "cardProgress": snapshot,
         "filesThisStep": files_this_step,
+        "llmCalls": llm_calls,
+        "toolCalls": tool_calls,
+        "failedTools": failed_tools,
+        "promptCharsApprox": prompt_chars_approx,
+        "modelSwitches": int(model_switches or 0),
     }
     if duration_ms is not None:
         progress["durationMs"] = duration_ms

@@ -74,7 +74,7 @@ def test_local_slm_compose_excludes_transcript_and_legacy_sections():
 
 
 def test_full_profile_po_still_uses_legacy_monolith():
-    save_workflow_settings({"promptProfile": "full"})
+    save_workflow_settings({"promptProfile": "full", "agentEfficiencyMode": "standard"})
     assert not is_local_slm_profile()
     task = _sample_task()
     focus = FocusContext(

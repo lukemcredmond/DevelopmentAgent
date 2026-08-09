@@ -223,11 +223,25 @@ def append_step_recap_after_batch_if_enabled(
     successful_tool_keys: Sequence[Tuple[str, str]],
     iteration: int,
     max_iterations: int,
+    tool_batch_index: int = 0,
+    phase_graph_active: bool = False,
 ) -> None:
     from backend.services.workflow_settings import get_workflow_settings
 
-    if not step_recap_enabled(get_workflow_settings()):
+    ws = get_workflow_settings()
+    if not step_recap_enabled(ws):
         return
+    try:
+        from backend.services.agent_efficiency import should_throttle_step_recap
+
+        if should_throttle_step_recap(
+            tool_batch_index=tool_batch_index or iteration,
+            phase_graph_active=phase_graph_active,
+            ws=ws,
+        ):
+            return
+    except Exception:
+        pass
     task = find_task_by_id(task_id) if task_id else None
     block = build_step_recap_after_tools(
         agent_role=agent_role,
