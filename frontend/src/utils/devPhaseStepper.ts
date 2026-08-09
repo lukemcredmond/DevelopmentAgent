@@ -142,3 +142,55 @@ export function segmentClassName(state: DevPhaseSegmentState, compact?: boolean)
   }
   return `${base} border-cat-surface1 text-cat-overlay bg-transparent`
 }
+
+export type DiagramNodeId = 'explore' | 'patch' | 'verify' | 'stuck' | 'done'
+
+export interface DiagramNodeState {
+  id: DiagramNodeId
+  label: string
+  state: DevPhaseSegmentState | 'idle'
+  count?: number
+  max?: number
+}
+
+/** Node highlight map for the SVG state-machine diagram. */
+export function diagramNodeStates(snap: DevPhaseGraphSnapshot): DiagramNodeState[] {
+  const segments = buildDevPhaseSegments(snap)
+  const phase = String(snap.phase || 'explore').toLowerCase()
+  const byId = Object.fromEntries(segments.map((s) => [s.id, s])) as Record<
+    'explore' | 'patch' | 'verify',
+    DevPhaseSegment
+  >
+
+  const endState = (id: 'stuck' | 'done'): DevPhaseSegmentState | 'idle' => {
+    if (id === 'stuck' && phase === 'stuck') return 'stuck'
+    if (id === 'done' && phase === 'done') return 'done'
+    return 'idle'
+  }
+
+  return [
+    {
+      id: 'explore',
+      label: 'Explore',
+      state: byId.explore?.state ?? 'upcoming',
+      count: byId.explore?.count,
+      max: byId.explore?.max,
+    },
+    {
+      id: 'patch',
+      label: 'Patch',
+      state: byId.patch?.state ?? 'upcoming',
+      count: byId.patch?.count,
+      max: byId.patch?.max,
+    },
+    {
+      id: 'verify',
+      label: 'Verify',
+      state: byId.verify?.state ?? 'upcoming',
+      count: byId.verify?.count,
+      max: byId.verify?.max,
+    },
+    { id: 'stuck', label: 'Stuck', state: endState('stuck') },
+    { id: 'done', label: 'Done', state: endState('done') },
+  ]
+}

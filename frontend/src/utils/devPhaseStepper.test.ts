@@ -1,6 +1,7 @@
 import { describe, expect, it } from 'vitest'
 import {
   buildDevPhaseSegments,
+  diagramNodeStates,
   parseDevPhaseSnapshot,
   resolveDevPhaseSnapshot,
   snapshotFromPhaseLabel,
@@ -88,5 +89,53 @@ describe('devPhaseStepper helpers', () => {
       writeSucceeded: true,
     })
     expect(segs.every((s) => s.state === 'done')).toBe(true)
+  })
+
+  it('diagramNodeStates mirrors segment states and end nodes', () => {
+    const nodes = diagramNodeStates({
+      phase: 'patch',
+      exploreCount: 2,
+      exploreMax: 3,
+      patchCount: 1,
+      patchMax: 4,
+      verifyCount: 0,
+      verifyMax: 2,
+    })
+    const byId = Object.fromEntries(nodes.map((n) => [n.id, n]))
+    expect(byId.explore?.state).toBe('done')
+    expect(byId.patch?.state).toBe('current')
+    expect(byId.verify?.state).toBe('upcoming')
+    expect(byId.stuck?.state).toBe('idle')
+    expect(byId.done?.state).toBe('idle')
+    expect(byId.patch?.count).toBe(1)
+    expect(byId.patch?.max).toBe(4)
+  })
+
+  it('diagramNodeStates marks stuck and done terminals', () => {
+    const stuck = diagramNodeStates({
+      phase: 'stuck',
+      exploreCount: 3,
+      exploreMax: 3,
+      patchCount: 0,
+      patchMax: 4,
+      writeSucceeded: false,
+    })
+    expect(stuck.find((n) => n.id === 'stuck')?.state).toBe('stuck')
+    expect(stuck.find((n) => n.id === 'explore')?.state).toBe('stuck')
+
+    const done = diagramNodeStates({
+      phase: 'done',
+      exploreCount: 1,
+      exploreMax: 3,
+      patchCount: 1,
+      patchMax: 4,
+      verifyCount: 1,
+      verifyMax: 2,
+      writeSucceeded: true,
+    })
+    expect(done.find((n) => n.id === 'done')?.state).toBe('done')
+    expect(done.filter((n) => ['explore', 'patch', 'verify'].includes(n.id)).every((n) => n.state === 'done')).toBe(
+      true,
+    )
   })
 })
