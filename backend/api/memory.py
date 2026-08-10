@@ -46,6 +46,27 @@ def create_memory(payload: MemoryCreatePayload, ollamaUrl: str = "http://localho
     return {"ok": True, "entry": entries[0] if entries else None}
 
 
+@router.get("/api/memory/core-block")
+def get_core_block(agent: str = "Developer", ollamaUrl: str = "http://localhost:11434"):
+    with state.STATE_LOCK:
+        engine = _engine(ollamaUrl)
+        entry = engine.get_core_block(agent or "Developer", project_id=state.CURRENT_PROJECT_ID)
+    return {"ok": True, "entry": entry}
+
+
+@router.put("/api/memory/core-block")
+def put_core_block(payload: MemoryUpdatePayload, agent: str = "Developer", ollamaUrl: str = "http://localhost:11434"):
+    content = (payload.content or "").strip()
+    with state.STATE_LOCK:
+        engine = _engine(ollamaUrl)
+        entry = engine.upsert_core_block(
+            content,
+            agent or "Developer",
+            project_id=state.CURRENT_PROJECT_ID,
+        )
+    return {"ok": True, "entry": entry}
+
+
 @router.delete("/api/memory/{memory_id}")
 def delete_memory(memory_id: str):
     with state.STATE_LOCK:

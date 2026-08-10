@@ -216,6 +216,7 @@ export default function WorkflowPanel({
                 enableDevPhaseGraph: true,
                 agentEfficiencyMode: 'high',
                 enablePhaseModelRouting: true,
+                enableDevCoreMemoryBlock: true,
                 enablePromptSectionRotation: false,
                 maxToolsPerLlmTurn: 3,
                 maxLlmIterationsPerStep: 6,
@@ -1628,6 +1629,15 @@ export default function WorkflowPanel({
           onChange={(e) => onSettingsChange({ enableStepLessonMemory: e.target.checked })}
         />
         Save end-of-step lesson to memory
+      </label>
+      <label className="flex items-center gap-2 text-[11px] text-cat-subtext cursor-pointer pl-5">
+        <input
+          type="checkbox"
+          checked={settings.enableDevCoreMemoryBlock !== false}
+          onChange={(e) => onSettingsChange({ enableDevCoreMemoryBlock: e.target.checked })}
+        />
+        Dev core memory block (always inject pinned lessons)
+        <SettingHint hint="Letta-inspired sticky block for Developer: step lessons merge into a capped ~800-char block that is always injected (even when search finds nothing). Not a full Letta memory stack." />
       </label>
       <label className="flex items-center gap-2 text-[11px] text-cat-subtext cursor-pointer pl-5">
         <input

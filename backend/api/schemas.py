@@ -265,6 +265,7 @@ class WorkflowSettingsPayload(BaseModel):
     devPatchModel: Optional[str] = None
     maxToolsPerLlmTurn: Optional[int] = None
     enableStepLessonMemory: Optional[bool] = None
+    enableDevCoreMemoryBlock: Optional[bool] = None
     enableLlmContextCompress: Optional[bool] = None
     contextCompressMinChars: Optional[int] = None
     contextCompressMaxChars: Optional[int] = None

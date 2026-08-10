@@ -582,6 +582,7 @@ export interface WorkflowSettings {
   enableLlmModelRationale?: boolean
   toolOutputEchoStopAfter?: number
   enableStepLessonMemory?: boolean
+  enableDevCoreMemoryBlock?: boolean
   enableLlmContextCompress?: boolean
   contextCompressMinChars?: number
   contextCompressMaxChars?: number
@@ -1292,6 +1293,7 @@ export interface WorkflowSettingsPayload {
   enableLlmModelRationale?: boolean
   toolOutputEchoStopAfter?: number
   enableStepLessonMemory?: boolean
+  enableDevCoreMemoryBlock?: boolean
   enableLlmContextCompress?: boolean
   contextCompressMinChars?: number
   contextCompressMaxChars?: number
@@ -1646,6 +1648,7 @@ export const DEFAULT_WORKFLOW_SETTINGS: WorkflowSettings = {
   enableLlmModelRationale: false,
   toolOutputEchoStopAfter: 2,
   enableStepLessonMemory: true,
+  enableDevCoreMemoryBlock: true,
   enableLlmContextCompress: false,
   contextCompressMinChars: 8000,
   contextCompressMaxChars: 3500,

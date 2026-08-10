@@ -1,0 +1,8 @@
+# Optional offline prompt optimization (GEPA / DSPy).
+# Core AllHands runs without these packages.
+#
+#   pip install -r requirements-optimize.txt
+#   python scripts/optimize_dev_prompt.py --limit 50
+#
+dspy>=2.5.0
+gepa

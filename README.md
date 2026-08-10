@@ -459,6 +459,7 @@ Persisted per project. Update via sidebar **Workflow** or `POST /api/workflow/se
 | enableAgentStepRecap | On | `=== STEP GOAL ===` at step start + `=== STEP RECAP ===` after tools (intent, dedupe list, next action) for local/weaker models |
 | enableEpisodeSummary | On | Fold pruned tool messages into `=== EPISODE SUMMARY ===` |
 | enableStepLessonMemory | On | Save one structured lesson to memory at end of each agent step |
+| enableDevCoreMemoryBlock | On | Pinned Developer core memory (~800 chars): lessons merge in; always injected before search hits |
 | enableLlmContextCompress | **Off** | When sprint inject (semantic + files) exceeds `contextCompressMinChars`, one extra Ollama call shrinks it to `contextCompressMaxChars` (fail-open). Off by default because it adds a call per step |
 | contextCompressMinChars | 8000 | Minimum inject size before compress runs |
 | contextCompressMaxChars | 3500 | Target size after compress |
@@ -908,6 +909,8 @@ Live updates: `GET /api/events` (SSE).
 |--------|------|-------------|
 | GET | `/api/memory` | List memories (`agent`, `category`, `q`, `dedupe`, `limit`) |
 | POST | `/api/memory` | Create project note |
+| GET | `/api/memory/core-block` | Get pinned Dev (or role) core memory block |
+| PUT | `/api/memory/core-block` | Upsert core memory block (`content`) |
 | PATCH | `/api/memory/{id}` | Update memory |
 | DELETE | `/api/memory/{id}` | Delete memory |
 | GET | `/api/search/semantic` | Semantic codebase search |
@@ -1141,9 +1144,33 @@ Per-card evidence lives in **Task Detail → Agent progress** (LLM/tool counts p
 | **Retrieval feedback** | Weak-hit banner → raise min score / re-index |
 | **SQLite project memory** | Categorized notes with embeddings; TF-IDF fallback if embed fails |
 | **Step-lesson memory** | Optional end-of-step lessons saved for later retrieval |
+| **Dev core memory block** | Pinned `core_block` (~800 chars) always injected for Developer (`enableDevCoreMemoryBlock`); lessons merge in. Not a full Letta stack |
 | **Graphify (optional)** | Structural graph context alongside RAG when Graphify is on PATH |
 
 Key code: `backend/storage/code_index.py`, `backend/storage/memory_engine.py`, `backend/services/graphify_service.py`.
+
+### Related research / optional integrations
+
+AllHands keeps its own ScrumAgent + board + Ollama loop. These projects are useful as **patterns** or **offline tools**, not as a runtime replacement:
+
+| Project | What it is | How AllHands uses it |
+|---------|------------|----------------------|
+| [DSPy](https://github.com/stanfordnlp/dspy) | Program LM pipelines + metric-driven optimizers | Optional offline compile of prompts; do **not** replace the tool loop with DSPy ReAct |
+| [GEPA](https://github.com/gepa-ai/gepa) | Reflective prompt/code evolution (also `dspy.GEPA`) | Offline Dev system-prompt optimize from step diagnostics |
+| [Letta](https://github.com/letta-ai/letta) | Stateful agents with advanced memory | **Borrowed:** one pinned Dev core memory block. **Not:** Letta server, archival/recall tiers, agent memory-edit tools |
+| [Sutando](https://github.com/sonichi/sutando) | Personal Mac “Stand” (voice, meetings, night rewrite) | Ideas only (overnight self-improve). No Sutando cron/voice integration in-app |
+
+**Core memory block vs full Letta-inspired memory:** the block is a single always-injected sticky note (system merges step lessons; you can edit via `GET/PUT /api/memory/core-block`). Full Letta would add mid-turn memory tools, archival search, and consolidation jobs — out of scope for now.
+
+**Offline Dev prompt optimize (GEPA/DSPy-friendly):**
+
+```bash
+pip install -r requirements-optimize.txt   # optional; heuristic + Ollama reflection work without it
+python scripts/optimize_dev_prompt.py --limit 50
+python scripts/optimize_dev_prompt.py --limit 50 --apply   # writes agentPrompts.Developer.system
+```
+
+Writes versioned files under `~/.allhands/optimized_prompts/`. Scoring uses step diagnostics (writes good; max-iter / duplicate / high LLM:tool ratio bad). Cross-links: step lessons, training export (`GET /api/training/export`), agent efficiency mode.
 
 ### Skills, MCP, and extensibility
 

@@ -10,6 +10,11 @@ import requests
 from backend.config import DB_PATH
 
 
+CORE_BLOCK_CATEGORY = "core_block"
+DEV_CORE_KEY = "dev_core"
+CORE_BLOCK_MAX_CHARS = 800
+
+
 def resolve_embed_model(explicit: Optional[str] = None) -> str:
     """Resolve Ollama embed model from workflow settings or explicit override."""
     if explicit:
@@ -245,6 +250,138 @@ class SemanticMemoryEngine:
             project_id=project_id,
             meta=meta,
         )
+        # Sticky Dev core block (Letta-inspired pinned memory — always injected).
+        try:
+            from backend.services.workflow_settings import get_workflow_settings
+
+            if get_workflow_settings().get("enableDevCoreMemoryBlock", True):
+                role = agent_id.split(":")[-1] if ":" in agent_id else agent_id
+                if role in ("Developer", "dev"):
+                    bullet = lesson.strip().split("\n")[0][:200]
+                    if bullet:
+                        self.merge_lesson_into_core_block(
+                            "Developer",
+                            bullet,
+                            project_id=project_id,
+                        )
+        except Exception:
+            pass
+
+    def core_block_memory_id(self, agent_id: str = "Developer", *, project_id: Optional[str] = None) -> str:
+        from backend import state
+
+        pid = project_id or state.CURRENT_PROJECT_ID or "default-proj"
+        role = agent_id.split(":")[-1] if ":" in agent_id else agent_id
+        key = DEV_CORE_KEY if role in ("Developer", "dev") else f"{role.lower().replace(' ', '_')}_core"
+        return f"{pid}-{key}"
+
+    def get_core_block(
+        self,
+        agent_id: str = "Developer",
+        *,
+        project_id: Optional[str] = None,
+    ) -> Optional[Dict[str, Any]]:
+        mem_id = self.core_block_memory_id(agent_id, project_id=project_id)
+        with sqlite3.connect(self.db_path) as conn:
+            conn.row_factory = sqlite3.Row
+            cursor = conn.cursor()
+            cursor.execute(
+                "SELECT id, agent_id, category, content, timestamp FROM memories WHERE id = ?",
+                (mem_id,),
+            )
+            row = cursor.fetchone()
+        if not row:
+            return None
+        agent_scope = str(row["agent_id"] or "")
+        display_agent = agent_scope.split(":")[-1] if ":" in agent_scope else agent_scope
+        return {
+            "id": row["id"],
+            "agent": display_agent,
+            "category": row["category"],
+            "content": row["content"],
+            "timestamp": row["timestamp"],
+        }
+
+    def upsert_core_block(
+        self,
+        content: str,
+        agent_id: str = "Developer",
+        *,
+        project_id: Optional[str] = None,
+        max_chars: int = CORE_BLOCK_MAX_CHARS,
+    ) -> Dict[str, Any]:
+        from backend import state
+
+        pid = project_id or state.CURRENT_PROJECT_ID or "default-proj"
+        text = str(content or "").strip()
+        if len(text) > max_chars:
+            text = text[: max_chars - 1] + "…"
+        mem_id = self.core_block_memory_id(agent_id, project_id=pid)
+        scoped = self._scoped_agent_id(agent_id if agent_id != "dev" else "Developer", pid)
+        embedding = self._embed_ollama(text) if text else None
+        embedding_json = json.dumps(embedding) if embedding else None
+        with sqlite3.connect(self.db_path) as conn:
+            cursor = conn.cursor()
+            cursor.execute("SELECT id FROM memories WHERE id = ?", (mem_id,))
+            if cursor.fetchone():
+                cursor.execute(
+                    """
+                    UPDATE memories
+                    SET content = ?, category = ?, embedding = ?, timestamp = CURRENT_TIMESTAMP,
+                        agent_id = ?
+                    WHERE id = ?
+                    """,
+                    (text, CORE_BLOCK_CATEGORY, embedding_json, scoped, mem_id),
+                )
+            else:
+                cursor.execute(
+                    """
+                    INSERT INTO memories (id, agent_id, category, content, embedding)
+                    VALUES (?, ?, ?, ?, ?)
+                    """,
+                    (mem_id, scoped, CORE_BLOCK_CATEGORY, text, embedding_json),
+                )
+            conn.commit()
+        return self.get_core_block(agent_id, project_id=pid) or {
+            "id": mem_id,
+            "agent": agent_id,
+            "category": CORE_BLOCK_CATEGORY,
+            "content": text,
+            "timestamp": None,
+        }
+
+    def merge_lesson_into_core_block(
+        self,
+        agent_id: str,
+        lesson_bullet: str,
+        *,
+        project_id: Optional[str] = None,
+        max_chars: int = CORE_BLOCK_MAX_CHARS,
+    ) -> Dict[str, Any]:
+        """Append a short bullet; drop oldest bullets until under max_chars."""
+        raw = str(lesson_bullet or "").strip()
+        if not raw:
+            existing = self.get_core_block(agent_id, project_id=project_id)
+            return existing or {"id": "", "content": "", "category": CORE_BLOCK_CATEGORY}
+        if raw.startswith("- "):
+            bullet = raw
+        else:
+            bullet = f"- {raw}"
+        bullet = bullet[:220]
+        existing = self.get_core_block(agent_id, project_id=project_id)
+        lines: List[str] = []
+        if existing and str(existing.get("content") or "").strip():
+            for line in str(existing["content"]).splitlines():
+                line = line.strip()
+                if line:
+                    lines.append(line if line.startswith("- ") else f"- {line}")
+        # Dedupe exact bullet
+        if bullet not in lines:
+            lines.append(bullet)
+        while lines and len("\n".join(lines)) > max_chars:
+            lines.pop(0)
+        merged = "\n".join(lines)
+        return self.upsert_core_block(merged, agent_id, project_id=project_id, max_chars=max_chars)
 
     def search(
         self,
@@ -299,6 +436,11 @@ class SemanticMemoryEngine:
                 )
                 records = cursor.fetchall()
 
+        if not records:
+            return []
+
+        # Core blocks are always injected separately — exclude from semantic search.
+        records = [r for r in records if str(r["category"] or "").lower() != CORE_BLOCK_CATEGORY]
         if not records:
             return []
 

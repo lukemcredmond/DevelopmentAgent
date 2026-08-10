@@ -528,6 +528,20 @@ class ScrumAgent:
             local_slm_sprint_preload_enabled,
         )
 
+        core_block_text = ""
+        ws_mem = get_workflow_settings()
+        if self.role == "Developer" and ws_mem.get("enableDevCoreMemoryBlock", True):
+            try:
+                block = self.memory.get_core_block("Developer", project_id=project_id)
+                if block and str(block.get("content") or "").strip():
+                    core_block_text = (
+                        "\n=== DEV CORE MEMORY ===\n"
+                        + str(block["content"]).strip()
+                        + "\n"
+                    )
+            except Exception:
+                core_block_text = ""
+
         if not is_local_slm_profile():
             related_memories = self.memory.search(
                 self.role,
@@ -563,7 +577,11 @@ class ScrumAgent:
             memory_context = "\n=== RELEVANT HISTORICAL MEMORIES ===\n" + "\n".join(
                 [f"[{m['category']}] {m['content']}" for m in related_memories]
             )
-        parts = [part for part in (memory_context, f"Task Detail:\n{user_prompt}") if part]
+        parts = [
+            part
+            for part in (core_block_text, memory_context, f"Task Detail:\n{user_prompt}")
+            if part
+        ]
         return "\n\n".join(parts)
 
     def _save_step_lesson(

@@ -131,6 +131,8 @@ DEFAULT_WORKFLOW_SETTINGS: Dict[str, Any] = {
     "devPatchMaxTools": 4,
     "devVerifyMaxTools": 2,
     "enableStepLessonMemory": True,
+    # Pinned Dev core memory block (always injected; lessons merge into it).
+    "enableDevCoreMemoryBlock": True,
     # Off by default: it adds one extra Ollama call per step.
     "enableLlmContextCompress": False,
     "contextCompressMinChars": 8000,
