@@ -826,6 +826,10 @@ After a crash or power loss mid-sprint, a **recovery banner** shows the interrup
 | `specMarkdownPath` | string \| null | Generated spec markdown (`docs/tasks/…-spec.md`) — authoritative SDD view of the card |
 | `specVersion` | number | Bumped when spec-relevant card fields change |
 
+**Field history:** Task Detail shows a **clock** on Title, Description, Specification (SDD), and Acceptance Criteria. Click to list prior versions (datetime + source); open a row to see the full value at that time. Stored in SQLite `task_field_changelog` (not on the card JSON). First edit also keeps a baseline of the previous value.
+
+**Clarify with PO:** Under Description, **Clarify description with PO…** opens chat as Product Owner, pins the card, and seeds a rewrite prompt (replace boilerplate with concrete requirements / AC).
+
 Generated docs: **`*-spec.md`** is the human-readable spec (from card JSON). **`*-qa.md`** is operational working notes (Q&A, decisions, recent actions).
 
 **Epic vs card (SDD):** Feature cards in the Features lane hold the living epic context. Child backlog cards link via `featureId`; empty `userStory` / `scope` may be auto-filled from the epic (story template + this card’s title/description/AC slice). `acceptanceCriteria` and `testPlan` stay per card.
@@ -889,6 +893,8 @@ Live updates: `GET /api/events` (SSE).
 | POST | `/api/board/clear-tasks` | Clear all tasks from board |
 | POST | `/api/board/escalate-needs-user-to-po` | Move Needs User → Needs PO |
 | PATCH | `/api/tasks/{id}` | Update title, description, AC |
+| GET | `/api/tasks/{id}/field-history` | List field revisions (`field=title\|description\|acceptanceCriteria\|sdd`) |
+| GET | `/api/tasks/{id}/field-history/{entryId}` | Full snapshot for one revision |
 | POST | `/api/tasks/update` | Batch task update |
 | DELETE | `/api/tasks/{id}` | Delete task |
 | POST | `/api/tasks/delete` | Delete task (alternate) |

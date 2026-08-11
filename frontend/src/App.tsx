@@ -390,6 +390,30 @@ export default function App() {
     setBottomTab('chat')
   }
 
+  const handleClarifyWithPo = (task: Task) => {
+    const title = (task.title || '').trim() || task.id
+    const desc = (task.description || '').trim() || '(empty)'
+    const seed = [
+      `Please rewrite the description (and tighten acceptance criteria if needed) for card ${task.id}.`,
+      `Title: ${title}`,
+      '',
+      'Current description:',
+      desc,
+      '',
+      'Replace generic boilerplate with concrete requirements a developer can implement:',
+      '- What to build (entities, fields, constraints, examples)',
+      '- What is out of scope',
+      '- Clear acceptance criteria (1–3 testable items)',
+      'Do not reply with "outline the task details" style filler — give specific product requirements.',
+    ].join('\n')
+    setChatPinnedTask(task)
+    setChatAgent('po')
+    setChatInput(seed)
+    setSelectedTask(null)
+    expandBottomPanel()
+    setBottomTab('chat')
+  }
+
   const handleInjectToolEvidence = async (
     taskId: string,
     payload: {
@@ -2134,6 +2158,7 @@ export default function App() {
           if (related) setSelectedTask(related)
         }}
         onDiscussWithAgent={(task, lane) => handleDiscussWithAgent(task, lane)}
+        onClarifyWithPo={(task) => handleClarifyWithPo(task)}
         onSplit={(taskId) => handleSplitTask(taskId)}
         onInjectToolEvidence={(taskId, payload) => handleInjectToolEvidence(taskId, payload)}
         defaultInjectCommand={state.recommendedLintCommand ?? ''}

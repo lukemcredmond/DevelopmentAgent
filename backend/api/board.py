@@ -119,12 +119,25 @@ def claim_ready_cards(payload: ClaimReadyPayload):
 
 def _apply_task_update(task: dict, payload: UpdateTaskPayload) -> None:
     normalize_task(task)
+    before = {
+        "title": task.get("title"),
+        "description": task.get("description"),
+        "acceptanceCriteria": list(task.get("acceptanceCriteria") or []),
+        "userStory": task.get("userStory"),
+        "scope": task.get("scope"),
+        "outOfScope": task.get("outOfScope"),
+        "testPlan": task.get("testPlan"),
+    }
+    changed_keys: list[str] = []
     if payload.title is not None:
         task["title"] = payload.title
+        changed_keys.append("title")
     if payload.description is not None:
         task["description"] = payload.description
+        changed_keys.append("description")
     if payload.acceptanceCriteria is not None:
         task["acceptanceCriteria"] = payload.acceptanceCriteria
+        changed_keys.append("acceptanceCriteria")
         acs = [str(c).strip() for c in payload.acceptanceCriteria if str(c).strip()]
         checks = list(task.get("acChecklist") or [])
         while len(checks) < len(acs):
@@ -142,12 +155,16 @@ def _apply_task_update(task: dict, payload: UpdateTaskPayload) -> None:
         task["priority"] = payload.priority
     if payload.userStory is not None:
         task["userStory"] = payload.userStory
+        changed_keys.append("userStory")
     if payload.scope is not None:
         task["scope"] = payload.scope
+        changed_keys.append("scope")
     if payload.outOfScope is not None:
         task["outOfScope"] = payload.outOfScope
+        changed_keys.append("outOfScope")
     if payload.testPlan is not None:
         task["testPlan"] = payload.testPlan
+        changed_keys.append("testPlan")
     if payload.focusMode is not None:
         mode = str(payload.focusMode).strip().lower()
         if mode in ("ac", "subtask", "whole"):
@@ -184,6 +201,13 @@ def _apply_task_update(task: dict, payload: UpdateTaskPayload) -> None:
     else:
         sync_card_delivery_fields(task, rebuild_expected=rebuild_expected)
     normalize_task(task)
+    if changed_keys:
+        try:
+            from backend.services.task_field_history import record_task_fields_from_update
+
+            record_task_fields_from_update(task, before=before, source="user", changed_keys=changed_keys)
+        except Exception:
+            pass
 
 
 @router.post("/api/tasks/update")
@@ -209,6 +233,46 @@ def update_task(payload: UpdateTaskPayload):
 @router.patch("/api/tasks/{task_id}")
 def patch_task(task_id: str, payload: UpdateTaskPayload):
     return update_task(UpdateTaskPayload(task_id=task_id, **payload.model_dump(exclude={"task_id"}, exclude_none=True)))
+
+
+@router.get("/api/tasks/{task_id}/field-history")
+def get_task_field_history(task_id: str, field: str = "description", limit: int = 40):
+    from backend.services.task_field_history import (
+        TRACKED_FIELDS,
+        ensure_baseline_snapshot,
+        list_field_history,
+    )
+
+    field_key = str(field or "").strip()
+    if field_key not in TRACKED_FIELDS:
+        raise HTTPException(
+            status_code=400,
+            detail=f"field must be one of: {', '.join(TRACKED_FIELDS)}",
+        )
+    with state.STATE_LOCK:
+        task = find_task_by_id(task_id)
+        if not task:
+            raise HTTPException(status_code=404, detail="Task not found")
+        try:
+            ensure_baseline_snapshot(task, field_key)
+        except Exception:
+            pass
+        entries = list_field_history(task_id, field_key, limit=min(max(limit, 1), 80))
+    return {"ok": True, "taskId": task_id, "field": field_key, "entries": entries}
+
+
+@router.get("/api/tasks/{task_id}/field-history/{entry_id}")
+def get_task_field_history_entry(task_id: str, entry_id: str):
+    from backend.services.task_field_history import get_field_history_entry
+
+    with state.STATE_LOCK:
+        task = find_task_by_id(task_id)
+        if not task:
+            raise HTTPException(status_code=404, detail="Task not found")
+        entry = get_field_history_entry(entry_id)
+        if not entry or str(entry.get("taskId") or "") != str(task_id):
+            raise HTTPException(status_code=404, detail="History entry not found")
+    return {"ok": True, "entry": entry}
 
 
 @router.post("/api/tasks/{task_id}/focus-advance")

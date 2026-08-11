@@ -106,6 +106,25 @@ class ProjectStorage:
             )
             conn.execute(
                 """
+                CREATE TABLE IF NOT EXISTS task_field_changelog (
+                    id TEXT PRIMARY KEY,
+                    project_id TEXT NOT NULL,
+                    task_id TEXT NOT NULL,
+                    field TEXT NOT NULL,
+                    value TEXT NOT NULL,
+                    source TEXT NOT NULL,
+                    created_at DATETIME DEFAULT CURRENT_TIMESTAMP
+                )
+                """
+            )
+            conn.execute(
+                """
+                CREATE INDEX IF NOT EXISTS idx_task_field_changelog_lookup
+                ON task_field_changelog (project_id, task_id, field, created_at DESC)
+                """
+            )
+            conn.execute(
+                """
                 CREATE TABLE IF NOT EXISTS tool_aliases (
                     project_id TEXT NOT NULL,
                     alias TEXT NOT NULL,
@@ -266,6 +285,7 @@ class ProjectStorage:
             cursor.execute("DELETE FROM chat_messages WHERE project_id = ?", (proj_id,))
             cursor.execute("DELETE FROM file_revisions WHERE project_id = ?", (proj_id,))
             cursor.execute("DELETE FROM brief_changelog WHERE project_id = ?", (proj_id,))
+            cursor.execute("DELETE FROM task_field_changelog WHERE project_id = ?", (proj_id,))
             cursor.execute("DELETE FROM tool_aliases WHERE project_id = ?", (proj_id,))
             cursor.execute("DELETE FROM pending_tool_requests WHERE project_id = ?", (proj_id,))
             cursor.execute("DELETE FROM projects WHERE id = ?", (proj_id,))
@@ -338,6 +358,89 @@ class ProjectStorage:
                 (project_id, limit),
             )
             return [dict(r) for r in cursor.fetchall()]
+
+    def add_task_field_changelog(
+        self,
+        project_id: str,
+        task_id: str,
+        field: str,
+        value: str,
+        source: str = "user",
+        *,
+        max_per_field: int = 40,
+    ) -> str:
+        entry_id = str(uuid.uuid4())
+        with sqlite3.connect(self.db_path) as conn:
+            conn.execute(
+                """
+                INSERT INTO task_field_changelog
+                    (id, project_id, task_id, field, value, source)
+                VALUES (?, ?, ?, ?, ?, ?)
+                """,
+                (entry_id, project_id, task_id, field, value, source),
+            )
+            # Cap: drop oldest beyond max_per_field for this task+field
+            cursor = conn.cursor()
+            cursor.execute(
+                """
+                SELECT id FROM task_field_changelog
+                WHERE project_id = ? AND task_id = ? AND field = ?
+                ORDER BY created_at DESC, rowid DESC
+                """,
+                (project_id, task_id, field),
+            )
+            ids = [row[0] for row in cursor.fetchall()]
+            if len(ids) > max_per_field:
+                drop = ids[max_per_field:]
+                cursor.executemany(
+                    "DELETE FROM task_field_changelog WHERE id = ?",
+                    [(i,) for i in drop],
+                )
+            conn.commit()
+        return entry_id
+
+    def get_task_field_changelog(
+        self,
+        project_id: str,
+        task_id: str,
+        field: str,
+        *,
+        limit: int = 40,
+    ) -> List[Dict[str, Any]]:
+        with sqlite3.connect(self.db_path) as conn:
+            conn.row_factory = sqlite3.Row
+            cursor = conn.cursor()
+            cursor.execute(
+                """
+                SELECT id, field, value, source, created_at AS timestamp
+                FROM task_field_changelog
+                WHERE project_id = ? AND task_id = ? AND field = ?
+                ORDER BY created_at DESC, rowid DESC
+                LIMIT ?
+                """,
+                (project_id, task_id, field, limit),
+            )
+            return [dict(r) for r in cursor.fetchall()]
+
+    def get_task_field_changelog_entry(
+        self,
+        project_id: str,
+        entry_id: str,
+    ) -> Optional[Dict[str, Any]]:
+        with sqlite3.connect(self.db_path) as conn:
+            conn.row_factory = sqlite3.Row
+            cursor = conn.cursor()
+            cursor.execute(
+                """
+                SELECT id, project_id, task_id, field, value, source,
+                       created_at AS timestamp
+                FROM task_field_changelog
+                WHERE id = ? AND project_id = ?
+                """,
+                (entry_id, project_id),
+            )
+            row = cursor.fetchone()
+            return dict(row) if row else None
 
     def save_project_logs(self, proj_id: str, logs: List[Dict[str, str]]) -> None:
         with sqlite3.connect(self.db_path) as conn:

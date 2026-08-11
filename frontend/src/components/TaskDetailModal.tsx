@@ -22,6 +22,7 @@ import SlideOver from './SlideOver'
 import TaskFlowPanel from './TaskFlowPanel'
 import DevPhaseStepper from './DevPhaseStepper'
 import DevPhaseGraphPanel from './DevPhaseGraphPanel'
+import FieldHistoryButton from './FieldHistoryButton'
 
 function getCommandDiagnostics(task: Task): CommandDiagnostic[] {
   if (task.lastCommandDiagnostics?.length) {
@@ -166,6 +167,8 @@ interface TaskDetailModalProps {
   onApprove?: (taskId: string) => void
   onResolveUser?: (taskId: string, answer: string, target: 'dev' | 'refinement' | 'po') => void
   onDiscussWithAgent?: (task: Task, lane: BoardLane | null) => void
+  /** Open PO chat pinned to this card with a seeded rewrite prompt for the description. */
+  onClarifyWithPo?: (task: Task) => void
   onSplit?: (taskId: string) => void | Promise<void>
   onInjectToolEvidence?: (
     taskId: string,
@@ -236,6 +239,7 @@ function CollapsibleSection({
   defaultOpen = true,
   open: openProp,
   onOpenChange,
+  headerExtra,
   children,
 }: {
   title: string
@@ -243,6 +247,7 @@ function CollapsibleSection({
   defaultOpen?: boolean
   open?: boolean
   onOpenChange?: (open: boolean) => void
+  headerExtra?: ReactNode
   children: ReactNode
 }) {
   const [internalOpen, setInternalOpen] = useState(defaultOpen)
@@ -255,19 +260,31 @@ function CollapsibleSection({
   }
   return (
     <div className="border border-cat-surface1 rounded-lg overflow-hidden">
-      <button
-        type="button"
-        onClick={() => setOpen(!open)}
-        className="w-full flex items-center justify-between px-3 py-2 bg-cat-base/50 hover:bg-cat-base text-left"
-      >
-        <span className="text-xs font-bold uppercase tracking-wider text-cat-subtext">
-          {title}
-          {badge != null && (
-            <span className="ml-2 text-[10px] font-mono text-indigo-300 normal-case">{badge}</span>
-          )}
-        </span>
-        <i className={`fa-solid fa-chevron-${open ? 'up' : 'down'} text-cat-overlay text-[10px]`} />
-      </button>
+      <div className="w-full flex items-center justify-between px-3 py-2 bg-cat-base/50 hover:bg-cat-base">
+        <button
+          type="button"
+          onClick={() => setOpen(!open)}
+          className="flex-1 flex items-center text-left min-w-0"
+        >
+          <span className="text-xs font-bold uppercase tracking-wider text-cat-subtext">
+            {title}
+            {badge != null && (
+              <span className="ml-2 text-[10px] font-mono text-indigo-300 normal-case">{badge}</span>
+            )}
+          </span>
+        </button>
+        <div className="flex items-center gap-1 shrink-0">
+          {headerExtra}
+          <button
+            type="button"
+            onClick={() => setOpen(!open)}
+            className="text-cat-overlay text-[10px] px-1"
+            aria-label={open ? 'Collapse' : 'Expand'}
+          >
+            <i className={`fa-solid fa-chevron-${open ? 'up' : 'down'}`} />
+          </button>
+        </div>
+      </div>
       {open && <div className="p-3">{children}</div>}
     </div>
   )
@@ -327,6 +344,7 @@ export default function TaskDetailModal({
   onApprove,
   onResolveUser,
   onDiscussWithAgent,
+  onClarifyWithPo,
   onSplit,
   onInjectToolEvidence,
   defaultInjectCommand = '',
@@ -523,16 +541,21 @@ export default function TaskDetailModal({
       <div className="flex flex-col h-full min-h-0">
         <div className="sticky top-0 z-10 bg-cat-surface0 border-b border-cat-surface1 px-5 py-3 flex items-center justify-between shrink-0">
           <div className="min-w-0 flex-1 pr-4">
-            {editing ? (
-              <input
-                type="text"
-                value={title}
-                onChange={(e) => setTitle(e.target.value)}
-                className="text-base font-bold text-white bg-cat-base border border-cat-surface1 rounded px-2 py-1 w-full"
-              />
-            ) : (
-              <h3 className="text-base font-bold text-white truncate">{safeTask.title}</h3>
-            )}
+            <div className="flex items-start gap-1 min-w-0">
+              {editing ? (
+                <input
+                  type="text"
+                  value={title}
+                  onChange={(e) => setTitle(e.target.value)}
+                  className="text-base font-bold text-white bg-cat-base border border-cat-surface1 rounded px-2 py-1 w-full min-w-0"
+                />
+              ) : (
+                <h3 className="text-base font-bold text-white truncate min-w-0 flex-1">
+                  {safeTask.title}
+                </h3>
+              )}
+              <FieldHistoryButton taskId={task.id} field="title" className="mt-1" />
+            </div>
             <p className="text-[10px] text-indigo-300 font-mono mt-0.5">
               {task.id} · {taskLane ?? task.status}
               {task.priority != null && ` · P${task.priority}`}
@@ -703,7 +726,11 @@ export default function TaskDetailModal({
               </div>
             </div>
           )}
-          <CollapsibleSection title="Description" defaultOpen>
+          <CollapsibleSection
+            title="Description"
+            defaultOpen
+            headerExtra={<FieldHistoryButton taskId={task.id} field="description" />}
+          >
             {editing ? (
               <textarea
                 value={description}
@@ -715,9 +742,23 @@ export default function TaskDetailModal({
                 {formatTaskText(task.description)}
               </p>
             )}
+            {onClarifyWithPo && (
+              <button
+                type="button"
+                data-testid="clarify-with-po"
+                onClick={() => onClarifyWithPo(task)}
+                className="mt-2 w-full bg-amber-950/40 hover:bg-amber-950/60 text-amber-100 text-[11px] py-1.5 px-3 rounded-lg border border-amber-500/30"
+              >
+                Clarify description with PO…
+              </button>
+            )}
           </CollapsibleSection>
 
-          <CollapsibleSection title="Specification (SDD)" defaultOpen={editing}>
+          <CollapsibleSection
+            title="Specification (SDD)"
+            defaultOpen={editing}
+            headerExtra={<FieldHistoryButton taskId={task.id} field="sdd" />}
+          >
             {(safeTask.sddInheritedFromFeature?.length ?? 0) > 0 && (
               <p className="text-[10px] text-violet-300/90 mb-2 font-mono">
                 Inherited from feature {safeTask.featureId}:{' '}
@@ -920,7 +961,12 @@ export default function TaskDetailModal({
             )
           })()}
 
-          <CollapsibleSection title="Acceptance Criteria (QA)" badge={acList.length} defaultOpen>
+          <CollapsibleSection
+            title="Acceptance Criteria (QA)"
+            badge={acList.length}
+            defaultOpen
+            headerExtra={<FieldHistoryButton taskId={task.id} field="acceptanceCriteria" />}
+          >
             <p className="text-[10px] text-cat-overlay mb-2">
               For the QA agent / Done gate — check off when verifying the card.
             </p>

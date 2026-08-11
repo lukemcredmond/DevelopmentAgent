@@ -276,6 +276,46 @@ export async function updateTask(
   })
 }
 
+export type TaskFieldHistoryField = 'title' | 'description' | 'acceptanceCriteria' | 'sdd'
+
+export interface TaskFieldHistoryEntry {
+  id: string
+  field: string
+  timestamp: string
+  source: string
+  preview: string
+}
+
+export async function fetchTaskFieldHistory(
+  taskId: string,
+  field: TaskFieldHistoryField,
+  limit = 40,
+): Promise<{ ok: boolean; taskId: string; field: string; entries: TaskFieldHistoryEntry[] }> {
+  const qs = new URLSearchParams({ field, limit: String(limit) })
+  return request(
+    `/api/tasks/${encodeURIComponent(taskId)}/field-history?${qs.toString()}`,
+  )
+}
+
+export async function fetchTaskFieldHistoryEntry(
+  taskId: string,
+  entryId: string,
+): Promise<{
+  ok: boolean
+  entry: {
+    id: string
+    taskId: string
+    field: string
+    value: string
+    source: string
+    timestamp: string
+  }
+}> {
+  return request(
+    `/api/tasks/${encodeURIComponent(taskId)}/field-history/${encodeURIComponent(entryId)}`,
+  )
+}
+
 export async function focusAdvanceTask(taskId: string): Promise<AppState> {
   return request<AppState>(`/api/tasks/${encodeURIComponent(taskId)}/focus-advance`, {
     method: 'POST',

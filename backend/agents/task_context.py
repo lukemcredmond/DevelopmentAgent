@@ -920,10 +920,29 @@ def apply_po_clarification(
     if not task:
         return
     normalize_task(task)
+    before = {
+        "title": task.get("title"),
+        "description": task.get("description"),
+        "acceptanceCriteria": list(task.get("acceptanceCriteria") or []),
+        "userStory": task.get("userStory"),
+        "scope": task.get("scope"),
+        "outOfScope": task.get("outOfScope"),
+        "testPlan": task.get("testPlan"),
+    }
+    changed: List[str] = []
     if description:
         task["description"] = description
+        changed.append("description")
     if acceptance_criteria:
         task["acceptanceCriteria"] = acceptance_criteria
+        changed.append("acceptanceCriteria")
+    if changed:
+        try:
+            from backend.services.task_field_history import record_task_fields_from_update
+
+            record_task_fields_from_update(task, before=before, source="po", changed_keys=changed)
+        except Exception:
+            pass
 
 
 def sort_backlog() -> None:
