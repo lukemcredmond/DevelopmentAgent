@@ -14,7 +14,7 @@ __pycache__/
 .pytest_cache/
 
 
-
+SampleDiagnostics_extracted/
 venv/
 scrum_memory.db
 backend/__pycache__/__init__.cpython-312.pyc
