@@ -13,6 +13,24 @@ from backend.services.step_diagnostics import log_event
 from backend.services.workflow_settings import get_workflow_settings
 from backend.workspace.files import derive_project_lint_command
 
+# Agent results that should not start another expensive fix-verify round.
+_HARD_STOP_MARKERS = (
+    "stopped:",
+    "max tool iterations",
+    "timed out:",
+    "simulation_fallback",
+    "fix-verify aborted",
+)
+
+
+def _is_hard_stop_result(result: str) -> bool:
+    lower = (result or "").strip().lower()
+    if not lower:
+        return False
+    if lower == "simulation_fallback":
+        return True
+    return any(lower.startswith(m) or m in lower[:80] for m in _HARD_STOP_MARKERS)
+
 
 def run_fix_verify_loop(
     agent,
@@ -28,10 +46,16 @@ def run_fix_verify_loop(
 
     lint_cmd = derive_project_lint_command()
     if not lint_cmd:
+        add_system_log(
+            "Developer",
+            "warning",
+            "Fix-verify enabled but no project lint command detected — running single Dev step",
+        )
         return agent.execute_step(user_prompt, max_iterations=max_iterations)
 
-    max_rounds = max(1, int(ws.get("maxFixVerifyRounds", 3)))
+    max_rounds = max(1, int(ws.get("maxFixVerifyRounds", 2)))
     max_keep = max(0, int(ws.get("maxInCardLintFixes", 5)))
+    abort_on_hard = bool(ws.get("fixVerifyAbortOnHardStop", True))
     task_id = str(task.get("id") or "")
     prompt = user_prompt
     last_result = ""
@@ -59,6 +83,16 @@ def run_fix_verify_loop(
             )
             log_event("fix_verify_start", f"round {round_num}/{max_rounds}")
             last_result = agent.execute_step(prompt, max_iterations=iterations_per_round)
+
+            if abort_on_hard and _is_hard_stop_result(last_result):
+                add_system_log(
+                    "Developer",
+                    "warning",
+                    f"Fix-verify aborted after hard stop on round {round_num}: "
+                    f"{(last_result or '')[:160]}",
+                )
+                log_event("fix_verify_done", f"aborted_hard_stop round={round_num}")
+                return last_result
 
             lint_started = time.time()
             cmd_result = run_workspace_command(lint_cmd)
@@ -122,13 +156,15 @@ def run_fix_verify_loop(
                     f"\nLeftover project lint was split into related Backlog card(s): "
                     f"{', '.join(spawned)}. Do not chase those on this card.\n"
                 )
-            # Strip prior fix-verify observe blocks so rounds do not accumulate.
+            # Strip prior fix-verify observe blocks so rounds do not accumulate history.
             base = user_prompt
-            marker = "=== OBSERVE (fix-verify round"
-            if marker in base:
-                base = base.split(marker)[0].rstrip()
-            if "=== FIX-VERIFY ROUND" in base:
-                base = base.split("=== FIX-VERIFY ROUND")[0].rstrip()
+            for marker in (
+                "=== OBSERVE (fix-verify round",
+                "=== FIX-VERIFY ROUND",
+                "=== OBSERVE (fix-verify",
+            ):
+                if marker in base:
+                    base = base.split(marker)[0].rstrip()
             prompt = (
                 f"{base}\n\n"
                 f"=== OBSERVE (fix-verify round {round_num}/{max_rounds}) ===\n"

@@ -281,6 +281,31 @@ def _outcome_stop_reason(
     )
 
 
+def _provisional_dev_exit_reason(
+    agent_result: Optional[str],
+    *,
+    lane_before: str,
+) -> str:
+    """Exit reason before any lane move — used to block unhealthy QA/CR promotion."""
+    from backend.services.sprint_speed_gates import provisional_dev_exit_reason
+    from backend.services.step_diagnostics import get_active_trace
+
+    trace = get_active_trace()
+    tools = set(trace.tools_used) if trace else set()
+    return provisional_dev_exit_reason(
+        agent_result=agent_result,
+        tools_used=tools,
+        lane_before=lane_before,
+        lane_after=lane_before,
+    )
+
+
+def _dev_unhealthy_exit_blocks_advance(exit_reason: Optional[str]) -> bool:
+    from backend.services.sprint_speed_gates import unhealthy_exit_blocks_lane_advance
+
+    return unhealthy_exit_blocks_lane_advance(exit_reason)
+
+
 def _outcome_why_card_stayed(
     stop_reason: str,
     *,
@@ -571,7 +596,20 @@ def _record_last_step_outcome(
             "toolsUsed": diag.get("toolsUsed") or [],
             "filePath": diag.get("filePath"),
             "ok": diag.get("ok"),
+            "ollamaCallCount": diag.get("ollamaCallCount")
+            or len(diag.get("ollamaCalls") or []),
         }
+        try:
+            from backend.services.sprint_speed_gates import record_consecutive_bad_exit
+
+            exit_r = str(
+                diag.get("exitReason")
+                or (state.LAST_STEP_OUTCOME or {}).get("exitReason")
+                or ""
+            )
+            record_consecutive_bad_exit(task, exit_r)
+        except Exception:
+            pass
     state.DEV_STEP_READ_ONLY_NO_EDITS = False
     state.DEV_STEP_COMMAND_REPEAT_NO_PROGRESS = False
     state.DEV_STEP_INTERRUPTED = False
@@ -585,10 +623,35 @@ def _finalize_step_diagnostics_if_traced(task_id: str) -> None:
 
 
 def _ensure_dev_step_trace(task_id: str, task_title: str, lane_before: str) -> None:
+    _ensure_step_trace(task_id, task_title, "Developer", lane_before)
+
+
+def _ensure_step_trace(
+    task_id: str,
+    task_title: str,
+    agent: str,
+    lane_before: str,
+) -> None:
     from backend.services.step_diagnostics import get_active_trace, start_step_trace
 
     if get_active_trace() is None:
-        start_step_trace(task_id, task_title, "Developer", lane_before)
+        start_step_trace(task_id, task_title, agent, lane_before)
+
+
+def _finalize_role_step_diagnostics(
+    task_id: str,
+    lane_before: str,
+    agent: str,
+    *,
+    agent_result: Optional[str] = None,
+) -> None:
+    """Record outcome + finalize step JSON for any sprint role (Dev/PO/CR/QA)."""
+    try:
+        _record_last_step_outcome(
+            task_id, lane_before, agent, agent_result=agent_result
+        )
+    except Exception:
+        pass
 
 
 def _start_sprint_session(
@@ -924,6 +987,14 @@ def _check_stuck_and_escalate(
         task["stuckLoops"] = 0
         task.pop("autoExtendUsed", None)
         task.pop("lastStepOutcome", None)
+        task["consecutiveBadExits"] = 0
+        task.pop("lastCircuitExitReason", None)
+        try:
+            from backend.services.sprint_speed_gates import clear_patch_fingerprint
+
+            clear_patch_fingerprint(task)
+        except Exception:
+            pass
         try:
             from backend.agents.tool_fingerprints import clear_fingerprint_escalation_state
 
@@ -945,6 +1016,26 @@ def _check_stuck_and_escalate(
         return
 
     task["stuckLoops"] = int(task.get("stuckLoops", 0)) + 1
+
+    # Circuit breaker: identical patch fails / consecutive unhealthy exits escalate early.
+    try:
+        from backend.services.sprint_speed_gates import circuit_breaker_should_trip
+
+        trip, trip_reason = circuit_breaker_should_trip(task)
+        if trip:
+            ws_cb = get_workflow_settings()
+            max_stuck_cb = int(ws_cb.get("maxStuckSteps", 3))
+            task["stuckLoops"] = max_stuck_cb
+            record_task_decision(
+                task_id,
+                "System",
+                "stuck_circuit_breaker",
+                trip_reason,
+                "Stopping endless In Progress retries — split or escalate.",
+            )
+            add_system_log("System", "warning", f"{task_id}: {trip_reason}")
+    except Exception:
+        pass
 
     # Arm backup model for the next step(s) on reasoning/tool-use stuck (not lint walls).
     key = agent_key
@@ -1342,25 +1433,51 @@ def _inject_sprint_context(
         top_k_override = None
         if local_slm:
             top_k_override = min(max(1, int(ws.get("semanticSprintTopK") or 5)), 2)
-        semantic_block, sem_paths = build_semantic_sprint_context(
-            active_task,
-            max_chars=budgets["semantic"],
-            top_k_override=top_k_override,
-        )
-        graph_block = ""
-        try:
-            from backend.services.graphify_service import build_graphify_sprint_context, graphify_status
 
-            if graphify_status().get("available") or graphify_status().get("reportExists"):
-                graph_block = build_graphify_sprint_context(
-                    active_task,
-                    max_chars=budgets["graph"],
+        def _build_semantic():
+            return build_semantic_sprint_context(
+                active_task,
+                max_chars=budgets["semantic"],
+                top_k_override=top_k_override,
+            )
+
+        def _build_graph():
+            try:
+                from backend.services.graphify_service import (
+                    build_graphify_sprint_context,
+                    graphify_status,
                 )
-                graph_used = bool(graph_block)
-        except Exception:
-            graph_block = ""
+
+                if graphify_status().get("available") or graphify_status().get("reportExists"):
+                    return build_graphify_sprint_context(
+                        active_task,
+                        max_chars=budgets["graph"],
+                    )
+            except Exception:
+                return ""
+            return ""
+
+        # Parallelize independent context builders (semantic + graph), then file budget.
+        from concurrent.futures import ThreadPoolExecutor
+
+        with ThreadPoolExecutor(max_workers=2) as pool:
+            fut_sem = pool.submit(_build_semantic)
+            fut_graph = pool.submit(_build_graph)
+            try:
+                semantic_block, sem_paths = fut_sem.result()
+            except Exception:
+                semantic_block, sem_paths = "", []
+            try:
+                graph_block = fut_graph.result() or ""
+            except Exception:
+                graph_block = ""
+        graph_used = bool(graph_block)
         total_budget = budgets["total"]
-        file_budget = max(1000, total_budget - len(semantic_block) - len(graph_block)) if (semantic_block or graph_block) else total_budget
+        file_budget = (
+            max(1000, total_budget - len(semantic_block) - len(graph_block))
+            if (semantic_block or graph_block)
+            else total_budget
+        )
         file_block, file_paths = build_sprint_file_context(active_task, max_chars=file_budget)
         context_block = "".join(part for part in (semantic_block, graph_block, file_block) if part)
     paths = list(dict.fromkeys([*sem_paths, *file_paths]))
@@ -2969,100 +3086,108 @@ def _run_refinement_po_update(active_task: Dict[str, Any], brief: str) -> None:
 def _run_po_clarification(active_task: Dict[str, Any], brief: str) -> None:
     task_id = active_task["id"]
     lane_before = get_task_lane(task_id) or "Needs PO"
+    title = str(active_task.get("title", task_id))
     set_active_sprint_context(task_id, "Product Owner")
+    _ensure_step_trace(task_id, title, "Product Owner", lane_before)
+    result = ""
     try:
-        from backend.services.backup_model import apply_model_for_step
+        try:
+            from backend.services.backup_model import apply_model_for_step
 
-        apply_model_for_step(agent_po, "po", find_task_by_id(task_id) or active_task)
-    except Exception:
-        pass
-    add_system_log("Product Owner", "info", f"Clarifying '{active_task['title']}'…")
-    task_for_prompt = find_task_by_id(task_id) or active_task
-    prompt = (
-        build_task_prompt(task_for_prompt, brief)
-        + _po_clarification_retry_prompt_block(task_for_prompt)
-        + "\nDeveloper needs clarification. Reply with a JSON object: "
-        '{"description": "...", "acceptanceCriteria": ["..."], "briefAddition": "..."}\n'
-        "Then use update_board to move back to 'In Progress'."
-    )
-    result = agent_po.execute_step(prompt, max_iterations=_llm_iterations())
+            apply_model_for_step(agent_po, "po", find_task_by_id(task_id) or active_task)
+        except Exception:
+            pass
+        add_system_log("Product Owner", "info", f"Clarifying '{active_task['title']}'…")
+        task_for_prompt = find_task_by_id(task_id) or active_task
+        prompt = (
+            build_task_prompt(task_for_prompt, brief)
+            + _po_clarification_retry_prompt_block(task_for_prompt)
+            + "\nDeveloper needs clarification. Reply with a JSON object: "
+            '{"description": "...", "acceptanceCriteria": ["..."], "briefAddition": "..."}\n'
+            "Then use update_board to move back to 'In Progress'."
+        )
+        result = agent_po.execute_step(prompt, max_iterations=_llm_iterations())
 
-    with state.STATE_LOCK:
-        task = find_task_by_id(task_id)
-        if not task:
-            return
-        clarified = False
-        deferred_sim = False
-        if result == "SIMULATION_FALLBACK":
-            from backend.services.simulation_gate import (
-                build_proposal,
-                mark_step_outcome_simulation_pending,
-                try_defer_simulation,
-            )
-
-            prop = build_proposal(
-                kind="po_clarification",
-                task_id=task_id,
-                agent="Product Owner",
-                title=str(task.get("title") or task_id),
-                summary="Record offline PO clarification decision",
-                default_preview={"note": "Offline clarification"},
-                source="po_clarification",
-            )
-            if try_defer_simulation(prop):
-                deferred_sim = True
-                mark_step_outcome_simulation_pending(task_id, "Product Owner", lane_before)
-            else:
-                record_task_decision(task_id, "Product Owner", "clarification", "Offline clarification")
-                clarified = True
-        else:
-            obj = extract_json_object_from_text(result)
-            if obj and (obj.get("description") or obj.get("acceptanceCriteria")):
-                record_task_decision(task_id, "Product Owner", "clarification", result[:500], result)
-            elif result and result.strip():
-                record_task_decision(
-                    task_id,
-                    "Product Owner",
-                    "clarification_incomplete",
-                    result[:500],
-                    result,
+        with state.STATE_LOCK:
+            task = find_task_by_id(task_id)
+            if not task:
+                return
+            clarified = False
+            deferred_sim = False
+            if result == "SIMULATION_FALLBACK":
+                from backend.services.simulation_gate import (
+                    build_proposal,
+                    mark_step_outcome_simulation_pending,
+                    try_defer_simulation,
                 )
-            clarified = _apply_po_clarification_result(task, result)
-        if not deferred_sim and _task_in_lane(task_id, "Needs PO"):
-            if clarified:
-                ws = get_workflow_settings()
-                if (
-                    ws.get("requireBacklogRefinement")
-                    and int(task.get("refinementRoundTrips") or 0) > 0
-                    and not task.get("refinementComplete")
-                ):
-                    move_board_stage(task_id, "Refinement")
-                    task["refinementStatus"] = "po_updated"
-                    publish_activity(
-                        task_id,
-                        "po_clarified",
-                        "PO clarified refinement blockers — returned to Refinement",
-                        role="assistant",
-                        agent="Product Owner",
-                        lane="Refinement",
-                    )
+
+                prop = build_proposal(
+                    kind="po_clarification",
+                    task_id=task_id,
+                    agent="Product Owner",
+                    title=str(task.get("title") or task_id),
+                    summary="Record offline PO clarification decision",
+                    default_preview={"note": "Offline clarification"},
+                    source="po_clarification",
+                )
+                if try_defer_simulation(prop):
+                    deferred_sim = True
+                    mark_step_outcome_simulation_pending(task_id, "Product Owner", lane_before)
                 else:
-                    move_board_stage(task_id, "In Progress")
-                    publish_activity(
-                        task_id,
-                        "po_clarified",
-                        "PO clarified requirements and returned task to Dev",
-                        role="assistant",
-                        agent="Product Owner",
-                        lane="In Progress",
-                    )
+                    record_task_decision(task_id, "Product Owner", "clarification", "Offline clarification")
+                    clarified = True
             else:
-                add_system_log(
-                    "Product Owner",
-                    "warning",
-                    f"Clarification incomplete for '{task['title']}' — card stays in Needs PO",
-                )
-        _check_stuck_and_escalate(task_id, lane_before, agent_key="po")
+                obj = extract_json_object_from_text(result)
+                if obj and (obj.get("description") or obj.get("acceptanceCriteria")):
+                    record_task_decision(task_id, "Product Owner", "clarification", result[:500], result)
+                elif result and result.strip():
+                    record_task_decision(
+                        task_id,
+                        "Product Owner",
+                        "clarification_incomplete",
+                        result[:500],
+                        result,
+                    )
+                clarified = _apply_po_clarification_result(task, result)
+            if not deferred_sim and _task_in_lane(task_id, "Needs PO"):
+                if clarified:
+                    ws = get_workflow_settings()
+                    if (
+                        ws.get("requireBacklogRefinement")
+                        and int(task.get("refinementRoundTrips") or 0) > 0
+                        and not task.get("refinementComplete")
+                    ):
+                        move_board_stage(task_id, "Refinement")
+                        task["refinementStatus"] = "po_updated"
+                        publish_activity(
+                            task_id,
+                            "po_clarified",
+                            "PO clarified refinement blockers — returned to Refinement",
+                            role="assistant",
+                            agent="Product Owner",
+                            lane="Refinement",
+                        )
+                    else:
+                        move_board_stage(task_id, "In Progress")
+                        publish_activity(
+                            task_id,
+                            "po_clarified",
+                            "PO clarified requirements and returned task to Dev",
+                            role="assistant",
+                            agent="Product Owner",
+                            lane="In Progress",
+                        )
+                else:
+                    add_system_log(
+                        "Product Owner",
+                        "warning",
+                        f"Clarification incomplete for '{task['title']}' — card stays in Needs PO",
+                    )
+            _check_stuck_and_escalate(task_id, lane_before, agent_key="po")
+    finally:
+        _finalize_role_step_diagnostics(
+            task_id, lane_before, "Product Owner", agent_result=result or None
+        )
 
 
 def _run_developer_step(active_task: Dict[str, Any], brief: str) -> None:
@@ -3121,7 +3246,17 @@ def _run_developer_step(active_task: Dict[str, Any], brief: str) -> None:
                 "autonomous_suffix": _autonomous_instruction_suffix(),
             },
         )
-        prompt = _inject_sprint_context(active_task, brief, "Developer", instructions)
+        # Prefer prefetched context from parallel independent-card pipeline when present.
+        prompt = None
+        fresh_for_cache = find_task_by_id(task_id) or active_task
+        cached = None
+        if isinstance(fresh_for_cache, dict):
+            cached = fresh_for_cache.pop("_cachedDevSprintPrompt", None)
+        if isinstance(cached, str) and cached.strip():
+            prompt = cached
+            add_system_log("Developer", "info", f"{task_id}: using prefetched sprint context")
+        if not prompt:
+            prompt = _inject_sprint_context(active_task, brief, "Developer", instructions)
         from backend.services.fix_verify_loop import run_fix_verify_loop
 
         result = run_fix_verify_loop(
@@ -3166,7 +3301,27 @@ def _run_developer_step(active_task: Dict[str, Any], brief: str) -> None:
                     try_defer_simulation,
                 )
 
-                if apply_dev_offline_if_file_exists(task, task_id=task_id, lane_before=lane_before):
+                # Do not promote incomplete work to QA when Ollama died mid-step.
+                if _dev_unhealthy_exit_blocks_advance("ollama_fallback"):
+                    add_system_log(
+                        "Developer",
+                        "warning",
+                        f"{task_id}: Ollama unavailable — staying In Progress "
+                        "(unhealthy exit gate; set forceCompleteOnUnhealthyExit to override)",
+                    )
+                    preview = preview_sprint_dev(task)
+                    prop = build_proposal(
+                        kind="sprint_dev",
+                        task_id=task_id,
+                        agent="Developer",
+                        title=str(task.get("title") or task_id),
+                        summary=dev_simulation_summary(task),
+                        default_preview=preview,
+                        source="sprint_dev",
+                    )
+                    if try_defer_simulation(prop):
+                        mark_step_outcome_simulation_pending(task_id, "Developer", lane_before)
+                elif apply_dev_offline_if_file_exists(task, task_id=task_id, lane_before=lane_before):
                     result = "Used existing workspace file (Ollama offline)"
                 else:
                     preview = preview_sprint_dev(task)
@@ -3229,7 +3384,15 @@ def _run_developer_step(active_task: Dict[str, Any], brief: str) -> None:
                             )
                     else:
                         fresh = find_task_by_id(task_id)
-                        if fresh and _task_has_write_files(fresh):
+                        exit_reason = _provisional_dev_exit_reason(result, lane_before=lane_before)
+                        if fresh and _dev_unhealthy_exit_blocks_advance(exit_reason):
+                            add_system_log(
+                                "Developer",
+                                "warning",
+                                f"{task_id}: blocked lane advance — unhealthy exit "
+                                f"'{exit_reason}' (staying In Progress)",
+                            )
+                        elif fresh and _task_has_write_files(fresh):
                             blocked, reason = dev_gate_blocks_advance(fresh)
                             if blocked:
                                 add_system_log("Developer", "warning", f"{task_id}: {reason}")
@@ -3327,156 +3490,172 @@ def _run_developer_step(active_task: Dict[str, Any], brief: str) -> None:
 def _run_code_review_step(active_task: Dict[str, Any], brief: str) -> None:
     task_id = active_task["id"]
     lane_before = get_task_lane(task_id) or "Code Review"
+    title = str(active_task.get("title", task_id))
     _mark_sprint_step_start()
     set_active_sprint_context(task_id, "Code Reviewer")
+    _ensure_step_trace(task_id, title, "Code Reviewer", lane_before)
+    result = ""
     try:
-        from backend.services.backup_model import apply_model_for_step
+        try:
+            from backend.services.backup_model import apply_model_for_step
 
-        apply_model_for_step(agent_cr, "cr", find_task_by_id(task_id) or active_task)
-    except Exception:
-        pass
-    add_system_log("Code Reviewer", "info", f"Reviewing '{active_task['title']}'…")
-    from backend.services.prompt_defaults import get_effective_step_instructions
+            apply_model_for_step(agent_cr, "cr", find_task_by_id(task_id) or active_task)
+        except Exception:
+            pass
+        add_system_log("Code Reviewer", "info", f"Reviewing '{active_task['title']}'…")
+        from backend.services.prompt_defaults import get_effective_step_instructions
 
-    instructions = get_effective_step_instructions("Code Reviewer", get_workflow_settings(), {})
-    prompt = _inject_sprint_context(active_task, brief, "Code Reviewer", instructions)
-    result = agent_cr.execute_step(prompt, max_iterations=_llm_iterations())
+        instructions = get_effective_step_instructions("Code Reviewer", get_workflow_settings(), {})
+        prompt = _inject_sprint_context(active_task, brief, "Code Reviewer", instructions)
+        result = agent_cr.execute_step(prompt, max_iterations=_llm_iterations())
 
-    with state.STATE_LOCK:
-        if not find_task_by_id(task_id):
-            return
-        if result == "SIMULATION_FALLBACK":
+        with state.STATE_LOCK:
+            if not find_task_by_id(task_id):
+                return
+            if result == "SIMULATION_FALLBACK":
+                task = find_task_by_id(task_id)
+                if task:
+                    from backend.services.simulation_gate import (
+                        build_proposal,
+                        mark_step_outcome_simulation_pending,
+                        preview_sprint_cr,
+                        try_defer_simulation,
+                    )
+
+                    preview = preview_sprint_cr()
+                    prop = build_proposal(
+                        kind="sprint_cr",
+                        task_id=task_id,
+                        agent="Code Reviewer",
+                        title=str(task.get("title") or task_id),
+                        summary="Offline code review: random pass to QA or fail to In Progress",
+                        default_preview=preview,
+                        source="sprint_cr",
+                    )
+                    if try_defer_simulation(prop):
+                        mark_step_outcome_simulation_pending(task_id, "Code Reviewer", lane_before)
+                    else:
+                        _simulate_code_review(task)
+            else:
+                record_task_decision(task_id, "Code Reviewer", "review", result[:500], result)
+                if _task_in_lane(task_id, "Code Review"):
+                    move_board_stage(task_id, "QA")
             task = find_task_by_id(task_id)
             if task:
-                from backend.services.simulation_gate import (
-                    build_proposal,
-                    mark_step_outcome_simulation_pending,
-                    preview_sprint_cr,
-                    try_defer_simulation,
+                _log_sprint_step_outcome(
+                    "Code Reviewer", task_id, task.get("title", task_id), lane_before, result
                 )
-
-                preview = preview_sprint_cr()
-                prop = build_proposal(
-                    kind="sprint_cr",
-                    task_id=task_id,
-                    agent="Code Reviewer",
-                    title=str(task.get("title") or task_id),
-                    summary="Offline code review: random pass to QA or fail to In Progress",
-                    default_preview=preview,
-                    source="sprint_cr",
-                )
-                if try_defer_simulation(prop):
-                    mark_step_outcome_simulation_pending(task_id, "Code Reviewer", lane_before)
-                else:
-                    _simulate_code_review(task)
-        else:
-            record_task_decision(task_id, "Code Reviewer", "review", result[:500], result)
-            if _task_in_lane(task_id, "Code Review"):
-                move_board_stage(task_id, "QA")
-        task = find_task_by_id(task_id)
-        if task:
-            _log_sprint_step_outcome(
-                "Code Reviewer", task_id, task.get("title", task_id), lane_before, result
-            )
-        _check_stuck_and_escalate(task_id, lane_before, agent_key="cr")
+            _check_stuck_and_escalate(task_id, lane_before, agent_key="cr")
+    finally:
+        _finalize_role_step_diagnostics(
+            task_id, lane_before, "Code Reviewer", agent_result=result or None
+        )
 
 
 def _run_qa_step(active_task: Dict[str, Any], brief: str) -> None:
     task_id = active_task["id"]
     lane_before = get_task_lane(task_id) or "QA"
+    title = str(active_task.get("title", task_id))
     step_started = _mark_sprint_step_start()
     set_active_sprint_context(task_id, "QA Tester")
+    _ensure_step_trace(task_id, title, "QA Tester", lane_before)
+    result = ""
     try:
-        from backend.services.backup_model import apply_model_for_step
+        try:
+            from backend.services.backup_model import apply_model_for_step
 
-        apply_model_for_step(agent_qa, "qa", find_task_by_id(task_id) or active_task)
-    except Exception:
-        pass
-    add_system_log("QA Tester", "info", f"Validating '{active_task['title']}'…")
+            apply_model_for_step(agent_qa, "qa", find_task_by_id(task_id) or active_task)
+        except Exception:
+            pass
+        add_system_log("QA Tester", "info", f"Validating '{active_task['title']}'…")
 
-    playbook = _run_qa_test_playbook(task_id)
-    with state.STATE_LOCK:
-        task_for_evidence = find_task_by_id(task_id)
-        if task_for_evidence:
-            normalize_task(task_for_evidence)
-            task_for_evidence["qaEvidence"] = {
+        playbook = _run_qa_test_playbook(task_id)
+        with state.STATE_LOCK:
+            task_for_evidence = find_task_by_id(task_id)
+            if task_for_evidence:
+                normalize_task(task_for_evidence)
+                task_for_evidence["qaEvidence"] = {
+                    "playbookRun": playbook["run"],
+                    "commands": playbook["commands"],
+                    "passed": playbook["passed"],
+                }
+
+        ac = active_task.get("acceptanceCriteria") or []
+        ac_block = "\n".join(f"- {c}" for c in ac) if ac else "(see description)"
+        from backend.services.prompt_defaults import get_effective_step_instructions
+
+        instructions = get_effective_step_instructions(
+            "QA Tester",
+            get_workflow_settings(),
+            {
+                "ac_block": ac_block,
+                "dod_block": build_dod_block(),
+                "playbook_block": _format_playbook_block(playbook),
+            },
+        )
+        prompt = _inject_sprint_context(active_task, brief, "QA Tester", instructions)
+        result = agent_qa.execute_step(prompt, max_iterations=_llm_iterations())
+
+        with state.STATE_LOCK:
+            task = find_task_by_id(task_id)
+            if not task:
+                return
+            normalize_task(task)
+            passed, fail_reason = (False, "") if result == "SIMULATION_FALLBACK" else _qa_step_passed(
+                task, result, playbook, step_started
+            )
+            task["qaEvidence"] = {
                 "playbookRun": playbook["run"],
                 "commands": playbook["commands"],
-                "passed": playbook["passed"],
+                "passed": passed,
             }
+            from backend.services.card_delivery import update_ac_verification_from_qa
 
-    ac = active_task.get("acceptanceCriteria") or []
-    ac_block = "\n".join(f"- {c}" for c in ac) if ac else "(see description)"
-    from backend.services.prompt_defaults import get_effective_step_instructions
-
-    instructions = get_effective_step_instructions(
-        "QA Tester",
-        get_workflow_settings(),
-        {
-            "ac_block": ac_block,
-            "dod_block": build_dod_block(),
-            "playbook_block": _format_playbook_block(playbook),
-        },
-    )
-    prompt = _inject_sprint_context(active_task, brief, "QA Tester", instructions)
-    result = agent_qa.execute_step(prompt, max_iterations=_llm_iterations())
-
-    with state.STATE_LOCK:
-        task = find_task_by_id(task_id)
-        if not task:
-            return
-        normalize_task(task)
-        passed, fail_reason = (False, "") if result == "SIMULATION_FALLBACK" else _qa_step_passed(
-            task, result, playbook, step_started
-        )
-        task["qaEvidence"] = {
-            "playbookRun": playbook["run"],
-            "commands": playbook["commands"],
-            "passed": passed,
-        }
-        from backend.services.card_delivery import update_ac_verification_from_qa
-
-        update_ac_verification_from_qa(
-            task,
-            passed=passed,
-            commands=list(playbook.get("commands") or []),
-            failure_reason=fail_reason if not passed else "",
-        )
-        if result == "SIMULATION_FALLBACK":
-            from backend.services.simulation_gate import (
-                build_proposal,
-                mark_step_outcome_simulation_pending,
-                preview_sprint_qa,
-                try_defer_simulation,
+            update_ac_verification_from_qa(
+                task,
+                passed=passed,
+                commands=list(playbook.get("commands") or []),
+                failure_reason=fail_reason if not passed else "",
             )
+            if result == "SIMULATION_FALLBACK":
+                from backend.services.simulation_gate import (
+                    build_proposal,
+                    mark_step_outcome_simulation_pending,
+                    preview_sprint_qa,
+                    try_defer_simulation,
+                )
 
-            preview = preview_sprint_qa()
-            prop = build_proposal(
-                kind="sprint_qa",
-                task_id=task_id,
-                agent="QA Tester",
-                title=str(task.get("title") or task_id),
-                summary="Offline QA: random pass to Done or fail to In Progress",
-                default_preview=preview,
-                source="sprint_qa",
-            )
-            if try_defer_simulation(prop):
-                mark_step_outcome_simulation_pending(task_id, "QA Tester", lane_before)
-            else:
-                _simulate_qa(task)
-        else:
-            record_task_decision(task_id, "QA Tester", "qa", result[:500], result)
-            if _task_in_lane(task_id, "QA"):
-                if not passed:
-                    reason = fail_reason if fail_reason else result[:500]
-                    set_qa_failure(task_id, reason, result)
-                    record_task_decision(task_id, "QA Tester", "qa_fail", reason, result)
-                    move_board_stage(task_id, "In Progress")
+                preview = preview_sprint_qa()
+                prop = build_proposal(
+                    kind="sprint_qa",
+                    task_id=task_id,
+                    agent="QA Tester",
+                    title=str(task.get("title") or task_id),
+                    summary="Offline QA: random pass to Done or fail to In Progress",
+                    default_preview=preview,
+                    source="sprint_qa",
+                )
+                if try_defer_simulation(prop):
+                    mark_step_outcome_simulation_pending(task_id, "QA Tester", lane_before)
                 else:
-                    move_board_stage(task_id, "Done")
-                    _commit_on_done(task)
-        _log_sprint_step_outcome("QA Tester", task_id, task.get("title", task_id), lane_before, result)
-        _check_stuck_and_escalate(task_id, lane_before, agent_key="qa")
+                    _simulate_qa(task)
+            else:
+                record_task_decision(task_id, "QA Tester", "qa", result[:500], result)
+                if _task_in_lane(task_id, "QA"):
+                    if not passed:
+                        reason = fail_reason if fail_reason else result[:500]
+                        set_qa_failure(task_id, reason, result)
+                        record_task_decision(task_id, "QA Tester", "qa_fail", reason, result)
+                        move_board_stage(task_id, "In Progress")
+                    else:
+                        move_board_stage(task_id, "Done")
+                        _commit_on_done(task)
+            _log_sprint_step_outcome("QA Tester", task_id, task.get("title", task_id), lane_before, result)
+            _check_stuck_and_escalate(task_id, lane_before, agent_key="qa")
+    finally:
+        _finalize_role_step_diagnostics(
+            task_id, lane_before, "QA Tester", agent_result=result or None
+        )
 
 
 def _sprint_lanes_active() -> List[str]:
@@ -3703,6 +3882,108 @@ def has_sprint_work() -> bool:
                 ):
                     return True
     return False
+
+
+def list_independent_in_progress_cards(limit: int = 2) -> List[Dict[str, Any]]:
+    """In Progress cards with no blockedBy — candidates for parallel context pipeline."""
+    limit = max(1, int(limit or 1))
+    out: List[Dict[str, Any]] = []
+    with state.STATE_LOCK:
+        for task in list(state.SHARED_BOARD.get("In Progress") or []):
+            if not isinstance(task, dict):
+                continue
+            blocked = task.get("blockedBy") or []
+            if blocked:
+                continue
+            out.append(dict(task))
+            if len(out) >= limit:
+                break
+    return out
+
+
+def _prefetch_dev_sprint_context(active_task: Dict[str, Any], brief: str) -> None:
+    """Build Dev prompt off the critical path and stash on the live board task."""
+    task_id = str(active_task.get("id") or "")
+    if not task_id:
+        return
+    try:
+        lint_cmd = derive_project_lint_command()
+        lint_hint = f" (e.g. '{lint_cmd}')" if lint_cmd else ""
+        max_in_card = int(get_workflow_settings().get("maxInCardLintFixes", 5))
+        from backend.services.prompt_defaults import get_effective_step_instructions
+
+        instructions = get_effective_step_instructions(
+            "Developer",
+            get_workflow_settings(),
+            {
+                "lint_hint": lint_hint,
+                "max_in_card_lint": max_in_card,
+                "target_lane": _dev_complete_lane(),
+                "autonomous_suffix": _autonomous_instruction_suffix(),
+            },
+        )
+        prompt = _inject_sprint_context(active_task, brief, "Developer", instructions)
+        with state.STATE_LOCK:
+            live = find_task_by_id(task_id)
+            if live:
+                live["_cachedDevSprintPrompt"] = prompt
+        add_system_log(
+            "Developer",
+            "info",
+            f"Prefetched sprint context for '{active_task.get('title', task_id)}'",
+        )
+    except Exception as exc:
+        add_system_log(
+            "Developer",
+            "warning",
+            f"Prefetch context failed for {task_id}: {type(exc).__name__}",
+        )
+
+
+def _run_parallel_independent_dev_batch(brief: str, ollama_url: str) -> int:
+    """
+    Pipeline independent In Progress cards: prefetch next card's context while
+    the current card runs. Returns number of Dev steps executed (0 if not applicable).
+    """
+    ws = get_workflow_settings()
+    if not ws.get("enableParallelIndependentCards"):
+        return 0
+    # Prefer Needs PO / other handlers first — only batch when Dev is the natural next work.
+    with state.STATE_LOCK:
+        if state.SHARED_BOARD.get("Needs PO"):
+            return 0
+        if ws.get("pauseSprintOnNeedsUser") and state.SHARED_BOARD.get("Needs User"):
+            return 0
+    limit = max(2, int(ws.get("maxParallelDevCards") or 2))
+    cards = list_independent_in_progress_cards(limit=limit)
+    if len(cards) < 2:
+        return 0
+
+    from concurrent.futures import ThreadPoolExecutor
+
+    agent_dev.ollama_url = ollama_url
+    ran = 0
+    with ThreadPoolExecutor(max_workers=1) as pool:
+        for idx, card in enumerate(cards):
+            if state.SPRINT_CANCEL:
+                break
+            next_card = cards[idx + 1] if idx + 1 < len(cards) else None
+            fut = None
+            if next_card is not None:
+                fut = pool.submit(_prefetch_dev_sprint_context, next_card, brief)
+            _run_developer_step(card, brief)
+            ran += 1
+            if fut is not None:
+                try:
+                    fut.result()
+                except Exception:
+                    pass
+    add_system_log(
+        "System",
+        "info",
+        f"Parallel independent card pipeline ran {ran} Dev step(s)",
+    )
+    return ran
 
 
 def run_sprint_step(brief: str, ollama_url: str) -> None:
@@ -4025,14 +4306,72 @@ def run_auto_sprint(brief: str, ollama_url: str, max_steps: int | None = None) -
     refresh_minutes = int(ws.get("autoSprintSessionRefreshMinutes") or 60)
     refresh_sec = max(60, refresh_minutes * 60)
 
+    try:
+        from backend.services.sprint_speed_gates import reset_interrupt_backoff_state
+
+        reset_interrupt_backoff_state()
+    except Exception:
+        pass
+
     while steps < limit and not state.SPRINT_CANCEL:
         with state.STATE_LOCK:
             if not has_sprint_work():
                 status = "idle"
                 break
+        # Back off when prior tick crashed before any Ollama call (interrupt storm).
+        try:
+            from backend.services.sprint_speed_gates import remaining_interrupt_backoff_sec
+
+            wait_sec = remaining_interrupt_backoff_sec()
+            if wait_sec > 0:
+                add_system_log(
+                    "System",
+                    "warning",
+                    f"Auto sprint interrupt backoff — sleeping {wait_sec:.1f}s before next step",
+                )
+                slept = 0.0
+                while slept < wait_sec and not state.SPRINT_CANCEL:
+                    chunk = min(1.0, wait_sec - slept)
+                    time.sleep(chunk)
+                    slept += chunk
+                if state.SPRINT_CANCEL:
+                    break
+        except Exception:
+            pass
         state.SPRINT_PROGRESS_STEP = steps + 1
-        run_sprint_step(brief, ollama_url)
-        steps += 1
+        # Optional: pipeline independent In Progress cards (prefetch next while current runs).
+        batch_ran = 0
+        try:
+            batch_ran = _run_parallel_independent_dev_batch(brief, ollama_url)
+        except Exception:
+            batch_ran = 0
+        if batch_ran > 0:
+            steps += batch_ran
+        else:
+            run_sprint_step(brief, ollama_url)
+            steps += 1
+        try:
+            from backend.services.sprint_speed_gates import note_early_interrupt
+
+            outcome = state.LAST_STEP_OUTCOME if isinstance(state.LAST_STEP_OUTCOME, dict) else {}
+            diag = state.LAST_STEP_DIAGNOSTICS if isinstance(state.LAST_STEP_DIAGNOSTICS, dict) else {}
+            delay = note_early_interrupt(
+                exit_reason=str(outcome.get("exitReason") or diag.get("exitReason") or ""),
+                ollama_call_count=int(
+                    diag.get("ollamaCallCount")
+                    or len(diag.get("ollamaCalls") or [])
+                    or 0
+                ),
+                duration_ms=int(diag.get("durationMs") or 0),
+            )
+            if delay > 0:
+                add_system_log(
+                    "System",
+                    "warning",
+                    f"Early interrupted step (0 Ollama calls) — next backoff {delay:.1f}s",
+                )
+        except Exception:
+            pass
         if refresh_enabled and (time.monotonic() - session_start) >= refresh_sec:
             status = "session_refresh"
             add_system_log(

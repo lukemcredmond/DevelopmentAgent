@@ -18,7 +18,10 @@ DEFAULT_WORKFLOW_SETTINGS: Dict[str, Any] = {
     "maxSubtaskDepth": 4,
     "maxSubtaskSpawns": 8,
     "enableFixVerifyLoop": False,
-    "maxFixVerifyRounds": 3,
+    # Keep fix-verify cheap: 2 rounds max by default (was 3).
+    "maxFixVerifyRounds": 2,
+    # Abort further fix-verify rounds on hard agent stops (tool_failure, plan_exhausted, …).
+    "fixVerifyAbortOnHardStop": True,
     # Auto-extend one more chunk of iterations on max_iterations when progress is evident.
     # Off by default — manual Extend remains; auto +4 was a hidden latency tax.
     "autoExtendOnMaxIter": False,
@@ -31,6 +34,22 @@ DEFAULT_WORKFLOW_SETTINGS: Dict[str, Any] = {
     "backupModelStuckSteps": 2,
     # After backup attempts fail at maxStuckSteps: one PO auto-split before Needs PO.
     "enableSplitOnStuck": True,
+    # Block In Progress → QA/CR when step exit is unhealthy (ollama_fallback, max_iterations, …).
+    "forceCompleteOnUnhealthyExit": False,
+    # Circuit breaker: stop endless same-card In Progress retries after N bad exits / identical patches.
+    "enableStuckCircuitBreaker": True,
+    "circuitBreakerMaxBadExits": 3,
+    "circuitBreakerIdenticalPatchFails": 3,
+    # Auto-sprint: backoff when steps interrupt before any Ollama call (crash/retry storms).
+    "enableAutoSprintInterruptBackoff": True,
+    "autoSprintInterruptBackoffSec": 5,
+    "autoSprintInterruptBackoffMaxSec": 120,
+    "interruptEarlyMaxMs": 30000,
+    # Cap Explore→Patch→Verify cycles per card before forcing stuck / split.
+    "maxDevPhaseCyclesPerCard": 12,
+    # Optional: run independent In Progress cards concurrently (workspace write-locked).
+    "enableParallelIndependentCards": False,
+    "maxParallelDevCards": 2,
     "requireWorkspaceStructure": True,
     "autoScaffoldOnStructureGap": True,
     "toolApprovalTools": ["write_file", "run_command", "delete_file"],

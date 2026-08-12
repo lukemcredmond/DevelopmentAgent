@@ -78,6 +78,7 @@ def test_resolve_step_model_falls_back_to_backup():
         "enablePhaseModelRouting": True,
         "devExploreModel": "",
         "devPatchModel": "",
+        "discordModelPresetFast": "qwen2.5-coder:7b",
     }
     model, reason = resolve_step_model(
         role="Developer",
@@ -88,6 +89,31 @@ def test_resolve_step_model_falls_back_to_backup():
     )
     assert model == "coder-backup:7b"
     assert reason == "phase_explore"
+
+
+def test_resolve_step_model_avoids_gemma_for_patch():
+    ws = {
+        "agentEfficiencyMode": "high",
+        "enablePhaseModelRouting": True,
+        "devExploreModel": "",
+        "devPatchModel": "",
+        "discordModelPresetFast": "qwen2.5-coder:7b",
+        "discordModelPresetQuality": "qwen2.5-coder:14b",
+    }
+    explore, _ = resolve_step_model(
+        role="Developer",
+        phase="explore",
+        primary_model="gemma-4-q4km:26b",
+        ws=ws,
+    )
+    assert "gemma" not in explore.lower()
+    patch, _ = resolve_step_model(
+        role="Developer",
+        phase="patch",
+        primary_model="gemma-4-q4km:26b",
+        ws=ws,
+    )
+    assert patch == "qwen2.5-coder:14b"
 
 
 def test_max_tools_per_llm_turn_by_phase():

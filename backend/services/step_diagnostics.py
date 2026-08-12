@@ -896,6 +896,14 @@ def derive_exit_reason(
         lower = agent_result.lower()
         if "identical arguments" in lower or "same arguments" in lower:
             return "duplicate_tool"
+        if "explore tool budget" in lower:
+            return "explore_budget_exhausted"
+        if "patch tool budget" in lower:
+            return "patch_budget_exhausted"
+        if "repeated tool output" in lower or "tool output echo" in lower:
+            return "tool_output_echo"
+        if "identical apply_patch" in lower or "same apply_patch" in lower:
+            return "tool_failure_stop"
         return "tool_failure_stop"
     if agent_result and agent_result.startswith("Max tool iterations"):
         return "max_iterations"

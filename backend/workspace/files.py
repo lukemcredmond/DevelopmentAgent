@@ -821,8 +821,32 @@ def derive_project_lint_command() -> Optional[str]:
     sync_virtual_filesystem_from_disk()
     ws = state.WORKSPACE_DIR
 
-    if os.path.isfile(os.path.join(ws, "pubspec.yaml")):
+    # Flutter / Dart: pubspec at root or one level down (monorepo / app folder).
+    pubspec = os.path.join(ws, "pubspec.yaml")
+    if os.path.isfile(pubspec):
         return "flutter analyze"
+    try:
+        for name in os.listdir(ws):
+            child = os.path.join(ws, name, "pubspec.yaml")
+            if os.path.isfile(child):
+                # Prefer flutter when the SDK is available; else dart analyze.
+                import shutil
+
+                if shutil.which("flutter"):
+                    return f"flutter analyze {name}"
+                if shutil.which("dart"):
+                    return f"dart analyze {name}"
+                return f"flutter analyze {name}"
+    except OSError:
+        pass
+    # Loose .dart files without pubspec — still try dart analyze when available.
+    if any(str(p).endswith(".dart") for p in state.VIRTUAL_FILESYSTEM):
+        import shutil
+
+        if shutil.which("dart"):
+            return "dart analyze"
+        if shutil.which("flutter"):
+            return "flutter analyze"
 
     if _workspace_has_dotnet_project(ws):
         return "dotnet build"

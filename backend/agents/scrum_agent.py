@@ -2116,7 +2116,9 @@ class ScrumAgent:
             apply_batch_to_recovery_state,
             build_patch_recovery_nudge,
             build_patch_recovery_reminder,
+            build_write_file_escalation_nudge,
             failed_apply_patch_paths,
+            failed_patch_fingerprint,
             paths_needing_read_before_patch,
         )
 
@@ -2131,6 +2133,55 @@ class ScrumAgent:
         pending_paths: set = getattr(self, "_patch_recovery_paths", None) or set()
         read_ok: set = getattr(self, "_patch_recovery_read_ok", None) or set()
         injects = int(getattr(self, "_patch_recovery_injects", 0) or 0)
+        identical_counts: dict = getattr(self, "_identical_patch_fail_counts", None) or {}
+
+        # Track identical apply_patch failures; stop after 2 of the same fingerprint.
+        escalate_paths: list = []
+        for name, args, result in recovery_batch:
+            if name != "apply_patch" or bool(getattr(result, "success", False)):
+                continue
+            path = str((args or {}).get("path") or "")
+            fp = failed_patch_fingerprint(
+                path,
+                old_text=str((args or {}).get("old_text") or ""),
+                new_text=str((args or {}).get("new_text") or ""),
+            )
+            identical_counts[fp] = int(identical_counts.get(fp) or 0) + 1
+            if identical_counts[fp] >= 2:
+                escalate_paths.append(path)
+            # Cross-step circuit breaker fingerprint on the card.
+            if task_id:
+                live = find_task_by_id(task_id)
+                if live:
+                    try:
+                        from backend.services.sprint_speed_gates import (
+                            record_failed_patch_fingerprint,
+                        )
+
+                        record_failed_patch_fingerprint(live, fp)
+                    except Exception:
+                        pass
+        self._identical_patch_fail_counts = identical_counts
+        if escalate_paths:
+            unique_paths = list(dict.fromkeys(p for p in escalate_paths if p))
+            stop_msg = (
+                "Stopped: identical apply_patch failed repeatedly on "
+                f"{', '.join(unique_paths)}. Use read_file then write_file with the full file "
+                "instead of retrying the same patch."
+            )
+            messages.append(
+                {
+                    "role": "system",
+                    "content": build_write_file_escalation_nudge(unique_paths),
+                }
+            )
+            add_system_log(self.role, "warning", stop_msg)
+            from backend.services.step_diagnostics import log_event
+
+            log_event("patch_identical_stop", ",".join(unique_paths)[:240])
+            self._log_step_exit(stop_msg, "error")
+            self._finish_run(status="failed", error=stop_msg)
+            return stop_msg
 
         failed_paths = failed_apply_patch_paths(recovery_batch)
         offenders = [
@@ -2372,6 +2423,7 @@ class ScrumAgent:
         self._patch_recovery_paths = set()
         self._patch_recovery_read_ok = set()
         self._patch_recovery_injects = 0
+        self._identical_patch_fail_counts = {}
         self._tool_batch_index = 0
         self._model_switches = 0
         # Prefer project PRIMARY_MODELS over registry init defaults.
@@ -2420,6 +2472,25 @@ class ScrumAgent:
                 steps_on_card=steps_on_card,
                 focus_ac_index=focus_ac_index,
             )
+            # Cycle cap: bail before burning another Ollama step on a non-converging card.
+            graph = self._dev_phase_graph
+            if graph is not None and getattr(graph, "phase", None) == "stuck":
+                if str(getattr(graph, "prior_summary", "") or "") == "cycle_cap" or (
+                    "cycle cap" in str(getattr(graph, "status_text", "") or "").lower()
+                ):
+                    stop_msg = (
+                        f"Stopped: explore tool budget reached without apply_patch/write_file. "
+                        f"Phase cycle cap (cycle {graph.cycle}) — split the card or narrow AC."
+                    )
+                    # Use explore_budget wording so derive_exit_reason / circuit breaker fire.
+                    add_system_log(self.role, "warning", stop_msg)
+                    try:
+                        log_event("dev_phase_cycle_cap", f"cycle={graph.cycle}")
+                    except Exception:
+                        pass
+                    self._log_step_exit(stop_msg, "warning")
+                    self._finish_run(status="failed", error=stop_msg)
+                    return stop_msg
             if task_id:
                 try:
                     from backend.services.task_spec_markdown import ensure_task_spec_for_work

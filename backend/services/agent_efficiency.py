@@ -48,6 +48,9 @@ def resolve_step_model(
     """
     Return (model_name, reason) for this LLM turn.
     Thin hook for future cloud providers — same signature.
+
+    Explore prefers a fast tool-friendly coder; Patch/Verify prefer a reliable
+    tool-calling coder (avoid general chat models like Gemma for patch).
     """
     if ws is None:
         from backend.services.workflow_settings import get_workflow_settings
@@ -57,19 +60,51 @@ def resolve_step_model(
     if role != "Developer" or not phase_model_routing_enabled(ws):
         return primary, "role_primary"
 
+    fast = str(ws.get("discordModelPresetFast") or "").strip() or "qwen2.5-coder:7b"
+    quality = str(ws.get("discordModelPresetQuality") or "").strip() or "qwen2.5-coder:14b"
+
     explore = str(ws.get("devExploreModel") or "").strip()
     if not explore:
-        explore = (backup_model or "").strip() or str(ws.get("discordModelPresetFast") or "").strip()
+        # Prefer explicit fast preset over backup (backup may be another heavy model).
+        explore = fast
+        if backup_model and _is_coder_model(str(backup_model)):
+            # Only use backup for explore when it looks like a small/mid coder.
+            explore = str(backup_model).strip() or explore
     if not explore:
         explore = "qwen2.5-coder:7b"
+    # Never burn a heavy general-chat primary on Explore when a fast coder exists.
+    if _is_heavy_general_model(explore) and fast:
+        explore = fast
 
-    patch = str(ws.get("devPatchModel") or "").strip() or primary
+    patch = str(ws.get("devPatchModel") or "").strip()
+    if not patch:
+        if _is_heavy_general_model(primary) or not _is_coder_model(primary):
+            patch = quality if _is_coder_model(quality) else "qwen2.5-coder:14b"
+        else:
+            patch = primary
+    if not patch:
+        patch = primary
 
     ph = str(phase or "explore").strip().lower()
     if ph in ("explore", ""):
         return explore, "phase_explore"
     # patch / verify / done / stuck → stronger coder (keep warm for verify)
     return patch, f"phase_{ph or 'patch'}"
+
+
+def _is_coder_model(model: str) -> bool:
+    m = (model or "").strip().lower()
+    if not m:
+        return False
+    return any(tok in m for tok in ("coder", "codestral", "deepseek-coder", "starcoder", "qwen2.5-coder"))
+
+
+def _is_heavy_general_model(model: str) -> bool:
+    """True for large general/chat models that are slow and weak at native tool calls."""
+    m = (model or "").strip().lower()
+    if not m or _is_coder_model(m):
+        return False
+    return any(tok in m for tok in ("gemma", "llama3", "llama-3", "mistral", "phi4", "phi-4", "command-r"))
 
 
 def max_tools_per_llm_turn(*, phase: Optional[str] = None, ws: Optional[Dict[str, Any]] = None) -> int:

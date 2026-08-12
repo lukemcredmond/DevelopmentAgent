@@ -109,3 +109,22 @@ def apply_batch_to_recovery_state(
             # Stale read no longer counts after another failed patch.
             next_read.discard(path)
     return next_pending, next_read
+
+
+def failed_patch_fingerprint(path: str, old_text: str = "", new_text: str = "") -> str:
+    """Fingerprint identical apply_patch attempts (path + old/new text)."""
+    from backend.services.sprint_speed_gates import patch_fingerprint
+
+    return patch_fingerprint(path, old_text=old_text or "", summary=(new_text or "")[:200])
+
+
+def build_write_file_escalation_nudge(paths: Iterable[str]) -> str:
+    plist = ", ".join(f"`{normalize_recovery_path(p)}`" for p in paths if normalize_recovery_path(p))
+    if not plist:
+        plist = "(unknown path)"
+    return (
+        f"{PATCH_RECOVERY_MARKER}\n"
+        f"Identical apply_patch failed repeatedly on: {plist}.\n"
+        "Do NOT retry the same apply_patch.\n"
+        "Call read_file for the full file, then write_file with the complete corrected content."
+    )

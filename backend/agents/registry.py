@@ -258,6 +258,7 @@ def _guarded_update_board(task_id: str, target_lane: str, user_question: Optiona
             target_upper = target_lane.strip()
             if target_upper in ("Code Review", "QA", "Done"):
                 from backend.services.subtask_service import subtask_gate_blocks_advance
+                from backend.services.sprint_speed_gates import unhealthy_exit_blocks_lane_advance
 
                 blocked, reason = subtask_gate_blocks_advance(task)
                 if blocked:
@@ -265,6 +266,39 @@ def _guarded_update_board(task_id: str, target_lane: str, user_question: Optiona
                 blocked, reason = dev_gate_blocks_advance(task)
                 if blocked:
                     return f"Error: {reason}"
+                exit_r = ""
+                outcome = task.get("lastStepOutcome") if isinstance(task.get("lastStepOutcome"), dict) else {}
+                diag = (
+                    task.get("lastStepDiagnostics")
+                    if isinstance(task.get("lastStepDiagnostics"), dict)
+                    else {}
+                )
+                exit_r = str(
+                    (outcome or {}).get("exitReason")
+                    or (outcome or {}).get("stopReason")
+                    or (diag or {}).get("exitReason")
+                    or ""
+                )
+                # Live step: prefer active trace provisional reason when present.
+                try:
+                    from backend import state as _st
+                    from backend.services.step_diagnostics import derive_exit_reason, get_active_trace
+
+                    trace = get_active_trace()
+                    if trace and not exit_r:
+                        exit_r = derive_exit_reason(
+                            agent_result=getattr(_st, "LAST_AGENT_STEP_RESULT", None),
+                            tools_used=set(trace.tools_used or []),
+                            lane_before=lane,
+                            lane_after=lane,
+                        )
+                except Exception:
+                    pass
+                if unhealthy_exit_blocks_lane_advance(exit_r):
+                    return (
+                        f"Error: Cannot move to {target_upper} — step exit '{exit_r or 'unhealthy'}' "
+                        "blocks lane advance. Stay In Progress or set forceCompleteOnUnhealthyExit."
+                    )
     return move_board_stage(task_id, target_lane)
 
 

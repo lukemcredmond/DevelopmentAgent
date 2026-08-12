@@ -90,6 +90,39 @@ def test_fix_verify_clean_on_first_round_stops():
     assert agent.execute_step.call_count == 1
 
 
+def test_fix_verify_aborts_on_hard_stop_without_extra_round():
+    initialize()
+    reset_workflow_settings()
+    save_workflow_settings(
+        {
+            "enableFixVerifyLoop": True,
+            "requireCleanLint": True,
+            "maxFixVerifyRounds": 3,
+            "fixVerifyAbortOnHardStop": True,
+        }
+    )
+    task = init_new_task({"id": "T-FV-HARD", "title": "Hard stop", "description": "d"})
+    normalize_task(task)
+    state.SPRINT_CANCEL = False
+    agent = MagicMock()
+    agent.execute_step.return_value = "Stopped: 4 tool failures this step (limit 4)."
+
+    with patch(
+        "backend.services.fix_verify_loop.derive_project_lint_command",
+        return_value="flutter analyze",
+    ), patch(
+        "backend.services.fix_verify_loop.run_workspace_command",
+    ) as lint_mock, patch(
+        "backend.services.fix_verify_loop.find_task_by_id",
+        return_value=task,
+    ):
+        out = run_fix_verify_loop(agent, task, "prompt", max_iterations=4)
+
+    assert "tool failures" in out.lower()
+    assert agent.execute_step.call_count == 1
+    lint_mock.assert_not_called()
+
+
 def test_rrf_hybrid_ranks_expected_path():
     dense = [
         {"path": "src/auth.py", "score": 0.9, "content": "login oauth", "startLine": 1, "endLine": 10},
