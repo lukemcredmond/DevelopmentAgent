@@ -259,6 +259,14 @@ class WorkflowSettingsPayload(BaseModel):
     devExploreMaxTools: Optional[int] = None
     devPatchMaxTools: Optional[int] = None
     devVerifyMaxTools: Optional[int] = None
+    maxDevPhaseCyclesPerCard: Optional[int] = None
+    maxDevStepsPerCard: Optional[int] = None
+    forceCompleteOnUnhealthyExit: Optional[bool] = None
+    enableStuckCircuitBreaker: Optional[bool] = None
+    circuitBreakerMaxBadExits: Optional[int] = None
+    circuitBreakerIdenticalPatchFails: Optional[int] = None
+    enableZeroWorkRetryWatchdog: Optional[bool] = None
+    zeroWorkRetryWatchdogMax: Optional[int] = None
     agentEfficiencyMode: Optional[str] = None
     enablePhaseModelRouting: Optional[bool] = None
     devExploreModel: Optional[str] = None

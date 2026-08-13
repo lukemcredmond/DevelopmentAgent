@@ -173,8 +173,6 @@ def advance_focus(task: Dict[str, Any]) -> bool:
 def should_block_lane_advance_for_focus(task: Dict[str, Any]) -> bool:
     if not dev_micro_steps_enabled(task):
         return False
-    if focus_cap_reached(task):
-        return False
     return not all_focus_slices_done(task)
 
 
@@ -186,7 +184,16 @@ def focus_advance_after_step(task: Dict[str, Any], agent_result: str) -> None:
 
         append_working_context(task, kind="focus", summary=summary_line)
     if micro_step_complete(task, agent_result):
-        advance_focus(task)
+        advanced = advance_focus(task)
+        if advanced:
+            from datetime import datetime
+
+            task["lastFocusSliceCompletedAt"] = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+    if focus_cap_reached(task) and not all_focus_slices_done(task):
+        task["focusRecoveryRequired"] = True
+        task["focusRecoveryReason"] = (
+            f"Focus step cap reached ({task.get('focusStepsRun')}); unfinished slices remain"
+        )
 
 
 def reset_focus(task: Dict[str, Any]) -> None:

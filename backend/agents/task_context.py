@@ -203,6 +203,10 @@ def is_backlog_claimable(task: Dict[str, Any]) -> bool:
         return False
     if ws.get("requireBacklogRefinement") and task.get("refinementComplete") is False:
         return False
+    from backend.services.task_spec_validation import dev_claim_blocked
+
+    if dev_claim_blocked(task, ws):
+        return False
     return task_dependencies_met(task)
 
 
@@ -390,6 +394,20 @@ def normalize_task(task: Dict[str, Any]) -> Dict[str, Any]:
         task["poRoundTrips"] = 0
     if "stuckLoops" not in task or not isinstance(task.get("stuckLoops"), (int, float)):
         task["stuckLoops"] = 0
+    if "devStepCount" not in task or not isinstance(task.get("devStepCount"), (int, float)):
+        task["devStepCount"] = 0
+    if "devPhaseCycle" not in task or not isinstance(task.get("devPhaseCycle"), (int, float)):
+        task["devPhaseCycle"] = int(task.get("devStepCount") or 0)
+    task["phaseCycleCapReached"] = bool(task.get("phaseCycleCapReached", False))
+    if task.get("phaseCycleCapAt") is not None:
+        try:
+            task["phaseCycleCapAt"] = int(task["phaseCycleCapAt"])
+        except (TypeError, ValueError):
+            task["phaseCycleCapAt"] = None
+    else:
+        task["phaseCycleCapAt"] = None
+    task.setdefault("phaseCycleCapReason", None)
+    task.setdefault("phaseCycleCapTimestamp", None)
     from backend.agents.tool_fingerprints import normalize_fingerprint_fields
 
     normalize_fingerprint_fields(task)
@@ -658,6 +676,12 @@ def init_new_task(task: Dict[str, Any]) -> Dict[str, Any]:
     task["userQuestion"] = None
     task["poRoundTrips"] = 0
     task["stuckLoops"] = 0
+    task["devStepCount"] = 0
+    task["devPhaseCycle"] = 0
+    task["phaseCycleCapReached"] = False
+    task["phaseCycleCapAt"] = None
+    task["phaseCycleCapReason"] = None
+    task["phaseCycleCapTimestamp"] = None
     task["agentUsage"] = {}
     task["userResolutions"] = []
     task["needsUserCooldownUntilStep"] = None

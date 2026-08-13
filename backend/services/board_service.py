@@ -96,6 +96,61 @@ def move_board_stage(task_id: str, target_lane: str) -> str:
             )
         if len(matches) == 1 and source_lane == target_lane:
             return f"Task {task_id} is already in '{target_lane}'."
+        if target_lane == "In Progress":
+            from backend.services.task_spec_validation import dev_claim_blocked
+
+            claim_block = dev_claim_blocked(active_task, get_workflow_settings())
+            if claim_block:
+                criteria = list(active_task.get("acceptanceCriteria") or [])
+                ac_limit = max(
+                    1,
+                    min(
+                        MAX_AC_FOR_IMPLEMENTATION,
+                        int(get_workflow_settings().get("splitCardWhenAcOver") or 3),
+                    ),
+                )
+                required_spec_present = bool(
+                    str(active_task.get("description") or "").strip()
+                    and str(active_task.get("scope") or "").strip()
+                    and str(active_task.get("testPlan") or "").strip()
+                )
+                if len(criteria) > ac_limit and required_spec_present:
+                    chunks = [
+                        criteria[index : index + ac_limit]
+                        for index in range(0, len(criteria), ac_limit)
+                    ]
+                    children = [
+                        {
+                            "title": f"{active_task.get('title', task_id)} ({index + 1}/{len(chunks)})",
+                            "description": active_task.get("description"),
+                            "acceptanceCriteria": chunk,
+                            "scope": active_task.get("scope"),
+                            "outOfScope": active_task.get("outOfScope"),
+                            "testPlan": active_task.get("testPlan"),
+                            "userStory": active_task.get("userStory"),
+                            "workType": "implementation",
+                            "requiresDev": True,
+                            "requiresQa": True,
+                            "priority": active_task.get("priority", 100),
+                        }
+                        for index, chunk in enumerate(chunks)
+                    ]
+                    split_result = append_backlog_tasks(
+                        children, split_from_task_id=str(task_id)
+                    )
+                    if split_result.startswith("Added "):
+                        return (
+                            f"Task {task_id} was too large for Dev and was split by "
+                            f"acceptance criteria. {split_result}"
+                        )
+                target_lane = "Needs PO"
+                record_task_decision(
+                    str(task_id),
+                    state.ACTIVE_SPRINT_AGENT or "System",
+                    "dev_claim_blocked",
+                    claim_block,
+                    "Moved to Needs PO; complete the spec or split the card before Dev.",
+                )
 
         for lane in list(state.SHARED_BOARD.keys()):
             state.SHARED_BOARD[lane] = [
@@ -231,7 +286,7 @@ def _new_task_lane() -> str:
     return "Backlog"
 
 
-MAX_AC_FOR_IMPLEMENTATION = 5
+MAX_AC_FOR_IMPLEMENTATION = 3
 OVERSIZE_DESC_CHARS = 800
 _OVERSIZE_VERBS = (
     "implement",
@@ -249,16 +304,24 @@ _OVERSIZE_VERBS = (
 )
 
 
-def is_oversized_implementation(task: Dict[str, Any]) -> Optional[str]:
+def is_oversized_implementation(
+    task: Dict[str, Any],
+    *,
+    settings: Optional[Dict[str, Any]] = None,
+) -> Optional[str]:
     """Return a rejection reason if this card is too large for one focused pass."""
     if task.get("requiresDev") is False:
         return None
     if str(task.get("workType") or "") == "planning":
         return None
+    if settings is None:
+        settings = get_workflow_settings()
+    configured = int(settings.get("splitCardWhenAcOver") or MAX_AC_FOR_IMPLEMENTATION)
+    ac_limit = max(1, min(MAX_AC_FOR_IMPLEMENTATION, configured))
     ac = task.get("acceptanceCriteria") or []
-    if len(ac) > MAX_AC_FOR_IMPLEMENTATION:
+    if len(ac) > ac_limit:
         return (
-            f"Too many acceptance criteria ({len(ac)} > {MAX_AC_FOR_IMPLEMENTATION}). "
+            f"Too many acceptance criteria ({len(ac)} > {ac_limit}). "
             "Split into smaller cards via add_backlog_tasks."
         )
     desc = str(task.get("description") or "")
@@ -348,10 +411,12 @@ def append_backlog_tasks(
             )
 
         batch_ids = {str(t["id"]) for t in prepared}
-        prior_candidates = iter_board_tasks(exclude_ids=batch_ids)
+        source_id = str(split_from_task_id) if split_from_task_id else None
+        prior_candidates = iter_board_tasks(
+            exclude_ids=batch_ids | ({source_id} if source_id else set())
+        )
         added_tasks: List[Dict[str, Any]] = []
         reused_msgs: List[str] = []
-        source_id = str(split_from_task_id) if split_from_task_id else None
 
         for task in prepared:
             remapped: List[str] = []
@@ -450,6 +515,11 @@ def append_backlog_tasks(
                     if tid not in related:
                         related.append(tid)
                 source_task["relatedTaskIds"] = related
+                source_task["subtaskIds"] = [str(t["id"]) for t in added_tasks]
+                source_task["splitSuperseded"] = True
+                source_task["splitChildTaskIds"] = [str(t["id"]) for t in added_tasks]
+                source_task["requiresDev"] = False
+                source_task["requiresQa"] = False
                 needle = source_id
                 for ln in list(state.SHARED_BOARD.keys()):
                     state.SHARED_BOARD[ln] = [
@@ -457,6 +527,9 @@ def append_backlog_tasks(
                     ]
                 source_task["status"] = "Done"
                 state.SHARED_BOARD.setdefault("Done", []).append(source_task)
+                from backend.agents.task_context import on_task_completed
+
+                on_task_completed(source_id)
                 record_task_decision(
                     source_id,
                     state.ACTIVE_SPRINT_AGENT or "Product Owner",

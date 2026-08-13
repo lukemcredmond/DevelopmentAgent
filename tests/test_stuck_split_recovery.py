@@ -39,7 +39,7 @@ def test_arm_exit_reasons_include_loop_stops():
     assert not should_arm_from_exit_reason("completed_with_writes")
 
 
-def test_split_success_skips_needs_po():
+def test_added_children_without_parent_retirement_is_not_split_success():
     initialize()
     reset_workflow_settings()
     save_workflow_settings(
@@ -63,9 +63,8 @@ def test_split_success_skips_needs_po():
         _check_stuck_and_escalate("T-SPLIT-OK", "In Progress", agent_key="dev")
 
     split_mock.assert_called_once()
-    assert get_task_lane("T-SPLIT-OK") == "In Progress"
-    assert len(state.SHARED_BOARD.get("Needs PO") or []) == 0
-    refreshed = next(t for t in state.SHARED_BOARD["In Progress"] if t["id"] == "T-SPLIT-OK")
+    assert get_task_lane("T-SPLIT-OK") == "Needs PO"
+    refreshed = next(t for t in state.SHARED_BOARD["Needs PO"] if t["id"] == "T-SPLIT-OK")
     assert refreshed.get("splitAttemptedOnStuck") is True
 
 

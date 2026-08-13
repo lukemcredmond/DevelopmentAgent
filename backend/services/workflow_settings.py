@@ -45,8 +45,12 @@ DEFAULT_WORKFLOW_SETTINGS: Dict[str, Any] = {
     "autoSprintInterruptBackoffSec": 5,
     "autoSprintInterruptBackoffMaxSec": 120,
     "interruptEarlyMaxMs": 30000,
+    # Pause an auto sprint before a fourth identical task/reason zero-work retry.
+    "enableZeroWorkRetryWatchdog": True,
+    "zeroWorkRetryWatchdogMax": 3,
     # Cap Explore→Patch→Verify cycles per card before forcing stuck / split.
     "maxDevPhaseCyclesPerCard": 12,
+    "maxDevStepsPerCard": 12,
     # Optional: run independent In Progress cards concurrently (workspace write-locked).
     "enableParallelIndependentCards": False,
     "maxParallelDevCards": 2,
@@ -190,7 +194,7 @@ DEFAULT_WORKFLOW_SETTINGS: Dict[str, Any] = {
     "enableFocusMicroSteps": True,
     "maxFocusStepsPerCard": 8,
     "enablePromptSectionRotation": False,
-    "splitCardWhenAcOver": 5,
+    "splitCardWhenAcOver": 3,
     "contextPacker": "off",
     "contextPackerMaxChars": 12000,
     "repomixCommand": "repomix",

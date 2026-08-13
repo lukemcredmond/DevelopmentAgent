@@ -141,6 +141,10 @@ class StepDiagnosticsTracker:
 
     def _build_hint(self, exit_reason: str) -> str:
         hints = {
+            "phase_cycle_cap": (
+                "Card reached its durable Developer visit limit. It is latched and must be "
+                "split, clarified, or explicitly reset before Dev can run again."
+            ),
             "read_only_no_edits": (
                 "Model read files but never called apply_patch/write_file. "
                 "Text/plan responses are not tools, backlog items, or memory — model must call apply_patch. "
@@ -232,8 +236,33 @@ class StepDiagnosticsTracker:
             if isinstance(entry.get("durationMs"), (int, float)):
                 tool_ms += int(entry["durationMs"])
         payload["toolMsTotal"] = tool_ms
-        if state.LAST_STEP_PROGRESS:
+        if (
+            isinstance(state.LAST_STEP_PROGRESS, dict)
+            and str(state.LAST_STEP_PROGRESS.get("taskId") or "") == self.task_id
+        ):
             payload["stepProgress"] = state.LAST_STEP_PROGRESS
+        payload["currentStepActivity"] = {
+            "iterationsUsed": self.llm_iterations_used,
+            "iterationsMax": self.llm_iterations_max,
+            "toolFailures": self.tool_failures,
+            "planRejections": self.plan_rejections,
+            "textRejections": self.text_rejections,
+            "ollamaCallCount": len(self.ollama_calls),
+            "toolCallCount": len(self.tools_log),
+        }
+        try:
+            from backend.agents.task_context import find_task_by_id
+
+            task = find_task_by_id(self.task_id)
+            if task:
+                payload["cardCumulativeState"] = {
+                    "devStepCount": int(task.get("devStepCount") or 0),
+                    "consecutiveBadExits": int(task.get("consecutiveBadExits") or 0),
+                    "phaseCycleCapReached": bool(task.get("phaseCycleCapReached")),
+                    "identicalPatchFailCount": int(task.get("identicalPatchFailCount") or 0),
+                }
+        except Exception:
+            pass
 
         if status == "complete":
             payload.update(
@@ -334,6 +363,8 @@ def start_step_trace(
     agent: str,
     lane: str,
 ) -> StepDiagnosticsTracker:
+    # Agent result is step-local; never let a prior card's stop text determine this exit.
+    state.LAST_AGENT_STEP_RESULT = None
     stamp = datetime.now().strftime("%Y%m%dT%H%M%S")
     slug = _safe_task_slug(task_id)
     project_dir = diagnostics_dir(state.CURRENT_PROJECT_ID)
@@ -569,6 +600,7 @@ def build_card_work_snapshot(
     ac = task.get("acceptanceCriteria") or []
     ac_count = len(ac) if isinstance(ac, list) else 0
     stuck = int(task.get("stuckLoops") or 0)
+    dev_steps = int(task.get("devStepCount") or 0)
     files = files_this_step if files_this_step is not None else files_written_this_step()
 
     work_items: List[Dict[str, Any]] = []
@@ -584,7 +616,7 @@ def build_card_work_snapshot(
     return {
         "subtasksDone": subtasks_done,
         "subtasksTotal": len(subtask_ids),
-        "stepsOnCard": stuck,
+        "stepsOnCard": dev_steps,
         "stuckLoops": stuck,
         "poRoundTrips": int(task.get("poRoundTrips") or 0),
         "gatesRemaining": gates_remaining_for_lane(resolved_lane),
@@ -827,7 +859,9 @@ def persist_step_progress_from_active_run(
 
     existing: Optional[Dict[str, Any]] = None
     if isinstance(getattr(state, "LAST_STEP_PROGRESS", None), dict):
-        existing = state.LAST_STEP_PROGRESS
+        global_progress = state.LAST_STEP_PROGRESS
+        if not task_id or str(global_progress.get("taskId") or "") == str(task_id):
+            existing = global_progress
     if task_id:
         from backend.agents.task_context import find_task_by_id, normalize_task
 
@@ -848,13 +882,13 @@ def persist_step_progress_from_active_run(
     if chosen is None and existing is None:
         return None
 
-    # Start from existing progress when present; refresh counters from active trace/run.
+    # Start from same-task progress only. Current-step counters never inherit prior runs.
     base = dict(existing) if isinstance(existing, dict) else {}
-    iterations_used = int(base.get("iterationsUsed") or base.get("iterations_used") or 0)
-    iterations_max = int(base.get("iterationsMax") or base.get("iterations_max") or 0)
+    iterations_used = 0
+    iterations_max = 0
     if run is not None:
-        iterations_used = max(iterations_used, int(getattr(run, "iteration", 0) or 0))
-        iterations_max = max(iterations_max, int(getattr(run, "max_iterations", 0) or 0))
+        iterations_used = int(getattr(run, "iteration", 0) or 0)
+        iterations_max = int(getattr(run, "max_iterations", 0) or 0)
         task_id = task_id or getattr(run, "task_id", None)
 
     progress = build_step_progress(
@@ -894,6 +928,8 @@ def derive_exit_reason(
         return "step_timeout"
     if agent_result and agent_result.startswith("Stopped:"):
         lower = agent_result.lower()
+        if "phase cycle cap" in lower or "developer visit budget" in lower:
+            return "phase_cycle_cap"
         if "identical arguments" in lower or "same arguments" in lower:
             return "duplicate_tool"
         if "explore tool budget" in lower:

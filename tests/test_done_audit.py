@@ -35,14 +35,14 @@ def test_audit_clear_after_write_transcript():
     assert row is None
 
 
-def test_apply_moves_incomplete_to_in_progress():
+def test_apply_routes_incomplete_spec_to_needs_po_instead_of_bypassing_dev_gate():
     initialize()
     state.SHARED_BOARD.clear()
     task = init_new_task({"id": "T-MV", "title": "Move me", "description": "d", "status": "Done"})
     state.SHARED_BOARD["Done"] = [task]
     result = apply_done_audit_actions(["T-MV"], "In Progress", only_incomplete=True)
     assert "T-MV" in result["moved"]
-    assert any(t.get("id") == "T-MV" for t in state.SHARED_BOARD.get("In Progress") or [])
+    assert any(t.get("id") == "T-MV" for t in state.SHARED_BOARD.get("Needs PO") or [])
 
 
 def test_audit_report_counts():

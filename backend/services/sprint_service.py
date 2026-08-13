@@ -101,6 +101,7 @@ PLANNING_TASK_ID = "PLANNING"
 _HANDLER_AGENT: Dict[str, str] = {
     "po": "Product Owner",
     "dev": "Developer",
+    "dev_recovery": "System",
     "cr": "Code Reviewer",
     "qa": "QA Tester",
     "refinement_dev": "Developer",
@@ -473,6 +474,8 @@ def _build_last_step_outcome(
     if model_response_type:
         outcome["modelResponseType"] = model_response_type
     progress = state.LAST_STEP_PROGRESS
+    if isinstance(progress, dict) and str(progress.get("taskId") or "") != str(task_id):
+        progress = None
     if not progress and task and isinstance(task.get("lastStepProgress"), dict):
         progress = task["lastStepProgress"]
     if not progress and stop_reason == "max_iterations":
@@ -607,7 +610,16 @@ def _record_last_step_outcome(
                 or (state.LAST_STEP_OUTCOME or {}).get("exitReason")
                 or ""
             )
-            record_consecutive_bad_exit(task, exit_r)
+            lane_after = get_task_lane(task_id) or lane_before
+            focus_completed = bool(
+                task.get("focusSliceCompletedAt")
+                or task.get("lastFocusSliceCompletedAt")
+            )
+            record_consecutive_bad_exit(
+                task,
+                exit_r,
+                progress_made=lane_after != lane_before or focus_completed,
+            )
         except Exception:
             pass
     state.DEV_STEP_READ_ONLY_NO_EDITS = False
@@ -749,6 +761,14 @@ def apply_backlog_from_po_response(response: str, task_id: str) -> int:
     new_tasks = [t for t in valid if t.get("title") not in existing]
     if not new_tasks:
         return 0
+    parent = find_task_by_id(task_id) or {}
+    for child in new_tasks:
+        for field in ("scope", "outOfScope", "testPlan", "userStory"):
+            if not child.get(field) and parent.get(field):
+                child[field] = parent[field]
+        child.setdefault("workType", "implementation")
+        child.setdefault("requiresDev", True)
+        child.setdefault("requiresQa", True)
     append_backlog_tasks(new_tasks, split_from_task_id=task_id)
     add_system_log(
         "Product Owner",
@@ -917,19 +937,24 @@ def _try_move_to_needs_user(
     allowed, block_reason = should_escalate_to_needs_user(task, msg)
     if not allowed:
         if block_reason == "clarification_use_po":
-            return _redirect_to_needs_po(task_id, task, msg, kind=kind)
+            max_po = int(get_workflow_settings().get("maxPoRoundTrips", 3))
+            if int(task.get("poRoundTrips") or 0) < max_po:
+                return _redirect_to_needs_po(task_id, task, msg, kind=kind)
+            # PO is exhausted: this is now a concrete user unblock, not another PO bounce.
+            allowed = True
         if block_reason in (
             "duplicate_question",
             "cooldown_active",
             "same_reason_hash",
             "already_in_needs_user",
-        ):
+        ) and not allowed:
             add_system_log(
                 "System",
                 "warning",
                 f"{task_id}: Needs User blocked ({block_reason}) — {msg[:120]}",
             )
-        return False
+        if not allowed:
+            return False
     if _needs_user_cap_reached():
         add_system_log(
             "System",
@@ -987,14 +1012,16 @@ def _check_stuck_and_escalate(
         task["stuckLoops"] = 0
         task.pop("autoExtendUsed", None)
         task.pop("lastStepOutcome", None)
-        task["consecutiveBadExits"] = 0
-        task.pop("lastCircuitExitReason", None)
-        try:
-            from backend.services.sprint_speed_gates import clear_patch_fingerprint
+        delivery_progress = lane_after in ("Code Review", "QA", "Done")
+        if delivery_progress:
+            task["consecutiveBadExits"] = 0
+            task.pop("lastCircuitExitReason", None)
+            try:
+                from backend.services.sprint_speed_gates import clear_patch_fingerprint
 
-            clear_patch_fingerprint(task)
-        except Exception:
-            pass
+                clear_patch_fingerprint(task)
+            except Exception:
+                pass
         try:
             from backend.agents.tool_fingerprints import clear_fingerprint_escalation_state
 
@@ -1098,8 +1125,6 @@ def _check_stuck_and_escalate(
     if task["stuckLoops"] < max_stuck:
         return
 
-    task["stuckLoops"] = 0
-
     # Do not yank cards already escalated / finished.
     if lane_after in ("Needs PO", "Needs User", "Done", "Features"):
         return
@@ -1137,7 +1162,14 @@ def _check_stuck_and_escalate(
             )
             added = int((split_result or {}).get("added") or 0)
             lane_now = get_task_lane(task_id) or lane_after
-            if added > 0 or lane_now != lane_after:
+            split_parent = find_task_by_id(task_id)
+            split_succeeded = bool(
+                added > 0
+                and lane_now == "Done"
+                and split_parent
+                and split_parent.get("splitSuperseded")
+            )
+            if split_succeeded:
                 try:
                     from backend.services.backup_model import (
                         clear_backup_remaining,
@@ -1163,7 +1195,7 @@ def _check_stuck_and_escalate(
             add_system_log(
                 "System",
                 "warning",
-                f"{task_id}: stuck auto-split added no cards — escalating to Needs PO",
+                f"{task_id}: stuck auto-split did not supersede parent — escalating to Needs PO",
             )
         except Exception as exc:
             record_task_decision(
@@ -1907,8 +1939,19 @@ def _dev_has_verification(task: Dict[str, Any], step_started: str) -> bool:
 
 def dev_gate_blocks_advance(task: Dict[str, Any]) -> tuple[bool, str]:
     """Block dev board advance when no writes, structure gaps, subtasks pending, or lint unresolved."""
+    from backend.services.focus_slice import (
+        all_focus_slices_done,
+        dev_micro_steps_enabled,
+        focus_cap_reached,
+    )
     from backend.services.subtask_service import subtask_gate_blocks_advance
 
+    if dev_micro_steps_enabled(task) and not all_focus_slices_done(task):
+        if focus_cap_reached(task):
+            return (
+                True,
+                "Focus step cap reached with unfinished slices — split or recover the card before QA.",
+            )
     blocked, reason = subtask_gate_blocks_advance(task)
     if blocked:
         return blocked, reason
@@ -2601,7 +2644,8 @@ def run_po_split_task(task_id: str, ollama_url: str, guidance: str = "") -> Dict
             f"{extra}\n"
             f"You MUST call add_backlog_tasks with split_from_task_id={task_id!r}.\n"
             "Invoke the tool yourself — never tell the user to call add_backlog_tasks.\n"
-            "If you cannot use tools, reply with ONLY a JSON array (title, description, acceptanceCriteria).",
+            "If you cannot use tools, reply with ONLY a JSON array "
+            "(title, description, acceptanceCriteria, scope, testPlan).",
             max_iterations=_llm_iterations(),
         )
 
@@ -2651,6 +2695,16 @@ def run_po_split_task(task_id: str, ollama_url: str, guidance: str = "") -> Dict
         else:
             added = 0
 
+        parent = find_task_by_id(task_id)
+        split_valid = bool(
+            added > 0
+            and get_task_lane(task_id) == "Done"
+            and parent
+            and parent.get("splitSuperseded")
+        )
+        if not split_valid:
+            added = 0
+            new_task_ids = []
         save_current_project_state()
         publish_board_update(task_id, source="split")
         add_system_log(
@@ -2658,7 +2712,12 @@ def run_po_split_task(task_id: str, ollama_url: str, guidance: str = "") -> Dict
             "success" if added else "warning",
             f"Split {task_id}: added {added} subtask(s)" if added else f"Split {task_id}: no subtasks added",
         )
-        return {"added": added, "taskId": task_id, "taskIds": new_task_ids}
+        return {
+            "added": added,
+            "taskId": task_id,
+            "taskIds": new_task_ids,
+            "parentDone": bool(split_valid),
+        }
     finally:
         clear_active_sprint_context()
 
@@ -3196,6 +3255,36 @@ def _run_developer_step(active_task: Dict[str, Any], brief: str) -> None:
     title = str(active_task.get("title", task_id))
     step_started = _mark_sprint_step_start()
     set_active_sprint_context(task_id, "Developer")
+    live_task = find_task_by_id(task_id) or active_task
+    from backend.services.sprint_speed_gates import begin_dev_step
+
+    visit, capped = begin_dev_step(live_task)
+    if capped:
+        result = (
+            f"Stopped: phase cycle cap reached at Developer visit {visit}. "
+            "This card must be split, clarified, or explicitly reset before Dev runs again."
+        )
+        _ensure_dev_step_trace(task_id, title, lane_before)
+        state.LAST_AGENT_STEP_RESULT = result
+        with state.STATE_LOCK:
+            task = find_task_by_id(task_id) or live_task
+            record_task_decision(
+                task_id,
+                "System",
+                "phase_cycle_cap",
+                result,
+                str(task.get("phaseCycleCapReason") or result),
+            )
+            task["stuckLoops"] = max(
+                int(task.get("stuckLoops") or 0),
+                max(1, int(get_workflow_settings().get("maxStuckSteps") or 3)) - 1,
+            )
+            _record_last_step_outcome(
+                task_id, lane_before, "Developer", agent_result=result
+            )
+            _check_stuck_and_escalate(task_id, lane_before, agent_key="dev")
+        _finalize_dev_step_diagnostics_if_auto_sprint(task_id, lane_before)
+        return
     try:
         from backend.services.backup_model import apply_model_for_step
 
@@ -3785,6 +3874,25 @@ def _try_backlog_handler() -> tuple[Optional[str], Optional[Dict[str, Any]]]:
             record_task_decision(task["id"], "Developer", "claim", "Claimed from Backlog")
             claimed = find_task_by_id(task["id"]) or task
             return "dev", dict(claimed)
+        from backend.services.task_spec_validation import dev_claim_blocked
+
+        for blocked_task in list(state.SHARED_BOARD.get("Backlog") or []):
+            if not isinstance(blocked_task, dict) or not task_dependencies_met(blocked_task):
+                continue
+            reason = dev_claim_blocked(blocked_task, get_workflow_settings())
+            if not reason:
+                continue
+            move_board_stage(str(blocked_task["id"]), "In Progress")
+            lane_now = get_task_lane(str(blocked_task["id"]))
+            if lane_now == "Needs PO":
+                routed = find_task_by_id(str(blocked_task["id"])) or blocked_task
+                return "po", dict(routed)
+            # A deterministic AC split may have retired this parent and exposed a child.
+            child = next_claimable_backlog_task()
+            if child:
+                move_board_stage(str(child["id"]), "In Progress")
+                claimed = find_task_by_id(str(child["id"])) or child
+                return "dev", dict(claimed)
         po_plan = next_po_planning_backlog_task()
         if po_plan:
             move_board_stage(po_plan["id"], "Needs PO")
@@ -3860,6 +3968,15 @@ def has_sprint_work() -> bool:
         return True
     if next_claimable_backlog_task() or next_po_planning_backlog_task():
         return True
+    from backend.services.task_spec_validation import dev_claim_blocked
+
+    if any(
+        isinstance(task, dict)
+        and task_dependencies_met(task)
+        and dev_claim_blocked(task, ws)
+        for task in board.get("Backlog", [])
+    ):
+        return True
     if ws.get("requireBacklogRefinement"):
         if next_spike_task() or next_refinement_task():
             return True
@@ -3891,6 +4008,8 @@ def list_independent_in_progress_cards(limit: int = 2) -> List[Dict[str, Any]]:
     with state.STATE_LOCK:
         for task in list(state.SHARED_BOARD.get("In Progress") or []):
             if not isinstance(task, dict):
+                continue
+            if task.get("phaseCycleCapReached"):
                 continue
             blocked = task.get("blockedBy") or []
             if blocked:
@@ -3986,6 +4105,30 @@ def _run_parallel_independent_dev_batch(brief: str, ollama_url: str) -> int:
     return ran
 
 
+def _recover_latched_dev_card(active_task: Dict[str, Any]) -> None:
+    """Run the stuck recovery ladder without scheduling another Developer call."""
+    task_id = str(active_task.get("id") or "")
+    if not task_id:
+        return
+    lane_before = get_task_lane(task_id) or "In Progress"
+    title = str(active_task.get("title") or task_id)
+    result = (
+        "Stopped: phase cycle cap reached. Developer execution is latched; "
+        "attempting split/clarification recovery."
+    )
+    _ensure_dev_step_trace(task_id, title, lane_before)
+    state.LAST_AGENT_STEP_RESULT = result
+    with state.STATE_LOCK:
+        task = find_task_by_id(task_id)
+        if not task:
+            return
+        max_stuck = max(1, int(get_workflow_settings().get("maxStuckSteps") or 3))
+        task["stuckLoops"] = max(int(task.get("stuckLoops") or 0), max_stuck - 1)
+        _record_last_step_outcome(task_id, lane_before, "System", agent_result=result)
+        _check_stuck_and_escalate(task_id, lane_before, agent_key=None)
+    _finalize_dev_step_diagnostics_if_auto_sprint(task_id, lane_before)
+
+
 def run_sprint_step(brief: str, ollama_url: str) -> None:
     brief = resolve_brief_for_sprint(brief)
     agent_dev.ollama_url = ollama_url
@@ -4021,8 +4164,18 @@ def run_sprint_step(brief: str, ollama_url: str) -> None:
         ):
             handler = "needs_user"
         elif state.SHARED_BOARD.get("In Progress"):
-            active_task = dict(state.SHARED_BOARD["In Progress"][0])
-            handler = "dev"
+            runnable = [
+                task
+                for task in state.SHARED_BOARD["In Progress"]
+                if not task.get("phaseCycleCapReached")
+            ]
+            if runnable:
+                active_task = dict(runnable[0])
+                handler = "dev"
+            else:
+                # Recovery is runnable; another Developer LLM step is not.
+                active_task = dict(state.SHARED_BOARD["In Progress"][0])
+                handler = "dev_recovery"
         else:
             handler = None
             ws = get_workflow_settings()
@@ -4097,6 +4250,8 @@ def run_sprint_step(brief: str, ollama_url: str) -> None:
             add_system_log("System", "info", "Feature waiting in Needs User — resolve via UI.")
         elif handler == "dev" and active_task:
             _run_developer_step(active_task, brief)
+        elif handler == "dev_recovery" and active_task:
+            _recover_latched_dev_card(active_task)
         elif handler == "refinement_dev" and active_task:
             _run_refinement_dev_review(active_task, brief)
         elif handler == "spike_dev" and active_task:
@@ -4159,6 +4314,8 @@ def run_in_progress_step(
     brief: str,
     ollama_url: str,
     task_id: Optional[str] = None,
+    *,
+    override_phase_cycle_cap: bool = False,
 ) -> None:
     """Run Dev on an In Progress card only — skips Needs PO, Backlog, and Refinement."""
     from backend.services.logs import add_system_log
@@ -4179,6 +4336,10 @@ def run_in_progress_step(
                 raise ValueError(f"Task '{needle}' is not in In Progress")
             active_task = find_task_by_id(needle)
         elif in_progress:
+            if not override_phase_cycle_cap:
+                in_progress = [
+                    task for task in in_progress if not task.get("phaseCycleCapReached")
+                ]
             sorted_tasks = sorted(
                 in_progress,
                 key=lambda t: (t.get("priority") if isinstance(t.get("priority"), (int, float)) else 100, str(t.get("id", ""))),
@@ -4188,7 +4349,15 @@ def run_in_progress_step(
             raise ValueError("No cards in In Progress")
 
     if not active_task:
-        raise ValueError("In Progress task not found")
+        raise ValueError("No runnable cards in In Progress")
+    if active_task.get("phaseCycleCapReached"):
+        if not override_phase_cycle_cap:
+            raise ValueError(
+                "Task is blocked by the phase cycle cap; split, clarify, or explicitly reset it"
+            )
+        from backend.services.sprint_speed_gates import reset_dev_cycle_latch
+
+        reset_dev_cycle_latch(active_task)
 
     from backend.services.sprint_session import set_sprint_mode
 
@@ -4305,6 +4474,7 @@ def run_auto_sprint(brief: str, ollama_url: str, max_steps: int | None = None) -
     refresh_enabled = bool(ws.get("autoSprintSessionRefreshEnabled", True))
     refresh_minutes = int(ws.get("autoSprintSessionRefreshMinutes") or 60)
     refresh_sec = max(60, refresh_minutes * 60)
+    zero_work_watchdog: Dict[str, Any] = {}
 
     try:
         from backend.services.sprint_speed_gates import reset_interrupt_backoff_state
@@ -4363,6 +4533,11 @@ def run_auto_sprint(brief: str, ollama_url: str, max_steps: int | None = None) -
                     or 0
                 ),
                 duration_ms=int(diag.get("durationMs") or 0),
+                tool_call_count=int(
+                    diag.get("toolCallCount")
+                    or len(diag.get("toolCalls") or [])
+                    or 0
+                ),
             )
             if delay > 0:
                 add_system_log(
@@ -4372,6 +4547,30 @@ def run_auto_sprint(brief: str, ollama_url: str, max_steps: int | None = None) -
                 )
         except Exception:
             pass
+        outcome = state.LAST_STEP_OUTCOME if isinstance(state.LAST_STEP_OUTCOME, dict) else {}
+        diag = state.LAST_STEP_DIAGNOSTICS if isinstance(state.LAST_STEP_DIAGNOSTICS, dict) else {}
+        reason = str(outcome.get("exitReason") or diag.get("exitReason") or "")
+        task_id = str(outcome.get("taskId") or diag.get("taskId") or "")
+        ollama_calls = int(diag.get("ollamaCallCount") or len(diag.get("ollamaCalls") or []) or 0)
+        tool_calls = int(diag.get("toolCallCount") or len(diag.get("toolCalls") or []) or 0)
+        from backend.services.sprint_speed_gates import note_zero_work_exit
+
+        if note_zero_work_exit(
+            zero_work_watchdog,
+            task_id=task_id,
+            exit_reason=reason,
+            ollama_call_count=ollama_calls,
+            tool_call_count=tool_calls,
+            ws=ws,
+        ):
+            status = "retry_watchdog"
+            add_system_log(
+                "System",
+                "warning",
+                f"Auto sprint paused after {zero_work_watchdog.get('streak')} zero-work exits for "
+                f"{task_id} ({reason}); no fourth retry scheduled.",
+            )
+            break
         if refresh_enabled and (time.monotonic() - session_start) >= refresh_sec:
             status = "session_refresh"
             add_system_log(

@@ -266,6 +266,13 @@ def _guarded_update_board(task_id: str, target_lane: str, user_question: Optiona
                 blocked, reason = dev_gate_blocks_advance(task)
                 if blocked:
                     return f"Error: {reason}"
+                from backend.services.focus_slice import should_block_lane_advance_for_focus
+
+                if should_block_lane_advance_for_focus(task):
+                    return (
+                        "Error: Focus slices are incomplete — stay In Progress. "
+                        "If the focus cap is reached, split or recover the card."
+                    )
                 exit_r = ""
                 outcome = task.get("lastStepOutcome") if isinstance(task.get("lastStepOutcome"), dict) else {}
                 diag = (

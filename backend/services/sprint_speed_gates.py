@@ -9,6 +9,7 @@ from typing import Any, Dict, Optional, Set
 # Exits that must not promote In Progress → QA / Code Review.
 UNHEALTHY_LANE_ADVANCE_EXITS = frozenset(
     {
+        "phase_cycle_cap",
         "ollama_fallback",
         "tool_failure_stop",
         "interrupted",
@@ -21,6 +22,7 @@ UNHEALTHY_LANE_ADVANCE_EXITS = frozenset(
         "explore_budget_exhausted",
         "patch_budget_exhausted",
         "completed_text_only",
+        "completed_with_writes_no_advance",
         "tool_output_echo",
     }
 )
@@ -28,6 +30,7 @@ UNHEALTHY_LANE_ADVANCE_EXITS = frozenset(
 # Consecutive bad exits that feed the stuck-card circuit breaker.
 CIRCUIT_BREAKER_EXITS = frozenset(
     {
+        "phase_cycle_cap",
         "max_iterations",
         "tool_failure_stop",
         "plan_exhausted",
@@ -37,6 +40,7 @@ CIRCUIT_BREAKER_EXITS = frozenset(
         "ollama_fallback",
         "read_only_no_edits",
         "completed_text_only",
+        "completed_with_writes_no_advance",
     }
 )
 
@@ -113,11 +117,18 @@ def clear_patch_fingerprint(task: Dict[str, Any]) -> None:
     task.pop("identicalPatchFailCount", None)
 
 
-def record_consecutive_bad_exit(task: Dict[str, Any], exit_reason: Optional[str]) -> int:
+def record_consecutive_bad_exit(
+    task: Dict[str, Any],
+    exit_reason: Optional[str],
+    *,
+    progress_made: bool = False,
+) -> int:
     """Increment consecutive unhealthy exits; reset on healthy completion."""
     if not isinstance(task, dict):
         return 0
     reason = str(exit_reason or "").strip().lower()
+    if reason == "completed_with_writes" and not progress_made:
+        reason = "completed_with_writes_no_advance"
     if reason in CIRCUIT_BREAKER_EXITS:
         prev = str(task.get("lastCircuitExitReason") or "")
         if prev == reason or prev in CIRCUIT_BREAKER_EXITS:
@@ -128,7 +139,7 @@ def record_consecutive_bad_exit(task: Dict[str, Any], exit_reason: Optional[str]
         task["lastCircuitExitReason"] = reason
         return count
     # Healthy / lane-progress exits clear the streak.
-    if reason in ("completed_with_writes", "fix_verify_done") or not reason:
+    if (reason == "completed_with_writes" and progress_made) or reason == "fix_verify_done" or not reason:
         task["consecutiveBadExits"] = 0
         task.pop("lastCircuitExitReason", None)
         clear_patch_fingerprint(task)
@@ -169,11 +180,12 @@ def note_early_interrupt(
     exit_reason: Optional[str],
     ollama_call_count: int,
     duration_ms: int,
+    tool_call_count: int = 0,
     ws: Optional[Dict[str, Any]] = None,
 ) -> float:
     """
-    Track early interrupted steps (0 Ollama calls). Returns seconds to sleep before
-    the next auto-sprint tick (0 = no backoff).
+    Track fast zero-work failures. Returns seconds to sleep before the next
+    auto-sprint tick (0 = no backoff).
     """
     global _interrupt_streak, _interrupt_backoff_until
     if ws is None:
@@ -185,8 +197,9 @@ def note_early_interrupt(
 
     reason = str(exit_reason or "").strip().lower()
     early = (
-        reason == "interrupted"
+        reason in (CIRCUIT_BREAKER_EXITS | {"interrupted", "step_timeout"})
         and int(ollama_call_count or 0) == 0
+        and int(tool_call_count or 0) == 0
         and int(duration_ms or 0) < int(ws.get("interruptEarlyMaxMs") or 30000)
     )
     if not early:
@@ -208,6 +221,42 @@ def remaining_interrupt_backoff_sec() -> float:
     return max(0.0, remaining)
 
 
+def note_zero_work_exit(
+    watchdog: Dict[str, Any],
+    *,
+    task_id: str,
+    exit_reason: str,
+    ollama_call_count: int,
+    tool_call_count: int,
+    ws: Optional[Dict[str, Any]] = None,
+) -> bool:
+    """Return True when a third consecutive identical zero-work exit must pause."""
+    if ws is None:
+        from backend.services.workflow_settings import get_workflow_settings
+
+        ws = get_workflow_settings()
+    if not ws.get("enableZeroWorkRetryWatchdog", True):
+        watchdog.clear()
+        return False
+    key = (str(task_id or ""), str(exit_reason or "").strip().lower())
+    zero_work = bool(
+        key[0]
+        and key[1]
+        and int(ollama_call_count or 0) == 0
+        and int(tool_call_count or 0) == 0
+    )
+    if not zero_work:
+        watchdog.clear()
+        return False
+    if watchdog.get("key") == key:
+        watchdog["streak"] = int(watchdog.get("streak") or 0) + 1
+    else:
+        watchdog["key"] = key
+        watchdog["streak"] = 1
+    maximum = max(1, int(ws.get("zeroWorkRetryWatchdogMax") or 3))
+    return int(watchdog["streak"]) >= maximum
+
+
 def phase_cycle_cap_reached(cycle: int, ws: Optional[Dict[str, Any]] = None) -> bool:
     if ws is None:
         from backend.services.workflow_settings import get_workflow_settings
@@ -215,3 +264,62 @@ def phase_cycle_cap_reached(cycle: int, ws: Optional[Dict[str, Any]] = None) -> 
         ws = get_workflow_settings()
     cap = max(1, int(ws.get("maxDevPhaseCyclesPerCard") or 12))
     return int(cycle or 0) > cap
+
+
+def _stored_phase_cycle(task: Dict[str, Any]) -> int:
+    """Read the durable graph cycle without consulting global progress state."""
+    progress = task.get("lastStepProgress")
+    if not isinstance(progress, dict):
+        return 0
+    graph = progress.get("devPhaseGraph") or progress.get("dev_phase_graph")
+    if not isinstance(graph, dict):
+        return 0
+    try:
+        return max(0, int(graph.get("cycle") or 0))
+    except (TypeError, ValueError):
+        return 0
+
+
+def begin_dev_step(
+    task: Dict[str, Any],
+    ws: Optional[Dict[str, Any]] = None,
+) -> tuple[int, bool]:
+    """
+    Increment the card-level Dev visit exactly once per sprint Dev handler.
+    Returns (visit_count, capped). A latched card never increments again.
+    """
+    if ws is None:
+        from backend.services.workflow_settings import get_workflow_settings
+
+        ws = get_workflow_settings()
+    if task.get("phaseCycleCapReached"):
+        return int(task.get("devStepCount") or 0), True
+
+    prior = max(
+        int(task.get("devStepCount") or 0),
+        int(task.get("devPhaseCycle") or 0),
+        _stored_phase_cycle(task),
+    )
+    visit = prior + 1
+    task["devStepCount"] = visit
+    task["devPhaseCycle"] = visit
+    cap = max(1, int(ws.get("maxDevStepsPerCard") or ws.get("maxDevPhaseCyclesPerCard") or 12))
+    if visit > cap:
+        from datetime import datetime
+
+        task["phaseCycleCapReached"] = True
+        task["phaseCycleCapAt"] = visit
+        task["phaseCycleCapReason"] = f"Developer visit budget exceeded ({visit}>{cap})"
+        task["phaseCycleCapTimestamp"] = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+        return visit, True
+    return visit, False
+
+
+def reset_dev_cycle_latch(task: Dict[str, Any]) -> None:
+    """Explicit recovery reset; never called by ordinary PO/lane bounces."""
+    task["devStepCount"] = 0
+    task["devPhaseCycle"] = 0
+    task["phaseCycleCapReached"] = False
+    task["phaseCycleCapAt"] = None
+    task["phaseCycleCapReason"] = None
+    task["phaseCycleCapTimestamp"] = None

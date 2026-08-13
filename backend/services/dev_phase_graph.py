@@ -288,19 +288,16 @@ class DevPhaseGraph:
                 "Done here means this step's verify budget, not card Done."
             )
 
-        # Hard cap: endless Explore→Patch→Verify cycles on one card thrash Ollama.
-        try:
-            from backend.services.sprint_speed_gates import phase_cycle_cap_reached
+        # Hard cap: fail closed so configuration/read errors cannot re-enable an endless loop.
+        from backend.services.sprint_speed_gates import phase_cycle_cap_reached
 
-            if phase_cycle_cap_reached(self.cycle):
-                self.phase = "stuck"
-                self.status_text = (
-                    f"Phase cycle cap reached (cycle {self.cycle}). "
-                    "Split the card or narrow AC — further Explore→Patch loops blocked."
-                )
-                self.prior_summary = self.prior_summary or "cycle_cap"
-        except Exception:
-            pass
+        if phase_cycle_cap_reached(self.cycle):
+            self.phase = "stuck"
+            self.status_text = (
+                f"Phase cycle cap reached (cycle {self.cycle}). "
+                "Split the card or narrow AC — further Explore→Patch loops blocked."
+            )
+            self.prior_summary = self.prior_summary or "cycle_cap"
 
     @staticmethod
     def applies_to(*, role: str, lane: Optional[str]) -> bool:

@@ -49,8 +49,15 @@ def test_circuit_breaker_trips_on_identical_patches():
 
 def test_healthy_exit_clears_bad_streak():
     task = {"consecutiveBadExits": 2, "lastCircuitExitReason": "max_iterations"}
-    gates.record_consecutive_bad_exit(task, "completed_with_writes")
+    gates.record_consecutive_bad_exit(task, "completed_with_writes", progress_made=True)
     assert task.get("consecutiveBadExits") == 0
+
+
+def test_partial_writes_without_lane_progress_keep_bad_streak():
+    task = {"consecutiveBadExits": 1, "lastCircuitExitReason": "max_iterations"}
+    gates.record_consecutive_bad_exit(task, "completed_with_writes", progress_made=False)
+    assert task["consecutiveBadExits"] == 2
+    assert task["lastCircuitExitReason"] == "completed_with_writes_no_advance"
 
 
 def test_early_interrupt_backoff_escalates():
@@ -80,3 +87,37 @@ def test_phase_cycle_cap():
     ws = {"maxDevPhaseCyclesPerCard": 12}
     assert gates.phase_cycle_cap_reached(12, ws) is False
     assert gates.phase_cycle_cap_reached(13, ws) is True
+
+
+def test_dev_visit_13_latches_and_subsequent_pick_does_not_increment():
+    task = {"devStepCount": 12}
+    ws = {"maxDevStepsPerCard": 12}
+    visit, capped = gates.begin_dev_step(task, ws)
+    assert (visit, capped) == (13, True)
+    assert task["phaseCycleCapReached"] is True
+    assert task["phaseCycleCapAt"] == 13
+
+    second_visit, second_capped = gates.begin_dev_step(task, ws)
+    assert (second_visit, second_capped) == (13, True)
+
+
+def test_three_identical_zero_work_exits_trip_watchdog():
+    watchdog = {}
+    ws = {"enableZeroWorkRetryWatchdog": True, "zeroWorkRetryWatchdogMax": 3}
+    for _ in range(2):
+        assert not gates.note_zero_work_exit(
+            watchdog,
+            task_id="T1",
+            exit_reason="phase_cycle_cap",
+            ollama_call_count=0,
+            tool_call_count=0,
+            ws=ws,
+        )
+    assert gates.note_zero_work_exit(
+        watchdog,
+        task_id="T1",
+        exit_reason="phase_cycle_cap",
+        ollama_call_count=0,
+        tool_call_count=0,
+        ws=ws,
+    )

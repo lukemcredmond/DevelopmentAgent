@@ -83,7 +83,16 @@ def test_move_board_publishes_sse():
             received.append(item)
 
     state.EVENT_SUBSCRIBERS.append(FakeQueue())
-    task = init_new_task({"id": "T-TEST", "title": "Test", "description": "d"})
+    task = init_new_task(
+        {
+            "id": "T-TEST",
+            "title": "Test",
+            "description": "d",
+            "acceptanceCriteria": ["Move succeeds"],
+            "scope": "Board move",
+            "testPlan": "Verify lane",
+        }
+    )
     state.SHARED_BOARD.setdefault("Backlog", []).append(task)
     move_board_stage("T-TEST", "In Progress")
     assert any(e.get("type") == "board" for e in received)
@@ -230,7 +239,16 @@ def test_move_task_while_sprint_unlocked():
 
     initialize()
     client = TestClient(app)
-    task = init_new_task({"id": "T-MOVE", "title": "Move me", "description": "d"})
+    task = init_new_task(
+        {
+            "id": "T-MOVE",
+            "title": "Move me",
+            "description": "d",
+            "acceptanceCriteria": ["Move succeeds"],
+            "scope": "Board move",
+            "testPlan": "Verify lane",
+        }
+    )
     state.SHARED_BOARD.setdefault("Backlog", []).append(task)
     state.ACTIVE_SPRINT_TASK_ID = "other"
     state.ACTIVE_SPRINT_AGENT = "Developer"
@@ -395,8 +413,13 @@ def test_move_board_stage_removes_all_duplicate_copies():
 
     initialize()
     dup_id = "T-MOVE-DUP"
-    task_a = init_new_task({"id": dup_id, "title": "Dup", "description": "d"})
-    task_b = init_new_task({"id": dup_id, "title": "Dup copy", "description": "d"})
+    ready = {
+        "acceptanceCriteria": ["Move succeeds"],
+        "scope": "Board move",
+        "testPlan": "Verify lane",
+    }
+    task_a = init_new_task({"id": dup_id, "title": "Dup", "description": "d", **ready})
+    task_b = init_new_task({"id": dup_id, "title": "Dup copy", "description": "d", **ready})
     state.SHARED_BOARD = {
         "Backlog": [task_a],
         "QA": [task_b],
@@ -766,7 +789,16 @@ def test_audit_dev_files_written_warning():
     from backend.services.sprint_service import _audit_dev_files_written
 
     initialize()
-    task = init_new_task({"id": "T-NO-FILES", "title": "No files", "description": "d"})
+    task = init_new_task(
+        {
+            "id": "T-NO-FILES",
+            "title": "No files",
+            "description": "d",
+            "acceptanceCriteria": ["File exists"],
+            "scope": "One file",
+            "testPlan": "Verify file",
+        }
+    )
     state.SHARED_BOARD = {
         "In Progress": [],
         "QA": [task],
@@ -1492,7 +1524,11 @@ def test_add_backlog_tasks_split_moves_source_to_done():
         split_from_task_id="T-SPLIT",
     )
     assert "Added 2 task(s)" in result
-    assert any(t["id"] == "T-SPLIT" for t in state.SHARED_BOARD.get("Done", []))
+    parent = next(t for t in state.SHARED_BOARD.get("Done", []) if t["id"] == "T-SPLIT")
+    assert parent["splitSuperseded"] is True
+    assert parent["requiresDev"] is False
+    assert parent["requiresQa"] is False
+    assert len(parent["splitChildTaskIds"]) == 2
     assert len(state.SHARED_BOARD.get("Backlog", [])) == 2
     backlog = state.SHARED_BOARD["Backlog"]
     assert all("T-SPLIT" in (t.get("relatedTaskIds") or []) for t in backlog)
@@ -2286,6 +2322,9 @@ def test_work_type_skips_dev_claim():
             "id": "T-DEV",
             "title": "Implement login",
             "description": "Build login screen",
+                "acceptanceCriteria": ["Login screen works"],
+                "scope": "Login screen",
+                "testPlan": "Run login unit tests",
             "workType": "implementation",
             "requiresDev": True,
         }

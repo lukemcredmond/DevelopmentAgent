@@ -625,6 +625,14 @@ export interface WorkflowSettings {
   devExploreMaxTools?: number
   devPatchMaxTools?: number
   devVerifyMaxTools?: number
+  maxDevPhaseCyclesPerCard?: number
+  maxDevStepsPerCard?: number
+  forceCompleteOnUnhealthyExit?: boolean
+  enableStuckCircuitBreaker?: boolean
+  circuitBreakerMaxBadExits?: number
+  circuitBreakerIdenticalPatchFails?: number
+  enableZeroWorkRetryWatchdog?: boolean
+  zeroWorkRetryWatchdogMax?: number
   /** high = lean prompts + phase routing defaults; standard = full prompts. */
   agentEfficiencyMode?: 'high' | 'standard' | string
   enablePhaseModelRouting?: boolean
@@ -1337,6 +1345,14 @@ export interface WorkflowSettingsPayload {
   devExploreMaxTools?: number
   devPatchMaxTools?: number
   devVerifyMaxTools?: number
+  maxDevPhaseCyclesPerCard?: number
+  maxDevStepsPerCard?: number
+  forceCompleteOnUnhealthyExit?: boolean
+  enableStuckCircuitBreaker?: boolean
+  circuitBreakerMaxBadExits?: number
+  circuitBreakerIdenticalPatchFails?: number
+  enableZeroWorkRetryWatchdog?: boolean
+  zeroWorkRetryWatchdogMax?: number
   agentEfficiencyMode?: 'high' | 'standard' | string
   enablePhaseModelRouting?: boolean
   devExploreModel?: string
@@ -1688,9 +1704,17 @@ export const DEFAULT_WORKFLOW_SETTINGS: WorkflowSettings = {
   devExploreMaxTools: 3,
   devPatchMaxTools: 4,
   devVerifyMaxTools: 2,
+  maxDevPhaseCyclesPerCard: 12,
+  maxDevStepsPerCard: 12,
+  forceCompleteOnUnhealthyExit: false,
+  enableStuckCircuitBreaker: true,
+  circuitBreakerMaxBadExits: 3,
+  circuitBreakerIdenticalPatchFails: 3,
+  enableZeroWorkRetryWatchdog: true,
+  zeroWorkRetryWatchdogMax: 3,
   maxFocusStepsPerCard: 8,
   enablePromptSectionRotation: false,
-  splitCardWhenAcOver: 5,
+  splitCardWhenAcOver: 3,
   contextPacker: 'off',
   contextPackerMaxChars: 12000,
   repomixCommand: 'repomix',

@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-from typing import Any, Dict, List
+from typing import Any, Dict, List, Optional
 
 from backend.agents.task_context import coerce_task_text, normalize_acceptance_criteria
 
@@ -66,3 +66,38 @@ def spec_readiness(task: Dict[str, Any]) -> Dict[str, Any]:
 
     ok = len(missing) == 0
     return {"ok": ok, "missing": missing, "warnings": warnings}
+
+
+def dev_claim_blocked(
+    task: Dict[str, Any],
+    settings: Optional[Dict[str, Any]] = None,
+) -> Optional[str]:
+    """Deterministic hard gate used by every path that can enter Developer work."""
+    if task.get("requiresDev") is False:
+        return None
+    if str(task.get("workType") or "implementation").lower() != "implementation":
+        return None
+    if settings is None:
+        from backend.services.workflow_settings import get_workflow_settings
+
+        settings = get_workflow_settings()
+
+    from backend.services.board_service import is_oversized_implementation
+
+    oversized = is_oversized_implementation(task, settings=settings)
+    if oversized:
+        return oversized
+
+    missing: List[str] = []
+    if not coerce_task_text(task.get("description")).strip():
+        missing.append("description")
+    if not _scope_lines(task.get("scope")):
+        missing.append("scope")
+    if not coerce_task_text(task.get("testPlan")).strip():
+        missing.append("testPlan")
+    criteria = normalize_acceptance_criteria(task.get("acceptanceCriteria"))
+    if not criteria:
+        missing.append("acceptanceCriteria")
+    if missing:
+        return "Dev claim blocked: missing required spec fields: " + ", ".join(missing)
+    return None

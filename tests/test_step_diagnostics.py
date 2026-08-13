@@ -10,6 +10,7 @@ from backend.agents.task_context import init_new_task
 from backend.bootstrap import initialize
 from backend.services.sprint_service import run_in_progress_step
 from backend.services.step_diagnostics import (
+    build_card_work_snapshot,
     clear_active_step_trace,
     finalize_active_step_trace,
     get_active_trace,
@@ -49,6 +50,33 @@ def test_tracker_writes_json_file(tmp_path, monkeypatch):
     assert "filePath" in data
     assert get_active_trace() is None
     assert state.LAST_STEP_DIAGNOSTICS is not None
+
+
+def test_trace_does_not_merge_other_tasks_global_progress(tmp_path, monkeypatch):
+    monkeypatch.setenv("ALLHANDS_HOME", str(tmp_path))
+    initialize()
+    state.LAST_STEP_PROGRESS = {
+        "taskId": "OTHER",
+        "devPhaseGraph": {"cycle": 999, "phase": "explore"},
+    }
+    trace = start_step_trace("T-SCOPED", "Scoped", "Developer", "In Progress")
+    summary = finalize_active_step_trace(
+        lane_after="In Progress",
+        agent_result="Stopped: phase cycle cap reached",
+    )
+    assert summary is not None
+    data = json.loads(trace.file_path.read_text(encoding="utf-8"))
+    assert data["exitReason"] == "phase_cycle_cap"
+    assert "stepProgress" not in data
+
+
+def test_steps_on_card_uses_durable_dev_visits():
+    task = init_new_task({"id": "T-VISITS", "title": "Visits", "description": "d"})
+    task["devStepCount"] = 7
+    task["stuckLoops"] = 1
+    snapshot = build_card_work_snapshot(task)
+    assert snapshot["stepsOnCard"] == 7
+    assert snapshot["stuckLoops"] == 1
 
 
 def test_run_in_progress_logs_diagnostics_path(tmp_path, monkeypatch):

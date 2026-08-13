@@ -2456,7 +2456,10 @@ class ScrumAgent:
                                     steps_on_card = 0
                         if not steps_on_card:
                             try:
-                                steps_on_card = int(prior_task.get("stuckLoops") or 0)
+                                # Durable Dev visits, not the resetting stuckLoops counter.
+                                steps_on_card = max(
+                                    0, int(prior_task.get("devStepCount") or 0) - 1
+                                )
                             except (TypeError, ValueError):
                                 steps_on_card = 0
                         if prior_task.get("focusMode") == "ac" and prior_task.get("focusAcIndex") is not None:
@@ -2479,10 +2482,9 @@ class ScrumAgent:
                     "cycle cap" in str(getattr(graph, "status_text", "") or "").lower()
                 ):
                     stop_msg = (
-                        f"Stopped: explore tool budget reached without apply_patch/write_file. "
-                        f"Phase cycle cap (cycle {graph.cycle}) — split the card or narrow AC."
+                        f"Stopped: phase cycle cap reached (cycle {graph.cycle}). "
+                        "Split the card, clarify it, or explicitly reset the Developer visit budget."
                     )
-                    # Use explore_budget wording so derive_exit_reason / circuit breaker fire.
                     add_system_log(self.role, "warning", stop_msg)
                     try:
                         log_event("dev_phase_cycle_cap", f"cycle={graph.cycle}")

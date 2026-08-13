@@ -55,7 +55,7 @@ def test_focus_cap_blocks_infinite_micro_steps():
     }
     ensure_focus_initialized(task)
     assert focus_cap_reached(task) is True
-    assert should_block_lane_advance_for_focus(task) is False
+    assert should_block_lane_advance_for_focus(task) is True
 
 
 def test_micro_step_complete_on_focus_done_decision():

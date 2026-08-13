@@ -31,6 +31,8 @@ def _ac_unchecked(task: Dict[str, Any]) -> int:
 def audit_single_done_task(task: Dict[str, Any]) -> Optional[Dict[str, Any]]:
     """Return audit row if incomplete, else None."""
     normalize_task(task)
+    if task.get("splitSuperseded"):
+        return None
     items = derive_agent_work_items(task)
     pending_dev = [
         str(i.get("label") or i["id"])

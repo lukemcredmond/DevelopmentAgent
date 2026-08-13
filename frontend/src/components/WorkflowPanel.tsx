@@ -1446,9 +1446,9 @@ export default function WorkflowPanel({
             type="number"
             min={3}
             max={20}
-            value={settings.splitCardWhenAcOver ?? 5}
+            value={settings.splitCardWhenAcOver ?? 3}
             onChange={(e) =>
-              onSettingsChange({ splitCardWhenAcOver: Number(e.target.value) || 5 })
+              onSettingsChange({ splitCardWhenAcOver: Number(e.target.value) || 3 })
             }
             className="w-full bg-cat-base border border-cat-surface1 rounded p-1 text-white font-mono text-[10px]"
           />
@@ -2090,6 +2090,82 @@ export default function WorkflowPanel({
             onCommit={(maxAgentStepDurationSec) => onSettingsChange({ maxAgentStepDurationSec })}
             className="w-full bg-cat-base border border-cat-surface1 rounded p-1 text-white"
           />
+        </label>
+        <label>
+          <span className="text-[10px] text-cat-overlay block">Max Dev phase cycles / card</span>
+          <NumberSettingInput
+            value={settings.maxDevPhaseCyclesPerCard ?? 12}
+            min={1}
+            max={100}
+            onCommit={(maxDevPhaseCyclesPerCard) => onSettingsChange({ maxDevPhaseCyclesPerCard })}
+            className="w-full bg-cat-base border border-cat-surface1 rounded p-1 text-white"
+          />
+        </label>
+        <label>
+          <span className="text-[10px] text-cat-overlay block">Max Dev visits / card</span>
+          <NumberSettingInput
+            value={settings.maxDevStepsPerCard ?? 12}
+            min={1}
+            max={100}
+            onCommit={(maxDevStepsPerCard) => onSettingsChange({ maxDevStepsPerCard })}
+            className="w-full bg-cat-base border border-cat-surface1 rounded p-1 text-white"
+          />
+        </label>
+        <label>
+          <span className="text-[10px] text-cat-overlay block">Bad exits before circuit break</span>
+          <NumberSettingInput
+            value={settings.circuitBreakerMaxBadExits ?? 3}
+            min={1}
+            max={20}
+            onCommit={(circuitBreakerMaxBadExits) => onSettingsChange({ circuitBreakerMaxBadExits })}
+            className="w-full bg-cat-base border border-cat-surface1 rounded p-1 text-white"
+          />
+        </label>
+        <label>
+          <span className="text-[10px] text-cat-overlay block">Zero-work retry watchdog</span>
+          <NumberSettingInput
+            value={settings.zeroWorkRetryWatchdogMax ?? 3}
+            min={1}
+            max={20}
+            onCommit={(zeroWorkRetryWatchdogMax) => onSettingsChange({ zeroWorkRetryWatchdogMax })}
+            className="w-full bg-cat-base border border-cat-surface1 rounded p-1 text-white"
+          />
+        </label>
+        <label>
+          <span className="text-[10px] text-cat-overlay block">Identical patch failures</span>
+          <NumberSettingInput
+            value={settings.circuitBreakerIdenticalPatchFails ?? 3}
+            min={1}
+            max={20}
+            onCommit={(circuitBreakerIdenticalPatchFails) =>
+              onSettingsChange({ circuitBreakerIdenticalPatchFails })
+            }
+            className="w-full bg-cat-base border border-cat-surface1 rounded p-1 text-white"
+          />
+        </label>
+        <label className="flex items-center gap-2 text-[11px] text-cat-subtext cursor-pointer col-span-2">
+          <input
+            type="checkbox"
+            checked={settings.enableStuckCircuitBreaker !== false}
+            onChange={(e) => onSettingsChange({ enableStuckCircuitBreaker: e.target.checked })}
+          />
+          Enable stuck-card circuit breaker
+        </label>
+        <label className="flex items-center gap-2 text-[11px] text-cat-subtext cursor-pointer col-span-2">
+          <input
+            type="checkbox"
+            checked={settings.enableZeroWorkRetryWatchdog !== false}
+            onChange={(e) => onSettingsChange({ enableZeroWorkRetryWatchdog: e.target.checked })}
+          />
+          Pause auto sprint after repeated zero-work exits
+        </label>
+        <label className="flex items-center gap-2 text-[11px] text-cat-subtext cursor-pointer col-span-2">
+          <input
+            type="checkbox"
+            checked={settings.forceCompleteOnUnhealthyExit ?? false}
+            onChange={(e) => onSettingsChange({ forceCompleteOnUnhealthyExit: e.target.checked })}
+          />
+          Force completion on unhealthy exit (unsafe override)
         </label>
         <label className="flex items-center gap-2 text-[11px] text-cat-subtext cursor-pointer col-span-2">
           <input
