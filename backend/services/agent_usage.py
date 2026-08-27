@@ -36,6 +36,21 @@ def extract_ollama_token_counts(response: Any) -> Tuple[int, int, int, bool]:
     prompt = _get("prompt_eval_count")
     eval_ = _get("eval_count")
     if prompt is None and eval_ is None:
+        usage = None
+        if isinstance(response, dict):
+            usage = response.get("usage")
+        else:
+            usage = getattr(response, "usage", None)
+        if isinstance(usage, dict):
+            try:
+                prompt = int(usage.get("prompt_tokens") or 0) or None
+            except (TypeError, ValueError):
+                prompt = None
+            try:
+                eval_ = int(usage.get("completion_tokens") or 0) or None
+            except (TypeError, ValueError):
+                eval_ = None
+    if prompt is None and eval_ is None:
         return 0, 0, 0, False
     p = prompt or 0
     e = eval_ or 0

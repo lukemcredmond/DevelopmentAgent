@@ -93,7 +93,9 @@ def _set_bot_status(status: str, *, last_error: str = "") -> None:
 
 
 def _ollama_url() -> str:
-    return str(getattr(state, "OLLAMA_URL", "") or "").strip() or "http://localhost:11434"
+    from backend.services.llm_provider import chat_config
+
+    return str(chat_config().get("baseUrl") or "http://localhost:11434")
 
 
 def is_actor_allowed(

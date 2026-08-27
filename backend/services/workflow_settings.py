@@ -109,6 +109,12 @@ DEFAULT_WORKFLOW_SETTINGS: Dict[str, Any] = {
     "qdrantUrl": "http://localhost:6333",
     "qdrantApiKey": "",
     "embedModel": "nomic-embed-text",
+    "llmProvider": "ollama",
+    "llmProviderPreset": "ollama",
+    "llmBaseUrl": "http://localhost:11434",
+    "llmApiKey": "",
+    "embedProvider": "ollama",
+    "embedBaseUrl": "http://localhost:11434",
     "ollamaNumCtx": 32768,
     # Optional per-role override map {po,dev,cr,qa}; unset roles use sensible defaults.
     "ollamaNumCtxByRole": {},
@@ -259,6 +265,8 @@ def save_workflow_settings(settings: Dict[str, Any], project_id: str | None = No
         updates["agentPrompts"] = base_ap
     if not str(updates.get("qdrantApiKey") or "").strip():
         updates.pop("qdrantApiKey", None)
+    if not str(updates.get("llmApiKey") or "").strip():
+        updates.pop("llmApiKey", None)
     if not str(updates.get("phoneNotifyDiscordWebhookUrl") or "").strip():
         updates.pop("phoneNotifyDiscordWebhookUrl", None)
     if not str(updates.get("discordBotToken") or "").strip():

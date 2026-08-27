@@ -366,16 +366,70 @@ export default function SettingsSlideOver({
             <div className="space-y-3 text-xs">
               <label className="block">
                 <span className="text-[10px] text-cat-subtext mb-0.5 inline-flex items-center">
-                  OLLAMA URL
-                  <SettingHint hint="Address of your local Ollama server that runs the AI models (usually http://localhost:11434)." />
+                  LLM PROVIDER
+                  <SettingHint hint="Ollama uses native /api/chat options (num_ctx, keep_alive). LM Studio and other OpenAI-compatible servers use /v1/chat/completions." />
+                </span>
+                <select
+                  value={state.workflowSettings?.llmProviderPreset || 'ollama'}
+                  onChange={(e) => {
+                    const preset = e.target.value as 'ollama' | 'lmstudio' | 'custom'
+                    const nextUrl =
+                      preset === 'ollama'
+                        ? 'http://localhost:11434'
+                        : 'http://localhost:1234/v1'
+                    const provider = preset === 'ollama' ? 'ollama' : 'openai_compat'
+                    onOllamaUrlChange(nextUrl)
+                    onWorkflowSettingsChange({
+                      llmProviderPreset: preset,
+                      llmProvider: provider,
+                      llmBaseUrl: nextUrl,
+                    })
+                  }}
+                  className="w-full bg-cat-base border border-cat-surface1 rounded p-2 text-white focus:outline-none"
+                >
+                  <option value="ollama">Ollama</option>
+                  <option value="lmstudio">LM Studio</option>
+                  <option value="custom">OpenAI-compatible (custom)</option>
+                </select>
+              </label>
+              <label className="block">
+                <span className="text-[10px] text-cat-subtext mb-0.5 inline-flex items-center">
+                  LLM SERVER URL
+                  <SettingHint hint="Chat API base URL. Ollama is usually http://localhost:11434. LM Studio is usually http://localhost:1234/v1." />
                 </span>
                 <input
                   type="text"
                   value={ollamaUrl}
-                  onChange={(e) => onOllamaUrlChange(e.target.value)}
+                  onChange={(e) => {
+                    const v = e.target.value
+                    onOllamaUrlChange(v)
+                    onWorkflowSettingsChange({ llmBaseUrl: v })
+                  }}
                   className="w-full bg-cat-base border border-cat-surface1 rounded p-2 text-white font-mono focus:outline-none"
                 />
               </label>
+              {(state.workflowSettings?.llmProvider || 'ollama') !== 'ollama' && (
+                <p className="text-[10px] text-cat-overlay leading-relaxed">
+                  Context size (num_ctx), keep_alive, and VRAM unload are Ollama-only. LM Studio uses the
+                  model currently loaded in the app.
+                </p>
+              )}
+              {(state.workflowSettings?.llmProviderPreset === 'custom' ||
+                state.workflowSettings?.llmProviderPreset === 'lmstudio') && (
+                <label className="block">
+                  <span className="text-[10px] text-cat-subtext mb-0.5 inline-flex items-center">
+                    LLM API KEY
+                    <SettingHint hint="Optional. LM Studio accepts a dummy value such as lm-studio. Leave blank to keep the stored key." />
+                  </span>
+                  <input
+                    type="password"
+                    autoComplete="off"
+                    placeholder="Optional (leave blank to keep)"
+                    onChange={(e) => onWorkflowSettingsChange({ llmApiKey: e.target.value })}
+                    className="w-full bg-cat-base border border-cat-surface1 rounded p-2 text-white font-mono focus:outline-none"
+                  />
+                </label>
+              )}
               <div className="space-y-1.5" data-testid="settings-api-token">
                 <label className="block">
                   <span className="text-[10px] text-cat-subtext mb-0.5 inline-flex items-center">

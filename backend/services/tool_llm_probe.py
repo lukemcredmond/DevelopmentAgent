@@ -46,11 +46,11 @@ def _extract_first_tool_call(message: Any) -> tuple[Optional[str], Dict[str, Any
         fn = tc.get("function") or {}
         name = fn.get("name") if isinstance(fn, dict) else None
         args = fn.get("arguments") if isinstance(fn, dict) else {}
-        return (str(name) if name else None), _normalize_tool_arguments(args)
+        return (str(name) if name else None), normalize_tool_arguments(args)
     fn = getattr(tc, "function", None)
     name = getattr(fn, "name", None) if fn is not None else None
     args = getattr(fn, "arguments", None) if fn is not None else None
-    return (str(name) if name else None), _normalize_tool_arguments(args)
+    return (str(name) if name else None), normalize_tool_arguments(args)
 
 
 def run_llm_tool_probe(
@@ -135,8 +135,12 @@ def run_llm_tool_probe(
     ws = get_workflow_settings()
     options = {
         "temperature": 0.1,
-        "num_ctx": int(ws.get("ollamaNumCtx", 32768)),
     }
+    provider = agent._get_provider() if chat_fn is None else None
+    if provider is not None and provider.capabilities.num_ctx:
+        options["num_ctx"] = int(ws.get("ollamaNumCtx", 32768))
+    elif chat_fn is not None:
+        options["num_ctx"] = int(ws.get("ollamaNumCtx", 32768))
 
     started = time.time()
     llm_content = ""
@@ -144,10 +148,9 @@ def run_llm_tool_probe(
         if chat_fn is not None:
             result = chat_fn(resolved_model, messages, tools, options)
         else:
-            client = agent._get_client()
-            result = client.chat(
-                model=resolved_model,
-                messages=messages,
+            result = provider.chat(
+                resolved_model,
+                messages,
                 tools=tools,
                 stream=False,
                 options=options,

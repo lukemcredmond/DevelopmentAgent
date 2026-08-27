@@ -222,6 +222,12 @@ class WorkflowSettingsPayload(BaseModel):
     qdrantUrl: Optional[str] = None
     qdrantApiKey: Optional[str] = None
     embedModel: Optional[str] = None
+    llmProvider: Optional[str] = None
+    llmProviderPreset: Optional[str] = None
+    llmBaseUrl: Optional[str] = None
+    llmApiKey: Optional[str] = None
+    embedProvider: Optional[str] = None
+    embedBaseUrl: Optional[str] = None
     ollamaNumCtx: Optional[int] = None
     ollamaNumCtxByRole: Optional[Dict[str, int]] = None
     ollamaNumCtxAuto: Optional[bool] = None

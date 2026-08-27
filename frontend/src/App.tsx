@@ -228,6 +228,11 @@ export default function App() {
   const [ollamaUrl, setOllamaUrl] = useState('http://localhost:11434')
   const [brief, setBrief] = useState('')
   const briefDirtyRef = useRef(false)
+
+  useEffect(() => {
+    const saved = String(state.workflowSettings?.llmBaseUrl || '').trim()
+    if (saved) setOllamaUrl(saved)
+  }, [state.projectId, state.workflowSettings?.llmBaseUrl])
   const planDirtyRef = useRef(false)
   const documentsSaveTimerRef = useRef<number | null>(null)
 
@@ -301,6 +306,12 @@ export default function App() {
   const [showDiff, setShowDiff] = useState(false)
   const [bottomTab, setBottomTab] = useState<BottomTab>('console')
   const [memoryCount, setMemoryCount] = useState(0)
+
+  useEffect(() => {
+    if ((state.workflowSettings?.llmProvider || 'ollama') !== 'ollama' && bottomTab === 'ollamaServer') {
+      setBottomTab('model')
+    }
+  }, [state.workflowSettings?.llmProvider, bottomTab])
   const [kanbanOpen, setKanbanOpen] = useState(readKanbanOpen)
   const [briefOpen, setBriefOpen] = useState(() => (readKanbanOpen() ? false : readBriefOpen()))
   const [settingsOpen, setSettingsOpen] = useState(false)
@@ -912,9 +923,11 @@ export default function App() {
   }
 
   const chatFilePaths = useMemo(() => Object.keys(localFiles), [localFiles])
+  const llmIsOllama = (state.workflowSettings?.llmProvider || 'ollama') === 'ollama'
 
   const bottomTabs = useMemo(
-    (): { id: BottomTab; label: string; icon: string; badge?: number; group?: string }[] => [
+    (): { id: BottomTab; label: string; icon: string; badge?: number; group?: string }[] => {
+      const tabs: { id: BottomTab; label: string; icon: string; badge?: number; group?: string }[] = [
       { id: 'console', label: 'Console', icon: 'fa-terminal', group: 'Work' },
       { id: 'tools', label: 'Tools', icon: 'fa-wrench', group: 'Work', badge: toolRunningCount > 0 ? toolRunningCount : toolFailureCount || undefined },
       {
@@ -931,10 +944,14 @@ export default function App() {
       { id: 'search', label: 'Search', icon: 'fa-magnifying-glass', group: 'Code' },
       { id: 'git', label: 'Git', icon: 'fa-code-branch', group: 'Code' },
       { id: 'model', label: 'Model', icon: 'fa-brain', group: 'Debug' },
-      { id: 'ollamaServer', label: 'Ollama Server', icon: 'fa-server', group: 'Debug' },
-      { id: 'memory', label: 'Memory', icon: 'fa-brain-circuit', group: 'Debug', badge: memoryCount > 0 ? memoryCount : undefined },
-    ],
-    [toolRunningCount, toolFailureCount, activityEvents.length, memoryCount, selectedFile, state.projectToolEvidence?.length],
+      ]
+      if (llmIsOllama) {
+        tabs.push({ id: 'ollamaServer', label: 'Ollama Server', icon: 'fa-server', group: 'Debug' })
+      }
+      tabs.push({ id: 'memory', label: 'Memory', icon: 'fa-brain-circuit', group: 'Debug', badge: memoryCount > 0 ? memoryCount : undefined })
+      return tabs
+    },
+    [toolRunningCount, toolFailureCount, activityEvents.length, memoryCount, selectedFile, state.projectToolEvidence?.length, llmIsOllama],
   )
 
   const commandPaletteItems = useMemo((): CommandPaletteItem[] => {

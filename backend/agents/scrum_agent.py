@@ -6,7 +6,6 @@ import time
 from concurrent.futures import ThreadPoolExecutor
 from typing import Any, Dict, Generator, List, Mapping, Optional, Sequence, Tuple, Union
 
-from ollama import Client
 from ollama._types import Message
 
 from backend import state
@@ -363,7 +362,10 @@ class ScrumAgent:
         self.memory = create_memory_engine(ollama_url=self.ollama_url)
         self.registry = ToolRegistry()
         self.assigned_skills: List[str] = []
-        self._client: Optional[Client] = None
+        self._provider = None
+        self._provider_host: Optional[str] = None
+        self._provider_timeout: Optional[float] = None
+        self._client = None
         self._client_host: Optional[str] = None
         self._client_timeout: Optional[float] = None
         self._last_memories_used: List[Dict[str, Any]] = []
@@ -425,17 +427,28 @@ class ScrumAgent:
             return [max(0, int(d)) for d in raw]
         return [0, 2, 5, 10]
 
-    def _get_client(self) -> Client:
+    def _get_provider(self):
+        from backend.services.llm_provider import get_chat_provider
+
         timeout = self._ollama_timeout_sec()
         if (
-            self._client is None
-            or self._client_host != self.ollama_url
-            or self._client_timeout != timeout
+            self._provider is None
+            or self._provider_host != self.ollama_url
+            or self._provider_timeout != timeout
         ):
-            self._client = Client(host=self.ollama_url, timeout=timeout)
-            self._client_host = self.ollama_url
-            self._client_timeout = timeout
-        return self._client
+            self._provider = get_chat_provider(override_url=self.ollama_url)
+            self._provider.timeout_sec = timeout
+            self._provider_host = self.ollama_url
+            self._provider_timeout = timeout
+        return self._provider
+
+    def _get_client(self):
+        """Ollama SDK client when the chat provider is Ollama; otherwise the provider."""
+        provider = self._get_provider()
+        getter = getattr(provider, "_get_client", None)
+        if callable(getter):
+            return getter()
+        return provider
 
     def _get_skills_context(self) -> str:
         if not self.assigned_skills:
@@ -764,6 +777,7 @@ class ScrumAgent:
         *,
         duplicate_skip: bool = False,
         duplicate_attempt: int = 0,
+        tool_call_id: Optional[str] = None,
     ) -> None:
         from backend.services.llm_context import prepare_tool_output_parts
 
@@ -786,13 +800,16 @@ class ScrumAgent:
             path=str(arguments.get("path") or "") if tool_name == "read_file" else None,
         )
         for idx, llm_output in enumerate(parts):
-            messages.append(
-                {
-                    "role": "tool",
-                    "tool_name": tool_name,
-                    "content": llm_output,
-                }
-            )
+            tool_msg: Dict[str, Any] = {
+                "role": "tool",
+                "content": llm_output,
+            }
+            provider = self._get_provider()
+            if provider.capabilities.native_tool_name:
+                tool_msg["tool_name"] = tool_name
+            else:
+                tool_msg["tool_call_id"] = str(tool_call_id or f"call_{idx}")
+            messages.append(tool_msg)
         if len(parts) > 1:
             messages.append(
                 {
@@ -1012,10 +1029,12 @@ class ScrumAgent:
         ws = get_workflow_settings()
         opts: Dict[str, Any] = {
             "temperature": 0.1,
-            "num_ctx": self._effective_num_ctx(),
         }
+        provider = self._get_provider()
+        if provider.capabilities.num_ctx:
+            opts["num_ctx"] = self._effective_num_ctx()
         keep_alive = ws.get("ollamaKeepAlive")
-        if keep_alive:
+        if keep_alive and provider.capabilities.keep_alive:
             opts["keep_alive"] = str(keep_alive)
         return opts
 
@@ -1048,7 +1067,7 @@ class ScrumAgent:
 
     def _single_chat_attempt(
         self,
-        client: Client,
+        provider,
         messages: Sequence[ChatMessage],
         *,
         stream: bool,
@@ -1064,9 +1083,9 @@ class ScrumAgent:
 
         started = time.time()
         try:
-            result = client.chat(
-                model=self.model,
-                messages=list(messages),
+            result = provider.chat(
+                self.model,
+                list(messages),
                 tools=tools,
                 stream=stream,
                 options=self._chat_options(),
@@ -1092,6 +1111,7 @@ class ScrumAgent:
                     for tc in msg.tool_calls:
                         tool_calls.append(
                             {
+                                "id": getattr(tc, "id", None),
                                 "name": tc.function.name,
                                 "arguments": tc.function.arguments,
                             }
@@ -1153,7 +1173,7 @@ class ScrumAgent:
     ):
         from backend.agents.registry import AGENT_MAP
 
-        client = self._get_client()
+        provider = self._get_provider()
         max_retries = self._ollama_max_retries()
         delays = self._ollama_retry_delays()
         while len(delays) < max_retries:
@@ -1180,7 +1200,7 @@ class ScrumAgent:
                 attempt_num = idx + 1
                 while True:
                     result, err, err_type, duration_ms = self._single_chat_attempt(
-                        client,
+                        provider,
                         messages,
                         stream=stream,
                         tools=tools,
@@ -2039,6 +2059,7 @@ class ScrumAgent:
                 result.success,
                 duplicate_skip=bool(getattr(result, "duplicate_skip", False)),
                 duplicate_attempt=int(getattr(result, "duplicate_attempt", 0) or 0),
+                tool_call_id=str(getattr(call, "id", "") or ""),
             )
 
         batch = [

@@ -1355,7 +1355,11 @@ def _maybe_auto_extend_dev_step(
     try:
         from backend.services.prompt_retry import extend_agent_step
 
-        ollama_url = str(getattr(state, "OLLAMA_URL", "") or "http://localhost:11434")
+        ollama_url = str(getattr(state, "OLLAMA_URL", "") or "").strip()
+        if not ollama_url:
+            from backend.services.llm_provider import chat_config
+
+            ollama_url = str(chat_config().get("baseUrl") or "http://localhost:11434")
         ext = extend_agent_step(
             task_id,
             "dev",

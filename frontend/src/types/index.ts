@@ -548,6 +548,12 @@ export interface WorkflowSettings {
   qdrantApiKey?: string
   qdrantApiKeyConfigured?: boolean
   embedModel?: string
+  llmProvider?: 'ollama' | 'openai_compat' | string
+  llmProviderPreset?: 'ollama' | 'lmstudio' | 'custom' | string
+  llmBaseUrl?: string
+  llmApiKey?: string
+  embedProvider?: 'inherit' | 'ollama' | 'openai_compat' | string
+  embedBaseUrl?: string
   ollamaNumCtx?: number
   ollamaNumCtxByRole?: Partial<Record<'po' | 'dev' | 'cr' | 'qa', number>>
   ollamaNumCtxAuto?: boolean
@@ -1267,6 +1273,12 @@ export interface WorkflowSettingsPayload {
   qdrantApiKey?: string
   qdrantApiKeyConfigured?: boolean
   embedModel?: string
+  llmProvider?: 'ollama' | 'openai_compat' | string
+  llmProviderPreset?: 'ollama' | 'lmstudio' | 'custom' | string
+  llmBaseUrl?: string
+  llmApiKey?: string
+  embedProvider?: 'inherit' | 'ollama' | 'openai_compat' | string
+  embedBaseUrl?: string
   ollamaNumCtx?: number
   ollamaNumCtxByRole?: Partial<Record<'po' | 'dev' | 'cr' | 'qa', number>>
   ollamaNumCtxAuto?: boolean
@@ -1630,6 +1642,11 @@ export const DEFAULT_WORKFLOW_SETTINGS: WorkflowSettings = {
   qdrantUrl: 'http://localhost:6333',
   qdrantApiKeyConfigured: false,
   embedModel: 'nomic-embed-text',
+  llmProvider: 'ollama',
+  llmProviderPreset: 'ollama',
+  llmBaseUrl: 'http://localhost:11434',
+  embedProvider: 'ollama',
+  embedBaseUrl: 'http://localhost:11434',
   ollamaNumCtx: 32768,
   ollamaNumCtxByRole: {},
   ollamaNumCtxAuto: true,

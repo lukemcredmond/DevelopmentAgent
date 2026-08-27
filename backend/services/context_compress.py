@@ -5,7 +5,6 @@ from __future__ import annotations
 from typing import Optional
 
 from backend.services.logs import add_system_log
-from backend.services.ollama_warmup import _ollama_host
 from backend.services.workflow_settings import get_workflow_settings
 
 _COMPRESSED_HEADER = "=== COMPRESSED WORKSPACE CONTEXT ==="
@@ -69,12 +68,13 @@ def maybe_compress_sprint_context_block(
         f"{text[: min(len(text), 48000)]}"
     )
     try:
-        from ollama import Client
+        from backend.services.llm_provider import get_chat_provider
 
-        client = Client(host=_ollama_host(), timeout=timeout)
-        resp = client.chat(
-            model=model,
-            messages=[{"role": "user", "content": prompt}],
+        provider = get_chat_provider()
+        provider.timeout_sec = timeout
+        resp = provider.chat(
+            model,
+            [{"role": "user", "content": prompt}],
             options={"num_predict": max(512, max_out // 2), "temperature": 0.2},
         )
         content = (resp.message.content or "").strip() if resp and resp.message else ""

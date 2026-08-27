@@ -6,6 +6,7 @@ from fastapi.responses import StreamingResponse
 
 from backend import state
 from backend.services.llm_debug_log import clear_llm_log, get_llm_logs
+from backend.services.llm_provider import get_chat_provider
 from backend.services.model_timeline import build_model_timeline
 from backend.services.ollama_service_log import read_service_log_snapshot, stream_service_logs
 from backend.services.qdrant_auth import qdrant_connection_settings, qdrant_request_headers
@@ -15,16 +16,18 @@ router = APIRouter()
 
 
 @router.get("/api/ollama/health")
-def ollama_health(url: str = "http://localhost:11434"):
-    try:
-        response = requests.get(f"{url.rstrip('/')}/api/tags", timeout=5)
-        if response.status_code == 200:
-            data = response.json()
-            models = [m.get("name") for m in data.get("models", [])]
-            return {"ok": True, "url": url, "models": models}
-        return {"ok": False, "url": url, "error": f"HTTP {response.status_code}"}
-    except requests.RequestException as e:
-        return {"ok": False, "url": url, "error": str(e)}
+def ollama_health(url: Optional[str] = None):
+    provider = get_chat_provider(override_url=url)
+    result = provider.health()
+    payload: Dict[str, Any] = {
+        "ok": result.ok,
+        "url": result.url,
+        "models": result.models,
+        "provider": result.provider,
+    }
+    if result.error:
+        payload["error"] = result.error
+    return payload
 
 
 @router.get("/api/ollama/logs")
@@ -98,23 +101,22 @@ def system_capacity():
 
 
 @router.get("/api/ollama/model-recommendations")
-def model_recommendations(ollamaUrl: str = "http://localhost:11434"):
+def model_recommendations(ollamaUrl: Optional[str] = None):
     capacity = probe_system_capacity()
     installed: List[str] = []
     installed_ok = False
     tags_error: Optional[str] = None
-    try:
-        resp = requests.get(f"{ollamaUrl.rstrip('/')}/api/tags", timeout=5)
-        if resp.status_code == 200:
-            installed = [m.get("name") for m in resp.json().get("models", []) if m.get("name")]
-            installed_ok = True
-        else:
-            tags_error = f"HTTP {resp.status_code}"
-    except requests.RequestException as e:
-        tags_error = str(e)
+    provider = get_chat_provider(override_url=ollamaUrl)
+    health = provider.health()
+    if health.ok:
+        installed = list(health.models)
+        installed_ok = True
+    else:
+        tags_error = health.error
     result = get_model_recommendations(capacity, installed_models=installed)
     result["installedOk"] = installed_ok
     result["installedModels"] = installed
+    result["provider"] = health.provider
     if tags_error:
         result["installedError"] = tags_error
     return result

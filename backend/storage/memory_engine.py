@@ -5,8 +5,6 @@ import sqlite3
 import uuid
 from typing import Any, Dict, List, Optional
 
-import requests
-
 from backend.config import DB_PATH
 
 
@@ -72,19 +70,11 @@ class SemanticMemoryEngine:
             conn.commit()
 
     def _embed_ollama(self, text: str) -> Optional[List[float]]:
-        try:
-            response = requests.post(
-                f"{self.ollama_url}/api/embeddings",
-                json={"model": self.embed_model, "prompt": text},
-                timeout=30,
-            )
-            if response.status_code == 200:
-                data = response.json()
-                embedding = data.get("embedding")
-                if isinstance(embedding, list) and embedding:
-                    return embedding
-        except requests.RequestException:
-            pass
+        from backend.services.llm_provider import get_embed_provider
+
+        embedding = get_embed_provider().embed(self.embed_model, text)
+        if isinstance(embedding, list) and embedding:
+            return embedding
         return None
 
     @staticmethod

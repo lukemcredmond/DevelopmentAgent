@@ -1291,6 +1291,32 @@ export default function WorkflowPanel({
             <span className="font-mono">ollama list</span>.
           </p>
           <label className="block text-[10px] text-cat-subtext">
+            Embed provider
+            <select
+              value={settings.embedProvider ?? 'ollama'}
+              onChange={(e) => onSettingsChange({ embedProvider: e.target.value })}
+              className="mt-0.5 w-full bg-cat-base border border-cat-surface1 rounded px-2 py-1 text-[10px] text-white"
+            >
+              <option value="ollama">Ollama (recommended)</option>
+              <option value="inherit">Same as chat provider</option>
+              <option value="openai_compat">OpenAI-compatible /v1/embeddings</option>
+            </select>
+          </label>
+          <p className="text-[10px] text-cat-overlay leading-relaxed">
+            Keep embeddings on Ollama when chat is LM Studio so an existing Qdrant index stays valid.
+          </p>
+          {(settings.embedProvider ?? 'ollama') !== 'inherit' && (
+            <label className="block text-[10px] text-cat-subtext">
+              Embed server URL
+              <input
+                type="text"
+                value={settings.embedBaseUrl ?? 'http://localhost:11434'}
+                onChange={(e) => onSettingsChange({ embedBaseUrl: e.target.value })}
+                className="mt-0.5 w-full bg-cat-base border border-cat-surface1 rounded px-2 py-1 font-mono text-[10px] text-white"
+              />
+            </label>
+          )}
+          <label className="block text-[10px] text-cat-subtext">
             Qdrant URL
             <input
               type="text"
@@ -1794,7 +1820,7 @@ export default function WorkflowPanel({
       <label className="text-[11px] text-cat-subtext block">
         <span className="text-[10px] text-cat-overlay inline-flex items-center">
           Ollama context size (num_ctx)
-          <SettingHint hint="How many tokens of conversation the model can hold. Higher uses more RAM/VRAM and can be slower." />
+          <SettingHint hint="How many tokens of conversation the model can hold. Higher uses more RAM/VRAM and can be slower. Ignored on LM Studio / OpenAI-compatible servers." />
         </span>
         <NumberSettingInput
           value={settings.ollamaNumCtx ?? 32768}
@@ -1804,6 +1830,12 @@ export default function WorkflowPanel({
           className="w-full bg-cat-base border border-cat-surface1 rounded p-1 text-white"
         />
       </label>
+      {(settings.llmProvider || 'ollama') !== 'ollama' && (
+        <p className="text-[10px] text-amber-200/90 leading-relaxed -mt-1">
+          num_ctx is not sent to OpenAI-compatible servers. Context length is whatever is loaded in
+          LM Studio (or equivalent).
+        </p>
+      )}
       <p className="text-[10px] text-cat-overlay leading-relaxed -mt-1">
         Global default. Dev uses this; PO/CR/QA default to min(global, 16384) unless overridden below.
         Increase if you see exceed_context_size_error. Higher values use more RAM/VRAM.

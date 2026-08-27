@@ -309,7 +309,15 @@ def assistant_message_to_chat_dict(message: Any) -> Dict[str, Any]:
             args = normalize_tool_arguments(args)
         elif not isinstance(args, dict):
             args = normalize_tool_arguments(args)
-        serialized.append({"function": {"name": name, "arguments": args or {}}})
+        call_id = None
+        if isinstance(tc, dict):
+            call_id = tc.get("id")
+        else:
+            call_id = getattr(tc, "id", None)
+        entry: Dict[str, Any] = {"function": {"name": name, "arguments": args or {}}}
+        if call_id:
+            entry["id"] = str(call_id)
+        serialized.append(entry)
     out: Dict[str, Any] = {"role": role, "content": content}
     if serialized:
         out["tool_calls"] = serialized

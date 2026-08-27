@@ -1,25 +1,35 @@
-"""Best-effort Ollama model warm / unload helpers (never block long)."""
+"""Best-effort model warm / unload helpers (never block long)."""
 
 from __future__ import annotations
 
 import threading
 import time
-from typing import Any, Optional
+from typing import Optional
 
 from backend.services.logs import add_system_log
 from backend.services.workflow_settings import get_workflow_settings
 
+_logged_compat_noop = False
 
-def _ollama_host() -> str:
-    try:
-        from backend import state
 
-        url = str(getattr(state, "OLLAMA_URL", "") or "").strip()
-        if url:
-            return url
-    except Exception:
-        pass
-    return "http://localhost:11434"
+def _chat_provider(*, timeout_sec: float = 2.0):
+    from backend.services.llm_provider import get_chat_provider
+
+    provider = get_chat_provider()
+    provider.timeout_sec = timeout_sec
+    return provider
+
+
+def _log_compat_noop_once(action: str) -> None:
+    global _logged_compat_noop
+    if _logged_compat_noop:
+        return
+    _logged_compat_noop = True
+    add_system_log(
+        "System",
+        "info",
+        f"{action} skipped — current LLM provider does not support keep_alive / VRAM unload",
+    )
 
 
 def unload_model(model: str, *, timeout_sec: float = 2.0) -> bool:
@@ -28,16 +38,11 @@ def unload_model(model: str, *, timeout_sec: float = 2.0) -> bool:
     if not model:
         return False
     try:
-        from ollama import Client
-
-        client = Client(host=_ollama_host(), timeout=timeout_sec)
-        client.chat(
-            model=model,
-            messages=[{"role": "user", "content": "."}],
-            options={"num_predict": 1},
-            keep_alive=0,
-        )
-        return True
+        provider = _chat_provider(timeout_sec=timeout_sec)
+        if not provider.capabilities.vram_unload:
+            _log_compat_noop_once("VRAM unload")
+            return False
+        return provider.unload(model)
     except Exception as exc:
         add_system_log(
             "System",
@@ -53,18 +58,13 @@ def warm_model(model: str, *, timeout_sec: float = 2.0) -> bool:
     if not model:
         return False
     try:
-        from ollama import Client
-
+        provider = _chat_provider(timeout_sec=timeout_sec)
+        if not provider.capabilities.keep_alive:
+            _log_compat_noop_once("Model warmup")
+            return False
         ws = get_workflow_settings()
         keep_alive = ws.get("ollamaKeepAlive") or "30m"
-        client = Client(host=_ollama_host(), timeout=timeout_sec)
-        client.chat(
-            model=model,
-            messages=[{"role": "user", "content": "."}],
-            options={"num_predict": 1},
-            keep_alive=str(keep_alive),
-        )
-        return True
+        return provider.warm(model, keep_alive=str(keep_alive))
     except Exception as exc:
         add_system_log(
             "System",

@@ -175,7 +175,6 @@ def _merge_with_llm(
     sources: List[Dict[str, str]],
     ollama_url: str,
 ) -> str:
-    from backend.services.ollama_warmup import _ollama_host
     from backend.services.workflow_settings import get_workflow_settings
 
     ws = get_workflow_settings()
@@ -203,15 +202,13 @@ def _merge_with_llm(
         f"{corpus}"
     )
 
-    from ollama import Client
+    from backend.services.llm_provider import get_chat_provider
 
-    host = _ollama_host()
-    if ollama_url and ollama_url.strip():
-        host = ollama_url.replace("/v1", "").rstrip("/")
-    client = Client(host=host, timeout=timeout)
-    resp = client.chat(
-        model=model,
-        messages=[
+    provider = get_chat_provider(override_url=ollama_url)
+    provider.timeout_sec = timeout
+    resp = provider.chat(
+        model,
+        [
             {"role": "system", "content": system},
             {"role": "user", "content": user},
         ],

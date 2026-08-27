@@ -7,8 +7,6 @@ import re
 import uuid
 from typing import Any, Dict, List, Optional, Tuple
 
-import requests
-
 from backend import state
 from backend.services.events import publish_event
 from backend.services.logs import add_system_log
@@ -201,44 +199,42 @@ class CodeIndexEngine:
 
     def _verify_embed_model(self) -> Optional[str]:
         """Return error message if embed model unavailable, else None."""
-        try:
-            resp = requests.get(f"{self.ollama_url}/api/tags", timeout=10)
-            if resp.status_code != 200:
-                return f"Ollama unreachable at {self.ollama_url} (HTTP {resp.status_code})"
-            names = {m.get("name") for m in resp.json().get("models", []) if m.get("name")}
-            base = self.embed_model.split(":")[0]
-            if self.embed_model not in names and not any(n.startswith(base) for n in names):
-                return (
-                    f"Embed model '{self.embed_model}' not found in Ollama. "
-                    f"Run: ollama pull {self.embed_model}"
-                )
-        except requests.RequestException as exc:
-            return f"Cannot reach Ollama at {self.ollama_url}: {exc}"
+        from backend.services.llm_provider import PROVIDER_OLLAMA, get_embed_provider
+
+        provider = get_embed_provider()
+        health = provider.health()
+        if not health.ok:
+            return f"Embed provider unreachable at {health.url}: {health.error or 'unknown error'}"
+        names = {m for m in health.models if m}
+        base = self.embed_model.split(":")[0]
+        if (
+            provider.provider_id == PROVIDER_OLLAMA
+            and names
+            and self.embed_model not in names
+            and not any(n.startswith(base) for n in names)
+        ):
+            return (
+                f"Embed model '{self.embed_model}' not found. "
+                f"Run: ollama pull {self.embed_model}"
+            )
 
         test = self._embed("index preflight test")
         if not test:
             return (
-                f"Embedding test failed for '{self.embed_model}' at {self.ollama_url}. "
-                f"Ensure the model is pulled and Ollama is running."
+                f"Embedding test failed for '{self.embed_model}' at {health.url}. "
+                f"Ensure the embed model is loaded and the embed provider is running."
             )
         self._embed_dim = len(test)
         return None
 
     def _embed(self, text: str) -> Optional[List[float]]:
-        try:
-            resp = requests.post(
-                f"{self.ollama_url}/api/embeddings",
-                json={"model": self.embed_model, "prompt": text[:4000]},
-                timeout=60,
-            )
-            if resp.status_code == 200:
-                emb = resp.json().get("embedding")
-                if isinstance(emb, list) and len(emb) >= 64:
-                    if self._embed_dim is None:
-                        self._embed_dim = len(emb)
-                    return emb
-        except requests.RequestException:
-            pass
+        from backend.services.llm_provider import get_embed_provider
+
+        embedding = get_embed_provider().embed(self.embed_model, text)
+        if isinstance(embedding, list) and len(embedding) >= 64:
+            if self._embed_dim is None:
+                self._embed_dim = len(embedding)
+            return embedding
         return None
 
     @staticmethod

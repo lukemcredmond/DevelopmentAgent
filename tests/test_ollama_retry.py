@@ -22,7 +22,7 @@ def test_get_client_uses_workflow_timeout():
     reset_workflow_settings()
     save_workflow_settings({"ollamaRequestTimeoutSec": 420})
     agent = ScrumAgent("Developer", "test-model", "system", "http://localhost:11434")
-    with patch("backend.agents.scrum_agent.Client") as mock_client:
+    with patch("ollama.Client") as mock_client:
         agent._get_client()
         mock_client.assert_called_with(host="http://localhost:11434", timeout=420.0)
 
@@ -46,16 +46,16 @@ def test_chat_cooldown_retry_on_transient_failure():
         }
     )
     agent = ScrumAgent("Developer", "test-model", "system", "http://localhost:11434")
-    mock_client = MagicMock()
+    mock_provider = MagicMock()
     success = MagicMock()
     success.message.content = "ok"
     success.message.tool_calls = None
-    mock_client.chat.side_effect = [Exception("connection refused"), success]
-    with patch.object(agent, "_get_client", return_value=mock_client):
+    mock_provider.chat.side_effect = [Exception("connection refused"), success]
+    with patch.object(agent, "_get_provider", return_value=mock_provider):
         with patch("backend.agents.scrum_agent.time.sleep"):
             result = agent._chat([{"role": "user", "content": "hi"}])
     assert result is success
-    assert mock_client.chat.call_count == 2
+    assert mock_provider.chat.call_count == 2
 
 
 def test_chat_skips_cooldown_on_context_overflow():
@@ -70,13 +70,13 @@ def test_chat_skips_cooldown_on_context_overflow():
         }
     )
     agent = ScrumAgent("Developer", "test-model", "system", "http://localhost:11434")
-    mock_client = MagicMock()
-    mock_client.chat.side_effect = Exception("exceed_context_size_error")
-    with patch.object(agent, "_get_client", return_value=mock_client):
+    mock_provider = MagicMock()
+    mock_provider.chat.side_effect = Exception("exceed_context_size_error")
+    with patch.object(agent, "_get_provider", return_value=mock_provider):
         with patch("backend.agents.scrum_agent.time.sleep"):
             result = agent._chat([{"role": "user", "content": "hi"}])
     assert result is None
-    assert mock_client.chat.call_count == 1
+    assert mock_provider.chat.call_count == 1
 
 
 def test_save_ollama_timeout_via_api(tmp_path, monkeypatch):
