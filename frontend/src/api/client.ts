@@ -13,6 +13,7 @@ import type {
   FileSearchResult,
   FileTreeNode,
   GitStatusResponse,
+  LlmModelTestResponse,
   ManualTaskPayload,
   MoveTaskPayload,
   OllamaHealthResponse,
@@ -677,6 +678,16 @@ export async function checkOllamaHealth(
 ): Promise<OllamaHealthResponse> {
   const qs = url ? `?url=${encodeURIComponent(url)}` : ''
   return request<OllamaHealthResponse>(`/api/ollama/health${qs}`)
+}
+
+export async function testLlmModel(
+  model: string,
+  url?: string,
+): Promise<LlmModelTestResponse> {
+  return request<LlmModelTestResponse>('/api/llm/test-model', {
+    method: 'POST',
+    body: JSON.stringify({ model, url }),
+  })
 }
 
 export async function runTerminal(

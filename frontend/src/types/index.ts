@@ -1411,6 +1411,19 @@ export interface OllamaHealthResponse {
   url?: string
   models?: string[]
   error?: string
+  provider?: 'ollama' | 'openai_compat' | string
+}
+
+export interface LlmModelTestResponse {
+  ok: boolean
+  provider: 'ollama' | 'openai_compat' | string
+  url: string
+  model: string
+  models: string[]
+  latencyMs: number
+  response?: string
+  errorType?: 'connection' | 'model' | 'generation' | string
+  error?: string
 }
 
 export interface ChatPayload {

@@ -325,6 +325,11 @@ class WorkflowSettingsPayload(BaseModel):
     agentPrompts: Optional[Dict[str, Dict[str, Optional[str]]]] = None
 
 
+class LlmModelTestPayload(BaseModel):
+    model: str
+    url: Optional[str] = None
+
+
 class DiagnoseTaskPayload(BaseModel):
     ollamaUrl: str = "http://localhost:11434"
 

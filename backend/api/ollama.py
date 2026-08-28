@@ -1,3 +1,4 @@
+import time
 from typing import Any, Dict, List, Optional
 
 import requests
@@ -5,6 +6,7 @@ from fastapi import APIRouter, Query
 from fastapi.responses import StreamingResponse
 
 from backend import state
+from backend.api.schemas import LlmModelTestPayload
 from backend.services.llm_debug_log import clear_llm_log, get_llm_logs
 from backend.services.llm_provider import get_chat_provider
 from backend.services.model_timeline import build_model_timeline
@@ -28,6 +30,74 @@ def ollama_health(url: Optional[str] = None):
     if result.error:
         payload["error"] = result.error
     return payload
+
+
+@router.post("/api/llm/test-model")
+def test_llm_model(payload: LlmModelTestPayload):
+    model = payload.model.strip()
+    provider = get_chat_provider(override_url=payload.url)
+    started = time.perf_counter()
+    health = provider.health()
+    if not health.ok:
+        return {
+            "ok": False,
+            "provider": health.provider,
+            "url": health.url,
+            "model": model,
+            "models": health.models,
+            "latencyMs": int((time.perf_counter() - started) * 1000),
+            "errorType": "connection",
+            "error": health.error or "LLM server is unreachable",
+        }
+    if not model:
+        return {
+            "ok": False,
+            "provider": health.provider,
+            "url": health.url,
+            "model": model,
+            "models": health.models,
+            "latencyMs": int((time.perf_counter() - started) * 1000),
+            "errorType": "model",
+            "error": "Enter or select a model name before testing",
+        }
+    if health.models and model not in health.models:
+        return {
+            "ok": False,
+            "provider": health.provider,
+            "url": health.url,
+            "model": model,
+            "models": health.models,
+            "latencyMs": int((time.perf_counter() - started) * 1000),
+            "errorType": "model",
+            "error": f"Model '{model}' is not returned by the server model list",
+        }
+    try:
+        result = provider.chat(
+            model,
+            [{"role": "user", "content": "Reply with OK."}],
+            options={"temperature": 0, "num_predict": 4},
+        )
+        content = str(getattr(getattr(result, "message", None), "content", "") or "").strip()
+        return {
+            "ok": True,
+            "provider": health.provider,
+            "url": health.url,
+            "model": model,
+            "models": health.models,
+            "latencyMs": int((time.perf_counter() - started) * 1000),
+            "response": content[:200],
+        }
+    except Exception as exc:
+        return {
+            "ok": False,
+            "provider": health.provider,
+            "url": health.url,
+            "model": model,
+            "models": health.models,
+            "latencyMs": int((time.perf_counter() - started) * 1000),
+            "errorType": "generation",
+            "error": str(exc)[:500],
+        }
 
 
 @router.get("/api/ollama/logs")

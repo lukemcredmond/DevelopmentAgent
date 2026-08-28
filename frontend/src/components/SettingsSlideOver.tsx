@@ -1,4 +1,5 @@
 import { useCallback, useEffect, useState } from 'react'
+import { checkOllamaHealth, testLlmModel } from '../api/client'
 import type { AgentId, AppState, ConfigPayload, WorkflowSettings } from '../types'
 import { AGENT_LABELS, DEFAULT_WORKFLOW_SETTINGS } from '../types'
 import { isAutoLlmToolHealthOnPick, runAndPersistLlmProbeAll } from '../lib/toolHealthLlm'
@@ -121,6 +122,7 @@ export default function SettingsSlideOver({
   const [tab, setTab] = useState<SettingsTab>(initialTab)
   const [modelFocus, setModelFocus] = useState<'PO' | 'DEV' | 'CR' | 'QA'>('DEV')
   const [llmHealthStatus, setLlmHealthStatus] = useState<string | null>(null)
+  const [llmTestRunning, setLlmTestRunning] = useState(false)
   const [apiTokenInput, setApiTokenInput] = useState('')
 
   useEffect(() => {
@@ -190,6 +192,14 @@ export default function SettingsSlideOver({
   ]
 
   const ws = state.workflowSettings ?? DEFAULT_WORKFLOW_SETTINGS
+  const selectedModel =
+    modelFocus === 'PO'
+      ? poModel
+      : modelFocus === 'DEV'
+        ? devModel
+        : modelFocus === 'CR'
+          ? crModel
+          : qaModel
   const notifications = state.notifications ?? {
     needsPo: 0,
     needsUser: 0,
@@ -515,7 +525,7 @@ export default function SettingsSlideOver({
                       <span className="text-[9px] text-cat-subtext font-bold shrink-0 inline-flex items-center">
                         {label} MODEL
                         <SettingHint
-                          hint={`Primary Ollama model for the ${label} agent. Use a name from “ollama list”.`}
+                          hint={`Primary model ID for the ${label} agent. Select an exact ID from the server model list below.`}
                         />
                       </span>
                       <input
@@ -551,6 +561,7 @@ export default function SettingsSlideOver({
               <InstalledModelsPanel
                 ollamaUrl={ollamaUrl}
                 focusedRole={modelFocus}
+                provider={state.workflowSettings?.llmProvider || 'ollama'}
                 onPickModel={(name) => {
                   const role =
                     modelFocus === 'PO'
@@ -563,25 +574,97 @@ export default function SettingsSlideOver({
                   assignModel(role, name)
                 }}
               />
+              <div className="grid grid-cols-2 gap-2">
+                <button
+                  type="button"
+                  disabled={llmTestRunning}
+                  onClick={() => {
+                    setLlmTestRunning(true)
+                    setLlmHealthStatus('Testing LLM server connection…')
+                    void checkOllamaHealth(ollamaUrl)
+                      .then((result) => {
+                        if (!result.ok) {
+                          setLlmHealthStatus(`Connection failed: ${result.error || 'server unavailable'}`)
+                          return
+                        }
+                        const count = result.models?.length ?? 0
+                        const provider =
+                          result.provider === 'openai_compat' ? 'OpenAI-compatible' : 'Ollama'
+                        setLlmHealthStatus(
+                          `Connection OK (${provider}) — ${count} model ID${count === 1 ? '' : 's'} returned.`,
+                        )
+                      })
+                      .catch((err: unknown) => {
+                        setLlmHealthStatus(
+                          `Connection failed: ${err instanceof Error ? err.message : String(err)}`,
+                        )
+                      })
+                      .finally(() => setLlmTestRunning(false))
+                  }}
+                  className="rounded border border-cat-surface1 bg-cat-base px-2 py-1.5 text-[10px] text-indigo-200 hover:bg-cat-surface0 disabled:opacity-50"
+                >
+                  Test connection
+                </button>
+                <button
+                  type="button"
+                  disabled={llmTestRunning || !selectedModel.trim()}
+                  onClick={() => {
+                    setLlmTestRunning(true)
+                    setLlmHealthStatus(`Testing ${modelFocus} model “${selectedModel}”…`)
+                    void testLlmModel(selectedModel, ollamaUrl)
+                      .then((result) => {
+                        if (result.ok) {
+                          setLlmHealthStatus(
+                            `${modelFocus} model OK — “${result.model}” generated successfully in ${result.latencyMs} ms.`,
+                          )
+                          return
+                        }
+                        const available =
+                          result.errorType === 'model' && result.models.length
+                            ? ` Available: ${result.models.join(', ')}`
+                            : ''
+                        setLlmHealthStatus(
+                          `${modelFocus} model test failed: ${result.error || 'unknown error'}.${available}`,
+                        )
+                      })
+                      .catch((err: unknown) => {
+                        setLlmHealthStatus(
+                          `${modelFocus} model test failed: ${
+                            err instanceof Error ? err.message : String(err)
+                          }`,
+                        )
+                      })
+                      .finally(() => setLlmTestRunning(false))
+                  }}
+                  className="rounded border border-indigo-500/40 bg-indigo-950/30 px-2 py-1.5 text-[10px] text-indigo-200 hover:bg-indigo-950/60 disabled:opacity-50"
+                >
+                  Test {modelFocus} model
+                </button>
+              </div>
               {llmHealthStatus && (
                 <p className="text-[10px] text-violet-300 leading-relaxed">{llmHealthStatus}</p>
               )}
-              <label className="block text-[11px] text-cat-subtext">
-                <span className="text-[10px] text-cat-overlay block mb-0.5">
-                  Ollama keep_alive (keeps weights loaded between sprint steps)
-                </span>
-                <input
-                  type="text"
-                  value={state.workflowSettings?.ollamaKeepAlive ?? '30m'}
-                  onChange={(e) => onWorkflowSettingsChange({ ollamaKeepAlive: e.target.value })}
-                  className="w-full bg-cat-base border border-cat-surface1 rounded p-1.5 font-mono text-[11px] text-white focus:outline-none"
-                  placeholder="30m"
-                />
-              </label>
-              <p className="text-[10px] text-cat-overlay leading-relaxed -mt-1">
-                Use <code className="text-cat-subtext">30m</code> or <code className="text-cat-subtext">-1</code>{' '}
-                to avoid cold-reloading the model every iteration.
-              </p>
+              {(state.workflowSettings?.llmProvider || 'ollama') === 'ollama' && (
+                <>
+                  <label className="block text-[11px] text-cat-subtext">
+                    <span className="text-[10px] text-cat-overlay block mb-0.5">
+                      Ollama keep_alive (keeps weights loaded between sprint steps)
+                    </span>
+                    <input
+                      type="text"
+                      value={state.workflowSettings?.ollamaKeepAlive ?? '30m'}
+                      onChange={(e) => onWorkflowSettingsChange({ ollamaKeepAlive: e.target.value })}
+                      className="w-full bg-cat-base border border-cat-surface1 rounded p-1.5 font-mono text-[11px] text-white focus:outline-none"
+                      placeholder="30m"
+                    />
+                  </label>
+                  <p className="text-[10px] text-cat-overlay leading-relaxed -mt-1">
+                    Use <code className="text-cat-subtext">30m</code> or{' '}
+                    <code className="text-cat-subtext">-1</code> to avoid cold-reloading the model
+                    every iteration.
+                  </p>
+                </>
+              )}
               <div className="border border-cat-surface1 rounded-lg p-2 space-y-2">
                 <p className="text-[10px] font-bold uppercase tracking-wider text-cat-subtext">
                   Advanced context (LLM speed)

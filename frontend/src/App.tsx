@@ -306,12 +306,6 @@ export default function App() {
   const [showDiff, setShowDiff] = useState(false)
   const [bottomTab, setBottomTab] = useState<BottomTab>('console')
   const [memoryCount, setMemoryCount] = useState(0)
-
-  useEffect(() => {
-    if ((state.workflowSettings?.llmProvider || 'ollama') !== 'ollama' && bottomTab === 'ollamaServer') {
-      setBottomTab('model')
-    }
-  }, [state.workflowSettings?.llmProvider, bottomTab])
   const [kanbanOpen, setKanbanOpen] = useState(readKanbanOpen)
   const [briefOpen, setBriefOpen] = useState(() => (readKanbanOpen() ? false : readBriefOpen()))
   const [settingsOpen, setSettingsOpen] = useState(false)
@@ -923,7 +917,6 @@ export default function App() {
   }
 
   const chatFilePaths = useMemo(() => Object.keys(localFiles), [localFiles])
-  const llmIsOllama = (state.workflowSettings?.llmProvider || 'ollama') === 'ollama'
 
   const bottomTabs = useMemo(
     (): { id: BottomTab; label: string; icon: string; badge?: number; group?: string }[] => {
@@ -944,14 +937,12 @@ export default function App() {
       { id: 'search', label: 'Search', icon: 'fa-magnifying-glass', group: 'Code' },
       { id: 'git', label: 'Git', icon: 'fa-code-branch', group: 'Code' },
       { id: 'model', label: 'Model', icon: 'fa-brain', group: 'Debug' },
+      { id: 'ollamaServer', label: 'LLM Server', icon: 'fa-server', group: 'Debug' },
       ]
-      if (llmIsOllama) {
-        tabs.push({ id: 'ollamaServer', label: 'Ollama Server', icon: 'fa-server', group: 'Debug' })
-      }
       tabs.push({ id: 'memory', label: 'Memory', icon: 'fa-brain-circuit', group: 'Debug', badge: memoryCount > 0 ? memoryCount : undefined })
       return tabs
     },
-    [toolRunningCount, toolFailureCount, activityEvents.length, memoryCount, selectedFile, state.projectToolEvidence?.length, llmIsOllama],
+    [toolRunningCount, toolFailureCount, activityEvents.length, memoryCount, selectedFile, state.projectToolEvidence?.length],
   )
 
   const commandPaletteItems = useMemo((): CommandPaletteItem[] => {
@@ -1945,7 +1936,11 @@ export default function App() {
                 )}
                 {bottomTab === 'ollamaServer' && (
                   <div className="absolute inset-0 flex flex-col min-h-0">
-                    <OllamaServiceLogPanel hidden={false} onOpenModelTab={openModelTab} />
+                    <OllamaServiceLogPanel
+                      hidden={false}
+                      provider={state.workflowSettings?.llmProvider || 'ollama'}
+                      onOpenModelTab={openModelTab}
+                    />
                   </div>
                 )}
                 {bottomTab === 'editor' && (

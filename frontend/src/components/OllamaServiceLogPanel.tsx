@@ -5,11 +5,13 @@ import NumberSettingInput from './NumberSettingInput'
 interface OllamaServiceLogPanelProps {
   hidden?: boolean
   onOpenModelTab?: () => void
+  provider?: string
 }
 
 export default function OllamaServiceLogPanel({
   hidden = false,
   onOpenModelTab,
+  provider = 'ollama',
 }: OllamaServiceLogPanelProps) {
   const [lines, setLines] = useState<string[]>([])
   const [source, setSource] = useState<string>('')
@@ -21,6 +23,7 @@ export default function OllamaServiceLogPanel({
   const bottomRef = useRef<HTMLDivElement>(null)
   const scrollRef = useRef<HTMLDivElement>(null)
   const pinnedRef = useRef(true)
+  const isOllama = provider === 'ollama'
 
   const refresh = useCallback(async () => {
     setLoading(true)
@@ -38,14 +41,14 @@ export default function OllamaServiceLogPanel({
   }, [lineCount])
 
   useEffect(() => {
-    if (hidden) return
+    if (hidden || !isOllama) return
     if (!follow) {
       void refresh()
     }
-  }, [hidden, follow, refresh])
+  }, [hidden, isOllama, follow, refresh])
 
   useEffect(() => {
-    if (hidden || !follow) return
+    if (hidden || !isOllama || !follow) return
     const es = new EventSource(`/api/ollama/service-logs/stream?lines=${lineCount}`)
     es.onmessage = (ev) => {
       const text = ev.data?.trim()
@@ -65,13 +68,13 @@ export default function OllamaServiceLogPanel({
       setError('Stream disconnected — click Refresh')
     }
     return () => es.close()
-  }, [hidden, follow, lineCount])
+  }, [hidden, isOllama, follow, lineCount])
 
   useEffect(() => {
-    if (hidden || follow) return
+    if (hidden || !isOllama || follow) return
     const id = window.setInterval(() => void refresh(), 10_000)
     return () => window.clearInterval(id)
-  }, [hidden, follow, refresh])
+  }, [hidden, isOllama, follow, refresh])
 
   useEffect(() => {
     if (!pinnedRef.current || !scrollRef.current) return
@@ -86,6 +89,34 @@ export default function OllamaServiceLogPanel({
   }
 
   if (hidden) return null
+  if (!isOllama) {
+    return (
+      <div className="flex h-full min-h-0 flex-col items-center justify-center gap-3 bg-cat-base p-6 text-center">
+        <i className="fa-solid fa-server text-2xl text-cat-overlay" />
+        <div className="max-w-xl space-y-2">
+          <h3 className="text-sm font-semibold text-cat-text">LM Studio server logs</h3>
+          <p className="text-[11px] leading-relaxed text-cat-subtext">
+            Native LM Studio server logs are unavailable through its OpenAI-compatible API. Open
+            LM Studio’s Developer/server console to inspect its internal request and model-loading
+            logs.
+          </p>
+          <p className="text-[11px] leading-relaxed text-cat-overlay">
+            This app still records LLM requests, responses, latency, token usage, and errors in the
+            Model tab.
+          </p>
+        </div>
+        {onOpenModelTab && (
+          <button
+            type="button"
+            onClick={onOpenModelTab}
+            className="rounded border border-indigo-500/40 bg-indigo-950/30 px-3 py-1.5 text-[11px] text-indigo-200 hover:bg-indigo-950/60"
+          >
+            Open app LLM logs
+          </button>
+        )}
+      </div>
+    )
+  }
 
   return (
     <div className="flex flex-col h-full min-h-0 bg-cat-base text-xs">

@@ -5,12 +5,14 @@ interface InstalledModelsPanelProps {
   ollamaUrl: string
   onPickModel: (model: string) => void
   focusedRole?: string
+  provider?: string
 }
 
 export default function InstalledModelsPanel({
   ollamaUrl,
   onPickModel,
   focusedRole,
+  provider = 'ollama',
 }: InstalledModelsPanelProps) {
   const [models, setModels] = useState<string[]>([])
   const [error, setError] = useState<string | null>(null)
@@ -27,7 +29,7 @@ export default function InstalledModelsPanel({
           setError(null)
         } else {
           setModels([])
-          setError(res.error || 'Ollama unreachable')
+          setError(res.error || 'LLM server unreachable')
         }
       })
       .catch((err: unknown) => {
@@ -47,20 +49,24 @@ export default function InstalledModelsPanel({
     <div className="space-y-1.5 border border-cat-surface1 rounded-lg p-2.5 bg-cat-base/40">
       <div className="flex items-center justify-between gap-2">
         <h3 className="text-[10px] font-bold uppercase tracking-wider text-cat-subtext">
-          Installed models
+          {provider === 'ollama' ? 'Installed models' : 'Loaded models'}
         </h3>
         {focusedRole && (
           <span className="text-[9px] text-indigo-300">Click assigns → {focusedRole}</span>
         )}
       </div>
-      {loading && <p className="text-[10px] text-cat-overlay">Loading from Ollama…</p>}
+      {loading && <p className="text-[10px] text-cat-overlay">Loading from LLM server…</p>}
       {!loading && error && (
         <p className="text-[10px] text-rose-300 leading-relaxed">
-          Could not list models: {error}. Check Ollama URL and that Ollama is running.
+          Could not list models: {error}. Check the server URL and that the LLM server is running.
         </p>
       )}
       {!loading && !error && models.length === 0 && (
-        <p className="text-[10px] text-cat-overlay">No models pulled yet. Use <code>ollama pull …</code>.</p>
+        <p className="text-[10px] text-cat-overlay">
+          {provider === 'ollama'
+            ? 'No models installed yet. Use ollama pull …'
+            : 'No model IDs returned by /v1/models. Load a model in LM Studio, then refresh settings.'}
+        </p>
       )}
       {!loading && models.length > 0 && (
         <div className="flex flex-wrap gap-1 max-h-28 overflow-y-auto">

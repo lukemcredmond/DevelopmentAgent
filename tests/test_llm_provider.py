@@ -2,13 +2,17 @@
 
 from __future__ import annotations
 
+from pathlib import Path
 from unittest.mock import MagicMock, patch
 
 from backend.bootstrap import initialize
 from backend.services.llm_provider import (
+    ChatResult,
     DEFAULT_LMSTUDIO_URL,
     DEFAULT_OLLAMA_URL,
+    HealthResult,
     OpenAICompatProvider,
+    ProviderMessage,
     chat_config,
     chat_result_from_openai,
     embed_config,
@@ -183,3 +187,114 @@ def test_embed_provider_stays_on_ollama_when_chat_is_lmstudio():
     assert captured["url"] == "http://localhost:11434/api/embeddings"
     assert vec is not None
     assert len(vec) == 64
+
+
+def _test_client():
+    from fastapi.testclient import TestClient
+    from backend.main import app
+
+    initialize()
+    return TestClient(app)
+
+
+def test_model_endpoint_generates_with_exact_listed_model():
+    provider = MagicMock()
+    provider.health.return_value = HealthResult(
+        ok=True,
+        url=DEFAULT_LMSTUDIO_URL,
+        models=["loaded-model"],
+        provider="openai_compat",
+    )
+    provider.chat.return_value = ChatResult(message=ProviderMessage(content="OK"))
+    with patch("backend.api.ollama.get_chat_provider", return_value=provider):
+        data = _test_client().post(
+            "/api/llm/test-model",
+            json={"url": DEFAULT_LMSTUDIO_URL, "model": "loaded-model"},
+        ).json()
+
+    assert data["ok"] is True
+    assert data["model"] == "loaded-model"
+    assert data["provider"] == "openai_compat"
+    assert data["response"] == "OK"
+    provider.chat.assert_called_once()
+
+
+def test_model_endpoint_rejects_unknown_model_without_generation():
+    provider = MagicMock()
+    provider.health.return_value = HealthResult(
+        ok=True,
+        url=DEFAULT_LMSTUDIO_URL,
+        models=["actual-model"],
+        provider="openai_compat",
+    )
+    with patch("backend.api.ollama.get_chat_provider", return_value=provider):
+        data = _test_client().post(
+            "/api/llm/test-model",
+            json={"url": DEFAULT_LMSTUDIO_URL, "model": "wrong-model"},
+        ).json()
+
+    assert data["ok"] is False
+    assert data["errorType"] == "model"
+    assert data["models"] == ["actual-model"]
+    provider.chat.assert_not_called()
+
+
+def test_model_endpoint_reports_unreachable_provider():
+    provider = MagicMock()
+    provider.health.return_value = HealthResult(
+        ok=False,
+        url=DEFAULT_LMSTUDIO_URL,
+        error="connection refused",
+        provider="openai_compat",
+    )
+    with patch("backend.api.ollama.get_chat_provider", return_value=provider):
+        data = _test_client().post(
+            "/api/llm/test-model",
+            json={"url": DEFAULT_LMSTUDIO_URL, "model": "loaded-model"},
+        ).json()
+
+    assert data["ok"] is False
+    assert data["errorType"] == "connection"
+    assert "connection refused" in data["error"]
+
+
+def test_model_endpoint_reports_generation_failure():
+    provider = MagicMock()
+    provider.health.return_value = HealthResult(
+        ok=True,
+        url=DEFAULT_LMSTUDIO_URL,
+        models=["loaded-model"],
+        provider="openai_compat",
+    )
+    provider.chat.side_effect = RuntimeError("model failed to load")
+    with patch("backend.api.ollama.get_chat_provider", return_value=provider):
+        data = _test_client().post(
+            "/api/llm/test-model",
+            json={"url": DEFAULT_LMSTUDIO_URL, "model": "loaded-model"},
+        ).json()
+
+    assert data["ok"] is False
+    assert data["errorType"] == "generation"
+    assert "failed to load" in data["error"]
+
+
+def test_lmstudio_ui_has_model_tests_and_log_fallback():
+    root = Path(__file__).resolve().parents[1]
+    settings = (root / "frontend/src/components/SettingsSlideOver.tsx").read_text(
+        encoding="utf-8"
+    )
+    models = (root / "frontend/src/components/InstalledModelsPanel.tsx").read_text(
+        encoding="utf-8"
+    )
+    logs = (root / "frontend/src/components/OllamaServiceLogPanel.tsx").read_text(
+        encoding="utf-8"
+    )
+    app = (root / "frontend/src/App.tsx").read_text(encoding="utf-8")
+
+    assert "Test connection" in settings
+    assert "Test {modelFocus} model" in settings
+    assert "Loaded models" in models
+    assert "No model IDs returned by /v1/models" in models
+    assert "Native LM Studio server logs are unavailable" in logs
+    assert "Open app LLM logs" in logs
+    assert "label: 'LLM Server'" in app
