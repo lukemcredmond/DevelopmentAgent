@@ -11,6 +11,10 @@ import requests
 DEFAULT_OLLAMA_URL = "http://localhost:11434"
 DEFAULT_LMSTUDIO_URL = "http://localhost:1234/v1"
 
+# Most sprint/chat payloads still default `ollama_url` to these values, so they cannot
+# be treated as a deliberate per-request override of a configured provider.
+LEGACY_OLLAMA_URLS = {"http://localhost:11434", "http://127.0.0.1:11434"}
+
 PROVIDER_OLLAMA = "ollama"
 PROVIDER_OPENAI_COMPAT = "openai_compat"
 PRESET_OLLAMA = "ollama"
@@ -321,9 +325,22 @@ def apply_llm_preset(preset: str) -> Dict[str, str]:
     return dict(PRESET_DEFAULTS.get(key) or PRESET_DEFAULTS[PRESET_OLLAMA])
 
 
+def _normalize_url(url: str) -> str:
+    return (url or "").strip().rstrip("/").lower()
+
+
+def is_legacy_ollama_default(url: str) -> bool:
+    """True when a caller passed the historic hard-coded Ollama URL default."""
+    return _normalize_url(url) in LEGACY_OLLAMA_URLS
+
+
 def infer_provider_from_url(url: str, fallback: str = PROVIDER_OLLAMA) -> str:
-    raw = (url or "").strip().lower()
-    if "/v1" in raw or ":1234" in raw:
+    raw = _normalize_url(url)
+    if "/v1" in raw:
+        return PROVIDER_OPENAI_COMPAT
+    if ":11434" in raw:
+        return PROVIDER_OLLAMA
+    if ":1234" in raw:
         return PROVIDER_OPENAI_COMPAT
     return fallback or PROVIDER_OLLAMA
 
@@ -343,14 +360,18 @@ def chat_config(*, override_url: Optional[str] = None, ws: Optional[Dict[str, An
     data = ws if ws is not None else _settings()
     preset = str(data.get("llmProviderPreset") or PRESET_OLLAMA).strip().lower()
     provider = str(data.get("llmProvider") or PROVIDER_OLLAMA).strip().lower()
-    url = str(override_url or data.get("llmBaseUrl") or DEFAULT_OLLAMA_URL).strip()
-    if override_url:
-        provider = infer_provider_from_url(url, fallback=provider)
-    elif preset == PRESET_LMSTUDIO:
+    url = str(data.get("llmBaseUrl") or "").strip()
+    if preset == PRESET_LMSTUDIO:
         provider = PROVIDER_OPENAI_COMPAT
         url = url or DEFAULT_LMSTUDIO_URL
     elif preset == PRESET_CUSTOM:
         provider = PROVIDER_OPENAI_COMPAT
+    override = str(override_url or "").strip()
+    # Ignore the legacy Ollama default so it cannot silently send an OpenAI-compatible
+    # setup back to port 11434 while the UI still polls the configured server.
+    if override and not (provider == PROVIDER_OPENAI_COMPAT and is_legacy_ollama_default(override)):
+        url = override
+        provider = infer_provider_from_url(url, fallback=provider)
     api_key = str(data.get("llmApiKey") or "").strip()
     return {
         "provider": provider if provider in (PROVIDER_OLLAMA, PROVIDER_OPENAI_COMPAT) else PROVIDER_OLLAMA,

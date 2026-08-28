@@ -38,7 +38,7 @@ def test_setting_hint_markers():
         encoding="utf-8"
     )
     assert "SettingHint" in settings
-    assert "OLLAMA URL" in settings
+    assert "LLM SERVER URL" in settings
     panel = (root / "frontend" / "src" / "components" / "WorkflowPanel.tsx").read_text(
         encoding="utf-8"
     )

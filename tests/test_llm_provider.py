@@ -152,6 +152,43 @@ def test_health_endpoint_uses_v1_models(monkeypatch):
     assert data["models"] == ["loaded-model"]
 
 
+def test_legacy_ollama_url_default_does_not_override_lmstudio():
+    """Sprint/chat payloads default ollama_url to 11434; that must not hijack LM Studio."""
+    initialize()
+    reset_workflow_settings()
+    save_workflow_settings(
+        {
+            "llmProvider": "openai_compat",
+            "llmProviderPreset": "lmstudio",
+            "llmBaseUrl": DEFAULT_LMSTUDIO_URL,
+        }
+    )
+
+    for legacy in (DEFAULT_OLLAMA_URL, "http://127.0.0.1:11434", "http://localhost:11434/"):
+        cfg = chat_config(override_url=legacy)
+        assert cfg["provider"] == "openai_compat"
+        assert cfg["baseUrl"] == DEFAULT_LMSTUDIO_URL
+
+    # A deliberate OpenAI-compatible override is still honoured.
+    remote = chat_config(override_url="http://192.168.1.9:1234/v1")
+    assert remote["baseUrl"] == "http://192.168.1.9:1234/v1"
+
+
+def test_ollama_settings_still_honour_url_override():
+    initialize()
+    reset_workflow_settings()
+    save_workflow_settings(
+        {
+            "llmProvider": "ollama",
+            "llmProviderPreset": "ollama",
+            "llmBaseUrl": DEFAULT_OLLAMA_URL,
+        }
+    )
+    cfg = chat_config(override_url="http://10.0.0.5:11434")
+    assert cfg["provider"] == "ollama"
+    assert cfg["baseUrl"] == "http://10.0.0.5:11434"
+
+
 def test_embed_provider_stays_on_ollama_when_chat_is_lmstudio():
     initialize()
     reset_workflow_settings()
