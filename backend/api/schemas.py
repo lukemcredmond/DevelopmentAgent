@@ -330,6 +330,12 @@ class LlmModelTestPayload(BaseModel):
     url: Optional[str] = None
 
 
+class LlmModelBatchTestPayload(BaseModel):
+    url: Optional[str] = None
+    models: Optional[Dict[str, str]] = None
+    backupModels: Optional[Dict[str, str]] = None
+
+
 class DiagnoseTaskPayload(BaseModel):
     ollamaUrl: str = "http://localhost:11434"
 

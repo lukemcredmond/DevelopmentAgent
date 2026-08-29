@@ -1079,9 +1079,26 @@ class ScrumAgent:
         tool_names: List[str],
     ) -> Tuple[Optional[Any], Optional[str], Optional[str], int]:
         """Returns (result, error, error_type, duration_ms)."""
-        from backend.services.llm_debug_log import append_llm_log_entry
+        from backend.services.llm_debug_log import append_llm_log_entry, complete_llm_log_entry
 
         started = time.time()
+        pending_entry = None
+        if not stream:
+            pending_entry = append_llm_log_entry(
+                agent=self.role,
+                agent_id=agent_id,
+                task_id=task_id,
+                run_id=run_id,
+                model=self.model,
+                iteration=iteration,
+                request_messages=messages,
+                tool_names=tool_names,
+                memories_used=getattr(self, "_last_memories_used", None),
+                decisions_included=getattr(self, "_decisions_in_prompt", None),
+                prompt_unchanged_inject=getattr(self, "_prompt_unchanged_inject", False),
+                prompt_section=getattr(self, "_current_prompt_section", None),
+                status="running",
+            )
         try:
             result = provider.chat(
                 self.model,
@@ -1116,6 +1133,29 @@ class ScrumAgent:
                                 "arguments": tc.function.arguments,
                             }
                         )
+                complete_llm_log_entry(
+                    pending_entry["id"],
+                    response_content=(msg.content or "") if msg else "",
+                    response_tool_calls=tool_calls,
+                    duration_ms=duration_ms,
+                    prompt_tokens=prompt_tokens,
+                    eval_tokens=eval_tokens,
+                    total_tokens=total_tokens,
+                    tokens_reported=tokens_reported,
+                )
+            return result, None, None, duration_ms
+        except Exception as exc:
+            last_error = str(exc)
+            error_type = self._classify_ollama_error(last_error)
+            duration_ms = int((time.time() - started) * 1000)
+            if pending_entry is not None:
+                complete_llm_log_entry(
+                    pending_entry["id"],
+                    duration_ms=duration_ms,
+                    error=last_error,
+                    error_type=error_type,
+                )
+            else:
                 append_llm_log_entry(
                     agent=self.role,
                     agent_id=agent_id,
@@ -1125,40 +1165,15 @@ class ScrumAgent:
                     iteration=iteration,
                     request_messages=messages,
                     tool_names=tool_names,
-                    response_content=(msg.content or "") if msg else "",
-                    response_tool_calls=tool_calls,
                     duration_ms=duration_ms,
+                    error=last_error,
+                    error_type=error_type,
                     memories_used=getattr(self, "_last_memories_used", None),
                     decisions_included=getattr(self, "_decisions_in_prompt", None),
-                    prompt_tokens=prompt_tokens,
-                    eval_tokens=eval_tokens,
-                    total_tokens=total_tokens,
-                    tokens_reported=tokens_reported,
                     prompt_unchanged_inject=getattr(self, "_prompt_unchanged_inject", False),
                     prompt_section=getattr(self, "_current_prompt_section", None),
+                    status="failed",
                 )
-            return result, None, None, duration_ms
-        except Exception as exc:
-            last_error = str(exc)
-            error_type = self._classify_ollama_error(last_error)
-            duration_ms = int((time.time() - started) * 1000)
-            append_llm_log_entry(
-                agent=self.role,
-                agent_id=agent_id,
-                task_id=task_id,
-                run_id=run_id,
-                model=self.model,
-                iteration=iteration,
-                request_messages=messages,
-                tool_names=tool_names,
-                duration_ms=duration_ms,
-                error=last_error,
-                error_type=error_type,
-                memories_used=getattr(self, "_last_memories_used", None),
-                decisions_included=getattr(self, "_decisions_in_prompt", None),
-                prompt_unchanged_inject=getattr(self, "_prompt_unchanged_inject", False),
-                prompt_section=getattr(self, "_current_prompt_section", None),
-            )
             return None, last_error, error_type, duration_ms
 
     def _chat(

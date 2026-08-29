@@ -1,6 +1,12 @@
 import { useCallback, useEffect, useState } from 'react'
-import { checkOllamaHealth, testLlmModel } from '../api/client'
-import type { AgentId, AppState, ConfigPayload, WorkflowSettings } from '../types'
+import { checkOllamaHealth, testAllAgentModels, testLlmModel } from '../api/client'
+import type {
+  AgentId,
+  AppState,
+  ConfigPayload,
+  LlmAgentModelTestResult,
+  WorkflowSettings,
+} from '../types'
 import { AGENT_LABELS, DEFAULT_WORKFLOW_SETTINGS } from '../types'
 import { isAutoLlmToolHealthOnPick, runAndPersistLlmProbeAll } from '../lib/toolHealthLlm'
 import BoardRecoveryPanel from './BoardRecoveryPanel'
@@ -123,6 +129,7 @@ export default function SettingsSlideOver({
   const [modelFocus, setModelFocus] = useState<'PO' | 'DEV' | 'CR' | 'QA'>('DEV')
   const [llmHealthStatus, setLlmHealthStatus] = useState<string | null>(null)
   const [llmTestRunning, setLlmTestRunning] = useState(false)
+  const [agentModelTestResults, setAgentModelTestResults] = useState<LlmAgentModelTestResult[]>([])
   const [apiTokenInput, setApiTokenInput] = useState('')
 
   useEffect(() => {
@@ -200,6 +207,37 @@ export default function SettingsSlideOver({
         : modelFocus === 'CR'
           ? crModel
           : qaModel
+
+  const handleTestAllAgentModels = async () => {
+    setLlmTestRunning(true)
+    setAgentModelTestResults([])
+    setLlmHealthStatus('Testing all configured agent primary and backup models…')
+    try {
+      const result = await testAllAgentModels(
+        { po: poModel, dev: devModel, cr: crModel, qa: qaModel },
+        {
+          po: poBackupModel,
+          dev: devBackupModel,
+          cr: crBackupModel,
+          qa: qaBackupModel,
+        },
+        ollamaUrl,
+      )
+      setAgentModelTestResults(result.results)
+      const passed = result.results.filter((item) => item.ok).length
+      const failed = result.results.length - passed
+      setLlmHealthStatus(
+        `Agent model tests complete — ${passed} passed, ${failed} failed across ${result.uniqueModelsTested} unique model${result.uniqueModelsTested === 1 ? '' : 's'}.`,
+      )
+    } catch (err: unknown) {
+      setLlmHealthStatus(
+        `Agent model tests failed: ${err instanceof Error ? err.message : String(err)}`,
+      )
+    } finally {
+      setLlmTestRunning(false)
+    }
+  }
+
   const notifications = state.notifications ?? {
     needsPo: 0,
     needsUser: 0,
@@ -641,8 +679,37 @@ export default function SettingsSlideOver({
                   Test {modelFocus} model
                 </button>
               </div>
+              <button
+                type="button"
+                disabled={llmTestRunning}
+                onClick={() => void handleTestAllAgentModels()}
+                className="w-full rounded border border-violet-500/40 bg-violet-950/30 px-2 py-1.5 text-[10px] text-violet-200 hover:bg-violet-950/60 disabled:opacity-50"
+              >
+                {llmTestRunning ? 'Testing configured models…' : 'Test all agent models'}
+              </button>
               {llmHealthStatus && (
                 <p className="text-[10px] text-violet-300 leading-relaxed">{llmHealthStatus}</p>
+              )}
+              {agentModelTestResults.length > 0 && (
+                <div className="space-y-1 rounded border border-cat-surface1 bg-cat-base/50 p-2">
+                  {agentModelTestResults.map((result) => (
+                    <div
+                      key={`${result.agentId}-${result.slot}`}
+                      className="flex items-start justify-between gap-2 text-[10px]"
+                    >
+                      <span className="text-cat-subtext">
+                        {result.agent} {result.slot}
+                        <span className="ml-1 font-mono text-cat-overlay">{result.model}</span>
+                      </span>
+                      <span
+                        className={result.ok ? 'shrink-0 text-emerald-300' : 'shrink-0 text-rose-300'}
+                        title={result.error}
+                      >
+                        {result.ok ? `PASS · ${result.latencyMs}ms` : `FAIL · ${result.error || 'unknown error'}`}
+                      </span>
+                    </div>
+                  ))}
+                </div>
               )}
               {(state.workflowSettings?.llmProvider || 'ollama') === 'ollama' && (
                 <>

@@ -55,4 +55,7 @@ def test_timeline_merges_llm_and_tool():
     kinds = [item["kind"] for item in result["items"]]
     assert kinds.count("llm") == 2
     assert kinds.count("tool") == 1
+    assert all(
+        item["status"] == "completed" for item in result["items"] if item["kind"] == "llm"
+    )
     assert result["threads"][0]["taskId"] == "T-TIME"

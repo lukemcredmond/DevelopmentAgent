@@ -80,6 +80,7 @@ def append_llm_log_entry(
     prompt_section: Optional[str] = None,
     decision_trace: Optional[Dict[str, Any]] = None,
     echo_detected: bool = False,
+    status: str = "completed",
 ) -> Dict[str, Any]:
     entry: Dict[str, Any] = {
         "id": uuid.uuid4().hex[:12],
@@ -99,6 +100,7 @@ def append_llm_log_entry(
         "evalTokens": int(eval_tokens or 0),
         "totalTokens": int(total_tokens or (prompt_tokens or 0) + (eval_tokens or 0)),
         "tokensReported": bool(tokens_reported),
+        "status": status,
     }
     if error:
         entry["error"] = error
@@ -129,6 +131,45 @@ def append_llm_log_entry(
             del state.LLM_DEBUG_LOG[:overflow]
         persist_llm_log()
     return entry
+
+
+def complete_llm_log_entry(
+    entry_id: str,
+    *,
+    response_content: Optional[str] = None,
+    response_tool_calls: Optional[List[Any]] = None,
+    duration_ms: int = 0,
+    error: Optional[str] = None,
+    error_type: Optional[str] = None,
+    prompt_tokens: int = 0,
+    eval_tokens: int = 0,
+    total_tokens: int = 0,
+    tokens_reported: bool = False,
+) -> Optional[Dict[str, Any]]:
+    """Complete an existing running request without adding a duplicate log row."""
+    with state.STATE_LOCK:
+        for entry in reversed(state.LLM_DEBUG_LOG):
+            if entry.get("id") != entry_id:
+                continue
+            entry["status"] = "failed" if error else "completed"
+            entry["responseContent"] = (response_content or "")[:MAX_MESSAGE_CHARS]
+            entry["responseToolCalls"] = response_tool_calls or []
+            entry["durationMs"] = int(duration_ms or 0)
+            entry["promptTokens"] = int(prompt_tokens or 0)
+            entry["evalTokens"] = int(eval_tokens or 0)
+            entry["totalTokens"] = int(total_tokens or (prompt_tokens or 0) + (eval_tokens or 0))
+            entry["tokensReported"] = bool(tokens_reported)
+            if error:
+                entry["error"] = error
+            else:
+                entry.pop("error", None)
+            if error_type:
+                entry["errorType"] = error_type
+            else:
+                entry.pop("errorType", None)
+            persist_llm_log()
+            return dict(entry)
+    return None
 
 
 def amend_llm_log_entry(

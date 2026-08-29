@@ -379,6 +379,7 @@ export interface LlmDebugEntry {
   responseContent: string
   responseToolCalls: unknown[]
   durationMs: number
+  status?: 'running' | 'completed' | 'failed'
   error?: string
   memoriesUsed?: Array<{ category: string; content: string }>
   decisionsIncluded?: number
@@ -409,7 +410,7 @@ export interface ModelTimelineItem {
   toolArgs?: Record<string, unknown>
   toolOutput?: string
   success?: boolean
-  status?: string
+  status?: 'running' | 'completed' | 'failed' | 'awaiting_approval' | string
   source?: string
 }
 
@@ -1424,6 +1425,21 @@ export interface LlmModelTestResponse {
   response?: string
   errorType?: 'connection' | 'model' | 'generation' | string
   error?: string
+}
+
+export interface LlmAgentModelTestResult extends LlmModelTestResponse {
+  agentId: AgentId
+  agent: string
+  slot: 'primary' | 'backup'
+}
+
+export interface LlmAgentModelsTestResponse {
+  ok: boolean
+  provider: 'ollama' | 'openai_compat' | string
+  url: string
+  models: string[]
+  results: LlmAgentModelTestResult[]
+  uniqueModelsTested: number
 }
 
 export interface ChatPayload {

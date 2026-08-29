@@ -6,7 +6,7 @@ from fastapi import APIRouter, Query
 from fastapi.responses import StreamingResponse
 
 from backend import state
-from backend.api.schemas import LlmModelTestPayload
+from backend.api.schemas import LlmModelBatchTestPayload, LlmModelTestPayload
 from backend.services.llm_debug_log import clear_llm_log, get_llm_logs
 from backend.services.llm_provider import get_chat_provider
 from backend.services.model_timeline import build_model_timeline
@@ -15,6 +15,12 @@ from backend.services.qdrant_auth import qdrant_connection_settings, qdrant_requ
 from backend.services.system_capacity import get_model_recommendations, probe_system_capacity
 
 router = APIRouter()
+AGENT_MODEL_LABELS = {
+    "po": "Product Owner",
+    "dev": "Developer",
+    "cr": "Code Reviewer",
+    "qa": "QA Tester",
+}
 
 
 @router.get("/api/ollama/health")
@@ -32,12 +38,10 @@ def ollama_health(url: Optional[str] = None):
     return payload
 
 
-@router.post("/api/llm/test-model")
-def test_llm_model(payload: LlmModelTestPayload):
-    model = payload.model.strip()
-    provider = get_chat_provider(override_url=payload.url)
-    started = time.perf_counter()
-    health = provider.health()
+def _test_model_with_health(
+    provider: Any, health: Any, model: str, *, started: Optional[float] = None
+) -> Dict[str, Any]:
+    started = started or time.perf_counter()
     if not health.ok:
         return {
             "ok": False,
@@ -98,6 +102,53 @@ def test_llm_model(payload: LlmModelTestPayload):
             "errorType": "generation",
             "error": str(exc)[:500],
         }
+
+
+@router.post("/api/llm/test-model")
+def test_llm_model(payload: LlmModelTestPayload):
+    provider = get_chat_provider(override_url=payload.url)
+    started = time.perf_counter()
+    health = provider.health()
+    return _test_model_with_health(provider, health, payload.model.strip(), started=started)
+
+
+@router.post("/api/llm/test-agent-models")
+def test_agent_models(payload: LlmModelBatchTestPayload):
+    """Test every configured primary/backup slot without mutating live agents."""
+    with state.STATE_LOCK:
+        primary_models = dict(payload.models or state.PRIMARY_MODELS)
+        backup_models = dict(payload.backupModels or state.BACKUP_MODELS)
+
+    slots: List[Dict[str, str]] = []
+    for agent_id, agent_label in AGENT_MODEL_LABELS.items():
+        primary = str(primary_models.get(agent_id) or "").strip()
+        backup = str(backup_models.get(agent_id) or "").strip()
+        if primary:
+            slots.append(
+                {"agentId": agent_id, "agent": agent_label, "slot": "primary", "model": primary}
+            )
+        if backup and backup != primary:
+            slots.append(
+                {"agentId": agent_id, "agent": agent_label, "slot": "backup", "model": backup}
+            )
+
+    provider = get_chat_provider(override_url=payload.url)
+    health = provider.health()
+    model_results: Dict[str, Dict[str, Any]] = {}
+    for slot in slots:
+        model = slot["model"]
+        if model not in model_results:
+            model_results[model] = _test_model_with_health(provider, health, model)
+
+    results = [{**slot, **model_results[slot["model"]]} for slot in slots]
+    return {
+        "ok": bool(results) and all(result["ok"] for result in results),
+        "provider": health.provider,
+        "url": health.url,
+        "models": health.models,
+        "results": results,
+        "uniqueModelsTested": len(model_results),
+    }
 
 
 @router.get("/api/ollama/logs")

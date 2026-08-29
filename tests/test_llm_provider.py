@@ -315,6 +315,81 @@ def test_model_endpoint_reports_generation_failure():
     assert "failed to load" in data["error"]
 
 
+def test_all_agent_models_deduplicates_and_skips_unconfigured_backups():
+    from backend import state
+
+    client = _test_client()
+    state.PRIMARY_MODELS = {
+        "po": "shared-model",
+        "dev": "dev-model",
+        "cr": "shared-model",
+        "qa": "qa-model",
+    }
+    state.BACKUP_MODELS = {
+        "po": "",
+        "dev": "shared-model",
+        "cr": "shared-model",
+        "qa": "qa-backup",
+    }
+    original_primary = dict(state.PRIMARY_MODELS)
+    original_backup = dict(state.BACKUP_MODELS)
+    provider = MagicMock()
+    provider.health.return_value = HealthResult(
+        ok=True,
+        url=DEFAULT_LMSTUDIO_URL,
+        models=["shared-model", "dev-model", "qa-model", "qa-backup"],
+        provider="openai_compat",
+    )
+    provider.chat.return_value = ChatResult(message=ProviderMessage(content="OK"))
+
+    with patch("backend.api.ollama.get_chat_provider", return_value=provider):
+        data = client.post(
+            "/api/llm/test-agent-models",
+            json={
+                "url": DEFAULT_LMSTUDIO_URL,
+                "models": state.PRIMARY_MODELS,
+                "backupModels": state.BACKUP_MODELS,
+            },
+        ).json()
+
+    assert data["ok"] is True
+    assert data["uniqueModelsTested"] == 4
+    assert len(data["results"]) == 6
+    assert provider.chat.call_count == 4
+    assert state.PRIMARY_MODELS == original_primary
+    assert state.BACKUP_MODELS == original_backup
+    assert not any(
+        result["agentId"] == "cr" and result["slot"] == "backup"
+        for result in data["results"]
+    )
+
+
+def test_all_agent_models_reports_connection_failure_for_each_slot():
+    from backend import state
+
+    client = _test_client()
+    state.PRIMARY_MODELS = {key: f"{key}-model" for key in ("po", "dev", "cr", "qa")}
+    state.BACKUP_MODELS = {key: "" for key in ("po", "dev", "cr", "qa")}
+    provider = MagicMock()
+    provider.health.return_value = HealthResult(
+        ok=False,
+        url=DEFAULT_LMSTUDIO_URL,
+        error="connection refused",
+        provider="openai_compat",
+    )
+
+    with patch("backend.api.ollama.get_chat_provider", return_value=provider):
+        data = client.post(
+            "/api/llm/test-agent-models",
+            json={"url": DEFAULT_LMSTUDIO_URL},
+        ).json()
+
+    assert data["ok"] is False
+    assert len(data["results"]) == 4
+    assert all(result["errorType"] == "connection" for result in data["results"])
+    provider.chat.assert_not_called()
+
+
 def test_lmstudio_ui_has_model_tests_and_log_fallback():
     root = Path(__file__).resolve().parents[1]
     settings = (root / "frontend/src/components/SettingsSlideOver.tsx").read_text(
@@ -330,6 +405,7 @@ def test_lmstudio_ui_has_model_tests_and_log_fallback():
 
     assert "Test connection" in settings
     assert "Test {modelFocus} model" in settings
+    assert "Test all agent models" in settings
     assert "Loaded models" in models
     assert "No model IDs returned by /v1/models" in models
     assert "Native LM Studio server logs are unavailable" in logs

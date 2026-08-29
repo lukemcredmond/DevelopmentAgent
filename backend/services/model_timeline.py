@@ -41,6 +41,7 @@ def build_model_timeline(
                 "iteration": entry.get("iteration"),
                 "durationMs": entry.get("durationMs"),
                 "error": entry.get("error"),
+                "status": entry.get("status") or ("failed" if entry.get("error") else "completed"),
                 "content": entry.get("responseContent") or "",
                 "toolCalls": entry.get("responseToolCalls") or [],
                 "toolNames": entry.get("toolNames") or [],

@@ -3,7 +3,7 @@ import type { LlmDebugEntry, ModelTimelineItem, ModelTimelineThread } from '../t
 import { clearLlmLogs, fetchLlmLogs, fetchModelTimeline } from '../api/client'
 
 interface ModelDebugPanelProps {
-  taskIdFilter?: string | null
+  selectedTaskId?: string | null
 }
 
 type ViewMode = 'list' | 'conversation'
@@ -21,7 +21,8 @@ function LlmTimelineEntry({ item, itemKey }: { item: ModelTimelineItem; itemKey:
           <span className="text-indigo-300 font-semibold">{item.agent}</span>
           <span className="text-cat-overlay">{item.timestamp}</span>
           <span className="text-cat-subtext">iter {item.iteration}</span>
-          {item.durationMs != null && (
+          {item.status === 'running' && <span className="text-amber-300 animate-pulse">RUNNING</span>}
+          {item.status !== 'running' && item.durationMs != null && (
             <span className="text-cat-subtext">{item.durationMs}ms</span>
           )}
           {item.error && <span className="text-rose-400">ERR</span>}
@@ -79,7 +80,7 @@ function LlmTimelineEntry({ item, itemKey }: { item: ModelTimelineItem; itemKey:
   )
 }
 
-export default function ModelDebugPanel({ taskIdFilter }: ModelDebugPanelProps) {
+export default function ModelDebugPanel({ selectedTaskId }: ModelDebugPanelProps) {
   const [entries, setEntries] = useState<LlmDebugEntry[]>([])
   const [threads, setThreads] = useState<ModelTimelineThread[]>([])
   const [agentFilter, setAgentFilter] = useState('')
@@ -88,13 +89,15 @@ export default function ModelDebugPanel({ taskIdFilter }: ModelDebugPanelProps) 
   const [expandedThread, setExpandedThread] = useState<string | null>(null)
   const [loading, setLoading] = useState(false)
   const [clearing, setClearing] = useState(false)
+  const [filterToSelectedTask, setFilterToSelectedTask] = useState(false)
+  const effectiveTaskId = filterToSelectedTask ? selectedTaskId : null
 
   const refresh = useCallback(async () => {
     setLoading(true)
     try {
       if (viewMode === 'conversation') {
         const data = await fetchModelTimeline({
-          taskId: taskIdFilter || undefined,
+          taskId: effectiveTaskId || undefined,
           limit: 150,
         })
         setThreads(data.threads ?? [])
@@ -103,7 +106,7 @@ export default function ModelDebugPanel({ taskIdFilter }: ModelDebugPanelProps) 
         const data = await fetchLlmLogs({
           limit: 200,
           agent: agentFilter || undefined,
-          taskId: taskIdFilter || undefined,
+          taskId: effectiveTaskId || undefined,
         })
         setEntries(data.entries ?? [])
         setThreads([])
@@ -114,21 +117,27 @@ export default function ModelDebugPanel({ taskIdFilter }: ModelDebugPanelProps) 
     } finally {
       setLoading(false)
     }
-  }, [agentFilter, taskIdFilter, viewMode])
+  }, [agentFilter, effectiveTaskId, viewMode])
+
+  const hasRunning =
+    entries.some((entry) => entry.status === 'running') ||
+    threads.some((thread) => thread.items.some((item) => item.status === 'running'))
 
   useEffect(() => {
     void refresh()
-    let id = window.setInterval(() => void refresh(), document.visibilityState === 'hidden' ? 15000 : 8000)
+    const intervalMs = document.visibilityState === 'hidden' ? 15000 : hasRunning ? 2000 : 8000
+    let id = window.setInterval(() => void refresh(), intervalMs)
     const onVisibility = () => {
       window.clearInterval(id)
-      id = window.setInterval(() => void refresh(), document.visibilityState === 'hidden' ? 15000 : 8000)
+      const nextIntervalMs = document.visibilityState === 'hidden' ? 15000 : hasRunning ? 2000 : 8000
+      id = window.setInterval(() => void refresh(), nextIntervalMs)
     }
     document.addEventListener('visibilitychange', onVisibility)
     return () => {
       window.clearInterval(id)
       document.removeEventListener('visibilitychange', onVisibility)
     }
-  }, [refresh])
+  }, [hasRunning, refresh])
 
   // API returns newest-first; keep that for list view (newest at top).
   const displayEntries = useMemo(() => entries, [entries])
@@ -211,8 +220,23 @@ export default function ModelDebugPanel({ taskIdFilter }: ModelDebugPanelProps) 
             </select>
           </>
         )}
-        {taskIdFilter && (
-          <span className="text-[10px] text-indigo-300 font-mono">task: {taskIdFilter}</span>
+        {selectedTaskId && (
+          <div className="flex rounded border border-cat-surface1 overflow-hidden text-[10px]">
+            <button
+              type="button"
+              onClick={() => setFilterToSelectedTask(false)}
+              className={`px-2 py-0.5 ${!filterToSelectedTask ? 'bg-indigo-600/40 text-indigo-200' : 'text-cat-overlay'}`}
+            >
+              All sprint tasks
+            </button>
+            <button
+              type="button"
+              onClick={() => setFilterToSelectedTask(true)}
+              className={`px-2 py-0.5 font-mono ${filterToSelectedTask ? 'bg-indigo-600/40 text-indigo-200' : 'text-cat-overlay'}`}
+            >
+              Selected: {selectedTaskId}
+            </button>
+          </div>
         )}
         <button
           type="button"
@@ -255,7 +279,11 @@ export default function ModelDebugPanel({ taskIdFilter }: ModelDebugPanelProps) 
                     <span className="text-indigo-300">{e.agent}</span>
                     <span className="text-cat-overlay">{e.timestamp}</span>
                     <span className="text-cat-subtext">iter {e.iteration}</span>
-                    <span className="text-cat-subtext">{e.durationMs}ms</span>
+                    {e.status === 'running' ? (
+                      <span className="text-amber-300 animate-pulse">RUNNING</span>
+                    ) : (
+                      <span className="text-cat-subtext">{e.durationMs}ms</span>
+                    )}
                     {e.error && <span className="text-rose-400">ERR</span>}
                     {e.toolNames?.length > 0 && (
                       <span className="text-amber-300/80">tools: {e.toolNames.join(', ')}</span>
@@ -327,12 +355,12 @@ export default function ModelDebugPanel({ taskIdFilter }: ModelDebugPanelProps) 
           ) : (
             displayThreads.map((thread) => {
               const tid = thread.taskId
-              const open = expandedThread === tid || (taskIdFilter != null && taskIdFilter === tid)
+              const open = expandedThread === tid || (effectiveTaskId != null && effectiveTaskId === tid)
               return (
                 <div key={tid} className="border border-cat-surface1 rounded-lg overflow-hidden">
                   <button
                     type="button"
-                    onClick={() => setExpandedThread(open && !taskIdFilter ? null : tid)}
+                    onClick={() => setExpandedThread(open && !effectiveTaskId ? null : tid)}
                     className="w-full text-left px-3 py-2 bg-cat-mantle/30 hover:bg-cat-surface0/30 flex justify-between"
                   >
                     <span className="text-indigo-300 font-mono text-[10px]">

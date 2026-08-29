@@ -1931,7 +1931,7 @@ export default function App() {
                 )}
                 {bottomTab === 'model' && (
                   <div className="absolute inset-0 flex flex-col min-h-0">
-                    <ModelDebugPanel taskIdFilter={selectedTask?.id ?? null} />
+                    <ModelDebugPanel selectedTaskId={selectedTask?.id ?? null} />
                   </div>
                 )}
                 {bottomTab === 'ollamaServer' && (

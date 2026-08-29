@@ -1,0 +1,2 @@
+# Unity Quest 3 VR Skill
+Edit C# scripts under Assets/; avoid modifying Library/ or Temp/. Use XR Interaction Toolkit or Meta XR SDK per project brief. Target Android/Quest builds. Run tests via run_command (Unity batchmode -runTests or dotnet test for edit-mode tests). Document build commands in Project Memory (Unity path, scene names, package versions). Keep MonoBehaviour scripts focused; use ScriptableObjects for data. Quest deploy requires Android build + adb/Meta tooling — script these in run_command when paths are known.
