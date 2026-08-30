@@ -203,7 +203,17 @@ export default function SettingsSlideOver({
     void testLlmModel(trimmed, ollamaUrl)
       .then((result) => {
         if (result.ok) {
-          setModelSlotStatus((prev) => ({ ...prev, [slotKey]: `PASS · ${result.latencyMs}ms` }))
+          const detail = [
+            result.contextLength ? `ctx ${result.contextLength}` : '',
+            result.unloadStatus || '',
+            result.loadStatus || '',
+          ]
+            .filter(Boolean)
+            .join(' · ')
+          setModelSlotStatus((prev) => ({
+            ...prev,
+            [slotKey]: `PASS · ${result.latencyMs}ms${detail ? ` (${detail})` : ''}`,
+          }))
           setLlmHealthStatus(
             `${label} ${slot} OK — “${result.model}” generated successfully in ${result.latencyMs} ms.`,
           )
@@ -213,9 +223,10 @@ export default function SettingsSlideOver({
           result.errorType === 'model' && result.models.length
             ? ` Available: ${result.models.join(', ')}`
             : ''
+        const failNote = result.unloadStatus ? ` (${result.unloadStatus})` : ''
         setModelSlotStatus((prev) => ({
           ...prev,
-          [slotKey]: `FAIL · ${result.error || 'unknown error'}`,
+          [slotKey]: `FAIL · ${result.error || 'unknown error'}${failNote}`,
         }))
         setLlmHealthStatus(
           `${label} ${slot} test failed: ${result.error || 'unknown error'}.${available}`,

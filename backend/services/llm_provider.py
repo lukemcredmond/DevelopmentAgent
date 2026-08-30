@@ -112,12 +112,21 @@ class LlmProvider:
     def warm(self, model: str, *, keep_alive: Optional[str] = None) -> bool:
         return False
 
-    def unload_loaded_except(self, keep_model: str) -> None:
+    def unload_loaded_except(self, keep_model: str) -> Dict[str, Any]:
         """Best-effort: free VRAM held by models other than keep_model.
 
-        Used only by connectivity tests. Must never raise.
+        Test path only. Never raises; reports why nothing happened so the
+        caller can tell "nothing to unload" apart from "could not unload".
         """
-        return
+        return {"status": "unsupported", "unloaded": []}
+
+    def load_model_for_test(self, model: str, *, context_length: int = 4096) -> Dict[str, Any]:
+        """Load a model with an explicit small context. Test path only.
+
+        Avoids relying on the server's just-in-time defaults, which may reserve
+        a full-size KV cache and trip a memory guardrail.
+        """
+        return {"status": "unsupported"}
 
 
 class OllamaProvider(LlmProvider):
@@ -213,22 +222,39 @@ class OllamaProvider(LlmProvider):
         except Exception:
             return False
 
-    def unload_loaded_except(self, keep_model: str) -> None:
+    def unload_loaded_except(self, keep_model: str) -> Dict[str, Any]:
         keep = (keep_model or "").strip()
         try:
             response = requests.get(
                 f"{self.base_url}/api/ps", timeout=min(10.0, max(2.0, self.health_timeout_sec))
             )
             if response.status_code != 200:
-                return
+                return {
+                    "status": "error",
+                    "unloaded": [],
+                    "detail": f"/api/ps returned HTTP {response.status_code}",
+                }
             models = response.json().get("models") or []
-        except Exception:
-            return
+        except Exception as exc:
+            return {"status": "error", "unloaded": [], "detail": f"{type(exc).__name__}: {exc}"}
+
+        unloaded: List[str] = []
+        failed: List[str] = []
         for item in models:
             name = str((item or {}).get("name") or (item or {}).get("model") or "").strip()
             if not name or _same_model_id(name, keep):
                 continue
-            self.unload(name)
+            if self.unload(name):
+                unloaded.append(name)
+            else:
+                failed.append(name)
+        if failed:
+            return {
+                "status": "error",
+                "unloaded": unloaded,
+                "detail": f"could not unload {', '.join(failed)}",
+            }
+        return {"status": "unloaded" if unloaded else "none", "unloaded": unloaded}
 
     def warm(self, model: str, *, keep_alive: Optional[str] = None) -> bool:
         try:
@@ -336,23 +362,44 @@ class OpenAICompatProvider(LlmProvider):
             pass
         return None
 
-    def unload_loaded_except(self, keep_model: str) -> None:
-        """Unload every LM Studio instance except keep_model via native /api/v1."""
+    def _native_timeout(self) -> float:
+        return min(30.0, max(5.0, self.health_timeout_sec))
+
+    def unload_loaded_except(self, keep_model: str) -> Dict[str, Any]:
+        """Unload every LM Studio instance except keep_model via native /api/v1.
+
+        The /api/v1 routes require LM Studio 0.4.0+; on older builds this
+        reports "unavailable" rather than silently leaving VRAM occupied.
+        """
         keep = (keep_model or "").strip()
         host = strip_openai_suffix(self.base_url)
-        timeout = min(30.0, max(5.0, self.health_timeout_sec))
+        timeout = self._native_timeout()
         try:
             response = requests.get(
                 f"{host}/api/v1/models", headers=self._headers(), timeout=timeout
             )
+            if response.status_code == 404:
+                return {
+                    "status": "unavailable",
+                    "unloaded": [],
+                    "detail": "native /api/v1 model API not found (needs LM Studio 0.4.0+)",
+                }
             if response.status_code != 200:
-                return
+                return {
+                    "status": "error",
+                    "unloaded": [],
+                    "detail": f"/api/v1/models returned HTTP {response.status_code}",
+                }
             payload = response.json() or {}
-        except Exception:
-            return
+        except Exception as exc:
+            return {"status": "error", "unloaded": [], "detail": f"{type(exc).__name__}: {exc}"}
+
         models = payload.get("models") if isinstance(payload, dict) else None
         if not isinstance(models, list):
-            return
+            return {"status": "error", "unloaded": [], "detail": "unexpected /api/v1/models body"}
+
+        unloaded: List[str] = []
+        failures: List[str] = []
         for item in models:
             if not isinstance(item, dict):
                 continue
@@ -368,14 +415,63 @@ class OpenAICompatProvider(LlmProvider):
                 if not instance_id or _same_model_id(instance_id, keep):
                     continue
                 try:
-                    requests.post(
+                    unload_response = requests.post(
                         f"{host}/api/v1/models/unload",
                         headers=self._headers(),
                         json={"instance_id": instance_id},
                         timeout=timeout,
                     )
-                except Exception:
-                    continue
+                    if unload_response.status_code < 400:
+                        unloaded.append(instance_id)
+                    else:
+                        failures.append(
+                            f"{instance_id} (HTTP {unload_response.status_code})"
+                        )
+                except Exception as exc:
+                    failures.append(f"{instance_id} ({type(exc).__name__})")
+        if failures:
+            return {
+                "status": "error",
+                "unloaded": unloaded,
+                "detail": f"could not unload {', '.join(failures)}",
+            }
+        return {"status": "unloaded" if unloaded else "none", "unloaded": unloaded}
+
+    def load_model_for_test(self, model: str, *, context_length: int = 4096) -> Dict[str, Any]:
+        host = strip_openai_suffix(self.base_url)
+        try:
+            response = requests.post(
+                f"{host}/api/v1/models/load",
+                headers=self._headers(),
+                json={
+                    "model": model,
+                    "context_length": int(context_length),
+                    "echo_load_config": True,
+                },
+                timeout=self.timeout_sec,
+            )
+        except Exception as exc:
+            return {"status": "error", "error": f"{type(exc).__name__}: {exc}"}
+
+        if response.status_code == 404:
+            return {
+                "status": "unavailable",
+                "detail": "native /api/v1 model API not found (needs LM Studio 0.4.0+)",
+            }
+        if response.status_code >= 400:
+            return {
+                "status": "error",
+                "error": f"HTTP {response.status_code}: {response.text[:300]}",
+            }
+        try:
+            body = response.json() or {}
+        except Exception:
+            body = {}
+        return {
+            "status": "loaded",
+            "config": body.get("load_config") or {},
+            "loadTimeSeconds": body.get("load_time_seconds"),
+        }
 
 
 def strip_openai_suffix(url: str) -> str:

@@ -496,6 +496,112 @@ def test_lmstudio_missing_native_unload_api_does_not_fail_probe():
     provider.chat.assert_called_once()
 
 
+def test_lmstudio_unload_reports_unavailable_on_older_server():
+    """A 404 means no native /api/v1; that must be visible, not silently skipped."""
+    provider = OpenAICompatProvider(DEFAULT_LMSTUDIO_URL)
+    missing = MagicMock()
+    missing.status_code = 404
+
+    with patch("backend.services.llm_provider.requests.get", return_value=missing):
+        info = provider.unload_loaded_except("any-model")
+
+    assert info["status"] == "unavailable"
+    assert "0.4.0" in info["detail"]
+
+
+def test_lmstudio_load_requests_small_context():
+    provider = OpenAICompatProvider(DEFAULT_LMSTUDIO_URL)
+    loaded = MagicMock()
+    loaded.status_code = 200
+    loaded.json.return_value = {
+        "instance_id": "qwen/qwen3-27b",
+        "load_time_seconds": 9.1,
+        "load_config": {"context_length": 4096},
+    }
+
+    with patch("backend.services.llm_provider.requests.post", return_value=loaded) as mock_post:
+        info = provider.load_model_for_test("qwen/qwen3-27b", context_length=4096)
+
+    assert mock_post.call_args.args[0] == "http://localhost:1234/api/v1/models/load"
+    assert mock_post.call_args.kwargs["json"]["context_length"] == 4096
+    assert mock_post.call_args.kwargs["json"]["model"] == "qwen/qwen3-27b"
+    assert info["status"] == "loaded"
+    assert info["config"]["context_length"] == 4096
+
+
+def test_probe_reports_guardrail_refusal_without_generating():
+    """A refused load is its own failure, not a confusing generation error."""
+    provider = MagicMock()
+    health = HealthResult(
+        ok=True,
+        url=DEFAULT_LMSTUDIO_URL,
+        models=["qwen/qwen3-27b"],
+        provider="openai_compat",
+    )
+    provider.health.return_value = health
+    provider.unload_loaded_except.return_value = {"status": "none", "unloaded": []}
+    provider.load_model_for_test.return_value = {
+        "status": "error",
+        "error": "HTTP 400: insufficient system resources, requires approximately 19.54GB",
+    }
+
+    result = probe_model(provider, health, "qwen/qwen3-27b")
+
+    assert result["ok"] is False
+    assert result["errorType"] == "load"
+    assert "19.54GB" in result["error"]
+    provider.chat.assert_not_called()
+
+
+def test_probe_records_context_and_unload_notes_on_success():
+    provider = MagicMock()
+    health = HealthResult(
+        ok=True,
+        url=DEFAULT_LMSTUDIO_URL,
+        models=["keep-model"],
+        provider="openai_compat",
+    )
+    provider.health.return_value = health
+    provider.unload_loaded_except.return_value = {
+        "status": "unloaded",
+        "unloaded": ["other-model"],
+    }
+    provider.load_model_for_test.return_value = {
+        "status": "loaded",
+        "config": {"context_length": 4096},
+    }
+    provider.chat.return_value = ChatResult(message=ProviderMessage(content="OK"))
+
+    result = probe_model(provider, health, "keep-model")
+
+    assert result["ok"] is True
+    assert result["contextLength"] == 4096
+    assert "other-model" in result["unloadStatus"]
+
+
+def test_probe_continues_when_explicit_load_is_unavailable():
+    provider = MagicMock()
+    health = HealthResult(
+        ok=True,
+        url=DEFAULT_LMSTUDIO_URL,
+        models=["keep-model"],
+        provider="openai_compat",
+    )
+    provider.health.return_value = health
+    provider.unload_loaded_except.return_value = {"status": "none", "unloaded": []}
+    provider.load_model_for_test.return_value = {
+        "status": "unavailable",
+        "detail": "native /api/v1 model API not found (needs LM Studio 0.4.0+)",
+    }
+    provider.chat.return_value = ChatResult(message=ProviderMessage(content="OK"))
+
+    result = probe_model(provider, health, "keep-model")
+
+    assert result["ok"] is True
+    assert "0.4.0" in result["loadStatus"]
+    provider.chat.assert_called_once()
+
+
 def test_ollama_unload_uses_ps_list_except_keep_model():
     provider = OllamaProvider("http://localhost:11434")
     listed = MagicMock()
@@ -613,6 +719,9 @@ def test_lmstudio_ui_has_model_tests_and_log_fallback():
     assert "Test all agent models" not in settings
     assert "Test {modelFocus} model" not in settings
     assert "unloads other loaded models first" in settings
+    # Unload / load problems are visible on the row, not swallowed.
+    assert "result.unloadStatus" in settings
+    assert "result.loadStatus" in settings
     assert "modelTestTimeoutSec" in workflow
     assert "Loaded models" in models
     assert "No model IDs returned by /v1/models" in models

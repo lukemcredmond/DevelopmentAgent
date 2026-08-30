@@ -16,6 +16,10 @@ from typing import Any, Callable, Dict, List, Optional
 # so a handful of tokens would leave the visible content empty.
 PROBE_MAX_TOKENS = 32
 MAX_HEALTH_TIMEOUT_SEC = 30.0
+# The probe sends a few tokens and asks for a few back, so a small context keeps
+# the KV cache tiny. Just-in-time loads otherwise reserve a full-size cache and
+# can be refused by a memory guardrail on large models.
+PROBE_CONTEXT_LENGTH = 4096
 
 AGENT_MODEL_LABELS: Dict[str, str] = {
     "po": "Product Owner",
@@ -65,6 +69,35 @@ def build_test_slots(
     return slots
 
 
+def _unload_others(provider: Any, model: str) -> str:
+    """Free VRAM held by other models. Returns a note only when noteworthy."""
+    unload = getattr(provider, "unload_loaded_except", None)
+    if not callable(unload):
+        return ""
+    try:
+        info = unload(model) or {}
+    except Exception as exc:
+        return f"unload failed ({type(exc).__name__})"
+    if not isinstance(info, dict):
+        return ""
+    status = info.get("status")
+    if status == "unloaded":
+        return f"unloaded {', '.join(info.get('unloaded') or [])}"
+    if status in ("unavailable", "error"):
+        return f"unload {status}: {info.get('detail') or 'no detail'}"
+    return ""
+
+
+def _load_with_small_context(provider: Any, model: str) -> Dict[str, Any]:
+    load = getattr(provider, "load_model_for_test", None)
+    if not callable(load):
+        return {"status": "unsupported"}
+    try:
+        return load(model, context_length=PROBE_CONTEXT_LENGTH) or {"status": "unsupported"}
+    except Exception as exc:
+        return {"status": "error", "error": f"{type(exc).__name__}: {exc}"}
+
+
 def probe_model(
     provider: Any,
     health: Any,
@@ -79,6 +112,8 @@ def probe_model(
     def _elapsed() -> int:
         return int((time.perf_counter() - started) * 1000)
 
+    notes: Dict[str, Any] = {}
+
     def _failure(error_type: str, error: str) -> Dict[str, Any]:
         return {
             "ok": False,
@@ -89,6 +124,7 @@ def probe_model(
             "latencyMs": _elapsed(),
             "errorType": error_type,
             "error": error,
+            **notes,
         }
 
     if not health.ok:
@@ -104,17 +140,31 @@ def probe_model(
         if health.models and model not in health.models:
             return _failure("model", f"Model '{model}' is not returned by the server model list")
 
+    unload_note = _unload_others(provider, model)
+    if unload_note:
+        notes["unloadStatus"] = unload_note
+
+    load_info = _load_with_small_context(provider, model)
+    if load_info.get("status") == "error":
+        return _failure(
+            "load", f"model load refused: {load_info.get('error') or 'unknown error'}"
+        )
+    if load_info.get("status") == "unavailable":
+        notes["loadStatus"] = str(load_info.get("detail") or "explicit load unavailable")
+    elif load_info.get("status") == "loaded":
+        context = (load_info.get("config") or {}).get("context_length")
+        if context:
+            notes["contextLength"] = context
+
     try:
-        try:
-            unload = getattr(provider, "unload_loaded_except", None)
-            if callable(unload):
-                unload(model)
-        except Exception:
-            pass
         result = provider.chat(
             model,
             [{"role": "user", "content": "Reply with OK."}],
-            options={"temperature": 0, "num_predict": PROBE_MAX_TOKENS},
+            options={
+                "temperature": 0,
+                "num_predict": PROBE_MAX_TOKENS,
+                "num_ctx": PROBE_CONTEXT_LENGTH,
+            },
         )
         content = str(getattr(getattr(result, "message", None), "content", "") or "").strip()
         return {
@@ -125,6 +175,7 @@ def probe_model(
             "models": health.models,
             "latencyMs": _elapsed(),
             "response": content[:200],
+            **notes,
         }
     except Exception as exc:
         return _failure("generation", str(exc)[:500])

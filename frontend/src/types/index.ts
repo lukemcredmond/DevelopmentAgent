@@ -1425,8 +1425,11 @@ export interface LlmModelTestResponse {
   models: string[]
   latencyMs: number
   response?: string
-  errorType?: 'connection' | 'model' | 'generation' | string
+  errorType?: 'connection' | 'model' | 'generation' | 'load' | string
   error?: string
+  unloadStatus?: string
+  loadStatus?: string
+  contextLength?: number
 }
 
 export type LlmAgentModelTestStatus = 'pending' | 'testing' | 'passed' | 'failed'
