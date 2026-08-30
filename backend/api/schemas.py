@@ -234,6 +234,15 @@ class WorkflowSettingsPayload(BaseModel):
     ollamaNumCtxAdaptive: Optional[bool] = None
     ollamaNumCtxAdaptiveStart: Optional[int] = None
     ollamaNumCtxAdaptiveStep: Optional[int] = None
+    ollamaKvCacheType: Optional[str] = None
+    # VRAM of the host serving llmBaseUrl; required when inference is remote.
+    llmHostVramMb: Optional[int] = None
+    singleModelMode: Optional[str] = None
+    maxToolCallsPerStep: Optional[int] = None
+    samplingDefaults: Optional[Dict[str, float]] = None
+    samplingByRole: Optional[Dict[str, Dict[str, float]]] = None
+    mcpTimeoutSec: Optional[int] = None
+    mcpConnectTimeoutSec: Optional[int] = None
     ollamaKeepAlive: Optional[str] = None
     ollamaRequestTimeoutSec: Optional[int] = None
     modelTestTimeoutSec: Optional[int] = None

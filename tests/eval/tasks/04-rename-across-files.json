@@ -1,0 +1,22 @@
+{
+  "id": "04-rename-across-files",
+  "title": "Rename calc_tot to calculate_total across the package",
+  "description": "The function calc_tot in app/billing.py is badly named. Rename it to calculate_total and update every call site across the package so the tests pass. There are call sites in app/orders.py and app/report.py.",
+  "acceptanceCriteria": [
+    "app/billing.py defines calculate_total and no longer defines calc_tot",
+    "All call sites are updated",
+    "python -m pytest -q passes"
+  ],
+  "brief": "A small Python billing package.",
+  "seedFiles": {
+    "app/__init__.py": "",
+    "app/billing.py": "\"\"\"Billing math.\"\"\"\n\n\ndef calc_tot(items: list[dict]) -> float:\n    return round(sum(i[\"price\"] * i[\"qty\"] for i in items), 2)\n",
+    "app/orders.py": "from app.billing import calc_tot\n\n\ndef order_summary(items: list[dict]) -> str:\n    return f\"Order total: {calc_tot(items):.2f}\"\n",
+    "app/report.py": "from app.billing import calc_tot\n\n\ndef report_line(label: str, items: list[dict]) -> str:\n    return f\"{label}: {calc_tot(items):.2f}\"\n",
+    "test_billing.py": "from app.billing import calculate_total\nfrom app.orders import order_summary\nfrom app.report import report_line\n\nITEMS = [{\"price\": 2.5, \"qty\": 2}, {\"price\": 1.0, \"qty\": 3}]\n\n\ndef test_total():\n    assert calculate_total(ITEMS) == 8.0\n\n\ndef test_order_summary():\n    assert order_summary(ITEMS) == \"Order total: 8.00\"\n\n\ndef test_report_line():\n    assert report_line(\"Q1\", ITEMS) == \"Q1: 8.00\"\n\n\ndef test_old_name_gone():\n    import app.billing\n\n    assert not hasattr(app.billing, \"calc_tot\")\n"
+  },
+  "verifyCommand": "python -m pytest -q",
+  "expectChangedFiles": ["app/billing.py", "app/orders.py", "app/report.py"],
+  "protectedFiles": ["test_billing.py"],
+  "maxSteps": 8
+}

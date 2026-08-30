@@ -1,0 +1,19 @@
+{
+  "id": "01-add-function",
+  "title": "Add a slugify helper to text_utils",
+  "description": "The module app/text_utils.py is missing a slugify function. Add it so the existing test suite passes. slugify must lowercase the input, replace any run of non-alphanumeric characters with a single hyphen, and strip leading/trailing hyphens.",
+  "acceptanceCriteria": [
+    "app/text_utils.py defines a function slugify(value: str) -> str",
+    "python -m pytest -q passes"
+  ],
+  "brief": "A small Python text utility library.",
+  "seedFiles": {
+    "app/__init__.py": "",
+    "app/text_utils.py": "\"\"\"Small text helpers.\"\"\"\n\n\ndef titleize(value: str) -> str:\n    return \" \".join(word.capitalize() for word in value.split())\n",
+    "test_text_utils.py": "from app.text_utils import slugify\n\n\ndef test_basic():\n    assert slugify(\"Hello World\") == \"hello-world\"\n\n\ndef test_punctuation_collapses():\n    assert slugify(\"Hello,   World!!\") == \"hello-world\"\n\n\ndef test_strips_edges():\n    assert slugify(\"  --Hello--  \") == \"hello\"\n"
+  },
+  "verifyCommand": "python -m pytest -q",
+  "expectChangedFiles": ["app/text_utils.py"],
+  "protectedFiles": ["test_text_utils.py"],
+  "maxSteps": 6
+}

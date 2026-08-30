@@ -128,6 +128,14 @@ class LlmProvider:
         """
         return {"status": "unsupported"}
 
+    def show_model(self, model: str) -> Optional[Dict[str, Any]]:
+        """Architecture/quantization metadata used to size the KV cache.
+
+        None when the server cannot describe the model; callers must treat that as
+        "unknown" rather than assuming a default.
+        """
+        return None
+
 
 class OllamaProvider(LlmProvider):
     provider_id = PROVIDER_OLLAMA
@@ -154,6 +162,21 @@ class OllamaProvider(LlmProvider):
     def list_models(self) -> List[str]:
         result = self.health()
         return result.models
+
+    def show_model(self, model: str) -> Optional[Dict[str, Any]]:
+        # Metadata is an optimization, never worth stalling an agent turn for.
+        try:
+            response = requests.post(
+                f"{self.base_url}/api/show",
+                json={"model": model},
+                timeout=min(3.0, self.health_timeout_sec),
+            )
+            if response.status_code != 200:
+                return None
+            data = response.json()
+            return data if isinstance(data, dict) else None
+        except (requests.RequestException, ValueError):
+            return None
 
     def health(self) -> HealthResult:
         try:

@@ -86,12 +86,15 @@ def probe_system_capacity() -> Dict[str, Any]:
     if vram_mb is not None:
         if vram_mb >= 24000:
             tier = "high"
-        elif vram_mb >= 12000:
+        elif vram_mb >= 16000:
             tier = "medium"
-        elif vram_mb >= 8000:
+        elif vram_mb >= 10000:
             tier = "low"
-        else:
+        elif vram_mb >= 6000:
             tier = "minimal"
+        else:
+            # Under ~6 GB nothing above a 3B-class model fits with usable context.
+            tier = "tiny"
     return {
         "gpuAvailable": vram_mb is not None,
         "vramMb": vram_mb,
@@ -112,24 +115,38 @@ def get_model_recommendations(
     tier = str(capacity.get("tier") or "cpu_only")
     vram_mb = capacity.get("vramMb")
 
-    if tier in ("high",) or (isinstance(vram_mb, int) and vram_mb >= 24000):
-        dev = "qwen2.5-coder:14b"
-        small = "qwen2.5-coder:7b"
-    elif tier in ("medium",) or (isinstance(vram_mb, int) and vram_mb >= 12000):
-        dev = "qwen2.5-coder:14b"
-        small = "qwen2.5-coder:7b"
-    elif tier in ("low",) or (isinstance(vram_mb, int) and vram_mb >= 8000):
-        dev = "qwen2.5-coder:7b"
-        small = "qwen2.5-coder:7b"
+    # A model only "fits" once its weights AND a usable KV cache are in VRAM. A 14B at
+    # Q4 is ~9 GB of weights before any context, so it needs well past 12 GB in practice.
+    if isinstance(vram_mb, int) and vram_mb > 0:
+        if vram_mb >= 24000:
+            dev, small = "qwen2.5-coder:14b", "qwen2.5-coder:7b"
+        elif vram_mb >= 16000:
+            dev, small = "qwen2.5-coder:14b", "qwen2.5-coder:7b"
+        elif vram_mb >= 10000:
+            dev, small = "qwen2.5-coder:7b", "qwen2.5-coder:7b"
+        elif vram_mb >= 6000:
+            dev, small = "qwen2.5-coder:7b", "qwen2.5-coder:3b"
+        else:
+            dev, small = "qwen2.5-coder:3b", "qwen2.5-coder:3b"
+    elif tier == "high":
+        dev, small = "qwen2.5-coder:14b", "qwen2.5-coder:7b"
+    elif tier == "medium":
+        dev, small = "qwen2.5-coder:14b", "qwen2.5-coder:7b"
+    elif tier == "low":
+        dev, small = "qwen2.5-coder:7b", "qwen2.5-coder:7b"
+    elif tier == "minimal":
+        dev, small = "qwen2.5-coder:7b", "qwen2.5-coder:3b"
     else:
-        dev = "qwen2.5-coder:7b"
-        small = "llama3:8b"
+        # CPU-only: plenty of system RAM but very low throughput; stay small.
+        dev, small = "qwen2.5-coder:3b", "qwen2.5-coder:3b"
 
+    # One model across every role avoids reload thrash whenever a lane changes hands.
+    single_model = dev if _prefers_single_model(vram_mb, tier) else None
     roles = {
-        "po": small,
-        "dev": dev,
-        "cr": small,
-        "qa": small,
+        "po": single_model or small,
+        "dev": single_model or dev,
+        "cr": single_model or small,
+        "qa": single_model or small,
     }
 
     def _status(model: str) -> str:
@@ -140,14 +157,29 @@ def get_model_recommendations(
                 return "partial"
         return "not_installed"
 
+    note = (
+        "Quantized tags (e.g. :q4_K_M) reduce VRAM use. "
+        "Recommendations assume a single loaded model."
+    )
+    if single_model:
+        note += (
+            " Only one model fits this GPU at a time, so every role is mapped to the "
+            "same model — mixing models would force a reload on each lane change."
+        )
+
     return {
         "capacity": capacity,
         "tier": tier,
+        "singleModelRecommended": bool(single_model),
         "roles": {
             role: {"model": model, "status": _status(model)} for role, model in roles.items()
         },
-        "note": (
-            "Quantized tags (e.g. :q4_K_M) reduce VRAM use. "
-            "Recommendations assume a single loaded model."
-        ),
+        "note": note,
     }
+
+
+def _prefers_single_model(vram_mb: Optional[int], tier: str) -> bool:
+    """True when the GPU can only hold one model, so per-role models cause thrash."""
+    if isinstance(vram_mb, int) and vram_mb > 0:
+        return vram_mb < 16000
+    return tier in ("low", "minimal", "tiny", "cpu_only")

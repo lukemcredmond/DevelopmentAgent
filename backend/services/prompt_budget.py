@@ -27,6 +27,71 @@ def normalize_role_key(role: Optional[str]) -> Optional[str]:
     return _ROLE_ALIASES.get(key, key if key in _ROLE_KEYS else None)
 
 
+def vram_fit_num_ctx(
+    requested: int,
+    *,
+    role: Optional[str] = None,
+    model: Optional[str] = None,
+    settings: Optional[Dict[str, Any]] = None,
+) -> Dict[str, Any]:
+    """Clamp a requested context window to what the inference host can actually hold.
+
+    Capacity follows the configured LLM endpoint, not this machine: when Ollama runs
+    on another box we have no business measuring the local GPU. If capacity or model
+    metadata is unknown, the request passes through untouched.
+    """
+    from backend.services.llm_capacity import (
+        fetch_model_meta,
+        fit_num_ctx,
+        resolve_inference_capacity,
+    )
+
+    try:
+        from backend.services.workflow_settings import get_workflow_settings
+
+        ws = settings if settings is not None else get_workflow_settings()
+    except Exception:
+        ws = settings or {}
+
+    capacity = resolve_inference_capacity(ws)
+    if not capacity.known:
+        return {
+            "numCtx": requested,
+            "requested": requested,
+            "clamped": False,
+            "reason": (
+                "inference host VRAM unknown - set llmHostVramMb to enable context fitting"
+                if not capacity.is_local
+                else "local VRAM could not be probed"
+            ),
+            "capacity": capacity.to_dict(),
+        }
+
+    if not model:
+        model = _model_for_role(role, ws)
+
+    meta = fetch_model_meta(model) if model else None
+    result = fit_num_ctx(
+        requested,
+        vram_mb=capacity.vram_mb,
+        model_meta=meta,
+        kv_cache_type=str(ws.get("ollamaKvCacheType") or "f16"),
+    )
+    result["capacity"] = capacity.to_dict()
+    result["model"] = model
+    return result
+
+
+def _model_for_role(role: Optional[str], ws: Dict[str, Any]) -> str:
+    from backend import state
+
+    key = normalize_role_key(role) or "dev"
+    try:
+        return str(state.PRIMARY_MODELS.get(key) or "")
+    except Exception:
+        return ""
+
+
 def resolve_ollama_num_ctx(
     role: Optional[str] = None,
     *,
@@ -35,7 +100,7 @@ def resolve_ollama_num_ctx(
     """
     Resolve num_ctx for a role.
     Dev defaults to global; PO/CR/QA default to min(global, 16384) when unset in map.
-    When ollamaNumCtxAuto and VRAM tier is low/minimal, halve Dev ctx.
+    When ollamaNumCtxAuto is on, clamp to what the inference host's VRAM can hold.
     """
     try:
         from backend.services.workflow_settings import get_workflow_settings
@@ -61,13 +126,10 @@ def resolve_ollama_num_ctx(
     else:
         ctx = min(global_ctx, 16384)
 
-    if key == "dev" and ws.get("ollamaNumCtxAuto"):
+    if ws.get("ollamaNumCtxAuto"):
         try:
-            from backend.services.system_capacity import probe_system_capacity
-
-            tier = str(probe_system_capacity().get("tier") or "")
-            if tier in ("low", "minimal"):
-                ctx = max(2048, ctx // 2)
+            fit = vram_fit_num_ctx(ctx, role=role, settings=ws)
+            ctx = max(1024, int(fit.get("numCtx") or ctx))
         except Exception:
             pass
     return ctx

@@ -24,6 +24,27 @@ from backend.services.system_capacity import get_model_recommendations, probe_sy
 router = APIRouter()
 
 
+@router.get("/api/preflight")
+def preflight():
+    """Offline readiness: endpoint, models, capacity, vector store, outbound features."""
+    from backend.services.preflight import run_preflight
+
+    return run_preflight()
+
+
+@router.get("/api/llm/capacity")
+def llm_capacity():
+    """What we know about the machine actually serving the models."""
+    from backend.services.llm_capacity import resolve_inference_capacity
+    from backend.services.agent_efficiency import single_model_mode_active
+
+    capacity = resolve_inference_capacity()
+    return {
+        **capacity.to_dict(),
+        "singleModelActive": single_model_mode_active(),
+    }
+
+
 @router.get("/api/ollama/health")
 def ollama_health(url: Optional[str] = None):
     provider = get_chat_provider(override_url=url)

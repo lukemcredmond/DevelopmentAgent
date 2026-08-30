@@ -168,6 +168,9 @@ class StepDiagnosticsTracker:
                 "Check apply_patch errors or Split the card."
             ),
             "tool_failure_stop": "Tool failures exceeded the step limit.",
+            "tool_budget_exhausted": (
+                "Step used its whole tool-call budget. Raise maxToolCallsPerStep or split the card."
+            ),
             "ollama_fallback": "Ollama was unavailable during the step.",
             "completed_text_only": (
                 "Agent returned text without write tools while still In Progress."

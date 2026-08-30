@@ -17,7 +17,9 @@ DEFAULT_WORKFLOW_SETTINGS: Dict[str, Any] = {
     "maxRefinementRoundTrips": 3,
     "maxSubtaskDepth": 4,
     "maxSubtaskSpawns": 8,
-    "enableFixVerifyLoop": False,
+    # Self-correcting against real lint/test output is most of what makes an agent feel
+    # like it delivers; affordable now that the iteration budget is not the bottleneck.
+    "enableFixVerifyLoop": True,
     # Keep fix-verify cheap: 2 rounds max by default (was 3).
     "maxFixVerifyRounds": 2,
     # Abort further fix-verify rounds on hard agent stops (tool_failure, plan_exhausted, …).
@@ -86,7 +88,11 @@ DEFAULT_WORKFLOW_SETTINGS: Dict[str, Any] = {
     "autoSprintSessionRefreshEnabled": True,
     "autoSprintSessionRefreshMinutes": 60,
     "autoSprintHardReload": True,
-    "maxLlmIterationsPerStep": 6,
+    # A real change needs inventory + several reads + edits + a lint round. At 6 the
+    # loop ran out of turns before it could finish and reported that as a failure.
+    "maxLlmIterationsPerStep": 30,
+    # The true safety net is total tool calls plus the wall-clock cap, not LLM turns.
+    "maxToolCallsPerStep": 80,
     "maxPoRoundTrips": 3,
     "maxStuckSteps": 3,
     # Wall-clock cap for one agent tool loop (LLM+tools). Default 45 minutes.
@@ -118,8 +124,18 @@ DEFAULT_WORKFLOW_SETTINGS: Dict[str, Any] = {
     "ollamaNumCtx": 32768,
     # Optional per-role override map {po,dev,cr,qa}; unset roles use sensible defaults.
     "ollamaNumCtxByRole": {},
-    # When true, halve Dev ctx on low/minimal VRAM tiers.
+    # When true, clamp num_ctx to what the inference host's VRAM can actually hold.
     "ollamaNumCtxAuto": True,
+    # KV cache precision configured on the Ollama SERVER (OLLAMA_KV_CACHE_TYPE).
+    # We cannot set it from here — it belongs to the server process — but the context
+    # fit calculation must match it, and preflight warns when it looks unset.
+    # q8_0 roughly halves KV memory vs f16 for negligible quality loss.
+    "ollamaKvCacheType": "q8_0",
+    # VRAM of the machine serving llmBaseUrl. Required when inference is remote: we
+    # cannot probe another host, and probing this one would measure the wrong GPU.
+    "llmHostVramMb": 0,
+    # auto = collapse to one model when the host can only hold one; on/off to force.
+    "singleModelMode": "auto",
     # Start each step at ollamaNumCtxAdaptiveStart; on exceed_context errors, increase and retry.
     "ollamaNumCtxAdaptive": False,
     "ollamaNumCtxAdaptiveStart": 8192,
@@ -131,6 +147,15 @@ DEFAULT_WORKFLOW_SETTINGS: Dict[str, Any] = {
     "terminalTimeoutSec": 600,
     # Unload primary before loading backup when VRAM is nearly full.
     "enableVramAwareModelSwap": True,
+    # Sampling. Greedy decoding on small local models drives repetition loops, which
+    # the duplicate-tool and echo guards were papering over. Overrides are merged over
+    # the per-role defaults in services/sampling.py.
+    "samplingDefaults": {},
+    "samplingByRole": {},
+    # MCP servers are optional; when one is unreachable it must fail fast rather than
+    # consume an agent step's wall-clock budget.
+    "mcpTimeoutSec": 20,
+    "mcpConnectTimeoutSec": 5,
     "ollamaMaxRetries": 4,
     "ollamaRetryDelaySec": [0, 2, 5, 10],
     "ollamaCooldownRetryEnabled": True,
@@ -157,10 +182,12 @@ DEFAULT_WORKFLOW_SETTINGS: Dict[str, Any] = {
     "enableLlmModelRationale": False,
     "toolOutputEchoStopAfter": 2,
     # Dev Explore → Patch → Verify phase graph (cuts open-ended read_file thrash).
+    # Budgets sized so a multi-file change is reachable; the total tool-call cap and
+    # the wall-clock timeout remain the real stops.
     "enableDevPhaseGraph": True,
-    "devExploreMaxTools": 3,
-    "devPatchMaxTools": 4,
-    "devVerifyMaxTools": 2,
+    "devExploreMaxTools": 12,
+    "devPatchMaxTools": 12,
+    "devVerifyMaxTools": 8,
     "enableStepLessonMemory": True,
     # Pinned Dev core memory block (always injected; lessons merge into it).
     "enableDevCoreMemoryBlock": True,

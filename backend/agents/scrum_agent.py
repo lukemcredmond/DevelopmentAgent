@@ -1026,14 +1026,15 @@ class ScrumAgent:
         return True
 
     def _chat_options(self) -> Dict[str, Any]:
+        from backend.services.agent_efficiency import effective_keep_alive
+        from backend.services.sampling import sampling_options_for_role
+
         ws = get_workflow_settings()
-        opts: Dict[str, Any] = {
-            "temperature": 0.1,
-        }
+        opts: Dict[str, Any] = dict(sampling_options_for_role(self.role, ws=ws))
         provider = self._get_provider()
         if provider.capabilities.num_ctx:
             opts["num_ctx"] = self._effective_num_ctx()
-        keep_alive = ws.get("ollamaKeepAlive")
+        keep_alive = effective_keep_alive(ws)
         if keep_alive and provider.capabilities.keep_alive:
             opts["keep_alive"] = str(keep_alive)
         return opts
@@ -2372,6 +2373,9 @@ class ScrumAgent:
         ws = get_workflow_settings()
         max_tool_failures = int(ws.get("maxToolFailuresPerStep", 5))
         max_duration_sec = int(ws.get("maxAgentStepDurationSec", 2700) or 2700)
+        # Total tool calls, not LLM turns, is the meaningful work budget for a step.
+        max_tool_calls = int(ws.get("maxToolCallsPerStep", 80) or 0)
+        self._step_tool_call_count = 0
         step_started_mono = time.monotonic()
         self._mid_step_backup_switched = False
         try:
@@ -2558,6 +2562,17 @@ class ScrumAgent:
                         pass
                     self._finish_run(status="failed", error=stop_msg)
                     pending_lesson = ("step_timeout", set(tools_used), stop_msg)
+                    return stop_msg
+                if max_tool_calls > 0 and self._step_tool_call_count >= max_tool_calls:
+                    stop_msg = (
+                        f"Stopped: tool call budget reached ({self._step_tool_call_count}/"
+                        f"{max_tool_calls}) — raise maxToolCallsPerStep or split the card."
+                    )
+                    add_system_log(self.role, "warning", stop_msg)
+                    self._log_step_exit(stop_msg, "warning")
+                    log_event("tool_budget_exhausted", stop_msg)
+                    self._finish_run(status="failed", error=stop_msg)
+                    pending_lesson = ("tool_budget_exhausted", set(tools_used), stop_msg)
                     return stop_msg
                 if task_id and is_task_done(task_id) and not state.ALLOW_DONE_RETRY:
                     stop_msg = "Stopped: task already Done"
@@ -2786,6 +2801,7 @@ class ScrumAgent:
                 )
 
                 if message.tool_calls:
+                    self._step_tool_call_count += len(tool_call_names)
                     self._consecutive_echo_count = 0
                     if decision_trace_enabled():
                         amend_llm_log_entry(

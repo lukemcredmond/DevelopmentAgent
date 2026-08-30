@@ -1,0 +1,20 @@
+{
+  "id": "08-read-before-patch",
+  "title": "Change the default timeout in a densely repeated config",
+  "description": "app/config.py contains several similar-looking timeout settings. Change only DEFAULT_REQUEST_TIMEOUT from 30 to 60, leaving every other timeout untouched. This task deliberately contains near-duplicate lines to exercise precise patching.",
+  "acceptanceCriteria": [
+    "DEFAULT_REQUEST_TIMEOUT is 60",
+    "All other timeout values are unchanged",
+    "python -m pytest -q passes"
+  ],
+  "brief": "A small Python service configuration module.",
+  "seedFiles": {
+    "app/__init__.py": "",
+    "app/config.py": "\"\"\"Service configuration.\"\"\"\n\nDEFAULT_CONNECT_TIMEOUT = 30\nDEFAULT_REQUEST_TIMEOUT = 30\nDEFAULT_READ_TIMEOUT = 30\nDEFAULT_WRITE_TIMEOUT = 30\nDEFAULT_POOL_TIMEOUT = 30\n",
+    "test_config.py": "from app import config\n\n\ndef test_request_timeout_updated():\n    assert config.DEFAULT_REQUEST_TIMEOUT == 60\n\n\ndef test_others_unchanged():\n    assert config.DEFAULT_CONNECT_TIMEOUT == 30\n    assert config.DEFAULT_READ_TIMEOUT == 30\n    assert config.DEFAULT_WRITE_TIMEOUT == 30\n    assert config.DEFAULT_POOL_TIMEOUT == 30\n"
+  },
+  "verifyCommand": "python -m pytest -q",
+  "expectChangedFiles": ["app/config.py"],
+  "protectedFiles": ["test_config.py"],
+  "maxSteps": 6
+}

@@ -1,0 +1,20 @@
+{
+  "id": "06-edge-case",
+  "title": "Handle empty input in statistics helpers",
+  "description": "app/stats.py crashes with ZeroDivisionError on empty input. Make mean() and median() return None for an empty sequence, keeping current behaviour for non-empty input.",
+  "acceptanceCriteria": [
+    "mean([]) returns None",
+    "median([]) returns None",
+    "python -m pytest -q passes"
+  ],
+  "brief": "A small Python statistics helper library.",
+  "seedFiles": {
+    "app/__init__.py": "",
+    "app/stats.py": "\"\"\"Statistics helpers.\"\"\"\n\n\ndef mean(values: list[float]) -> float:\n    return sum(values) / len(values)\n\n\ndef median(values: list[float]) -> float:\n    ordered = sorted(values)\n    mid = len(ordered) // 2\n    if len(ordered) % 2 == 1:\n        return ordered[mid]\n    return (ordered[mid - 1] + ordered[mid]) / 2\n",
+    "test_stats.py": "from app.stats import mean, median\n\n\ndef test_mean_normal():\n    assert mean([1, 2, 3]) == 2\n\n\ndef test_median_odd():\n    assert median([3, 1, 2]) == 2\n\n\ndef test_median_even():\n    assert median([1, 2, 3, 4]) == 2.5\n\n\ndef test_mean_empty():\n    assert mean([]) is None\n\n\ndef test_median_empty():\n    assert median([]) is None\n"
+  },
+  "verifyCommand": "python -m pytest -q",
+  "expectChangedFiles": ["app/stats.py"],
+  "protectedFiles": ["test_stats.py"],
+  "maxSteps": 6
+}

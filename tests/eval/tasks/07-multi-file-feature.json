@@ -1,0 +1,21 @@
+{
+  "id": "07-multi-file-feature",
+  "title": "Add a discount code feature across cart and pricing",
+  "description": "Add support for percentage discount codes. app/pricing.py must gain apply_discount(total, code) which applies 10 percent for code SAVE10, 25 percent for SAVE25, and raises ValueError for an unknown code. app/cart.py's checkout() must accept an optional code argument and route the total through apply_discount when a code is supplied.",
+  "acceptanceCriteria": [
+    "app/pricing.py defines apply_discount(total, code)",
+    "app/cart.py checkout accepts an optional code and applies the discount",
+    "python -m pytest -q passes"
+  ],
+  "brief": "A small Python shopping cart package.",
+  "seedFiles": {
+    "app/__init__.py": "",
+    "app/pricing.py": "\"\"\"Pricing rules.\"\"\"\n\n\ndef line_total(price: float, qty: int) -> float:\n    return round(price * qty, 2)\n",
+    "app/cart.py": "from app.pricing import line_total\n\n\ndef checkout(items: list[dict]) -> float:\n    return round(sum(line_total(i[\"price\"], i[\"qty\"]) for i in items), 2)\n",
+    "test_cart.py": "import pytest\n\nfrom app.cart import checkout\nfrom app.pricing import apply_discount\n\nITEMS = [{\"price\": 10.0, \"qty\": 2}, {\"price\": 5.0, \"qty\": 4}]\n\n\ndef test_checkout_without_code():\n    assert checkout(ITEMS) == 40.0\n\n\ndef test_apply_discount_10():\n    assert apply_discount(100.0, \"SAVE10\") == 90.0\n\n\ndef test_apply_discount_25():\n    assert apply_discount(100.0, \"SAVE25\") == 75.0\n\n\ndef test_unknown_code_rejected():\n    with pytest.raises(ValueError):\n        apply_discount(100.0, \"NOPE\")\n\n\ndef test_checkout_with_code():\n    assert checkout(ITEMS, \"SAVE25\") == 30.0\n"
+  },
+  "verifyCommand": "python -m pytest -q",
+  "expectChangedFiles": ["app/pricing.py", "app/cart.py"],
+  "protectedFiles": ["test_cart.py"],
+  "maxSteps": 8
+}

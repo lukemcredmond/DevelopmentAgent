@@ -1,0 +1,19 @@
+{
+  "id": "02-fix-failing-test",
+  "title": "Fix off-by-one bug in pagination",
+  "description": "app/pagination.py has a failing test. page_bounds() returns the wrong end index - it is off by one, and it does not clamp the end to total. Fix the implementation so all tests pass. Do not change the tests.",
+  "acceptanceCriteria": [
+    "python -m pytest -q passes",
+    "page_bounds clamps the end index to total"
+  ],
+  "brief": "A small Python pagination utility.",
+  "seedFiles": {
+    "app/__init__.py": "",
+    "app/pagination.py": "\"\"\"Pagination helpers.\"\"\"\n\n\ndef page_bounds(page: int, per_page: int, total: int) -> tuple[int, int]:\n    \"\"\"Return (start, end) indices for a 1-based page number.\"\"\"\n    start = (page - 1) * per_page\n    end = start + per_page + 1\n    return start, end\n",
+    "test_pagination.py": "from app.pagination import page_bounds\n\n\ndef test_first_page():\n    assert page_bounds(1, 10, 100) == (0, 10)\n\n\ndef test_second_page():\n    assert page_bounds(2, 10, 100) == (10, 20)\n\n\ndef test_last_page_clamped():\n    assert page_bounds(3, 10, 25) == (20, 25)\n"
+  },
+  "verifyCommand": "python -m pytest -q",
+  "expectChangedFiles": ["app/pagination.py"],
+  "protectedFiles": ["test_pagination.py"],
+  "maxSteps": 6
+}

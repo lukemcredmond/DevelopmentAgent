@@ -32,9 +32,73 @@ def phase_model_routing_enabled(ws: Optional[Dict[str, Any]] = None) -> bool:
         from backend.services.workflow_settings import get_workflow_settings
 
         ws = get_workflow_settings()
+    if single_model_mode_active(ws):
+        # Routing between an explore model and a patch model is pure reload cost when
+        # only one model fits in VRAM at a time.
+        return False
     if "enablePhaseModelRouting" in ws:
         return bool(ws.get("enablePhaseModelRouting"))
     return efficiency_high(ws)
+
+
+def single_model_mode_active(ws: Optional[Dict[str, Any]] = None) -> bool:
+    """True when every role should share one model to avoid reload thrash.
+
+    "auto" only engages when we actually know the inference host's VRAM and it is too
+    small to hold two models. Unknown capacity leaves the operator's config alone.
+    """
+    if ws is None:
+        from backend.services.workflow_settings import get_workflow_settings
+
+        ws = get_workflow_settings()
+    mode = str(ws.get("singleModelMode") or "auto").strip().lower()
+    if mode in ("on", "true", "yes", "1"):
+        return True
+    if mode in ("off", "false", "no", "0"):
+        return False
+    try:
+        from backend.services.llm_capacity import resolve_inference_capacity
+
+        capacity = resolve_inference_capacity(ws)
+    except Exception:
+        return False
+    return bool(capacity.known and capacity.vram_mb is not None and capacity.vram_mb < 16000)
+
+
+def effective_keep_alive(ws: Optional[Dict[str, Any]] = None) -> str:
+    """How long the server should hold the model in VRAM after a turn.
+
+    With one shared model there is nothing to evict, so holding it indefinitely removes
+    reloads entirely. With several models on a card that only fits one, a long hold
+    means the *next* role waits for an eviction, so we release promptly instead.
+    """
+    if ws is None:
+        from backend.services.workflow_settings import get_workflow_settings
+
+        ws = get_workflow_settings()
+    configured = str(ws.get("ollamaKeepAlive") or "30m").strip()
+    if single_model_mode_active(ws):
+        return "-1"
+    try:
+        from backend.services.llm_capacity import resolve_inference_capacity
+
+        capacity = resolve_inference_capacity(ws)
+    except Exception:
+        return configured
+    if capacity.known and capacity.vram_mb is not None and capacity.vram_mb < 16000:
+        return "5m"
+    return configured
+
+
+def single_model_name(ws: Optional[Dict[str, Any]] = None, *, fallback: str = "") -> str:
+    """The one model every role uses in single-model mode (the Developer primary)."""
+    from backend import state
+
+    try:
+        dev = str((getattr(state, "PRIMARY_MODELS", None) or {}).get("dev") or "").strip()
+    except Exception:
+        dev = ""
+    return dev or str(fallback or "").strip()
 
 
 def resolve_step_model(
@@ -57,6 +121,11 @@ def resolve_step_model(
 
         ws = get_workflow_settings()
     primary = (primary_model or "").strip() or "qwen2.5-coder:14b"
+
+    if single_model_mode_active(ws):
+        # One model for every role and phase: a lane change must never cost a reload.
+        return single_model_name(ws, fallback=primary), "single_model"
+
     if role != "Developer" or not phase_model_routing_enabled(ws):
         return primary, "role_primary"
 

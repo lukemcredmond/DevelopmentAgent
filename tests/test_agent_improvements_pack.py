@@ -296,17 +296,46 @@ def test_resolve_ollama_num_ctx_by_role():
     assert resolve_ollama_num_ctx("po", settings=ws) == 8192
 
 
-def test_resolve_ollama_num_ctx_auto_halves_dev_on_low():
+def test_resolve_ollama_num_ctx_auto_clamps_dev_to_vram_fit():
+    """Auto mode sizes context to what the inference host can hold, not a tier guess.
+
+    A 14B at Q4 needs ~8 GB of weights before any KV cache, so a 12 GB host cannot
+    serve the full 32k window.
+    """
+    from tests.test_llm_capacity import QWEN_14B_META
+
     ws = {
         "ollamaNumCtx": 32768,
         "ollamaNumCtxByRole": {},
         "ollamaNumCtxAuto": True,
+        "llmBaseUrl": "http://localhost:11434",
+        "ollamaKvCacheType": "f16",
     }
     with patch(
         "backend.services.system_capacity.probe_system_capacity",
-        return_value={"tier": "low"},
+        return_value={"tier": "low", "vramMb": 12288, "ramGb": 32.0},
+    ), patch(
+        "backend.services.llm_capacity.fetch_model_meta",
+        return_value=QWEN_14B_META,
     ):
-        assert resolve_ollama_num_ctx("dev", settings=ws) == 16384
+        ctx = resolve_ollama_num_ctx("dev", settings=ws)
+    assert ctx < 32768
+    assert ctx % 1024 == 0
+
+
+def test_resolve_ollama_num_ctx_auto_leaves_remote_host_alone():
+    """A remote endpoint must not be sized from this machine's GPU."""
+    ws = {
+        "ollamaNumCtx": 32768,
+        "ollamaNumCtxByRole": {},
+        "ollamaNumCtxAuto": True,
+        "llmBaseUrl": "http://192.168.1.50:11434",
+    }
+    with patch(
+        "backend.services.system_capacity.probe_system_capacity",
+        return_value={"tier": "tiny", "vramMb": 4096},
+    ):
+        assert resolve_ollama_num_ctx("dev", settings=ws) == 32768
 
 
 def test_ui_diagnostics_and_settings_markers():

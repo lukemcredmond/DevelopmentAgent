@@ -13,6 +13,27 @@ from backend.services.logs import add_system_log
 from backend.services.workflow_settings import get_workflow_settings
 
 _REGISTERED_MCP_TOOLS: List[str] = []
+
+# A tool call runs inside an agent step, so an unreachable MCP server must not be able
+# to burn the step's wall-clock budget. The handshake is capped much harder still:
+# registration touches every configured server, and offline that cost is paid up front.
+DEFAULT_MCP_TIMEOUT_SEC = 20.0
+DEFAULT_MCP_CONNECT_TIMEOUT_SEC = 5.0
+
+
+def _mcp_timeout_sec() -> float:
+    try:
+        return max(1.0, float(get_workflow_settings().get("mcpTimeoutSec") or DEFAULT_MCP_TIMEOUT_SEC))
+    except Exception:
+        return DEFAULT_MCP_TIMEOUT_SEC
+
+
+def _mcp_connect_timeout_sec() -> float:
+    try:
+        raw = get_workflow_settings().get("mcpConnectTimeoutSec")
+        return max(1.0, float(raw or DEFAULT_MCP_CONNECT_TIMEOUT_SEC))
+    except Exception:
+        return DEFAULT_MCP_CONNECT_TIMEOUT_SEC
 _MCP_TOOL_INSTANCES: List[Tool] = []
 _MCP_CLIENTS: Dict[str, Any] = {}
 _LOCK = threading.Lock()
@@ -126,18 +147,26 @@ class _McpStdioClient:
 class _McpHttpClient:
     """Minimal MCP JSON-RPC over HTTP POST (streamable HTTP / SSE-compatible servers)."""
 
-    def __init__(self, name: str, url: str, headers: Optional[Dict[str, str]] = None):
+    def __init__(
+        self,
+        name: str,
+        url: str,
+        headers: Optional[Dict[str, str]] = None,
+        *,
+        timeout_sec: Optional[float] = None,
+    ):
         self.name = name
         self.url = url.rstrip("/")
         self.headers = {"Content-Type": "application/json", **(headers or {})}
+        self.timeout_sec = float(timeout_sec or _mcp_timeout_sec())
         self._next_id = 1
         self._initialize()
 
-    def _post(self, payload: Dict[str, Any]) -> Dict[str, Any]:
+    def _post(self, payload: Dict[str, Any], *, timeout_sec: Optional[float] = None) -> Dict[str, Any]:
         data = json.dumps(payload).encode("utf-8")
         req = urllib.request.Request(self.url, data=data, headers=self.headers, method="POST")
         try:
-            with urllib.request.urlopen(req, timeout=60) as resp:
+            with urllib.request.urlopen(req, timeout=timeout_sec or self.timeout_sec) as resp:
                 raw = resp.read().decode("utf-8")
                 return json.loads(raw) if raw.strip() else {}
         except urllib.error.HTTPError as exc:
@@ -147,6 +176,9 @@ class _McpHttpClient:
     def _initialize(self) -> None:
         init_id = self._next_id
         self._next_id += 1
+        # Handshake uses a short timeout: an unreachable server must fail fast at
+        # registration instead of stalling startup for every configured server.
+        connect_timeout = min(self.timeout_sec, _mcp_connect_timeout_sec())
         self._post(
             {
                 "jsonrpc": "2.0",
@@ -157,9 +189,13 @@ class _McpHttpClient:
                     "capabilities": {},
                     "clientInfo": {"name": "allhands", "version": "1.0"},
                 },
-            }
+            },
+            timeout_sec=connect_timeout,
         )
-        self._post({"jsonrpc": "2.0", "method": "notifications/initialized", "params": {}})
+        self._post(
+            {"jsonrpc": "2.0", "method": "notifications/initialized", "params": {}},
+            timeout_sec=connect_timeout,
+        )
 
     def list_tools(self) -> List[Dict[str, Any]]:
         req_id = self._next_id

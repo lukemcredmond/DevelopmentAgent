@@ -1,0 +1,20 @@
+{
+  "id": "03-add-validation",
+  "title": "Add input validation to create_user",
+  "description": "app/users.py has a create_user function with no validation. Add validation that raises ValueError with a clear message when the name is empty/whitespace, or when the age is negative or not an integer. Existing behaviour for valid input must not change.",
+  "acceptanceCriteria": [
+    "create_user raises ValueError for blank name",
+    "create_user raises ValueError for negative or non-integer age",
+    "python -m pytest -q passes"
+  ],
+  "brief": "A small Python user record library.",
+  "seedFiles": {
+    "app/__init__.py": "",
+    "app/users.py": "\"\"\"User record helpers.\"\"\"\n\n\ndef create_user(name: str, age: int) -> dict:\n    return {\"name\": name.strip(), \"age\": age}\n",
+    "test_users.py": "import pytest\n\nfrom app.users import create_user\n\n\ndef test_valid_user():\n    assert create_user(\"Ada\", 36) == {\"name\": \"Ada\", \"age\": 36}\n\n\ndef test_blank_name_rejected():\n    with pytest.raises(ValueError):\n        create_user(\"   \", 30)\n\n\ndef test_negative_age_rejected():\n    with pytest.raises(ValueError):\n        create_user(\"Ada\", -1)\n\n\ndef test_non_integer_age_rejected():\n    with pytest.raises(ValueError):\n        create_user(\"Ada\", \"thirty\")\n"
+  },
+  "verifyCommand": "python -m pytest -q",
+  "expectChangedFiles": ["app/users.py"],
+  "protectedFiles": ["test_users.py"],
+  "maxSteps": 6
+}

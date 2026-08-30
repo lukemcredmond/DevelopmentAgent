@@ -10,11 +10,31 @@ from backend.api import agents, board, chat, files, git, memory, ollama, project
 from backend.config import CORS_ORIGINS, FRONTEND_DIST
 
 
+def _start_preflight_in_background() -> None:
+    """Report offline readiness once per server boot.
+
+    Runs on a daemon thread because the checks make network calls that are slow
+    precisely when something is wrong, and server startup must not wait on them.
+    """
+    import threading
+
+    def _run() -> None:
+        try:
+            from backend.services.preflight import log_preflight_on_startup
+
+            log_preflight_on_startup()
+        except Exception:
+            pass
+
+    threading.Thread(target=_run, name="preflight", daemon=True).start()
+
+
 @asynccontextmanager
 async def lifespan(_app: FastAPI):
     from backend.services.discord_bot import start_discord_bot, stop_discord_bot
 
     await start_discord_bot()
+    _start_preflight_in_background()
     try:
         yield
     finally:

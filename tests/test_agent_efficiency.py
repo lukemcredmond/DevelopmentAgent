@@ -21,7 +21,10 @@ def test_defaults_enable_efficiency_high():
     assert DEFAULT_WORKFLOW_SETTINGS.get("agentEfficiencyMode") == "high"
     assert DEFAULT_WORKFLOW_SETTINGS.get("enablePhaseModelRouting") is True
     assert DEFAULT_WORKFLOW_SETTINGS.get("maxToolsPerLlmTurn") == 3
-    assert DEFAULT_WORKFLOW_SETTINGS.get("maxLlmIterationsPerStep") == 6
+    # The loop needs enough turns to explore, edit and verify; the real stop is the
+    # total tool-call budget plus the wall-clock cap.
+    assert DEFAULT_WORKFLOW_SETTINGS.get("maxLlmIterationsPerStep") == 30
+    assert DEFAULT_WORKFLOW_SETTINGS.get("maxToolCallsPerStep") == 80
     assert DEFAULT_WORKFLOW_SETTINGS.get("maxToolFailuresPerStep") == 4
     assert DEFAULT_WORKFLOW_SETTINGS.get("enablePromptSectionRotation") is False
 
@@ -186,7 +189,7 @@ def test_fast_first_code_preset_keys_match_mvp():
         "enablePhaseModelRouting": True,
         "enablePromptSectionRotation": False,
         "maxToolsPerLlmTurn": 3,
-        "maxLlmIterationsPerStep": 6,
+        "maxLlmIterationsPerStep": 30,
         "maxToolFailuresPerStep": 4,
         "duplicateToolPolicy": "strict",
         "enableDevPhaseGraph": True,
