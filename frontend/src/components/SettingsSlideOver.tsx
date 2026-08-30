@@ -1,10 +1,15 @@
-import { useCallback, useEffect, useState } from 'react'
-import { checkOllamaHealth, testAllAgentModels, testLlmModel } from '../api/client'
+import { useCallback, useEffect, useRef, useState } from 'react'
+import {
+  checkOllamaHealth,
+  fetchAgentModelTestStatus,
+  startAgentModelTests,
+  testLlmModel,
+} from '../api/client'
 import type {
   AgentId,
   AppState,
   ConfigPayload,
-  LlmAgentModelTestResult,
+  LlmAgentModelTestJob,
   WorkflowSettings,
 } from '../types'
 import { AGENT_LABELS, DEFAULT_WORKFLOW_SETTINGS } from '../types'
@@ -129,8 +134,9 @@ export default function SettingsSlideOver({
   const [modelFocus, setModelFocus] = useState<'PO' | 'DEV' | 'CR' | 'QA'>('DEV')
   const [llmHealthStatus, setLlmHealthStatus] = useState<string | null>(null)
   const [llmTestRunning, setLlmTestRunning] = useState(false)
-  const [agentModelTestResults, setAgentModelTestResults] = useState<LlmAgentModelTestResult[]>([])
+  const [agentModelTestJob, setAgentModelTestJob] = useState<LlmAgentModelTestJob | null>(null)
   const [apiTokenInput, setApiTokenInput] = useState('')
+  const agentTestPollRef = useRef<number | null>(null)
 
   useEffect(() => {
     if (!open) return
@@ -208,12 +214,44 @@ export default function SettingsSlideOver({
           ? crModel
           : qaModel
 
+  const stopAgentTestPolling = useCallback(() => {
+    if (agentTestPollRef.current != null) {
+      window.clearInterval(agentTestPollRef.current)
+      agentTestPollRef.current = null
+    }
+  }, [])
+
+  useEffect(() => stopAgentTestPolling, [stopAgentTestPolling])
+
+  useEffect(() => {
+    if (open) return
+    // The run continues on the server; drop the local poll so reopening can re-attach.
+    stopAgentTestPolling()
+    setLlmTestRunning(false)
+  }, [open, stopAgentTestPolling])
+
+  const applyAgentTestJob = useCallback((job: LlmAgentModelTestJob) => {
+    setAgentModelTestJob(job)
+    if (job.status !== 'done') return
+    stopAgentTestPolling()
+    setLlmTestRunning(false)
+    if (job.error) {
+      setLlmHealthStatus(`Agent model tests failed: ${job.error}`)
+      return
+    }
+    const passed = job.results.filter((item) => item.status === 'passed').length
+    const failed = job.results.filter((item) => item.status === 'failed').length
+    setLlmHealthStatus(
+      `Agent model tests complete — ${passed} passed, ${failed} failed across ${job.uniqueModelsTested} unique model${job.uniqueModelsTested === 1 ? '' : 's'}.`,
+    )
+  }, [stopAgentTestPolling])
+
   const handleTestAllAgentModels = async () => {
+    stopAgentTestPolling()
     setLlmTestRunning(true)
-    setAgentModelTestResults([])
     setLlmHealthStatus('Testing all configured agent primary and backup models…')
     try {
-      const result = await testAllAgentModels(
+      const started = await startAgentModelTests(
         { po: poModel, dev: devModel, cr: crModel, qa: qaModel },
         {
           po: poBackupModel,
@@ -223,18 +261,24 @@ export default function SettingsSlideOver({
         },
         ollamaUrl,
       )
-      setAgentModelTestResults(result.results)
-      const passed = result.results.filter((item) => item.ok).length
-      const failed = result.results.length - passed
-      setLlmHealthStatus(
-        `Agent model tests complete — ${passed} passed, ${failed} failed across ${result.uniqueModelsTested} unique model${result.uniqueModelsTested === 1 ? '' : 's'}.`,
-      )
+      applyAgentTestJob(started)
+      if (started.status === 'done') return
+      agentTestPollRef.current = window.setInterval(() => {
+        void fetchAgentModelTestStatus()
+          .then(applyAgentTestJob)
+          .catch((err: unknown) => {
+            stopAgentTestPolling()
+            setLlmTestRunning(false)
+            setLlmHealthStatus(
+              `Lost track of agent model tests: ${err instanceof Error ? err.message : String(err)}`,
+            )
+          })
+      }, 1500)
     } catch (err: unknown) {
+      setLlmTestRunning(false)
       setLlmHealthStatus(
         `Agent model tests failed: ${err instanceof Error ? err.message : String(err)}`,
       )
-    } finally {
-      setLlmTestRunning(false)
     }
   }
 
@@ -690,9 +734,19 @@ export default function SettingsSlideOver({
               {llmHealthStatus && (
                 <p className="text-[10px] text-violet-300 leading-relaxed">{llmHealthStatus}</p>
               )}
-              {agentModelTestResults.length > 0 && (
+              {agentModelTestJob && agentModelTestJob.results.length > 0 && (
                 <div className="space-y-1 rounded border border-cat-surface1 bg-cat-base/50 p-2">
-                  {agentModelTestResults.map((result) => (
+                  {agentModelTestJob.status === 'running' && (
+                    <p className="text-[10px] text-amber-300 leading-relaxed">
+                      {agentModelTestJob.currentModel
+                        ? `Loading and testing ${agentModelTestJob.currentModel}`
+                        : 'Connecting to LLM server'}{' '}
+                      ({agentModelTestJob.completed} of {agentModelTestJob.total} ·{' '}
+                      {Math.round((agentModelTestJob.elapsedMs ?? 0) / 1000)}s elapsed, up to{' '}
+                      {agentModelTestJob.timeoutSec ?? 600}s per model)
+                    </p>
+                  )}
+                  {agentModelTestJob.results.map((result) => (
                     <div
                       key={`${result.agentId}-${result.slot}`}
                       className="flex items-start justify-between gap-2 text-[10px]"
@@ -701,12 +755,22 @@ export default function SettingsSlideOver({
                         {result.agent} {result.slot}
                         <span className="ml-1 font-mono text-cat-overlay">{result.model}</span>
                       </span>
-                      <span
-                        className={result.ok ? 'shrink-0 text-emerald-300' : 'shrink-0 text-rose-300'}
-                        title={result.error}
-                      >
-                        {result.ok ? `PASS · ${result.latencyMs}ms` : `FAIL · ${result.error || 'unknown error'}`}
-                      </span>
+                      {result.status === 'pending' && (
+                        <span className="shrink-0 text-cat-overlay">queued</span>
+                      )}
+                      {result.status === 'testing' && (
+                        <span className="shrink-0 text-amber-300 animate-pulse">loading…</span>
+                      )}
+                      {result.status === 'passed' && (
+                        <span className="shrink-0 text-emerald-300">
+                          PASS · {result.latencyMs}ms
+                        </span>
+                      )}
+                      {result.status === 'failed' && (
+                        <span className="shrink-0 text-rose-300" title={result.error}>
+                          FAIL · {result.error || 'unknown error'}
+                        </span>
+                      )}
                     </div>
                   ))}
                 </div>

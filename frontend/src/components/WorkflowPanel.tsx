@@ -1936,6 +1936,21 @@ export default function WorkflowPanel({
       </p>
 
       <label className="text-[11px] text-cat-subtext block">
+        <span className="text-[10px] text-cat-overlay block">Model test timeout (seconds)</span>
+        <NumberSettingInput
+          value={settings.modelTestTimeoutSec ?? 600}
+          min={60}
+          max={1800}
+          onCommit={(modelTestTimeoutSec) => onSettingsChange({ modelTestTimeoutSec })}
+          className="w-full bg-cat-base border border-cat-surface1 rounded p-1 text-white"
+        />
+      </label>
+      <p className="text-[10px] text-cat-overlay leading-relaxed -mt-1">
+        Budget for Settings model tests, which must also cover a cold load of a large model
+        (default 600s).
+      </p>
+
+      <label className="text-[11px] text-cat-subtext block">
         <span className="text-[10px] text-cat-overlay block">Shell command timeout (seconds)</span>
         <NumberSettingInput
           value={settings.terminalTimeoutSec ?? 600}

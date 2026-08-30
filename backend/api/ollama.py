@@ -9,18 +9,19 @@ from backend import state
 from backend.api.schemas import LlmModelBatchTestPayload, LlmModelTestPayload
 from backend.services.llm_debug_log import clear_llm_log, get_llm_logs
 from backend.services.llm_provider import get_chat_provider
+from backend.services.model_test_runner import (
+    build_test_provider,
+    build_test_slots,
+    get_job_snapshot,
+    probe_model,
+    start_agent_model_tests,
+)
 from backend.services.model_timeline import build_model_timeline
 from backend.services.ollama_service_log import read_service_log_snapshot, stream_service_logs
 from backend.services.qdrant_auth import qdrant_connection_settings, qdrant_request_headers
 from backend.services.system_capacity import get_model_recommendations, probe_system_capacity
 
 router = APIRouter()
-AGENT_MODEL_LABELS = {
-    "po": "Product Owner",
-    "dev": "Developer",
-    "cr": "Code Reviewer",
-    "qa": "QA Tester",
-}
 
 
 @router.get("/api/ollama/health")
@@ -38,117 +39,32 @@ def ollama_health(url: Optional[str] = None):
     return payload
 
 
-def _test_model_with_health(
-    provider: Any, health: Any, model: str, *, started: Optional[float] = None
-) -> Dict[str, Any]:
-    started = started or time.perf_counter()
-    if not health.ok:
-        return {
-            "ok": False,
-            "provider": health.provider,
-            "url": health.url,
-            "model": model,
-            "models": health.models,
-            "latencyMs": int((time.perf_counter() - started) * 1000),
-            "errorType": "connection",
-            "error": health.error or "LLM server is unreachable",
-        }
-    if not model:
-        return {
-            "ok": False,
-            "provider": health.provider,
-            "url": health.url,
-            "model": model,
-            "models": health.models,
-            "latencyMs": int((time.perf_counter() - started) * 1000),
-            "errorType": "model",
-            "error": "Enter or select a model name before testing",
-        }
-    if health.models and model not in health.models:
-        return {
-            "ok": False,
-            "provider": health.provider,
-            "url": health.url,
-            "model": model,
-            "models": health.models,
-            "latencyMs": int((time.perf_counter() - started) * 1000),
-            "errorType": "model",
-            "error": f"Model '{model}' is not returned by the server model list",
-        }
-    try:
-        result = provider.chat(
-            model,
-            [{"role": "user", "content": "Reply with OK."}],
-            options={"temperature": 0, "num_predict": 4},
-        )
-        content = str(getattr(getattr(result, "message", None), "content", "") or "").strip()
-        return {
-            "ok": True,
-            "provider": health.provider,
-            "url": health.url,
-            "model": model,
-            "models": health.models,
-            "latencyMs": int((time.perf_counter() - started) * 1000),
-            "response": content[:200],
-        }
-    except Exception as exc:
-        return {
-            "ok": False,
-            "provider": health.provider,
-            "url": health.url,
-            "model": model,
-            "models": health.models,
-            "latencyMs": int((time.perf_counter() - started) * 1000),
-            "errorType": "generation",
-            "error": str(exc)[:500],
-        }
-
-
 @router.post("/api/llm/test-model")
 def test_llm_model(payload: LlmModelTestPayload):
-    provider = get_chat_provider(override_url=payload.url)
+    provider = build_test_provider(payload.url)
     started = time.perf_counter()
     health = provider.health()
-    return _test_model_with_health(provider, health, payload.model.strip(), started=started)
+    return probe_model(provider, health, payload.model.strip(), started=started)
 
 
 @router.post("/api/llm/test-agent-models")
 def test_agent_models(payload: LlmModelBatchTestPayload):
-    """Test every configured primary/backup slot without mutating live agents."""
+    """Start a background run over every configured primary/backup slot.
+
+    Returns immediately so a cold model load cannot time out the request; poll
+    the status route for per-model progress.
+    """
     with state.STATE_LOCK:
         primary_models = dict(payload.models or state.PRIMARY_MODELS)
         backup_models = dict(payload.backupModels or state.BACKUP_MODELS)
 
-    slots: List[Dict[str, str]] = []
-    for agent_id, agent_label in AGENT_MODEL_LABELS.items():
-        primary = str(primary_models.get(agent_id) or "").strip()
-        backup = str(backup_models.get(agent_id) or "").strip()
-        if primary:
-            slots.append(
-                {"agentId": agent_id, "agent": agent_label, "slot": "primary", "model": primary}
-            )
-        if backup and backup != primary:
-            slots.append(
-                {"agentId": agent_id, "agent": agent_label, "slot": "backup", "model": backup}
-            )
+    slots = build_test_slots(primary_models, backup_models)
+    return start_agent_model_tests(slots, url=payload.url)
 
-    provider = get_chat_provider(override_url=payload.url)
-    health = provider.health()
-    model_results: Dict[str, Dict[str, Any]] = {}
-    for slot in slots:
-        model = slot["model"]
-        if model not in model_results:
-            model_results[model] = _test_model_with_health(provider, health, model)
 
-    results = [{**slot, **model_results[slot["model"]]} for slot in slots]
-    return {
-        "ok": bool(results) and all(result["ok"] for result in results),
-        "provider": health.provider,
-        "url": health.url,
-        "models": health.models,
-        "results": results,
-        "uniqueModelsTested": len(model_results),
-    }
+@router.get("/api/llm/test-agent-models/status")
+def test_agent_models_status():
+    return get_job_snapshot()
 
 
 @router.get("/api/ollama/logs")

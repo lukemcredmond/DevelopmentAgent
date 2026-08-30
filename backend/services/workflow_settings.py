@@ -126,6 +126,8 @@ DEFAULT_WORKFLOW_SETTINGS: Dict[str, Any] = {
     "ollamaNumCtxAdaptiveStep": 8192,
     "ollamaKeepAlive": "30m",
     "ollamaRequestTimeoutSec": 300,
+    # Model connectivity tests must also cover a cold load of a large model.
+    "modelTestTimeoutSec": 600,
     "terminalTimeoutSec": 600,
     # Unload primary before loading backup when VRAM is nearly full.
     "enableVramAwareModelSwap": True,

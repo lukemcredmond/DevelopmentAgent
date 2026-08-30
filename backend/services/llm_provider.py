@@ -72,6 +72,9 @@ class HealthResult:
     provider: str = PROVIDER_OLLAMA
 
 
+DEFAULT_HEALTH_TIMEOUT_SEC = 5.0
+
+
 class LlmProvider:
     provider_id: str = PROVIDER_OLLAMA
     capabilities: ProviderCapabilities = ProviderCapabilities()
@@ -80,6 +83,8 @@ class LlmProvider:
         self.base_url = (base_url or "").rstrip("/")
         self.api_key = (api_key or "").strip()
         self.timeout_sec = float(timeout_sec or 300.0)
+        # Raised by callers that probe while the server may be busy loading a model.
+        self.health_timeout_sec = DEFAULT_HEALTH_TIMEOUT_SEC
 
     def list_models(self) -> List[str]:
         raise NotImplementedError
@@ -136,7 +141,7 @@ class OllamaProvider(LlmProvider):
 
     def health(self) -> HealthResult:
         try:
-            response = requests.get(f"{self.base_url}/api/tags", timeout=5)
+            response = requests.get(f"{self.base_url}/api/tags", timeout=self.health_timeout_sec)
             if response.status_code == 200:
                 models = [m.get("name") for m in response.json().get("models", []) if m.get("name")]
                 return HealthResult(ok=True, url=self.base_url, models=models, provider=self.provider_id)
@@ -239,7 +244,9 @@ class OpenAICompatProvider(LlmProvider):
 
     def health(self) -> HealthResult:
         try:
-            response = requests.get(f"{self.base_url}/models", headers=self._headers(), timeout=5)
+            response = requests.get(
+                f"{self.base_url}/models", headers=self._headers(), timeout=self.health_timeout_sec
+            )
             if response.status_code == 200:
                 data = response.json()
                 models = [m.get("id") for m in (data.get("data") or []) if isinstance(m, dict) and m.get("id")]

@@ -236,6 +236,7 @@ class WorkflowSettingsPayload(BaseModel):
     ollamaNumCtxAdaptiveStep: Optional[int] = None
     ollamaKeepAlive: Optional[str] = None
     ollamaRequestTimeoutSec: Optional[int] = None
+    modelTestTimeoutSec: Optional[int] = None
     terminalTimeoutSec: Optional[int] = None
     enableVramAwareModelSwap: Optional[bool] = None
     ollamaMaxRetries: Optional[int] = None

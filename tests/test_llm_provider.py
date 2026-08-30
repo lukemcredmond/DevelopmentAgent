@@ -2,10 +2,20 @@
 
 from __future__ import annotations
 
+import threading
+import time
 from pathlib import Path
 from unittest.mock import MagicMock, patch
 
 from backend.bootstrap import initialize
+from backend.services.model_test_runner import (
+    MAX_HEALTH_TIMEOUT_SEC,
+    build_test_provider,
+    build_test_slots,
+    probe_model,
+    reset_job_state,
+    run_agent_model_tests,
+)
 from backend.services.llm_provider import (
     ChatResult,
     DEFAULT_LMSTUDIO_URL,
@@ -243,7 +253,7 @@ def test_model_endpoint_generates_with_exact_listed_model():
         provider="openai_compat",
     )
     provider.chat.return_value = ChatResult(message=ProviderMessage(content="OK"))
-    with patch("backend.api.ollama.get_chat_provider", return_value=provider):
+    with patch("backend.api.ollama.build_test_provider", return_value=provider):
         data = _test_client().post(
             "/api/llm/test-model",
             json={"url": DEFAULT_LMSTUDIO_URL, "model": "loaded-model"},
@@ -264,7 +274,7 @@ def test_model_endpoint_rejects_unknown_model_without_generation():
         models=["actual-model"],
         provider="openai_compat",
     )
-    with patch("backend.api.ollama.get_chat_provider", return_value=provider):
+    with patch("backend.api.ollama.build_test_provider", return_value=provider):
         data = _test_client().post(
             "/api/llm/test-model",
             json={"url": DEFAULT_LMSTUDIO_URL, "model": "wrong-model"},
@@ -274,6 +284,8 @@ def test_model_endpoint_rejects_unknown_model_without_generation():
     assert data["errorType"] == "model"
     assert data["models"] == ["actual-model"]
     provider.chat.assert_not_called()
+    # Re-probed once in case the first model list was stale.
+    assert provider.health.call_count == 2
 
 
 def test_model_endpoint_reports_unreachable_provider():
@@ -284,7 +296,7 @@ def test_model_endpoint_reports_unreachable_provider():
         error="connection refused",
         provider="openai_compat",
     )
-    with patch("backend.api.ollama.get_chat_provider", return_value=provider):
+    with patch("backend.api.ollama.build_test_provider", return_value=provider):
         data = _test_client().post(
             "/api/llm/test-model",
             json={"url": DEFAULT_LMSTUDIO_URL, "model": "loaded-model"},
@@ -304,7 +316,7 @@ def test_model_endpoint_reports_generation_failure():
         provider="openai_compat",
     )
     provider.chat.side_effect = RuntimeError("model failed to load")
-    with patch("backend.api.ollama.get_chat_provider", return_value=provider):
+    with patch("backend.api.ollama.build_test_provider", return_value=provider):
         data = _test_client().post(
             "/api/llm/test-model",
             json={"url": DEFAULT_LMSTUDIO_URL, "model": "loaded-model"},
@@ -315,10 +327,25 @@ def test_model_endpoint_reports_generation_failure():
     assert "failed to load" in data["error"]
 
 
-def test_all_agent_models_deduplicates_and_skips_unconfigured_backups():
+def test_build_test_slots_skips_blank_and_duplicate_backups():
+    slots = build_test_slots(
+        {"po": "shared-model", "dev": "dev-model", "cr": "shared-model", "qa": "qa-model"},
+        {"po": "", "dev": "shared-model", "cr": "shared-model", "qa": "qa-backup"},
+    )
+    pairs = [(slot["agentId"], slot["slot"]) for slot in slots]
+
+    # Blank PO backup and CR backup equal to its own primary are both skipped.
+    assert ("po", "backup") not in pairs
+    assert ("cr", "backup") not in pairs
+    assert ("dev", "backup") in pairs
+    assert ("qa", "backup") in pairs
+    assert len(slots) == 6
+
+
+def test_run_agent_model_tests_loads_each_unique_model_once():
     from backend import state
 
-    client = _test_client()
+    initialize()
     state.PRIMARY_MODELS = {
         "po": "shared-model",
         "dev": "dev-model",
@@ -342,34 +369,19 @@ def test_all_agent_models_deduplicates_and_skips_unconfigured_backups():
     )
     provider.chat.return_value = ChatResult(message=ProviderMessage(content="OK"))
 
-    with patch("backend.api.ollama.get_chat_provider", return_value=provider):
-        data = client.post(
-            "/api/llm/test-agent-models",
-            json={
-                "url": DEFAULT_LMSTUDIO_URL,
-                "models": state.PRIMARY_MODELS,
-                "backupModels": state.BACKUP_MODELS,
-            },
-        ).json()
+    slots = build_test_slots(state.PRIMARY_MODELS, state.BACKUP_MODELS)
+    summary = run_agent_model_tests(slots, provider)
 
-    assert data["ok"] is True
-    assert data["uniqueModelsTested"] == 4
-    assert len(data["results"]) == 6
+    assert summary["ok"] is True
+    assert summary["uniqueModelsTested"] == 4
+    assert len(summary["results"]) == 6
+    # shared-model covers 3 slots but is loaded only once.
     assert provider.chat.call_count == 4
     assert state.PRIMARY_MODELS == original_primary
     assert state.BACKUP_MODELS == original_backup
-    assert not any(
-        result["agentId"] == "cr" and result["slot"] == "backup"
-        for result in data["results"]
-    )
 
 
-def test_all_agent_models_reports_connection_failure_for_each_slot():
-    from backend import state
-
-    client = _test_client()
-    state.PRIMARY_MODELS = {key: f"{key}-model" for key in ("po", "dev", "cr", "qa")}
-    state.BACKUP_MODELS = {key: "" for key in ("po", "dev", "cr", "qa")}
+def test_run_agent_model_tests_reports_connection_failure_for_each_slot():
     provider = MagicMock()
     provider.health.return_value = HealthResult(
         ok=False,
@@ -378,16 +390,141 @@ def test_all_agent_models_reports_connection_failure_for_each_slot():
         provider="openai_compat",
     )
 
-    with patch("backend.api.ollama.get_chat_provider", return_value=provider):
-        data = client.post(
+    slots = build_test_slots({key: f"{key}-model" for key in ("po", "dev", "cr", "qa")}, {})
+    summary = run_agent_model_tests(slots, provider)
+
+    assert summary["ok"] is False
+    assert len(summary["results"]) == 4
+    assert all(result["errorType"] == "connection" for result in summary["results"])
+    provider.chat.assert_not_called()
+
+
+def test_unlisted_model_is_retested_after_reprobe():
+    """A model missing from a stale list gets a second look before being failed."""
+    provider = MagicMock()
+    provider.health.side_effect = [
+        HealthResult(ok=True, url=DEFAULT_LMSTUDIO_URL, models=["other"], provider="openai_compat"),
+        HealthResult(
+            ok=True,
+            url=DEFAULT_LMSTUDIO_URL,
+            models=["other", "late-model"],
+            provider="openai_compat",
+        ),
+    ]
+    provider.chat.return_value = ChatResult(message=ProviderMessage(content="OK"))
+
+    health = provider.health()
+    result = probe_model(provider, health, "late-model")
+
+    assert result["ok"] is True
+    provider.chat.assert_called_once()
+
+
+def test_model_test_provider_uses_dedicated_timeout():
+    initialize()
+    reset_workflow_settings()
+    save_workflow_settings({"modelTestTimeoutSec": 900})
+
+    provider = build_test_provider(DEFAULT_LMSTUDIO_URL)
+
+    assert provider.timeout_sec == 900
+    # Health probes stay bounded so an unreachable server still fails quickly.
+    assert provider.health_timeout_sec == MAX_HEALTH_TIMEOUT_SEC
+    reset_workflow_settings()
+
+
+def test_health_probe_honours_raised_timeout():
+    provider = OpenAICompatProvider(DEFAULT_LMSTUDIO_URL)
+    provider.health_timeout_sec = 25.0
+    response = MagicMock()
+    response.status_code = 200
+    response.json.return_value = {"data": [{"id": "loaded-model"}]}
+
+    with patch("backend.services.llm_provider.requests.get", return_value=response) as mock_get:
+        provider.health()
+
+    assert mock_get.call_args.kwargs["timeout"] == 25.0
+
+
+def _await_job_done(client, *, attempts: int = 100) -> dict:
+    for _ in range(attempts):
+        data = client.get("/api/llm/test-agent-models/status").json()
+        if data["status"] == "done":
+            return data
+        time.sleep(0.05)
+    raise AssertionError("model test job did not finish")
+
+
+def test_agent_model_tests_start_returns_pending_rows_then_completes():
+    from backend import state
+
+    client = _test_client()
+    reset_job_state()
+    state.PRIMARY_MODELS = {key: f"{key}-model" for key in ("po", "dev", "cr", "qa")}
+    state.BACKUP_MODELS = {key: "" for key in ("po", "dev", "cr", "qa")}
+    provider = MagicMock()
+    provider.health.return_value = HealthResult(
+        ok=True,
+        url=DEFAULT_LMSTUDIO_URL,
+        models=[f"{key}-model" for key in ("po", "dev", "cr", "qa")],
+        provider="openai_compat",
+    )
+    provider.chat.return_value = ChatResult(message=ProviderMessage(content="OK"))
+
+    with patch("backend.services.model_test_runner.build_test_provider", return_value=provider):
+        started = client.post(
             "/api/llm/test-agent-models",
             json={"url": DEFAULT_LMSTUDIO_URL},
         ).json()
 
-    assert data["ok"] is False
-    assert len(data["results"]) == 4
-    assert all(result["errorType"] == "connection" for result in data["results"])
-    provider.chat.assert_not_called()
+        # Every slot is returned up front so the UI can render live rows.
+        assert started["runId"]
+        assert started["total"] == 4
+        assert [row["status"] for row in started["results"]] == ["pending"] * 4
+
+        done = _await_job_done(client)
+
+    assert done["ok"] is True
+    assert done["completed"] == 4
+    assert all(row["status"] == "passed" for row in done["results"])
+    assert done["currentModel"] is None
+    reset_job_state()
+
+
+def test_second_start_reuses_the_running_job():
+    from backend import state
+
+    client = _test_client()
+    reset_job_state()
+    state.PRIMARY_MODELS = {key: f"{key}-model" for key in ("po", "dev", "cr", "qa")}
+    state.BACKUP_MODELS = {key: "" for key in ("po", "dev", "cr", "qa")}
+    release = threading.Event()
+    provider = MagicMock()
+    provider.health.return_value = HealthResult(
+        ok=True,
+        url=DEFAULT_LMSTUDIO_URL,
+        models=[f"{key}-model" for key in ("po", "dev", "cr", "qa")],
+        provider="openai_compat",
+    )
+
+    def _blocking_chat(*_args, **_kwargs):
+        release.wait(timeout=10)
+        return ChatResult(message=ProviderMessage(content="OK"))
+
+    provider.chat.side_effect = _blocking_chat
+
+    with patch("backend.services.model_test_runner.build_test_provider", return_value=provider):
+        first = client.post("/api/llm/test-agent-models", json={}).json()
+        second = client.post("/api/llm/test-agent-models", json={}).json()
+
+        assert second["runId"] == first["runId"]
+        assert second["status"] == "running"
+
+        release.set()
+        done = _await_job_done(client)
+
+    assert done["completed"] == 4
+    reset_job_state()
 
 
 def test_lmstudio_ui_has_model_tests_and_log_fallback():
@@ -403,9 +540,15 @@ def test_lmstudio_ui_has_model_tests_and_log_fallback():
     )
     app = (root / "frontend/src/App.tsx").read_text(encoding="utf-8")
 
+    workflow = (root / "frontend/src/components/WorkflowPanel.tsx").read_text(encoding="utf-8")
+
     assert "Test connection" in settings
     assert "Test {modelFocus} model" in settings
     assert "Test all agent models" in settings
+    # Live per-slot progress while a cold model loads.
+    assert "Loading and testing" in settings
+    assert "s per model)" in settings
+    assert "modelTestTimeoutSec" in workflow
     assert "Loaded models" in models
     assert "No model IDs returned by /v1/models" in models
     assert "Native LM Studio server logs are unavailable" in logs

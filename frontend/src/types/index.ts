@@ -563,6 +563,7 @@ export interface WorkflowSettings {
   ollamaNumCtxAdaptiveStep?: number
   ollamaKeepAlive?: string
   ollamaRequestTimeoutSec?: number
+  modelTestTimeoutSec?: number
   terminalTimeoutSec?: number
   enableVramAwareModelSwap?: boolean
   ollamaMaxRetries?: number
@@ -1288,6 +1289,7 @@ export interface WorkflowSettingsPayload {
   ollamaNumCtxAdaptiveStep?: number
   ollamaKeepAlive?: string
   ollamaRequestTimeoutSec?: number
+  modelTestTimeoutSec?: number
   terminalTimeoutSec?: number
   enableVramAwareModelSwap?: boolean
   ollamaMaxRetries?: number
@@ -1427,19 +1429,31 @@ export interface LlmModelTestResponse {
   error?: string
 }
 
-export interface LlmAgentModelTestResult extends LlmModelTestResponse {
+export type LlmAgentModelTestStatus = 'pending' | 'testing' | 'passed' | 'failed'
+
+export interface LlmAgentModelTestResult extends Partial<LlmModelTestResponse> {
   agentId: AgentId
   agent: string
   slot: 'primary' | 'backup'
+  model: string
+  status: LlmAgentModelTestStatus
 }
 
-export interface LlmAgentModelsTestResponse {
-  ok: boolean
-  provider: 'ollama' | 'openai_compat' | string
-  url: string
-  models: string[]
+export interface LlmAgentModelTestJob {
+  runId: string | null
+  status: 'idle' | 'running' | 'done'
+  startedAt?: string
+  total: number
+  completed: number
+  currentModel?: string | null
   results: LlmAgentModelTestResult[]
   uniqueModelsTested: number
+  ok?: boolean | null
+  error?: string
+  elapsedMs?: number
+  timeoutSec?: number
+  provider?: string
+  url?: string
 }
 
 export interface ChatPayload {
@@ -1684,6 +1698,7 @@ export const DEFAULT_WORKFLOW_SETTINGS: WorkflowSettings = {
   ollamaNumCtxAdaptiveStep: 8192,
   ollamaKeepAlive: '30m',
   ollamaRequestTimeoutSec: 300,
+  modelTestTimeoutSec: 600,
   terminalTimeoutSec: 600,
   enableVramAwareModelSwap: true,
   ollamaMaxRetries: 4,
