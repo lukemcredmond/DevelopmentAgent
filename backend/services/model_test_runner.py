@@ -105,6 +105,12 @@ def probe_model(
             return _failure("model", f"Model '{model}' is not returned by the server model list")
 
     try:
+        try:
+            unload = getattr(provider, "unload_loaded_except", None)
+            if callable(unload):
+                unload(model)
+        except Exception:
+            pass
         result = provider.chat(
             model,
             [{"role": "user", "content": "Reply with OK."}],

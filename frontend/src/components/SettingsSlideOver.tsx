@@ -1,17 +1,6 @@
-import { useCallback, useEffect, useRef, useState } from 'react'
-import {
-  checkOllamaHealth,
-  fetchAgentModelTestStatus,
-  startAgentModelTests,
-  testLlmModel,
-} from '../api/client'
-import type {
-  AgentId,
-  AppState,
-  ConfigPayload,
-  LlmAgentModelTestJob,
-  WorkflowSettings,
-} from '../types'
+import { useCallback, useEffect, useState } from 'react'
+import { checkOllamaHealth, testLlmModel } from '../api/client'
+import type { AgentId, AppState, ConfigPayload, WorkflowSettings } from '../types'
 import { AGENT_LABELS, DEFAULT_WORKFLOW_SETTINGS } from '../types'
 import { isAutoLlmToolHealthOnPick, runAndPersistLlmProbeAll } from '../lib/toolHealthLlm'
 import BoardRecoveryPanel from './BoardRecoveryPanel'
@@ -134,9 +123,8 @@ export default function SettingsSlideOver({
   const [modelFocus, setModelFocus] = useState<'PO' | 'DEV' | 'CR' | 'QA'>('DEV')
   const [llmHealthStatus, setLlmHealthStatus] = useState<string | null>(null)
   const [llmTestRunning, setLlmTestRunning] = useState(false)
-  const [agentModelTestJob, setAgentModelTestJob] = useState<LlmAgentModelTestJob | null>(null)
+  const [modelSlotStatus, setModelSlotStatus] = useState<Record<string, string>>({})
   const [apiTokenInput, setApiTokenInput] = useState('')
-  const agentTestPollRef = useRef<number | null>(null)
 
   useEffect(() => {
     if (!open) return
@@ -205,81 +193,40 @@ export default function SettingsSlideOver({
   ]
 
   const ws = state.workflowSettings ?? DEFAULT_WORKFLOW_SETTINGS
-  const selectedModel =
-    modelFocus === 'PO'
-      ? poModel
-      : modelFocus === 'DEV'
-        ? devModel
-        : modelFocus === 'CR'
-          ? crModel
-          : qaModel
 
-  const stopAgentTestPolling = useCallback(() => {
-    if (agentTestPollRef.current != null) {
-      window.clearInterval(agentTestPollRef.current)
-      agentTestPollRef.current = null
-    }
-  }, [])
-
-  useEffect(() => stopAgentTestPolling, [stopAgentTestPolling])
-
-  useEffect(() => {
-    if (open) return
-    // The run continues on the server; drop the local poll so reopening can re-attach.
-    stopAgentTestPolling()
-    setLlmTestRunning(false)
-  }, [open, stopAgentTestPolling])
-
-  const applyAgentTestJob = useCallback((job: LlmAgentModelTestJob) => {
-    setAgentModelTestJob(job)
-    if (job.status !== 'done') return
-    stopAgentTestPolling()
-    setLlmTestRunning(false)
-    if (job.error) {
-      setLlmHealthStatus(`Agent model tests failed: ${job.error}`)
-      return
-    }
-    const passed = job.results.filter((item) => item.status === 'passed').length
-    const failed = job.results.filter((item) => item.status === 'failed').length
-    setLlmHealthStatus(
-      `Agent model tests complete — ${passed} passed, ${failed} failed across ${job.uniqueModelsTested} unique model${job.uniqueModelsTested === 1 ? '' : 's'}.`,
-    )
-  }, [stopAgentTestPolling])
-
-  const handleTestAllAgentModels = async () => {
-    stopAgentTestPolling()
+  const handleTestSlot = (slotKey: string, label: string, slot: 'primary' | 'backup', model: string) => {
+    const trimmed = model.trim()
+    if (!trimmed) return
     setLlmTestRunning(true)
-    setLlmHealthStatus('Testing all configured agent primary and backup models…')
-    try {
-      const started = await startAgentModelTests(
-        { po: poModel, dev: devModel, cr: crModel, qa: qaModel },
-        {
-          po: poBackupModel,
-          dev: devBackupModel,
-          cr: crBackupModel,
-          qa: qaBackupModel,
-        },
-        ollamaUrl,
-      )
-      applyAgentTestJob(started)
-      if (started.status === 'done') return
-      agentTestPollRef.current = window.setInterval(() => {
-        void fetchAgentModelTestStatus()
-          .then(applyAgentTestJob)
-          .catch((err: unknown) => {
-            stopAgentTestPolling()
-            setLlmTestRunning(false)
-            setLlmHealthStatus(
-              `Lost track of agent model tests: ${err instanceof Error ? err.message : String(err)}`,
-            )
-          })
-      }, 1500)
-    } catch (err: unknown) {
-      setLlmTestRunning(false)
-      setLlmHealthStatus(
-        `Agent model tests failed: ${err instanceof Error ? err.message : String(err)}`,
-      )
-    }
+    setModelSlotStatus((prev) => ({ ...prev, [slotKey]: 'loading…' }))
+    setLlmHealthStatus(`Testing ${label} ${slot} “${trimmed}” (unloads other loaded models first)…`)
+    void testLlmModel(trimmed, ollamaUrl)
+      .then((result) => {
+        if (result.ok) {
+          setModelSlotStatus((prev) => ({ ...prev, [slotKey]: `PASS · ${result.latencyMs}ms` }))
+          setLlmHealthStatus(
+            `${label} ${slot} OK — “${result.model}” generated successfully in ${result.latencyMs} ms.`,
+          )
+          return
+        }
+        const available =
+          result.errorType === 'model' && result.models.length
+            ? ` Available: ${result.models.join(', ')}`
+            : ''
+        setModelSlotStatus((prev) => ({
+          ...prev,
+          [slotKey]: `FAIL · ${result.error || 'unknown error'}`,
+        }))
+        setLlmHealthStatus(
+          `${label} ${slot} test failed: ${result.error || 'unknown error'}.${available}`,
+        )
+      })
+      .catch((err: unknown) => {
+        const message = err instanceof Error ? err.message : String(err)
+        setModelSlotStatus((prev) => ({ ...prev, [slotKey]: `FAIL · ${message}` }))
+        setLlmHealthStatus(`${label} ${slot} test failed: ${message}`)
+      })
+      .finally(() => setLlmTestRunning(false))
   }
 
   const notifications = state.notifications ?? {
@@ -601,7 +548,12 @@ export default function SettingsSlideOver({
                       focus: 'QA' as const,
                     },
                   ] as const
-                ).map(({ label, value, onChange, backup, onBackup, focus }) => (
+                ).map(({ label, value, onChange, backup, onBackup, focus }) => {
+                  const primaryKey = `${label}-primary`
+                  const backupKey = `${label}-backup`
+                  const primaryStatus = modelSlotStatus[primaryKey]
+                  const backupStatus = modelSlotStatus[backupKey]
+                  return (
                   <div key={label} className="space-y-1">
                     <div className="flex items-center justify-between gap-2">
                       <span className="text-[9px] text-cat-subtext font-bold shrink-0 inline-flex items-center">
@@ -615,9 +567,30 @@ export default function SettingsSlideOver({
                         value={value}
                         onFocus={() => setModelFocus(focus)}
                         onChange={(e) => onChange(e.target.value)}
-                        className="bg-cat-base border border-cat-surface1 rounded p-1.5 font-mono text-[11px] text-white text-right flex-1 focus:outline-none"
+                        className="bg-cat-base border border-cat-surface1 rounded p-1.5 font-mono text-[11px] text-white text-right flex-1 min-w-0 focus:outline-none"
                       />
+                      <button
+                        type="button"
+                        disabled={llmTestRunning || !value.trim()}
+                        onClick={() => handleTestSlot(primaryKey, label, 'primary', value)}
+                        className="shrink-0 rounded border border-indigo-500/40 bg-indigo-950/30 px-1.5 py-1 text-[10px] text-indigo-200 hover:bg-indigo-950/60 disabled:opacity-50"
+                      >
+                        Test
+                      </button>
                     </div>
+                    {primaryStatus && (
+                      <p
+                        className={`text-[10px] text-right leading-tight ${
+                          primaryStatus.startsWith('PASS')
+                            ? 'text-emerald-300'
+                            : primaryStatus.startsWith('FAIL')
+                              ? 'text-rose-300'
+                              : 'text-amber-300'
+                        }`}
+                      >
+                        {primaryStatus}
+                      </p>
+                    )}
                     <div className="flex items-center justify-between gap-2 pl-0.5">
                       <span className="text-[9px] text-cat-overlay shrink-0 inline-flex items-center">
                         Backup (stuck)
@@ -629,11 +602,33 @@ export default function SettingsSlideOver({
                         onFocus={() => setModelFocus(focus)}
                         onChange={(e) => onBackup(e.target.value)}
                         placeholder="optional"
-                        className="bg-cat-base border border-cat-surface1 rounded p-1.5 font-mono text-[11px] text-white text-right flex-1 focus:outline-none"
+                        className="bg-cat-base border border-cat-surface1 rounded p-1.5 font-mono text-[11px] text-white text-right flex-1 min-w-0 focus:outline-none"
                       />
+                      <button
+                        type="button"
+                        disabled={llmTestRunning || !backup.trim()}
+                        onClick={() => handleTestSlot(backupKey, label, 'backup', backup)}
+                        className="shrink-0 rounded border border-indigo-500/40 bg-indigo-950/30 px-1.5 py-1 text-[10px] text-indigo-200 hover:bg-indigo-950/60 disabled:opacity-50"
+                      >
+                        Test
+                      </button>
                     </div>
+                    {backupStatus && (
+                      <p
+                        className={`text-[10px] text-right leading-tight ${
+                          backupStatus.startsWith('PASS')
+                            ? 'text-emerald-300'
+                            : backupStatus.startsWith('FAIL')
+                              ? 'text-rose-300'
+                              : 'text-amber-300'
+                        }`}
+                      >
+                        {backupStatus}
+                      </p>
+                    )}
                   </div>
-                ))}
+                  )
+                })}
               </div>
               <p className="text-[10px] text-cat-overlay leading-relaxed">
                 Backup models run for the next few stuck steps when that agent loops on plan/text
@@ -656,124 +651,38 @@ export default function SettingsSlideOver({
                   assignModel(role, name)
                 }}
               />
-              <div className="grid grid-cols-2 gap-2">
-                <button
-                  type="button"
-                  disabled={llmTestRunning}
-                  onClick={() => {
-                    setLlmTestRunning(true)
-                    setLlmHealthStatus('Testing LLM server connection…')
-                    void checkOllamaHealth(ollamaUrl)
-                      .then((result) => {
-                        if (!result.ok) {
-                          setLlmHealthStatus(`Connection failed: ${result.error || 'server unavailable'}`)
-                          return
-                        }
-                        const count = result.models?.length ?? 0
-                        const provider =
-                          result.provider === 'openai_compat' ? 'OpenAI-compatible' : 'Ollama'
-                        setLlmHealthStatus(
-                          `Connection OK (${provider}) — ${count} model ID${count === 1 ? '' : 's'} returned.`,
-                        )
-                      })
-                      .catch((err: unknown) => {
-                        setLlmHealthStatus(
-                          `Connection failed: ${err instanceof Error ? err.message : String(err)}`,
-                        )
-                      })
-                      .finally(() => setLlmTestRunning(false))
-                  }}
-                  className="rounded border border-cat-surface1 bg-cat-base px-2 py-1.5 text-[10px] text-indigo-200 hover:bg-cat-surface0 disabled:opacity-50"
-                >
-                  Test connection
-                </button>
-                <button
-                  type="button"
-                  disabled={llmTestRunning || !selectedModel.trim()}
-                  onClick={() => {
-                    setLlmTestRunning(true)
-                    setLlmHealthStatus(`Testing ${modelFocus} model “${selectedModel}”…`)
-                    void testLlmModel(selectedModel, ollamaUrl)
-                      .then((result) => {
-                        if (result.ok) {
-                          setLlmHealthStatus(
-                            `${modelFocus} model OK — “${result.model}” generated successfully in ${result.latencyMs} ms.`,
-                          )
-                          return
-                        }
-                        const available =
-                          result.errorType === 'model' && result.models.length
-                            ? ` Available: ${result.models.join(', ')}`
-                            : ''
-                        setLlmHealthStatus(
-                          `${modelFocus} model test failed: ${result.error || 'unknown error'}.${available}`,
-                        )
-                      })
-                      .catch((err: unknown) => {
-                        setLlmHealthStatus(
-                          `${modelFocus} model test failed: ${
-                            err instanceof Error ? err.message : String(err)
-                          }`,
-                        )
-                      })
-                      .finally(() => setLlmTestRunning(false))
-                  }}
-                  className="rounded border border-indigo-500/40 bg-indigo-950/30 px-2 py-1.5 text-[10px] text-indigo-200 hover:bg-indigo-950/60 disabled:opacity-50"
-                >
-                  Test {modelFocus} model
-                </button>
-              </div>
               <button
                 type="button"
                 disabled={llmTestRunning}
-                onClick={() => void handleTestAllAgentModels()}
-                className="w-full rounded border border-violet-500/40 bg-violet-950/30 px-2 py-1.5 text-[10px] text-violet-200 hover:bg-violet-950/60 disabled:opacity-50"
+                onClick={() => {
+                  setLlmTestRunning(true)
+                  setLlmHealthStatus('Testing LLM server connection…')
+                  void checkOllamaHealth(ollamaUrl)
+                    .then((result) => {
+                      if (!result.ok) {
+                        setLlmHealthStatus(`Connection failed: ${result.error || 'server unavailable'}`)
+                        return
+                      }
+                      const count = result.models?.length ?? 0
+                      const provider =
+                        result.provider === 'openai_compat' ? 'OpenAI-compatible' : 'Ollama'
+                      setLlmHealthStatus(
+                        `Connection OK (${provider}) — ${count} model ID${count === 1 ? '' : 's'} returned.`,
+                      )
+                    })
+                    .catch((err: unknown) => {
+                      setLlmHealthStatus(
+                        `Connection failed: ${err instanceof Error ? err.message : String(err)}`,
+                      )
+                    })
+                    .finally(() => setLlmTestRunning(false))
+                }}
+                className="w-full rounded border border-cat-surface1 bg-cat-base px-2 py-1.5 text-[10px] text-indigo-200 hover:bg-cat-surface0 disabled:opacity-50"
               >
-                {llmTestRunning ? 'Testing configured models…' : 'Test all agent models'}
+                Test connection
               </button>
               {llmHealthStatus && (
                 <p className="text-[10px] text-violet-300 leading-relaxed">{llmHealthStatus}</p>
-              )}
-              {agentModelTestJob && agentModelTestJob.results.length > 0 && (
-                <div className="space-y-1 rounded border border-cat-surface1 bg-cat-base/50 p-2">
-                  {agentModelTestJob.status === 'running' && (
-                    <p className="text-[10px] text-amber-300 leading-relaxed">
-                      {agentModelTestJob.currentModel
-                        ? `Loading and testing ${agentModelTestJob.currentModel}`
-                        : 'Connecting to LLM server'}{' '}
-                      ({agentModelTestJob.completed} of {agentModelTestJob.total} ·{' '}
-                      {Math.round((agentModelTestJob.elapsedMs ?? 0) / 1000)}s elapsed, up to{' '}
-                      {agentModelTestJob.timeoutSec ?? 600}s per model)
-                    </p>
-                  )}
-                  {agentModelTestJob.results.map((result) => (
-                    <div
-                      key={`${result.agentId}-${result.slot}`}
-                      className="flex items-start justify-between gap-2 text-[10px]"
-                    >
-                      <span className="text-cat-subtext">
-                        {result.agent} {result.slot}
-                        <span className="ml-1 font-mono text-cat-overlay">{result.model}</span>
-                      </span>
-                      {result.status === 'pending' && (
-                        <span className="shrink-0 text-cat-overlay">queued</span>
-                      )}
-                      {result.status === 'testing' && (
-                        <span className="shrink-0 text-amber-300 animate-pulse">loading…</span>
-                      )}
-                      {result.status === 'passed' && (
-                        <span className="shrink-0 text-emerald-300">
-                          PASS · {result.latencyMs}ms
-                        </span>
-                      )}
-                      {result.status === 'failed' && (
-                        <span className="shrink-0 text-rose-300" title={result.error}>
-                          FAIL · {result.error || 'unknown error'}
-                        </span>
-                      )}
-                    </div>
-                  ))}
-                </div>
               )}
               {(state.workflowSettings?.llmProvider || 'ollama') === 'ollama' && (
                 <>

@@ -21,6 +21,7 @@ from backend.services.llm_provider import (
     DEFAULT_LMSTUDIO_URL,
     DEFAULT_OLLAMA_URL,
     HealthResult,
+    OllamaProvider,
     OpenAICompatProvider,
     ProviderMessage,
     chat_config,
@@ -446,6 +447,71 @@ def test_health_probe_honours_raised_timeout():
     assert mock_get.call_args.kwargs["timeout"] == 25.0
 
 
+def test_lmstudio_unload_skips_the_model_under_test():
+    provider = OpenAICompatProvider(DEFAULT_LMSTUDIO_URL)
+    listed = MagicMock()
+    listed.status_code = 200
+    listed.json.return_value = {
+        "models": [
+            {
+                "key": "google/gemma-3-12b",
+                "loaded_instances": [{"id": "google/gemma-3-12b"}],
+            },
+            {
+                "key": "qwen/qwen2.5-coder-14b",
+                "loaded_instances": [{"id": "qwen/qwen2.5-coder-14b"}],
+            },
+        ]
+    }
+    unloaded = MagicMock()
+    unloaded.status_code = 200
+    unloaded.json.return_value = {"instance_id": "qwen/qwen2.5-coder-14b"}
+
+    with (
+        patch("backend.services.llm_provider.requests.get", return_value=listed) as mock_get,
+        patch("backend.services.llm_provider.requests.post", return_value=unloaded) as mock_post,
+    ):
+        provider.unload_loaded_except("google/gemma-3-12b")
+
+    assert mock_get.call_args.args[0] == "http://localhost:1234/api/v1/models"
+    mock_post.assert_called_once()
+    assert mock_post.call_args.args[0] == "http://localhost:1234/api/v1/models/unload"
+    assert mock_post.call_args.kwargs["json"] == {"instance_id": "qwen/qwen2.5-coder-14b"}
+
+
+def test_lmstudio_missing_native_unload_api_does_not_fail_probe():
+    provider = MagicMock()
+    provider.health.return_value = HealthResult(
+        ok=True,
+        url=DEFAULT_LMSTUDIO_URL,
+        models=["keep-model"],
+        provider="openai_compat",
+    )
+    provider.unload_loaded_except.side_effect = RuntimeError("404")
+    provider.chat.return_value = ChatResult(message=ProviderMessage(content="OK"))
+
+    result = probe_model(provider, provider.health.return_value, "keep-model")
+
+    assert result["ok"] is True
+    provider.chat.assert_called_once()
+
+
+def test_ollama_unload_uses_ps_list_except_keep_model():
+    provider = OllamaProvider("http://localhost:11434")
+    listed = MagicMock()
+    listed.status_code = 200
+    listed.json.return_value = {
+        "models": [{"name": "keep-model"}, {"name": "other-model"}],
+    }
+    provider.unload = MagicMock(return_value=True)
+
+    with patch("backend.services.llm_provider.requests.get", return_value=listed) as mock_get:
+        provider.unload_loaded_except("keep-model")
+
+    assert "/api/ps" in mock_get.call_args.args[0]
+    provider.unload.assert_called_once_with("other-model")
+
+
 def _await_job_done(client, *, attempts: int = 100) -> dict:
     for _ in range(attempts):
         data = client.get("/api/llm/test-agent-models/status").json()
@@ -543,11 +609,10 @@ def test_lmstudio_ui_has_model_tests_and_log_fallback():
     workflow = (root / "frontend/src/components/WorkflowPanel.tsx").read_text(encoding="utf-8")
 
     assert "Test connection" in settings
-    assert "Test {modelFocus} model" in settings
-    assert "Test all agent models" in settings
-    # Live per-slot progress while a cold model loads.
-    assert "Loading and testing" in settings
-    assert "s per model)" in settings
+    assert "handleTestSlot" in settings
+    assert "Test all agent models" not in settings
+    assert "Test {modelFocus} model" not in settings
+    assert "unloads other loaded models first" in settings
     assert "modelTestTimeoutSec" in workflow
     assert "Loaded models" in models
     assert "No model IDs returned by /v1/models" in models

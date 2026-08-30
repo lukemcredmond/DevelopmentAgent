@@ -13,7 +13,6 @@ import type {
   FileSearchResult,
   FileTreeNode,
   GitStatusResponse,
-  LlmAgentModelTestJob,
   LlmModelTestResponse,
   ManualTaskPayload,
   MoveTaskPayload,
@@ -689,21 +688,6 @@ export async function testLlmModel(
     method: 'POST',
     body: JSON.stringify({ model, url }),
   })
-}
-
-export async function startAgentModelTests(
-  models: Record<string, string>,
-  backupModels: Record<string, string>,
-  url?: string,
-): Promise<LlmAgentModelTestJob> {
-  return request<LlmAgentModelTestJob>('/api/llm/test-agent-models', {
-    method: 'POST',
-    body: JSON.stringify({ models, backupModels, url }),
-  })
-}
-
-export async function fetchAgentModelTestStatus(): Promise<LlmAgentModelTestJob> {
-  return request<LlmAgentModelTestJob>('/api/llm/test-agent-models/status')
 }
 
 export async function runTerminal(

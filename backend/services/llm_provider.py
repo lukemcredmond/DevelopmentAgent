@@ -112,6 +112,13 @@ class LlmProvider:
     def warm(self, model: str, *, keep_alive: Optional[str] = None) -> bool:
         return False
 
+    def unload_loaded_except(self, keep_model: str) -> None:
+        """Best-effort: free VRAM held by models other than keep_model.
+
+        Used only by connectivity tests. Must never raise.
+        """
+        return
+
 
 class OllamaProvider(LlmProvider):
     provider_id = PROVIDER_OLLAMA
@@ -205,6 +212,23 @@ class OllamaProvider(LlmProvider):
             return True
         except Exception:
             return False
+
+    def unload_loaded_except(self, keep_model: str) -> None:
+        keep = (keep_model or "").strip()
+        try:
+            response = requests.get(
+                f"{self.base_url}/api/ps", timeout=min(10.0, max(2.0, self.health_timeout_sec))
+            )
+            if response.status_code != 200:
+                return
+            models = response.json().get("models") or []
+        except Exception:
+            return
+        for item in models:
+            name = str((item or {}).get("name") or (item or {}).get("model") or "").strip()
+            if not name or _same_model_id(name, keep):
+                continue
+            self.unload(name)
 
     def warm(self, model: str, *, keep_alive: Optional[str] = None) -> bool:
         try:
@@ -312,12 +336,61 @@ class OpenAICompatProvider(LlmProvider):
             pass
         return None
 
+    def unload_loaded_except(self, keep_model: str) -> None:
+        """Unload every LM Studio instance except keep_model via native /api/v1."""
+        keep = (keep_model or "").strip()
+        host = strip_openai_suffix(self.base_url)
+        timeout = min(30.0, max(5.0, self.health_timeout_sec))
+        try:
+            response = requests.get(
+                f"{host}/api/v1/models", headers=self._headers(), timeout=timeout
+            )
+            if response.status_code != 200:
+                return
+            payload = response.json() or {}
+        except Exception:
+            return
+        models = payload.get("models") if isinstance(payload, dict) else None
+        if not isinstance(models, list):
+            return
+        for item in models:
+            if not isinstance(item, dict):
+                continue
+            instances = item.get("loaded_instances") or []
+            if not isinstance(instances, list):
+                continue
+            for instance in instances:
+                instance_id = ""
+                if isinstance(instance, dict):
+                    instance_id = str(instance.get("id") or "").strip()
+                elif isinstance(instance, str):
+                    instance_id = instance.strip()
+                if not instance_id or _same_model_id(instance_id, keep):
+                    continue
+                try:
+                    requests.post(
+                        f"{host}/api/v1/models/unload",
+                        headers=self._headers(),
+                        json={"instance_id": instance_id},
+                        timeout=timeout,
+                    )
+                except Exception:
+                    continue
+
 
 def strip_openai_suffix(url: str) -> str:
     raw = (url or "").strip().rstrip("/")
     if raw.lower().endswith("/v1"):
         return raw[:-3].rstrip("/")
     return raw
+
+
+def _same_model_id(left: str, right: str) -> bool:
+    a = (left or "").strip().lower()
+    b = (right or "").strip().lower()
+    if not a or not b:
+        return False
+    return a == b or a.endswith("/" + b) or b.endswith("/" + a)
 
 
 def ensure_openai_base(url: str) -> str:
