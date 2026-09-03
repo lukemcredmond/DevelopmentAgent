@@ -136,6 +136,6 @@ def apply_done_audit_actions(
     if moved:
         from backend.services.project_service import save_current_project_state
 
-        save_current_project_state()
+        save_current_project_state(force_board=True)
 
     return {"ok": True, "moved": moved, "skipped": skipped, "targetLane": target}

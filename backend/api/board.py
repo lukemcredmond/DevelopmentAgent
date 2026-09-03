@@ -648,7 +648,7 @@ def delete_task(payload: DeleteTaskPayload):
                 break
         if not removed:
             raise HTTPException(status_code=404, detail="Task not found")
-        save_current_project_state()
+        save_current_project_state(force_board=True)
         add_system_log("System", "info", f"Deleted task {payload.task_id}")
         publish_board_update(payload.task_id, source="delete")
     return build_state_response()

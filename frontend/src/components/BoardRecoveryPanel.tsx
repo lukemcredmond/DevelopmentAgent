@@ -34,6 +34,9 @@ export default function BoardRecoveryPanel({ projectId, onRestored }: BoardRecov
       laneCounts?: Record<string, number>
     }>
   >([])
+  const [orphans, setOrphans] = useState<
+    Array<{ kind: string; id: string; label: string; taskCount?: number }>
+  >([])
   const [liveCount, setLiveCount] = useState<number | null>(null)
   const [liveLanes, setLiveLanes] = useState<Record<string, number>>({})
   const [busy, setBusy] = useState(false)
@@ -51,9 +54,11 @@ export default function BoardRecoveryPanel({ projectId, onRestored }: BoardRecov
         setLiveCount(r.liveTaskCount ?? 0)
         setLiveLanes((r as { liveLaneCounts?: Record<string, number> }).liveLaneCounts ?? {})
         setCandidates(r.candidates ?? [])
+        setOrphans(r.orphanProjects ?? [])
       })
       .catch(() => {
         setCandidates([])
+        setOrphans([])
         setLiveCount(null)
         setLiveLanes({})
       })
@@ -80,6 +85,7 @@ export default function BoardRecoveryPanel({ projectId, onRestored }: BoardRecov
       </h3>
       <p className="text-[10px] text-cat-overlay leading-relaxed">
         If cards disappeared, restore from an automatic snapshot or a legacy database copy.
+        Deleted projects still listed under snapshots can be re-inserted from this panel.
         You can also rebuild cards from <code className="text-cat-subtext">docs/tasks/*-spec.md</code>.
         Skills and model assignments are kept. Live board:{' '}
         <span className="text-cat-subtext font-mono">
@@ -200,7 +206,37 @@ export default function BoardRecoveryPanel({ projectId, onRestored }: BoardRecov
           ))}
         </div>
       )}
-      {snapshots.length === 0 && candidates.length === 0 && (
+      {orphans.length > 0 && (
+        <div className="space-y-1">
+          <p className="text-[10px] text-cat-subtext font-semibold">Deleted projects (snapshots)</p>
+          {orphans.map((o) => (
+            <button
+              key={`orphan-${o.id}`}
+              type="button"
+              disabled={busy}
+              onClick={() => {
+                setBusy(true)
+                setError(null)
+                setMessage(null)
+                void restoreBoardFromRecovery(projectId, { kind: 'orphan_snapshot', id: o.id })
+                  .then((st) => {
+                    onRestored(st)
+                    setMessage(o.label)
+                    refresh()
+                  })
+                  .catch((err: unknown) => {
+                    setError(err instanceof Error ? err.message : 'Recovery failed')
+                  })
+                  .finally(() => setBusy(false))
+              }}
+              className="w-full text-left text-[10px] px-2 py-1.5 rounded border border-violet-500/30 text-violet-100 hover:bg-violet-950/40 disabled:opacity-50"
+            >
+              {o.label}
+            </button>
+          ))}
+        </div>
+      )}
+      {snapshots.length === 0 && candidates.length === 0 && orphans.length === 0 && (
         <p className="text-[10px] text-cat-overlay">
           No richer snapshots or legacy boards found for this project yet.
         </p>

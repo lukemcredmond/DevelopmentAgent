@@ -21,7 +21,7 @@ def load_project_into_state(project_id: str) -> bool:
         and state.storage.load_project(state.CURRENT_PROJECT_ID)
     ):
         try:
-            save_current_project_state()
+            save_current_project_state(project_id=state.CURRENT_PROJECT_ID)
         except Exception:
             pass
 

@@ -298,7 +298,7 @@ def apply_refinement_audit_actions(
         moved_backlog.append(tid)
 
     if deleted or moved_done or moved_backlog:
-        save_current_project_state()
+        save_current_project_state(force_board=True)
 
     return {
         "ok": True,

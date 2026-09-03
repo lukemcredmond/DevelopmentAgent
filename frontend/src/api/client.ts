@@ -156,6 +156,13 @@ export async function fetchBoardRecoveryOptions(projectId: string): Promise<{
   projectId: string
   liveTaskCount: number
   candidates: Array<{ kind: string; id: string; label: string; taskCount?: number }>
+  orphanProjects?: Array<{
+    kind: string
+    id: string
+    label: string
+    taskCount?: number
+    projectName?: string
+  }>
 }> {
   return request(`/api/projects/${encodeURIComponent(projectId)}/board-recovery`)
 }

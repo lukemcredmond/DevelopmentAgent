@@ -13,6 +13,7 @@ import {
   subscribeEvents,
 } from '../api/client'
 import { mergePendingWorkflowSettings } from '../workflowSettingsPending'
+import { mergeAppStateIdentity } from '../utils/mergeAppState'
 import { mergeToolHistory } from '../utils/mergeToolHistory'
 import type {
   ActivityEvent,
@@ -663,14 +664,19 @@ export function useAppState() {
       const includeFiles = options?.includeFiles !== false
       const data = await fetchState({ includeFiles })
       const board = trimBoardHistory(data.board)
-      setState((prev) => ({
-        ...data,
-        board,
-        files: includeFiles ? data.files : prev.files,
-        workflowSettings: mergePendingWorkflowSettings(
-          data.workflowSettings ?? prev.workflowSettings,
-        ),
-      }))
+      setState((prev) => {
+        const merged = mergeAppStateIdentity(prev, data)
+        return {
+          ...data,
+          board,
+          files: includeFiles ? data.files : prev.files,
+          projectId: merged.projectId,
+          projectsList: merged.projectsList,
+          workflowSettings: mergePendingWorkflowSettings(
+            data.workflowSettings ?? prev.workflowSettings,
+          ),
+        }
+      })
       if (data.projectPlanOutline != null) {
         setPlanOutline(String(data.projectPlanOutline))
       }
@@ -694,12 +700,17 @@ export function useAppState() {
         board: trimBoardHistory(data.board),
         workflowSettings: mergePendingWorkflowSettings(data.workflowSettings),
       }
-      setState((prev) => ({
-        ...trimmed,
-        workflowSettings: mergePendingWorkflowSettings(
-          trimmed.workflowSettings ?? prev.workflowSettings,
-        ),
-      }))
+      setState((prev) => {
+        const merged = mergeAppStateIdentity(prev, trimmed)
+        return {
+          ...trimmed,
+          projectId: merged.projectId,
+          projectsList: merged.projectsList,
+          workflowSettings: mergePendingWorkflowSettings(
+            trimmed.workflowSettings ?? prev.workflowSettings,
+          ),
+        }
+      })
       if (trimmed.projectPlanOutline != null) {
         setPlanOutline(String(trimmed.projectPlanOutline))
       }
@@ -933,17 +944,22 @@ export function useAppState() {
   enqueueAgentRunRef.current = enqueueAgentRun
 
   const applySseStateSnapshot = useCallback((data: AppState) => {
-    const board = trimBoardHistory(data.board)
+    let nextBoard = data.board
     setState((prev) => {
       const incomingFiles = data.files
       const keepFiles =
         !incomingFiles ||
         (typeof incomingFiles === 'object' && Object.keys(incomingFiles).length === 0)
+      const merged = mergeAppStateIdentity(prev, data, { preserveEmptyBoard: true })
+      const board = trimBoardHistory(merged.board)
+      nextBoard = board
       return {
         ...data,
         board,
         files: keepFiles ? prev.files : incomingFiles,
         filePaths: data.filePaths?.length ? data.filePaths : prev.filePaths,
+        projectId: merged.projectId,
+        projectsList: merged.projectsList,
         workflowSettings: mergePendingWorkflowSettings(
           data.workflowSettings ?? prev.workflowSettings,
         ),
@@ -952,7 +968,7 @@ export function useAppState() {
     if (data.projectPlanOutline != null) {
       setPlanOutline(String(data.projectPlanOutline))
     }
-    syncActivityFromBoardRef.current(board)
+    syncActivityFromBoardRef.current(trimBoardHistory(nextBoard))
   }, [])
 
   const flushSseStateBatch = useCallback(() => {

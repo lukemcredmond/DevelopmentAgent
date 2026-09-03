@@ -1614,12 +1614,20 @@ export default function App() {
           applyStateFields(st, setters)
         }}
         onDeleteProject={() => {
-          const other = state.projectsList.find((p) => p.id !== state.projectId)
-          if (!other) return
-          if (!window.confirm(`Delete project "${other.name}"?`)) return
+          const current = state.projectsList.find((p) => p.id === state.projectId)
+          const fallback = state.projectsList.find((p) => p.id !== state.projectId)
+          if (!current || !fallback) return
+          if (
+            !window.confirm(
+              `Delete project "${current.name}"? You will be switched to "${fallback.name}". This cannot be undone.`,
+            )
+          ) {
+            return
+          }
           void withLoading(async () => {
-            await deleteProject(other.id)
-            handleState(await loadProject(state.projectId))
+            handleState(await loadProject(fallback.id))
+            await deleteProject(current.id)
+            handleState(await loadProject(fallback.id))
           })
         }}
         onOpenMemoryTab={handleOpenMemoryTab}

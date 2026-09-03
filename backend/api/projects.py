@@ -24,7 +24,7 @@ def create_new_project(payload: CreateProjectPayload):
     with state.STATE_LOCK:
         if state.CURRENT_PROJECT_ID and state.storage.load_project(state.CURRENT_PROJECT_ID):
             try:
-                save_current_project_state()
+                save_current_project_state(project_id=state.CURRENT_PROJECT_ID)
             except Exception:
                 pass
         state.CURRENT_PROJECT_ID = str(uuid.uuid4())
@@ -60,6 +60,8 @@ def delete_project(project_id: str):
     with state.STATE_LOCK:
         if project_id == state.CURRENT_PROJECT_ID:
             raise HTTPException(status_code=400, detail="Cannot delete the active project.")
+        if len(state.storage.list_projects()) <= 1:
+            raise HTTPException(status_code=400, detail="Cannot delete the last remaining project.")
         if not state.storage.delete_project(project_id):
             raise HTTPException(status_code=404, detail="Project not found.")
         add_system_log("System", "info", f"Deleted project {project_id}")
@@ -203,7 +205,7 @@ def update_config(payload: ConfigPayload):
 
             save_workflow_settings(llm_updates)
 
-        save_current_project_state()
+        save_current_project_state(persist_board=False)
         add_system_log(
             "System",
             "info",
@@ -242,7 +244,7 @@ def reset_workspace():
                         except Exception:
                             pass
 
-        save_current_project_state()
+        save_current_project_state(force_board=True)
         add_system_log("System", "info", "Workspace state cleared. Backlog lanes and directory files cleaned successfully.")
     return build_state_response()
 
@@ -286,7 +288,7 @@ def restore_board_snapshot(project_id: str, payload: dict):
         state.SHARED_BOARD = normalize_board_lanes(data["board_state"])
         normalize_board_tasks()
         dedupe_board_tasks()
-        save_current_project_state()
+        save_current_project_state(force_board=True)
         publish_board_update(source="restore_snapshot")
         add_system_log(
             "System",
@@ -310,7 +312,7 @@ def get_board_recovery_options(project_id: str):
 def restore_board_from_recovery(project_id: str, payload: dict):
     from backend.agents.task_context import dedupe_board_tasks, normalize_board_tasks
     from backend.services.board_lanes import normalize_board_lanes
-    from backend.services.board_recovery import load_recovery_board
+    from backend.services.board_recovery import load_recovery_board, recreate_project_from_orphan
     from backend.services.board_service import publish_board_update
 
     kind = str(payload.get("kind") or "")
@@ -319,12 +321,21 @@ def restore_board_from_recovery(project_id: str, payload: dict):
         raise HTTPException(status_code=400, detail="kind and id required")
     proj = state.storage.load_project(project_id)
     name = (proj or {}).get("name") or state.PROJECT_NAME
+    lookup_id = source_id if kind == "orphan_snapshot" else project_id
     board, message = load_recovery_board(
-        project_id, kind=kind, source_id=source_id, project_name=name
+        lookup_id, kind=kind, source_id=source_id, project_name=name
     )
     if board is None:
         raise HTTPException(status_code=404, detail=message)
     with state.STATE_LOCK:
+        if kind == "orphan_snapshot":
+            save_current_project_state()
+            recreate_project_from_orphan(source_id, board)
+            if not load_project_into_state(source_id):
+                raise HTTPException(status_code=500, detail="Failed to load recovered project")
+            publish_board_update(source="board_recovery")
+            add_system_log("System", "success", message)
+            return build_state_response()
         if project_id != state.CURRENT_PROJECT_ID:
             if not load_project_into_state(project_id):
                 raise HTTPException(status_code=404, detail="Project not found")
@@ -342,7 +353,7 @@ def restore_board_from_recovery(project_id: str, payload: dict):
         state.SHARED_BOARD = normalize_board_lanes(board)
         normalize_board_tasks()
         dedupe_board_tasks()
-        save_current_project_state()
+        save_current_project_state(force_board=True)
         publish_board_update(source="board_recovery")
         add_system_log("System", "success", message)
     return build_state_response()
@@ -377,7 +388,7 @@ def import_board_from_task_specs(project_id: str, payload: dict | None = None):
         normalize_board_lanes(state.SHARED_BOARD)
         normalize_board_tasks()
         dedupe_board_tasks()
-        save_current_project_state()
+        save_current_project_state(force_board=True)
         publish_board_update(source="import_specs")
         add_system_log(
             "System",

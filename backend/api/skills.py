@@ -93,7 +93,7 @@ def save_built_skill_route(payload: SaveBuiltSkillPayload):
             raise HTTPException(status_code=409, detail=str(e)) from e
         except ValueError as e:
             raise HTTPException(status_code=400, detail=str(e)) from e
-        save_current_project_state()
+        save_current_project_state(persist_board=False)
     return build_state_response()
 
 
@@ -125,7 +125,7 @@ def assign_skill_to_agent(payload: SkillPayload):
         if payload.agent not in AGENT_MAP:
             raise HTTPException(status_code=400, detail="Invalid agent")
         newly = _assign_one_skill(payload.agent, payload.skillFile)
-        save_current_project_state()
+        save_current_project_state(persist_board=False)
         if newly:
             agent_label = AGENT_LABELS.get(payload.agent, payload.agent)
             add_system_log(
@@ -147,7 +147,7 @@ def assign_skills_to_agent(payload: BulkSkillPayload):
         for skill_file in payload.skillFiles:
             if _assign_one_skill(payload.agent, skill_file):
                 assigned += 1
-        save_current_project_state()
+        save_current_project_state(persist_board=False)
         agent_label = AGENT_LABELS.get(payload.agent, payload.agent)
         add_system_log(
             agent_label,
@@ -180,7 +180,7 @@ def remove_skill_from_agent(payload: SkillPayload):
                     pass
             state.VIRTUAL_FILESYSTEM.pop(os.path.join("skills", skill_rel).replace("\\", "/"), None)
 
-        save_current_project_state()
+        save_current_project_state(persist_board=False)
         add_system_log(
             payload.agent.upper() + " Agent",
             "info",

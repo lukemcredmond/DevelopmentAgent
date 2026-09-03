@@ -1921,7 +1921,7 @@ def inject_tool_evidence_for_task(
             evidence["passed"] = True
             task["qaEvidence"] = evidence
 
-    save_current_project_state()
+    save_current_project_state(project_id=state.CURRENT_PROJECT_ID)
     publish_board_update(task_id, source="inject_evidence")
     return result
 
@@ -2634,7 +2634,7 @@ def run_po_add_feature(
             except Exception:
                 intake_feature_offline(title, description, preferred_feature_id=preferred_id)
 
-    save_current_project_state()
+    save_current_project_state(project_id=state.CURRENT_PROJECT_ID)
 
 
 def run_po_split_task(task_id: str, ollama_url: str, guidance: str = "") -> Dict[str, Any]:
@@ -2719,7 +2719,7 @@ def run_po_split_task(task_id: str, ollama_url: str, guidance: str = "") -> Dict
         if not split_valid:
             added = 0
             new_task_ids = []
-        save_current_project_state()
+        save_current_project_state(project_id=state.CURRENT_PROJECT_ID)
         publish_board_update(task_id, source="split")
         add_system_log(
             "Product Owner",
@@ -3508,7 +3508,7 @@ def _run_developer_step(active_task: Dict[str, Any], brief: str) -> None:
 
                                 if should_block_lane_advance_for_focus(fresh):
                                     focus_advance_after_step(fresh, result)
-                                    save_current_project_state()
+                                    save_current_project_state(project_id=state.CURRENT_PROJECT_ID)
                                     add_system_log(
                                         "Developer",
                                         "info",
@@ -4365,7 +4365,7 @@ def run_sprint_step(brief: str, ollama_url: str) -> None:
                     update_task_spec_markdown(str(active_task["id"]))
                 except Exception:
                     pass
-            save_current_project_state()
+            save_current_project_state(project_id=state.CURRENT_PROJECT_ID)
             if active_task and active_task.get("id"):
                 publish_board_delta(str(active_task["id"]), source="sprint_step")
             else:
@@ -4478,7 +4478,7 @@ def run_in_progress_step(
                 update_task_spec_markdown(tid)
             except Exception:
                 pass
-            save_current_project_state()
+            save_current_project_state(project_id=state.CURRENT_PROJECT_ID)
             publish_board_delta(tid, source="sprint_step")
         _record_last_step_outcome(tid, lane_before, "Developer")
         _finish_single_step_progress(active_task)

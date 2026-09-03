@@ -1,10 +1,23 @@
 import json
+import logging
 import sqlite3
 import uuid
 from datetime import datetime
 from typing import Any, Dict, List, Optional
 
+logger = logging.getLogger(__name__)
+
 from backend.config import DB_PATH
+
+
+def count_board_tasks(board_state: Any) -> int:
+    if not isinstance(board_state, dict):
+        return 0
+    total = 0
+    for tasks in board_state.values():
+        if isinstance(tasks, list):
+            total += len(tasks)
+    return total
 
 
 class ProjectStorage:
@@ -171,7 +184,40 @@ class ProjectStorage:
         cr_backup_model: str = "",
         qa_backup_model: str = "",
         plan_outline: str = "",
-    ) -> None:
+        persist_board: bool = True,
+        force_board: bool = False,
+    ) -> bool:
+        existing = self.load_project(proj_id) if proj_id else None
+        board_to_write = board_state
+        wrote_incoming_board = True
+        if existing:
+            stored_board = existing.get("board_state") if isinstance(existing.get("board_state"), dict) else {}
+            if not persist_board:
+                board_to_write = stored_board
+                wrote_incoming_board = False
+            elif not force_board:
+                old_count = count_board_tasks(stored_board)
+                new_count = count_board_tasks(board_state)
+                if new_count < old_count:
+                    board_to_write = stored_board
+                    wrote_incoming_board = False
+                    logger.warning(
+                        "Skipped board save for %s (incoming %s cards < stored %s)",
+                        proj_id,
+                        new_count,
+                        old_count,
+                    )
+                    try:
+                        from backend.services.logs import add_system_log
+
+                        add_system_log(
+                            "System",
+                            "warning",
+                            f"Skipped board save for {proj_id} "
+                            f"(incoming {new_count} cards < stored {old_count})",
+                        )
+                    except Exception:
+                        pass
         with sqlite3.connect(self.db_path) as conn:
             conn.execute(
                 """
@@ -210,7 +256,7 @@ class ProjectStorage:
                     name,
                     brief,
                     workspace_dir,
-                    json.dumps(board_state),
+                    json.dumps(board_to_write),
                     json.dumps(files),
                     json.dumps(po_skills),
                     json.dumps(dev_skills),
@@ -228,6 +274,7 @@ class ProjectStorage:
                 ),
             )
             conn.commit()
+        return wrote_incoming_board
 
     def load_project(self, proj_id: str) -> Optional[Dict[str, Any]]:
         with sqlite3.connect(self.db_path) as conn:

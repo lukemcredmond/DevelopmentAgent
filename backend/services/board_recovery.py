@@ -118,7 +118,46 @@ def scan_board_recovery_options(project_id: str, project_name: str = "") -> Dict
         "liveDb": str(live_db),
         "legacyDbExists": LEGACY_DB_PATH.is_file(),
         "candidates": sorted(candidates, key=lambda c: int(c.get("taskCount") or 0), reverse=True),
+        "orphanProjects": list_orphan_snapshot_projects(),
     }
+
+
+def list_orphan_snapshot_projects() -> List[Dict[str, Any]]:
+    """Snapshot folders whose project row is gone from the live DB."""
+    from backend import state
+    from backend.services.board_snapshots import list_board_snapshots
+
+    root = allhands_home() / "board_snapshots"
+    if not root.is_dir():
+        return []
+    live_ids = {str(p.get("id") or "") for p in state.storage.list_projects()}
+    out: List[Dict[str, Any]] = []
+    for folder in sorted(root.iterdir()):
+        if not folder.is_dir():
+            continue
+        pid = folder.name
+        if not pid or pid in live_ids:
+            continue
+        snaps = list_board_snapshots(pid)
+        if not snaps:
+            continue
+        best = max(snaps, key=lambda s: int(s.get("taskCount") or 0))
+        count = int(best.get("taskCount") or 0)
+        if count <= 0:
+            continue
+        name = str(best.get("projectName") or pid)
+        out.append(
+            {
+                "kind": "orphan_snapshot",
+                "id": pid,
+                "snapshotId": best.get("id"),
+                "label": f"Deleted project '{name}' ({count} cards)",
+                "taskCount": count,
+                "source": best.get("filename"),
+                "projectName": name,
+            }
+        )
+    return sorted(out, key=lambda c: int(c.get("taskCount") or 0), reverse=True)
 
 
 def load_recovery_board(
@@ -152,4 +191,55 @@ def load_recovery_board(
             return None, "Legacy project board not found"
         return match["board_state"], f"Restored board from legacy DB '{match.get('name')}'"
 
+    if kind == "orphan_snapshot":
+        from backend.services.board_snapshots import list_board_snapshots
+
+        snaps = list_board_snapshots(source_id)
+        if not snaps:
+            return None, "No snapshots for deleted project"
+        best = max(snaps, key=lambda s: int(s.get("taskCount") or 0))
+        payload = load_board_snapshot(source_id, str(best.get("id") or ""))
+        if not payload or not isinstance(payload.get("board_state"), dict):
+            return None, "Orphan snapshot not found"
+        name = str(payload.get("projectName") or best.get("projectName") or source_id)
+        return payload["board_state"], f"Restored deleted project '{name}' from snapshot"
+
     return None, f"Unknown recovery kind: {kind}"
+
+
+def recreate_project_from_orphan(orphan_id: str, board: Dict[str, Any]) -> str:
+    """Insert a projects row for a snapshot folder that has no DB row."""
+    from backend import state
+    from backend.agents.registry import agent_cr, agent_dev, agent_po, agent_qa
+    from backend.config import DEFAULT_VIRTUAL_FS
+    from backend.services.board_snapshots import list_board_snapshots
+
+    existing = {str(p.get("id") or "") for p in state.storage.list_projects()}
+    snaps = list_board_snapshots(orphan_id)
+    best = max(snaps, key=lambda s: int(s.get("taskCount") or 0)) if snaps else {}
+    payload = load_board_snapshot(orphan_id, str(best.get("id") or "")) if best else {}
+    name = str((payload or {}).get("projectName") or "Recovered project")
+    if orphan_id in existing:
+        return name
+    slug = "".join(ch if ch.isalnum() else "-" for ch in name.lower()).strip("-") or "recovered"
+    short = orphan_id.replace("-", "")[:8] or "proj"
+    candidate = f"./{slug}-recovered-{short}"
+    state.storage.save_project(
+        orphan_id,
+        name,
+        "",
+        candidate,
+        board,
+        dict(DEFAULT_VIRTUAL_FS),
+        list(agent_po.assigned_skills),
+        list(agent_dev.assigned_skills),
+        list(agent_cr.assigned_skills),
+        list(agent_qa.assigned_skills),
+        agent_po.model,
+        agent_dev.model,
+        agent_cr.model,
+        agent_qa.model,
+        persist_board=True,
+        force_board=True,
+    )
+    return name
