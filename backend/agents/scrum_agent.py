@@ -1031,9 +1031,8 @@ class ScrumAgent:
 
         ws = get_workflow_settings()
         opts: Dict[str, Any] = dict(sampling_options_for_role(self.role, ws=ws))
+        opts["num_ctx"] = self._effective_num_ctx()
         provider = self._get_provider()
-        if provider.capabilities.num_ctx:
-            opts["num_ctx"] = self._effective_num_ctx()
         keep_alive = effective_keep_alive(ws)
         if keep_alive and provider.capabilities.keep_alive:
             opts["keep_alive"] = str(keep_alive)
@@ -1285,7 +1284,8 @@ class ScrumAgent:
         add_system_log(
             self.role,
             "warning",
-            f"All Ollama attempts failed — last error ({last_error_type or 'other'}): {summary[:200]}",
+            f"All Ollama attempts failed ({provider.base_url}) — last error "
+            f"({last_error_type or 'other'}): {summary[:200]}",
         )
         return None
 

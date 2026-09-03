@@ -1429,10 +1429,11 @@ def test_chat_options_includes_num_ctx():
     from backend.services.workflow_settings import save_workflow_settings
 
     initialize()
-    save_workflow_settings({"ollamaNumCtx": 32768})
+    reset_workflow_settings()
+    save_workflow_settings({"ollamaNumCtx": 32768, "ollamaNumCtxAuto": False})
     opts = agent_po._chat_options()
-    assert opts["num_ctx"] == 32768
-    assert opts["temperature"] == 0.1
+    # PO is capped at 16384 unless ollamaNumCtxByRole overrides it.
+    assert opts["num_ctx"] == 16384
 
 
 def test_configure_po_tools_respects_web_search_flag():

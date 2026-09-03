@@ -120,23 +120,171 @@ def test_ollama_chat_sends_num_ctx_and_keep_alive():
     assert kwargs["keep_alive"] == "30m"
 
 
-def test_openai_compat_chat_omits_num_ctx():
-    provider = OpenAICompatProvider("http://localhost:1234/v1")
+def _openai_chat_response(content: str = "hi"):
     response = MagicMock()
     response.status_code = 200
     response.json.return_value = {
-        "choices": [{"message": {"role": "assistant", "content": "hi", "tool_calls": []}}],
+        "choices": [{"message": {"role": "assistant", "content": content, "tool_calls": []}}],
         "usage": {"prompt_tokens": 2, "completion_tokens": 1},
     }
-    with patch("backend.services.llm_provider.requests.post", return_value=response) as mock_post:
-        provider.chat(
-            "local",
-            [{"role": "user", "content": "hi"}],
-            options={"temperature": 0.1, "num_ctx": 32768, "keep_alive": "30m"},
-        )
-    payload = mock_post.call_args.kwargs["json"]
+    return response
+
+
+def _native_models_response(models=None, status_code: int = 200):
+    response = MagicMock()
+    response.status_code = status_code
+    response.json.return_value = {"models": list(models or [])}
+    response.text = "not found" if status_code == 404 else ""
+    return response
+
+
+def _native_load_response(context_length: int = 8192, status_code: int = 200, error_text: str = ""):
+    response = MagicMock()
+    response.status_code = status_code
+    response.text = error_text or ""
+    response.json.return_value = {
+        "load_config": {"context_length": context_length},
+        "load_time_seconds": 1.2,
+    }
+    return response
+
+
+def _lmstudio_http(native_models=None, load=None, chat=None):
+    listed = _native_models_response(native_models)
+
+    def handle_get(url, **_kwargs):
+        if "/api/v1/models" in url and not url.rstrip("/").endswith("/load"):
+            return listed
+        return listed
+
+    def handle_post(url, **kwargs):
+        if url.endswith("/api/v1/models/load"):
+            return load if load is not None else _native_load_response()
+        if url.endswith("/chat/completions"):
+            return chat if chat is not None else _openai_chat_response()
+        unload = MagicMock()
+        unload.status_code = 200
+        return unload
+
+    return handle_get, handle_post
+
+
+def test_openai_compat_chat_omits_num_ctx():
+    provider = OpenAICompatProvider("http://localhost:1234/v1")
+    handle_get, handle_post = _lmstudio_http(load=_native_load_response(32768))
+    with patch("backend.services.llm_provider.requests.get", side_effect=handle_get):
+        with patch("backend.services.llm_provider.requests.post", side_effect=handle_post) as mock_post:
+            provider.chat(
+                "local",
+                [{"role": "user", "content": "hi"}],
+                options={"temperature": 0.1, "num_ctx": 32768, "keep_alive": "30m"},
+            )
+    completions = [
+        call for call in mock_post.call_args_list if str(call.args[0]).endswith("/chat/completions")
+    ]
+    assert completions
+    payload = completions[0].kwargs["json"]
     assert "num_ctx" not in payload
     assert payload["messages"][0]["content"] == "hi"
+
+
+def test_openai_compat_chat_loads_then_completes():
+    provider = OpenAICompatProvider("http://localhost:1234/v1")
+    handle_get, handle_post = _lmstudio_http(load=_native_load_response(8192))
+    with patch("backend.services.llm_provider.requests.get", side_effect=handle_get):
+        with patch("backend.services.llm_provider.requests.post", side_effect=handle_post) as mock_post:
+            provider.chat(
+                "qwen/qwen3-27b",
+                [{"role": "user", "content": "hi"}],
+                options={"num_ctx": 8192},
+            )
+            urls = [str(call.args[0]) for call in mock_post.call_args_list]
+            load_calls = [call for call in mock_post.call_args_list if str(call.args[0]).endswith("/api/v1/models/load")]
+            assert load_calls
+            assert load_calls[0].kwargs["json"]["context_length"] == 8192
+            assert load_calls[0].kwargs["json"]["model"] == "qwen/qwen3-27b"
+            assert any(url.endswith("/chat/completions") for url in urls)
+            mock_post.reset_mock()
+            provider.chat(
+                "qwen/qwen3-27b",
+                [{"role": "user", "content": "again"}],
+                options={"num_ctx": 8192},
+            )
+            reload_calls = [
+                call for call in mock_post.call_args_list if str(call.args[0]).endswith("/api/v1/models/load")
+            ]
+            assert reload_calls == []
+            assert any(str(call.args[0]).endswith("/chat/completions") for call in mock_post.call_args_list)
+
+
+def test_openai_compat_chat_retries_smaller_context_on_load_refuse():
+    provider = OpenAICompatProvider("http://localhost:1234/v1")
+    listed = _native_models_response([])
+    refused = _native_load_response(status_code=400, error_text="insufficient system resources")
+    loaded = _native_load_response(4096)
+    chat = _openai_chat_response()
+    contexts = []
+
+    def handle_post(url, **kwargs):
+        if url.endswith("/api/v1/models/load"):
+            ctx = kwargs["json"]["context_length"]
+            contexts.append(ctx)
+            return loaded if ctx <= 4096 else refused
+        if url.endswith("/chat/completions"):
+            return chat
+        unload = MagicMock()
+        unload.status_code = 200
+        return unload
+
+    with patch("backend.services.llm_provider.requests.get", return_value=listed):
+        with patch("backend.services.llm_provider.requests.post", side_effect=handle_post):
+            provider.chat(
+                "qwen/qwen3-27b",
+                [{"role": "user", "content": "hi"}],
+                options={"num_ctx": 16384},
+            )
+    assert contexts[0] == 16384
+    assert 4096 in contexts
+    assert contexts[-1] == 4096
+
+
+def test_openai_compat_chat_skips_load_when_already_on_server():
+    provider = OpenAICompatProvider("http://localhost:1234/v1")
+    listed = _native_models_response(
+        [
+            {
+                "key": "local-model",
+                "loaded_instances": [
+                    {"id": "local-model", "config": {"context_length": 8192}},
+                ],
+            }
+        ]
+    )
+    with patch("backend.services.llm_provider.requests.get", return_value=listed):
+        with patch("backend.services.llm_provider.requests.post", return_value=_openai_chat_response()) as mock_post:
+            provider.chat("local-model", [{"role": "user", "content": "hi"}], options={"num_ctx": 8192})
+    urls = [str(call.args[0]) for call in mock_post.call_args_list]
+    assert not any(url.endswith("/api/v1/models/load") for url in urls)
+    assert any(url.endswith("/chat/completions") for url in urls)
+
+
+def test_ollama_chat_does_not_call_lmstudio_load():
+    from backend.services.llm_provider import OllamaProvider
+
+    provider = OllamaProvider("http://localhost:11434")
+    client = MagicMock()
+    client.chat.return_value = MagicMock(
+        message=MagicMock(content="ok", tool_calls=None), prompt_eval_count=1, eval_count=1
+    )
+    with patch.object(provider, "_get_client", return_value=client):
+        with patch("backend.services.llm_provider.requests.post") as mock_post:
+            provider.chat(
+                "qwen",
+                [{"role": "user", "content": "hi"}],
+                options={"temperature": 0.1, "num_ctx": 8192, "keep_alive": "30m"},
+            )
+    mock_post.assert_not_called()
+    assert client.chat.called
 
 
 def test_health_endpoint_uses_v1_models(monkeypatch):

@@ -73,6 +73,7 @@ class HealthResult:
 
 
 DEFAULT_HEALTH_TIMEOUT_SEC = 5.0
+MIN_LMSTUDIO_LOAD_CONTEXT = 4096
 
 
 class LlmProvider:
@@ -305,6 +306,8 @@ class OpenAICompatProvider(LlmProvider):
 
     def __init__(self, base_url: str, *, api_key: str = "", timeout_sec: float = 300.0):
         super().__init__(ensure_openai_base(base_url), api_key=api_key or "lm-studio", timeout_sec=timeout_sec)
+        self._loaded_model: Optional[str] = None
+        self._loaded_context: Optional[int] = None
 
     def _headers(self) -> Dict[str, str]:
         headers = {"Content-Type": "application/json"}
@@ -343,6 +346,7 @@ class OpenAICompatProvider(LlmProvider):
         options: Optional[Dict[str, Any]] = None,
     ) -> Union[ChatResult, Iterator[ChatResult]]:
         opts = dict(options or {})
+        self.ensure_model_loaded(model, context_length=opts.get("num_ctx"))
         payload: Dict[str, Any] = {
             "model": model,
             "messages": to_openai_messages(messages),
@@ -388,6 +392,33 @@ class OpenAICompatProvider(LlmProvider):
     def _native_timeout(self) -> float:
         return min(30.0, max(5.0, self.health_timeout_sec))
 
+    def _native_models_payload(self) -> Dict[str, Any]:
+        host = strip_openai_suffix(self.base_url)
+        timeout = self._native_timeout()
+        try:
+            response = requests.get(
+                f"{host}/api/v1/models", headers=self._headers(), timeout=timeout
+            )
+        except Exception as exc:
+            return {"status": "error", "models": [], "detail": f"{type(exc).__name__}: {exc}"}
+        if response.status_code == 404:
+            return {
+                "status": "unavailable",
+                "models": [],
+                "detail": "native /api/v1 model API not found (needs LM Studio 0.4.0+)",
+            }
+        if response.status_code != 200:
+            return {
+                "status": "error",
+                "models": [],
+                "detail": f"/api/v1/models returned HTTP {response.status_code}",
+            }
+        payload = response.json() or {}
+        models = payload.get("models") if isinstance(payload, dict) else None
+        if not isinstance(models, list):
+            return {"status": "error", "models": [], "detail": "unexpected /api/v1/models body"}
+        return {"status": "ok", "models": models}
+
     def unload_loaded_except(self, keep_model: str) -> Dict[str, Any]:
         """Unload every LM Studio instance except keep_model via native /api/v1.
 
@@ -395,35 +426,19 @@ class OpenAICompatProvider(LlmProvider):
         reports "unavailable" rather than silently leaving VRAM occupied.
         """
         keep = (keep_model or "").strip()
+        listed = self._native_models_payload()
+        if listed.get("status") != "ok":
+            return {
+                "status": listed.get("status") or "error",
+                "unloaded": [],
+                "detail": listed.get("detail") or "could not list models",
+            }
+
         host = strip_openai_suffix(self.base_url)
         timeout = self._native_timeout()
-        try:
-            response = requests.get(
-                f"{host}/api/v1/models", headers=self._headers(), timeout=timeout
-            )
-            if response.status_code == 404:
-                return {
-                    "status": "unavailable",
-                    "unloaded": [],
-                    "detail": "native /api/v1 model API not found (needs LM Studio 0.4.0+)",
-                }
-            if response.status_code != 200:
-                return {
-                    "status": "error",
-                    "unloaded": [],
-                    "detail": f"/api/v1/models returned HTTP {response.status_code}",
-                }
-            payload = response.json() or {}
-        except Exception as exc:
-            return {"status": "error", "unloaded": [], "detail": f"{type(exc).__name__}: {exc}"}
-
-        models = payload.get("models") if isinstance(payload, dict) else None
-        if not isinstance(models, list):
-            return {"status": "error", "unloaded": [], "detail": "unexpected /api/v1/models body"}
-
         unloaded: List[str] = []
         failures: List[str] = []
-        for item in models:
+        for item in listed.get("models") or []:
             if not isinstance(item, dict):
                 continue
             instances = item.get("loaded_instances") or []
@@ -461,6 +476,9 @@ class OpenAICompatProvider(LlmProvider):
         return {"status": "unloaded" if unloaded else "none", "unloaded": unloaded}
 
     def load_model_for_test(self, model: str, *, context_length: int = 4096) -> Dict[str, Any]:
+        return self._native_load(model, context_length=context_length)
+
+    def _native_load(self, model: str, *, context_length: int) -> Dict[str, Any]:
         host = strip_openai_suffix(self.base_url)
         try:
             response = requests.post(
@@ -495,6 +513,160 @@ class OpenAICompatProvider(LlmProvider):
             "config": body.get("load_config") or {},
             "loadTimeSeconds": body.get("load_time_seconds"),
         }
+
+    def ensure_model_loaded(
+        self, model: str, *, context_length: Optional[int] = None
+    ) -> Dict[str, Any]:
+        """Load `model` via native /api/v1 before chat/completions.
+
+        JIT chat/completions often reserves a full-size KV cache and is refused
+        by LM Studio's memory guardrail, so sprint never shows a loaded model.
+        Missing native API falls through to JIT chat.
+        """
+        wanted = _lmstudio_load_context(context_length)
+        if (
+            self._loaded_model
+            and _same_model_id(self._loaded_model, model)
+            and (self._loaded_context is None or self._loaded_context >= wanted)
+        ):
+            _provider_log(
+                f"LM Studio already has {model} loaded (context={self._loaded_context or wanted}) at {self.base_url}"
+            )
+            return {
+                "status": "already",
+                "model": model,
+                "contextLength": self._loaded_context or wanted,
+            }
+
+        listed = self._native_models_payload()
+        if listed.get("status") == "unavailable":
+            _provider_log(
+                f"LM Studio native load API unavailable at {self.base_url} — using just-in-time chat",
+                "warning",
+            )
+            return listed
+
+        loaded_ctx = _loaded_context_for_model(model, listed.get("models") or [])
+        if loaded_ctx is not None and (loaded_ctx == 0 or loaded_ctx >= wanted):
+            self._loaded_model = model
+            self._loaded_context = loaded_ctx or wanted
+            _provider_log(
+                f"LM Studio already has {model} loaded (context={self._loaded_context}) at {self.base_url}"
+            )
+            return {
+                "status": "already",
+                "model": model,
+                "contextLength": self._loaded_context,
+            }
+
+        self.unload_loaded_except(model)
+        ctx = wanted
+        last: Dict[str, Any] = {}
+        while ctx >= MIN_LMSTUDIO_LOAD_CONTEXT:
+            _provider_log(f"Loading {model} in LM Studio (context={ctx}) at {self.base_url}")
+            last = self._native_load(model, context_length=ctx)
+            status = last.get("status")
+            if status == "loaded":
+                actual = (last.get("config") or {}).get("context_length") or ctx
+                try:
+                    actual_int = int(actual)
+                except (TypeError, ValueError):
+                    actual_int = ctx
+                self._loaded_model = model
+                self._loaded_context = actual_int
+                return last
+            if status == "unavailable":
+                _provider_log(
+                    f"LM Studio native load API unavailable at {self.base_url} — using just-in-time chat",
+                    "warning",
+                )
+                return last
+            nxt = max(MIN_LMSTUDIO_LOAD_CONTEXT, ctx // 2)
+            if nxt >= ctx:
+                break
+            _provider_log(
+                f"LM Studio refused {model} at context={ctx} ({last.get('error') or 'unknown'}) — retrying at {nxt}",
+                "warning",
+            )
+            ctx = nxt
+        _provider_log(
+            f"LM Studio failed to load {model} at {self.base_url}: {last.get('error') or last.get('detail') or 'unknown'} — falling back to chat",
+            "warning",
+        )
+        return last or {"status": "error", "error": "load failed"}
+
+
+def _provider_log(message: str, level: str = "info") -> None:
+    try:
+        from backend.services.logs import add_system_log
+
+        add_system_log("System", level, message)
+    except Exception:
+        pass
+
+
+def _lmstudio_load_context(requested: Optional[int]) -> int:
+    if requested is not None:
+        try:
+            return max(MIN_LMSTUDIO_LOAD_CONTEXT, int(requested))
+        except (TypeError, ValueError):
+            pass
+    try:
+        from backend.services.prompt_budget import resolve_ollama_num_ctx
+
+        return max(MIN_LMSTUDIO_LOAD_CONTEXT, int(resolve_ollama_num_ctx()))
+    except Exception:
+        return MIN_LMSTUDIO_LOAD_CONTEXT
+
+
+def _instance_id(instance: Any) -> str:
+    if isinstance(instance, dict):
+        return str(instance.get("id") or "").strip()
+    if isinstance(instance, str):
+        return instance.strip()
+    return ""
+
+
+def _instance_context_length(instance: Any) -> Optional[int]:
+    if not isinstance(instance, dict):
+        return None
+    cfg = instance.get("config") or instance.get("load_config") or {}
+    raw = None
+    if isinstance(cfg, dict):
+        raw = cfg.get("context_length")
+    if raw is None:
+        raw = instance.get("context_length")
+    try:
+        value = int(raw)
+    except (TypeError, ValueError):
+        return None
+    return value if value > 0 else None
+
+
+def _loaded_context_for_model(model: str, native_models: Sequence[Any]) -> Optional[int]:
+    """Context length if `model` is loaded; 0 if loaded with unknown size; None if not loaded."""
+    found = False
+    best: Optional[int] = None
+    for item in native_models:
+        if not isinstance(item, dict):
+            continue
+        key = str(item.get("key") or item.get("id") or item.get("model") or "").strip()
+        instances = item.get("loaded_instances") or []
+        if not isinstance(instances, list) or not instances:
+            continue
+        matched = _same_model_id(key, model)
+        if not matched:
+            matched = any(_same_model_id(_instance_id(inst), model) for inst in instances)
+        if not matched:
+            continue
+        found = True
+        for inst in instances:
+            ctx = _instance_context_length(inst)
+            if ctx is not None:
+                best = ctx if best is None else max(best, ctx)
+    if not found:
+        return None
+    return best if best is not None else 0
 
 
 def strip_openai_suffix(url: str) -> str:
