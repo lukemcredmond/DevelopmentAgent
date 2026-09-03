@@ -75,6 +75,112 @@ def test_latched_card_with_exhausted_po_moves_to_needs_user_without_dev_retry():
     assert task["devStepCount"] == 13
 
 
+def test_latched_lint_wall_parks_to_needs_user_without_dev_retry():
+    initialize()
+    reset_workflow_settings()
+    save_workflow_settings(
+        {
+            "enableSplitOnStuck": False,
+            "maxStuckSteps": 1,
+            "maxPoRoundTrips": 1,
+            "pauseSprintOnNeedsUser": False,
+            "requireBacklogRefinement": False,
+        }
+    )
+    _empty_board()
+    task = init_new_task(
+        {"id": "T-LATCH-LINT", "title": "Lint wall", "description": "d", "status": "In Progress"}
+    )
+    task["phaseCycleCapReached"] = True
+    task["phaseCycleCapAt"] = 13
+    task["devStepCount"] = 13
+    task["poRoundTrips"] = 1
+    task["lastCommandDiagnostics"] = [{"command": "flutter analyze", "ok": False}]
+    state.SHARED_BOARD["In Progress"] = [task]
+
+    with patch("backend.services.sprint_service._run_developer_step") as developer:
+        run_sprint_step("brief", "http://localhost:11434")
+    developer.assert_not_called()
+    assert get_task_lane("T-LATCH-LINT") == "Needs User"
+    assert task["latchedRecoveryAttempted"] is True
+    assert task["devStepCount"] == 13
+
+
+def test_recovered_latched_card_does_not_block_backlog_claim():
+    initialize()
+    reset_workflow_settings()
+    save_workflow_settings(
+        {
+            "enableSplitOnStuck": False,
+            "requireBacklogRefinement": False,
+            "pauseSprintOnNeedsUser": False,
+            "splitCardWhenAcOver": 20,
+        }
+    )
+    _empty_board()
+    latched = init_new_task(
+        {"id": "T-LATCHED", "title": "Latched", "description": "d", "status": "In Progress"}
+    )
+    latched["phaseCycleCapReached"] = True
+    latched["latchedRecoveryAttempted"] = True
+    latched["devStepCount"] = 13
+    ready = init_new_task(
+        {
+            "id": "T-READY",
+            "title": "Ready work",
+            "description": "Implement the feature",
+            "status": "Backlog",
+            "acceptanceCriteria": ["a", "b"],
+            "scope": "One screen",
+            "testPlan": "Run unit tests",
+            "workType": "implementation",
+            "requiresDev": True,
+            "requiresQa": True,
+        }
+    )
+    state.SHARED_BOARD["In Progress"] = [latched]
+    state.SHARED_BOARD["Backlog"] = [ready]
+
+    from backend.services.sprint_service import has_sprint_work
+
+    assert has_sprint_work() is True
+
+    with patch("backend.services.sprint_service._run_developer_step") as developer:
+        with patch("backend.services.sprint_service._recover_latched_dev_card") as recover:
+            run_sprint_step("brief", "http://localhost:11434")
+    recover.assert_not_called()
+    developer.assert_called_once()
+    assert get_task_lane("T-READY") == "In Progress"
+    assert get_task_lane("T-LATCHED") == "In Progress"
+
+
+def test_only_recovered_latched_in_progress_is_not_sprint_work():
+    initialize()
+    reset_workflow_settings()
+    _empty_board()
+    latched = init_new_task(
+        {"id": "T-ONLY", "title": "Only latched", "description": "d", "status": "In Progress"}
+    )
+    latched["phaseCycleCapReached"] = True
+    latched["latchedRecoveryAttempted"] = True
+    state.SHARED_BOARD["In Progress"] = [latched]
+
+    from backend.services.sprint_service import has_sprint_work
+
+    assert has_sprint_work() is False
+
+
+def test_auto_sprint_ui_pauses_on_retry_watchdog():
+    from pathlib import Path
+
+    hook = (
+        Path(__file__).resolve().parents[1]
+        / "frontend/src/hooks/useAppState.ts"
+    ).read_text(encoding="utf-8")
+    assert "retry_watchdog" in hook
+    assert "setAutoSprintPaused(true)" in hook
+
+
 def test_manual_dev_move_splits_oversized_ready_card_and_retires_parent():
     initialize()
     reset_workflow_settings()

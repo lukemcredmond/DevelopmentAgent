@@ -1290,7 +1290,7 @@ export function useAutoSprint(
         resumeKickRef.current = true
       } else if (data.pendingSimulation?.id || data.lastSprintSummary?.status === 'simulation_pending') {
         setAutoSprintPaused(true)
-      } else if (data.lastSprintSummary?.status === 'idle') {
+      } else if (data.lastSprintSummary?.status === 'idle' || data.lastSprintSummary?.status === 'retry_watchdog') {
         setAutoSprintPaused(true)
       }
     } catch {

@@ -408,6 +408,7 @@ def normalize_task(task: Dict[str, Any]) -> Dict[str, Any]:
         task["phaseCycleCapAt"] = None
     task.setdefault("phaseCycleCapReason", None)
     task.setdefault("phaseCycleCapTimestamp", None)
+    task["latchedRecoveryAttempted"] = bool(task.get("latchedRecoveryAttempted", False))
     from backend.agents.tool_fingerprints import normalize_fingerprint_fields
 
     normalize_fingerprint_fields(task)
@@ -682,6 +683,7 @@ def init_new_task(task: Dict[str, Any]) -> Dict[str, Any]:
     task["phaseCycleCapAt"] = None
     task["phaseCycleCapReason"] = None
     task["phaseCycleCapTimestamp"] = None
+    task["latchedRecoveryAttempted"] = False
     task["agentUsage"] = {}
     task["userResolutions"] = []
     task["needsUserCooldownUntilStep"] = None

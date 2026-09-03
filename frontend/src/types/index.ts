@@ -290,6 +290,8 @@ export interface Task {
   childTaskIds?: string[]
   featureRollup?: FeatureRollup | null
   stuckLoops?: number
+  phaseCycleCapReached?: boolean
+  latchedRecoveryAttempted?: boolean
   lastStepProgress?: StepProgress | null
   agentWorkItems?: AgentWorkItem[]
   qaMarkdownPath?: string | null
@@ -849,7 +851,7 @@ export interface SprintSummary {
   blocked: string[]
   needsPo: number
   needsUser: number
-  status?: 'completed' | 'idle' | 'cancelled' | 'max_steps' | 'simulation_pending' | 'session_refresh'
+  status?: 'completed' | 'idle' | 'cancelled' | 'max_steps' | 'simulation_pending' | 'session_refresh' | 'retry_watchdog'
 }
 
 export interface CardWorkProgress {
@@ -1818,7 +1820,14 @@ export function hasSprintWork(board: Board, settings?: WorkflowSettings): boolea
   }
   if (settings?.requireCodeReview) lanes.push('Code Review')
   lanes.push('QA')
-  return lanes.some((lane) => (board[lane]?.length ?? 0) > 0)
+  return lanes.some((lane) => {
+    if (lane === 'In Progress') {
+      return (board[lane] ?? []).some(
+        (task) => !task.phaseCycleCapReached || !task.latchedRecoveryAttempted,
+      )
+    }
+    return (board[lane]?.length ?? 0) > 0
+  })
 }
 
 /** Backlog cards eligible for claim (approximates backend next_claimable_backlog_task). */

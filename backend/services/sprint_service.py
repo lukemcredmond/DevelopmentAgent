@@ -1213,8 +1213,11 @@ def _check_stuck_and_escalate(
 
     max_po = int(ws.get("maxPoRoundTrips", 3))
     msg = build_stuck_escalation_message(task, lane_after, max_stuck)
+    latched = bool(task.get("phaseCycleCapReached"))
     if int(task.get("poRoundTrips", 0)) >= max_po:
-        if stuck_is_tool_or_lint(task):
+        # Lint walls normally stay In Progress so Dev can retry. A latched card
+        # cannot run Dev again, so park it instead of spinning recovery forever.
+        if stuck_is_tool_or_lint(task) and not latched:
             record_task_decision(
                 task_id,
                 "System",
@@ -1228,6 +1231,13 @@ def _check_stuck_and_escalate(
                 f"{task_id}: stuck on lint/tools — fix code or run diagnosis; not moving to Needs User",
             )
         else:
+            if latched and stuck_is_tool_or_lint(task):
+                add_system_log(
+                    "System",
+                    "warning",
+                    f"{task_id}: phase cycle cap — parking to Needs User "
+                    "(Dev cannot retry lint/tools while latched)",
+                )
             _try_move_to_needs_user(task_id, task, msg)
     else:
         stuck_msg = (
@@ -3960,10 +3970,75 @@ def _log_idle_dependency_status() -> None:
     )
 
 
+def _in_progress_dev_runnable(board: Optional[Dict[str, Any]] = None) -> List[Dict[str, Any]]:
+    board = board if board is not None else state.SHARED_BOARD
+    return [
+        task
+        for task in board.get("In Progress") or []
+        if isinstance(task, dict) and not task.get("phaseCycleCapReached")
+    ]
+
+
+def _in_progress_pending_recovery(board: Optional[Dict[str, Any]] = None) -> List[Dict[str, Any]]:
+    board = board if board is not None else state.SHARED_BOARD
+    return [
+        task
+        for task in board.get("In Progress") or []
+        if isinstance(task, dict)
+        and task.get("phaseCycleCapReached")
+        and not task.get("latchedRecoveryAttempted")
+    ]
+
+
+def _select_downstream_sprint_handler() -> tuple[Optional[str], Optional[Dict[str, Any]]]:
+    """Backlog / refinement / CR / QA / idle. Caller holds STATE_LOCK."""
+    handler: Optional[str] = None
+    active_task: Optional[Dict[str, Any]] = None
+    ws = get_workflow_settings()
+    prioritize_impl = ws.get("prioritizeImplementationOverRefinement", True)
+    if prioritize_impl and ws.get("requireBacklogRefinement"):
+        backlog_handler, backlog_task = _try_backlog_handler()
+        if backlog_handler is not None:
+            handler, active_task = backlog_handler, backlog_task
+        if handler is None:
+            refine_handler, refine_task = _try_refinement_handler()
+            if refine_handler is not None:
+                handler, active_task = refine_handler, refine_task
+    else:
+        refine_handler, refine_task = _try_refinement_handler()
+        if refine_handler is not None:
+            handler, active_task = refine_handler, refine_task
+        if handler is None:
+            backlog_handler, backlog_task = _try_backlog_handler()
+            if backlog_handler is not None:
+                handler, active_task = backlog_handler, backlog_task
+    if handler is None and ws.get("requireCodeReview") and state.SHARED_BOARD.get("Code Review"):
+        active_task = dict(state.SHARED_BOARD["Code Review"][0])
+        handler = "cr"
+    elif handler is None and state.SHARED_BOARD.get("QA"):
+        qa_candidate = dict(state.SHARED_BOARD["QA"][0])
+        normalize_task(qa_candidate)
+        if not qa_candidate.get("requiresQa", True):
+            move_board_stage(qa_candidate["id"], "Done")
+            record_task_decision(
+                qa_candidate["id"],
+                "System",
+                "move",
+                "Skipped QA (requiresQa=false)",
+            )
+            handler = "idle"
+        else:
+            active_task = qa_candidate
+            handler = "qa"
+    elif handler is None:
+        handler = "idle"
+    return handler, active_task
+
+
 def has_sprint_work() -> bool:
     """True when auto-sprint has actionable (not merely blocked) work."""
     board = state.SHARED_BOARD
-    if board.get("Needs PO") or board.get("In Progress"):
+    if board.get("Needs PO") or _in_progress_dev_runnable(board) or _in_progress_pending_recovery(board):
         return True
     ws = get_workflow_settings()
     if ws.get("requireCodeReview") and board.get("Code Review"):
@@ -4127,6 +4202,7 @@ def _recover_latched_dev_card(active_task: Dict[str, Any]) -> None:
         if not task:
             return
         max_stuck = max(1, int(get_workflow_settings().get("maxStuckSteps") or 3))
+        task["latchedRecoveryAttempted"] = True
         task["stuckLoops"] = max(int(task.get("stuckLoops") or 0), max_stuck - 1)
         _record_last_step_outcome(task_id, lane_before, "System", agent_result=result)
         _check_stuck_and_escalate(task_id, lane_before, agent_key=None)
@@ -4167,59 +4243,17 @@ def run_sprint_step(brief: str, ollama_url: str) -> None:
             and state.SHARED_BOARD.get("Needs User")
         ):
             handler = "needs_user"
-        elif state.SHARED_BOARD.get("In Progress"):
-            runnable = [
-                task
-                for task in state.SHARED_BOARD["In Progress"]
-                if not task.get("phaseCycleCapReached")
-            ]
+        else:
+            runnable = _in_progress_dev_runnable()
+            pending_recovery = _in_progress_pending_recovery()
             if runnable:
                 active_task = dict(runnable[0])
                 handler = "dev"
-            else:
-                # Recovery is runnable; another Developer LLM step is not.
-                active_task = dict(state.SHARED_BOARD["In Progress"][0])
+            elif pending_recovery:
+                active_task = dict(pending_recovery[0])
                 handler = "dev_recovery"
-        else:
-            handler = None
-            ws = get_workflow_settings()
-            prioritize_impl = ws.get("prioritizeImplementationOverRefinement", True)
-            if prioritize_impl and ws.get("requireBacklogRefinement"):
-                backlog_handler, backlog_task = _try_backlog_handler()
-                if backlog_handler is not None:
-                    handler, active_task = backlog_handler, backlog_task
-                if handler is None:
-                    refine_handler, refine_task = _try_refinement_handler()
-                    if refine_handler is not None:
-                        handler, active_task = refine_handler, refine_task
             else:
-                refine_handler, refine_task = _try_refinement_handler()
-                if refine_handler is not None:
-                    handler, active_task = refine_handler, refine_task
-                if handler is None:
-                    backlog_handler, backlog_task = _try_backlog_handler()
-                    if backlog_handler is not None:
-                        handler, active_task = backlog_handler, backlog_task
-            if handler is None and ws.get("requireCodeReview") and state.SHARED_BOARD.get("Code Review"):
-                active_task = dict(state.SHARED_BOARD["Code Review"][0])
-                handler = "cr"
-            elif handler is None and state.SHARED_BOARD.get("QA"):
-                qa_candidate = dict(state.SHARED_BOARD["QA"][0])
-                normalize_task(qa_candidate)
-                if not qa_candidate.get("requiresQa", True):
-                    move_board_stage(qa_candidate["id"], "Done")
-                    record_task_decision(
-                        qa_candidate["id"],
-                        "System",
-                        "move",
-                        "Skipped QA (requiresQa=false)",
-                    )
-                    handler = "idle"
-                else:
-                    active_task = qa_candidate
-                    handler = "qa"
-            elif handler is None:
-                handler = "idle"
+                handler, active_task = _select_downstream_sprint_handler()
 
     if active_task and active_task.get("id"):
         lane_before = get_task_lane(str(active_task["id"])) or ""

@@ -323,3 +323,4 @@ def reset_dev_cycle_latch(task: Dict[str, Any]) -> None:
     task["phaseCycleCapAt"] = None
     task["phaseCycleCapReason"] = None
     task["phaseCycleCapTimestamp"] = None
+    task["latchedRecoveryAttempted"] = False
