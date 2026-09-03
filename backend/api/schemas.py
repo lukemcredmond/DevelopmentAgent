@@ -32,6 +32,9 @@ class ConfigPayload(BaseModel):
     devBackupModel: Optional[str] = None
     crBackupModel: Optional[str] = None
     qaBackupModel: Optional[str] = None
+    llmProvider: Optional[str] = None
+    llmProviderPreset: Optional[str] = None
+    llmBaseUrl: Optional[str] = None
 
 
 class SkillPayload(BaseModel):

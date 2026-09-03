@@ -716,6 +716,34 @@ def infer_provider_from_url(url: str, fallback: str = PROVIDER_OLLAMA) -> str:
     return fallback or PROVIDER_OLLAMA
 
 
+def normalize_llm_provider_settings(data: Dict[str, Any]) -> Dict[str, Any]:
+    """Keep preset/provider aligned with llmBaseUrl so LM Studio cannot look like Ollama."""
+    if not isinstance(data, dict):
+        return data
+    url = str(data.get("llmBaseUrl") or "").strip()
+    preset = str(data.get("llmProviderPreset") or "").strip().lower()
+    provider = str(data.get("llmProvider") or "").strip().lower()
+    inferred = infer_provider_from_url(url, fallback=provider or PROVIDER_OLLAMA)
+    looks_lmstudio = ":1234" in url.lower()
+    looks_openai = inferred == PROVIDER_OPENAI_COMPAT
+    if looks_openai and preset in ("", PRESET_OLLAMA):
+        data["llmProvider"] = PROVIDER_OPENAI_COMPAT
+        data["llmProviderPreset"] = PRESET_LMSTUDIO if looks_lmstudio else PRESET_CUSTOM
+        if not url:
+            data["llmBaseUrl"] = DEFAULT_LMSTUDIO_URL
+    elif preset == PRESET_LMSTUDIO:
+        data["llmProvider"] = PROVIDER_OPENAI_COMPAT
+        if not url:
+            data["llmBaseUrl"] = DEFAULT_LMSTUDIO_URL
+    elif preset == PRESET_CUSTOM:
+        data["llmProvider"] = PROVIDER_OPENAI_COMPAT
+    elif preset == PRESET_OLLAMA or not preset:
+        if inferred == PROVIDER_OLLAMA:
+            data["llmProvider"] = PROVIDER_OLLAMA
+            data["llmProviderPreset"] = PRESET_OLLAMA
+    return data
+
+
 def _settings() -> Dict[str, Any]:
     from backend.services.workflow_settings import get_workflow_settings
 

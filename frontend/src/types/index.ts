@@ -1143,6 +1143,9 @@ export interface ConfigPayload {
   devBackupModel?: string
   crBackupModel?: string
   qaBackupModel?: string
+  llmProvider?: 'ollama' | 'openai_compat' | string
+  llmProviderPreset?: 'ollama' | 'lmstudio' | 'custom' | string
+  llmBaseUrl?: string
 }
 
 export interface BriefPayload {

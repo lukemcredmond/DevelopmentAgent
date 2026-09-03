@@ -396,6 +396,9 @@ export default function SettingsSlideOver({
                       devBackupModel,
                       crBackupModel,
                       qaBackupModel,
+                      llmProvider: state.workflowSettings?.llmProvider,
+                      llmProviderPreset: state.workflowSettings?.llmProviderPreset,
+                      llmBaseUrl: ollamaUrl || state.workflowSettings?.llmBaseUrl,
                     })
                   }
                   className="w-full bg-indigo-600/40 hover:bg-indigo-600/80 border border-indigo-500/30 text-white font-semibold py-2 rounded text-[11px] transition-colors mt-2"
@@ -414,6 +417,14 @@ export default function SettingsSlideOver({
 
           {tab === 'models' && (
             <div className="space-y-3 text-xs">
+              {workflowSettingsSaving ? (
+                <p className="text-xs text-cat-subtext">Saving workflow settings…</p>
+              ) : null}
+              {workflowSettingsSaveError ? (
+                <p className="text-xs text-amber-400/90 border border-amber-500/30 bg-amber-950/30 rounded px-2 py-1.5">
+                  {workflowSettingsSaveError}
+                </p>
+              ) : null}
               <label className="block">
                 <span className="text-[10px] text-cat-subtext mb-0.5 inline-flex items-center">
                   LLM PROVIDER
@@ -790,6 +801,9 @@ export default function SettingsSlideOver({
                     devBackupModel,
                     crBackupModel,
                     qaBackupModel,
+                    llmProvider: state.workflowSettings?.llmProvider,
+                    llmProviderPreset: state.workflowSettings?.llmProviderPreset,
+                    llmBaseUrl: ollamaUrl || state.workflowSettings?.llmBaseUrl,
                   })
                 }
                 className="w-full bg-indigo-600/40 hover:bg-indigo-600/80 border border-indigo-500/30 text-white font-semibold py-2 rounded text-[11px] transition-colors"

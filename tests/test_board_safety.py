@@ -39,6 +39,36 @@ def test_write_and_list_board_snapshots(tmp_home):
     assert loaded["board_state"]["Backlog"][0]["id"] == "T1"
 
 
+def test_identical_snapshot_is_skipped(tmp_home):
+    board = {
+        "Backlog": [{"id": "T1", "title": "One", "description": "d", "status": "Backlog"}],
+        "Done": [],
+    }
+    first = write_board_snapshot("proj-a", board, project_name="Demo")
+    second = write_board_snapshot("proj-a", board, project_name="Demo", force=True)
+    assert first is not None
+    assert second is None
+    assert len(list_board_snapshots("proj-a")) == 1
+
+
+def test_prune_keeps_richest_nonempty_snapshot(tmp_home, monkeypatch):
+    monkeypatch.setattr("backend.services.board_snapshots.MAX_NONEMPTY_SNAPSHOTS", 2)
+    monkeypatch.setattr("backend.services.board_snapshots.MAX_EMPTY_SNAPSHOTS", 1)
+    rich = {
+        "Backlog": [{"id": f"T{i}", "title": str(i), "description": "d", "status": "Backlog"} for i in range(8)],
+        "Done": [],
+    }
+    write_board_snapshot("proj-b", rich, project_name="Demo", force=True)
+    for n in range(5):
+        board = {
+            "Backlog": [{"id": f"N{n}-{i}", "title": "x", "description": "d", "status": "Backlog"} for i in range(2)],
+            "Done": [],
+        }
+        write_board_snapshot("proj-b", board, project_name="Demo", force=True)
+    snaps = list_board_snapshots("proj-b")
+    assert any(s["taskCount"] == 8 for s in snaps)
+
+
 def test_publish_board_update_includes_project_id():
     state.CURRENT_PROJECT_ID = "proj-sse"
     state.SHARED_BOARD = {k: list(v) for k, v in DEFAULT_BOARD.items()}

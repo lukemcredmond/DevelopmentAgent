@@ -222,7 +222,18 @@ def claim_ready_backlog_tasks(limit: int = 5) -> List[str]:
 
 def clear_all_board_tasks() -> None:
     """Remove all tasks from every board lane; keep workspace files and brief."""
+    from backend.services.board_snapshots import write_board_snapshot
+
     normalize_board_lanes(state.SHARED_BOARD)
+    try:
+        write_board_snapshot(
+            state.CURRENT_PROJECT_ID,
+            state.SHARED_BOARD,
+            project_name=state.PROJECT_NAME,
+            force=True,
+        )
+    except Exception:
+        pass
     for lane in list(state.SHARED_BOARD.keys()):
         state.SHARED_BOARD[lane] = []
     state.ACTIVE_SPRINT_TASK_ID = None

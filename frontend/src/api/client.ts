@@ -170,6 +170,16 @@ export async function restoreBoardFromRecovery(
   })
 }
 
+export async function importBoardFromTaskSpecs(
+  projectId: string,
+  overwrite = false,
+): Promise<AppState & { importStats?: { importedCount?: number; skippedCount?: number } }> {
+  return request(`/api/projects/${encodeURIComponent(projectId)}/board-recovery/import-specs`, {
+    method: 'POST',
+    body: JSON.stringify({ overwrite }),
+  })
+}
+
 export async function deleteProject(
   projectId: string,
 ): Promise<{ ok: boolean; projectsList: ProjectSummary[] }> {

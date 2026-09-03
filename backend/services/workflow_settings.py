@@ -269,7 +269,9 @@ def get_workflow_settings(project_id: str | None = None) -> Dict[str, Any]:
         return dict(DEFAULT_WORKFLOW_SETTINGS)
     try:
         merged = {**DEFAULT_WORKFLOW_SETTINGS, **json.loads(raw)}
-        return merged
+        from backend.services.llm_provider import normalize_llm_provider_settings
+
+        return normalize_llm_provider_settings(merged)
     except json.JSONDecodeError:
         return dict(DEFAULT_WORKFLOW_SETTINGS)
 
@@ -314,6 +316,9 @@ def save_workflow_settings(settings: Dict[str, Any], project_id: str | None = No
             str(x).strip() for x in raw_ids if str(x).strip()
         ]
     current.update(updates)
+    from backend.services.llm_provider import normalize_llm_provider_settings
+
+    current = normalize_llm_provider_settings(current)
     state.storage.set_setting(_settings_key(pid), json.dumps(current))
     return current
 

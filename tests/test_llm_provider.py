@@ -29,6 +29,7 @@ from backend.services.llm_provider import (
     embed_config,
     get_embed_provider,
     infer_provider_from_url,
+    normalize_llm_provider_settings,
     to_openai_messages,
 )
 from backend.services.workflow_settings import reset_workflow_settings, save_workflow_settings
@@ -38,6 +39,48 @@ def test_infer_provider_from_lmstudio_url():
     assert infer_provider_from_url("http://localhost:1234/v1") == "openai_compat"
     assert infer_provider_from_url("http://localhost:1234") == "openai_compat"
     assert infer_provider_from_url("http://localhost:11434") == "ollama"
+
+
+def test_normalize_llm_settings_upgrades_stale_ollama_preset_for_lmstudio_url():
+    out = normalize_llm_provider_settings(
+        {
+            "llmProvider": "ollama",
+            "llmProviderPreset": "ollama",
+            "llmBaseUrl": "http://localhost:1234/v1",
+        }
+    )
+    assert out["llmProvider"] == "openai_compat"
+    assert out["llmProviderPreset"] == "lmstudio"
+
+
+def test_config_save_persists_lmstudio_provider(tmp_path, monkeypatch):
+    initialize()
+    reset_workflow_settings()
+    from fastapi.testclient import TestClient
+
+    from backend.main import app
+
+    client = TestClient(app)
+    r = client.post(
+        "/api/config",
+        json={
+            "projectName": "Demo",
+            "workspaceDir": str(tmp_path),
+            "skillsDir": str(tmp_path),
+            "poModel": "m",
+            "devModel": "m",
+            "crModel": "m",
+            "qaModel": "m",
+            "llmProvider": "openai_compat",
+            "llmProviderPreset": "lmstudio",
+            "llmBaseUrl": "http://localhost:1234/v1",
+        },
+    )
+    assert r.status_code == 200
+    ws = r.json()["workflowSettings"]
+    assert ws["llmProviderPreset"] == "lmstudio"
+    assert ws["llmProvider"] == "openai_compat"
+    assert "1234" in ws["llmBaseUrl"]
 
 
 def test_to_openai_messages_maps_tool_call_id():

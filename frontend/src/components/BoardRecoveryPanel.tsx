@@ -1,6 +1,7 @@
 import { useEffect, useState } from 'react'
 import {
   fetchBoardRecoveryOptions,
+  importBoardFromTaskSpecs,
   listBoardSnapshots,
   restoreBoardFromRecovery,
   restoreBoardSnapshot,
@@ -79,6 +80,7 @@ export default function BoardRecoveryPanel({ projectId, onRestored }: BoardRecov
       </h3>
       <p className="text-[10px] text-cat-overlay leading-relaxed">
         If cards disappeared, restore from an automatic snapshot or a legacy database copy.
+        You can also rebuild cards from <code className="text-cat-subtext">docs/tasks/*-spec.md</code>.
         Skills and model assignments are kept. Live board:{' '}
         <span className="text-cat-subtext font-mono">
           {liveCount == null ? '—' : `${liveCount} card(s)`}
@@ -101,12 +103,40 @@ export default function BoardRecoveryPanel({ projectId, onRestored }: BoardRecov
         />
         Overwrite live board (required)
       </label>
+      <button
+        type="button"
+        disabled={busy}
+        onClick={() =>
+          guard(() => {
+            setBusy(true)
+            setError(null)
+            setMessage(null)
+            void importBoardFromTaskSpecs(projectId, true)
+              .then((st) => {
+                onRestored(st)
+                const stats = st.importStats
+                setMessage(
+                  `Imported ${stats?.importedCount ?? 0} card(s) from docs/tasks` +
+                    (stats?.skippedCount ? ` (${stats.skippedCount} skipped)` : ''),
+                )
+                refresh()
+              })
+              .catch((err: unknown) => {
+                setError(err instanceof Error ? err.message : 'Import failed')
+              })
+              .finally(() => setBusy(false))
+          })
+        }
+        className="w-full text-left text-[10px] px-2 py-1.5 rounded border border-sky-500/30 text-sky-100 hover:bg-sky-950/40 disabled:opacity-50"
+      >
+        Rebuild board from docs/tasks
+      </button>
       {message && <p className="text-[10px] text-emerald-300">{message}</p>}
       {error && <p className="text-[10px] text-rose-300">{error}</p>}
       {snapshots.length > 0 && (
         <div className="space-y-1">
           <p className="text-[10px] text-cat-subtext font-semibold">Snapshots</p>
-          {snapshots.slice(0, 5).map((s) => (
+          {snapshots.map((s) => (
             <button
               key={s.id}
               type="button"

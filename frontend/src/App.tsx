@@ -107,6 +107,7 @@ import {
   markWorkflowSaveSucceeded,
   setWorkflowSaveTimerActive,
   snapshotPendingWorkflowPayloadForSave,
+  clearCommittedLlmSettings,
 } from './workflowSettingsPending'
 
 type BottomTab =
@@ -1033,7 +1034,7 @@ export default function App() {
         const payload = snapshotPendingWorkflowPayloadForSave()
         void updateWorkflowSettings(payload)
           .then((data) => {
-            markWorkflowSaveSucceeded()
+            markWorkflowSaveSucceeded(data.workflowSettings, payload)
             setWorkflowSettingsSaveError(null)
             setWorkflowSettingsSaving(false)
             setState((prev) => ({
@@ -1406,7 +1407,10 @@ export default function App() {
         isDark={isDark}
         onOpenSettings={() => setSettingsOpen(true)}
         onLoadProject={(id) =>
-          void withLoading(async () => handleState(await loadProject(id)))
+          void withLoading(async () => {
+            clearCommittedLlmSettings()
+            handleState(await loadProject(id))
+          })
         }
         onOpenNewProject={() => setShowNewProject(true)}
         onPlan={() =>
@@ -1566,11 +1570,21 @@ export default function App() {
         onCrBackupModelChange={setCrBackupModel}
         onQaBackupModelChange={setQaBackupModel}
         onLoadProject={(id) =>
-          void withLoading(async () => handleState(await loadProject(id)))
+          void withLoading(async () => {
+            clearCommittedLlmSettings()
+            handleState(await loadProject(id))
+          })
         }
         onSaveConfig={(payload) =>
           void withLoading(async () => {
             const data = await updateConfig(payload)
+            if (payload.llmProvider || payload.llmProviderPreset || payload.llmBaseUrl) {
+              markWorkflowSaveSucceeded(data.workflowSettings, {
+                llmProvider: payload.llmProvider,
+                llmProviderPreset: payload.llmProviderPreset,
+                llmBaseUrl: payload.llmBaseUrl,
+              })
+            }
             handleState(data)
             applyStateFields(data, setters)
           })

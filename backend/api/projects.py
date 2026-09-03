@@ -189,6 +189,20 @@ def update_config(payload: ConfigPayload):
         os.makedirs(state.SKILLS_DIR, exist_ok=True)
         state.storage.set_setting("skills_dir", payload.skillsDir)
 
+        llm_updates = {
+            k: v
+            for k, v in {
+                "llmProvider": payload.llmProvider,
+                "llmProviderPreset": payload.llmProviderPreset,
+                "llmBaseUrl": payload.llmBaseUrl,
+            }.items()
+            if v is not None and str(v).strip()
+        }
+        if llm_updates:
+            from backend.services.workflow_settings import save_workflow_settings
+
+            save_workflow_settings(llm_updates)
+
         save_current_project_state()
         add_system_log(
             "System",
@@ -203,6 +217,17 @@ def update_config(payload: ConfigPayload):
 @router.post("/api/reset")
 def reset_workspace():
     with state.STATE_LOCK:
+        try:
+            from backend.services.board_snapshots import write_board_snapshot
+
+            write_board_snapshot(
+                state.CURRENT_PROJECT_ID,
+                state.SHARED_BOARD,
+                project_name=state.PROJECT_NAME,
+                force=True,
+            )
+        except Exception:
+            pass
         state.SHARED_BOARD = {k: list(v) for k, v in DEFAULT_BOARD.items()}
         state.VIRTUAL_FILESYSTEM = dict(DEFAULT_VIRTUAL_FS)
         state.SYSTEM_LOGS.clear()
@@ -247,6 +272,17 @@ def restore_board_snapshot(project_id: str, payload: dict):
         if project_id != state.CURRENT_PROJECT_ID:
             if not load_project_into_state(project_id):
                 raise HTTPException(status_code=404, detail="Project not found")
+        try:
+            from backend.services.board_snapshots import write_board_snapshot
+
+            write_board_snapshot(
+                project_id,
+                state.SHARED_BOARD,
+                project_name=state.PROJECT_NAME,
+                force=True,
+            )
+        except Exception:
+            pass
         state.SHARED_BOARD = normalize_board_lanes(data["board_state"])
         normalize_board_tasks()
         dedupe_board_tasks()
@@ -292,6 +328,17 @@ def restore_board_from_recovery(project_id: str, payload: dict):
         if project_id != state.CURRENT_PROJECT_ID:
             if not load_project_into_state(project_id):
                 raise HTTPException(status_code=404, detail="Project not found")
+        try:
+            from backend.services.board_snapshots import write_board_snapshot
+
+            write_board_snapshot(
+                project_id,
+                state.SHARED_BOARD,
+                project_name=state.PROJECT_NAME,
+                force=True,
+            )
+        except Exception:
+            pass
         state.SHARED_BOARD = normalize_board_lanes(board)
         normalize_board_tasks()
         dedupe_board_tasks()
@@ -299,3 +346,46 @@ def restore_board_from_recovery(project_id: str, payload: dict):
         publish_board_update(source="board_recovery")
         add_system_log("System", "success", message)
     return build_state_response()
+
+
+@router.post("/api/projects/{project_id}/board-recovery/import-specs")
+def import_board_from_task_specs(project_id: str, payload: dict | None = None):
+    """Rebuild missing (or overwrite) cards from workspace docs/tasks/*-spec.md."""
+    from backend.agents.task_context import dedupe_board_tasks, normalize_board_tasks
+    from backend.services.board_lanes import normalize_board_lanes
+    from backend.services.board_service import publish_board_update
+    from backend.services.task_spec_import import import_cards_from_task_specs
+
+    body = payload or {}
+    overwrite = bool(body.get("overwrite"))
+    with state.STATE_LOCK:
+        if project_id != state.CURRENT_PROJECT_ID:
+            if not load_project_into_state(project_id):
+                raise HTTPException(status_code=404, detail="Project not found")
+        try:
+            from backend.services.board_snapshots import write_board_snapshot
+
+            write_board_snapshot(
+                project_id,
+                state.SHARED_BOARD,
+                project_name=state.PROJECT_NAME,
+                force=True,
+            )
+        except Exception:
+            pass
+        stats = import_cards_from_task_specs(overwrite=overwrite)
+        normalize_board_lanes(state.SHARED_BOARD)
+        normalize_board_tasks()
+        dedupe_board_tasks()
+        save_current_project_state()
+        publish_board_update(source="import_specs")
+        add_system_log(
+            "System",
+            "success",
+            f"Imported {stats['importedCount']} card(s) from docs/tasks "
+            f"({stats['skippedCount']} skipped)",
+        )
+    response = build_state_response()
+    response["importStats"] = stats
+    return response
+
