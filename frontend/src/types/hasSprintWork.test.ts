@@ -12,7 +12,7 @@ function task(partial: Partial<Task> & { id: string }): Task {
 }
 
 describe('hasSprintWork', () => {
-  it('ignores In Progress cards that are latched after recovery', () => {
+  it('counts In Progress cards that are latched after recovery (park step)', () => {
     const board = {
       ...EMPTY_BOARD,
       'In Progress': [
@@ -23,7 +23,7 @@ describe('hasSprintWork', () => {
         }),
       ],
     }
-    expect(hasSprintWork(board)).toBe(false)
+    expect(hasSprintWork(board)).toBe(true)
   })
 
   it('still counts latched cards that have not been recovered', () => {

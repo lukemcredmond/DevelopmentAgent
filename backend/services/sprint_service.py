@@ -3990,6 +3990,18 @@ def _in_progress_pending_recovery(board: Optional[Dict[str, Any]] = None) -> Lis
     ]
 
 
+def _in_progress_exhausted_latched(board: Optional[Dict[str, Any]] = None) -> List[Dict[str, Any]]:
+    """Latched after the one LLM recovery — park when nothing else is runnable."""
+    board = board if board is not None else state.SHARED_BOARD
+    return [
+        task
+        for task in board.get("In Progress") or []
+        if isinstance(task, dict)
+        and task.get("phaseCycleCapReached")
+        and task.get("latchedRecoveryAttempted")
+    ]
+
+
 def _select_downstream_sprint_handler() -> tuple[Optional[str], Optional[Dict[str, Any]]]:
     """Backlog / refinement / CR / QA / idle. Caller holds STATE_LOCK."""
     handler: Optional[str] = None
@@ -4038,7 +4050,12 @@ def _select_downstream_sprint_handler() -> tuple[Optional[str], Optional[Dict[st
 def has_sprint_work() -> bool:
     """True when auto-sprint has actionable (not merely blocked) work."""
     board = state.SHARED_BOARD
-    if board.get("Needs PO") or _in_progress_dev_runnable(board) or _in_progress_pending_recovery(board):
+    if (
+        board.get("Needs PO")
+        or _in_progress_dev_runnable(board)
+        or _in_progress_pending_recovery(board)
+        or _in_progress_exhausted_latched(board)
+    ):
         return True
     ws = get_workflow_settings()
     if ws.get("requireCodeReview") and board.get("Code Review"):
@@ -4184,29 +4201,49 @@ def _run_parallel_independent_dev_batch(brief: str, ollama_url: str) -> int:
     return ran
 
 
-def _recover_latched_dev_card(active_task: Dict[str, Any]) -> None:
-    """Run the stuck recovery ladder without scheduling another Developer call."""
+def _recover_latched_dev_card(active_task: Dict[str, Any], brief: str) -> None:
+    """Unlatch once and run Developer (LLM). A second latch parks without another Dev loop."""
     task_id = str(active_task.get("id") or "")
     if not task_id:
         return
     lane_before = get_task_lane(task_id) or "In Progress"
     title = str(active_task.get("title") or task_id)
-    result = (
-        "Stopped: phase cycle cap reached. Developer execution is latched; "
-        "attempting split/clarification recovery."
-    )
-    _ensure_dev_step_trace(task_id, title, lane_before)
-    state.LAST_AGENT_STEP_RESULT = result
+    run_dev = False
     with state.STATE_LOCK:
         task = find_task_by_id(task_id)
         if not task:
             return
-        max_stuck = max(1, int(get_workflow_settings().get("maxStuckSteps") or 3))
-        task["latchedRecoveryAttempted"] = True
-        task["stuckLoops"] = max(int(task.get("stuckLoops") or 0), max_stuck - 1)
-        _record_last_step_outcome(task_id, lane_before, "System", agent_result=result)
-        _check_stuck_and_escalate(task_id, lane_before, agent_key=None)
-    _finalize_dev_step_diagnostics_if_auto_sprint(task_id, lane_before)
+        if not task.get("latchedRecoveryAttempted"):
+            from backend.services.sprint_speed_gates import reset_dev_cycle_latch
+
+            reset_dev_cycle_latch(task)
+            # reset_dev_cycle_latch clears this; keep it so a second cap parks instead of looping.
+            task["latchedRecoveryAttempted"] = True
+            # Empty recovery ticks inflated this; they were not model failures.
+            task["consecutiveBadExits"] = 0
+            task.pop("lastCircuitExitReason", None)
+            run_dev = True
+            add_system_log(
+                "System",
+                "info",
+                f"{task_id}: reset phase cycle cap — running Developer so LM Studio is called",
+            )
+        else:
+            result = (
+                "Stopped: phase cycle cap reached. Developer execution is latched; "
+                "attempting split/clarification recovery."
+            )
+            _ensure_dev_step_trace(task_id, title, lane_before)
+            state.LAST_AGENT_STEP_RESULT = result
+            max_stuck = max(1, int(get_workflow_settings().get("maxStuckSteps") or 3))
+            task["stuckLoops"] = max(int(task.get("stuckLoops") or 0), max_stuck - 1)
+            _record_last_step_outcome(task_id, lane_before, "System", agent_result=result)
+            _check_stuck_and_escalate(task_id, lane_before, agent_key=None)
+            _finalize_dev_step_diagnostics_if_auto_sprint(task_id, lane_before)
+            return
+    if run_dev:
+        live = find_task_by_id(task_id) or active_task
+        _run_developer_step(live, brief)
 
 
 def run_sprint_step(brief: str, ollama_url: str) -> None:
@@ -4254,6 +4291,11 @@ def run_sprint_step(brief: str, ollama_url: str) -> None:
                 handler = "dev_recovery"
             else:
                 handler, active_task = _select_downstream_sprint_handler()
+                if handler in (None, "idle"):
+                    exhausted = _in_progress_exhausted_latched()
+                    if exhausted:
+                        active_task = dict(exhausted[0])
+                        handler = "dev_recovery"
 
     if active_task and active_task.get("id"):
         lane_before = get_task_lane(str(active_task["id"])) or ""
@@ -4289,7 +4331,7 @@ def run_sprint_step(brief: str, ollama_url: str) -> None:
         elif handler == "dev" and active_task:
             _run_developer_step(active_task, brief)
         elif handler == "dev_recovery" and active_task:
-            _recover_latched_dev_card(active_task)
+            _recover_latched_dev_card(active_task, brief)
         elif handler == "refinement_dev" and active_task:
             _run_refinement_dev_review(active_task, brief)
         elif handler == "spike_dev" and active_task:

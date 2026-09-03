@@ -1822,9 +1822,7 @@ export function hasSprintWork(board: Board, settings?: WorkflowSettings): boolea
   lanes.push('QA')
   return lanes.some((lane) => {
     if (lane === 'In Progress') {
-      return (board[lane] ?? []).some(
-        (task) => !task.phaseCycleCapReached || !task.latchedRecoveryAttempted,
-      )
+      return (board[lane] ?? []).length > 0
     }
     return (board[lane]?.length ?? 0) > 0
   })

@@ -47,7 +47,7 @@ def test_latched_card_cannot_be_run_manually_without_override():
     assert task["devStepCount"] == 13
 
 
-def test_latched_card_with_exhausted_po_moves_to_needs_user_without_dev_retry():
+def test_latched_card_first_recovery_runs_developer():
     initialize()
     reset_workflow_settings()
     save_workflow_settings(
@@ -70,12 +70,14 @@ def test_latched_card_with_exhausted_po_moves_to_needs_user_without_dev_retry():
 
     with patch("backend.services.sprint_service._run_developer_step") as developer:
         run_sprint_step("brief", "http://localhost:11434")
-    developer.assert_not_called()
-    assert get_task_lane("T-RECOVER") == "Needs User"
-    assert task["devStepCount"] == 13
+    developer.assert_called_once()
+    assert get_task_lane("T-RECOVER") == "In Progress"
+    assert task["latchedRecoveryAttempted"] is True
+    assert task["phaseCycleCapReached"] is False
+    assert task["devStepCount"] == 0
 
 
-def test_latched_lint_wall_parks_to_needs_user_without_dev_retry():
+def test_second_latch_after_recovery_parks_to_needs_user_without_dev():
     initialize()
     reset_workflow_settings()
     save_workflow_settings(
@@ -95,6 +97,7 @@ def test_latched_lint_wall_parks_to_needs_user_without_dev_retry():
     task["phaseCycleCapAt"] = 13
     task["devStepCount"] = 13
     task["poRoundTrips"] = 1
+    task["latchedRecoveryAttempted"] = True
     task["lastCommandDiagnostics"] = [{"command": "flutter analyze", "ok": False}]
     state.SHARED_BOARD["In Progress"] = [task]
 
@@ -102,7 +105,6 @@ def test_latched_lint_wall_parks_to_needs_user_without_dev_retry():
         run_sprint_step("brief", "http://localhost:11434")
     developer.assert_not_called()
     assert get_task_lane("T-LATCH-LINT") == "Needs User"
-    assert task["latchedRecoveryAttempted"] is True
     assert task["devStepCount"] == 13
 
 
@@ -154,7 +156,7 @@ def test_recovered_latched_card_does_not_block_backlog_claim():
     assert get_task_lane("T-LATCHED") == "In Progress"
 
 
-def test_only_recovered_latched_in_progress_is_not_sprint_work():
+def test_only_recovered_latched_in_progress_is_sprint_work_until_parked():
     initialize()
     reset_workflow_settings()
     _empty_board()
@@ -167,7 +169,7 @@ def test_only_recovered_latched_in_progress_is_not_sprint_work():
 
     from backend.services.sprint_service import has_sprint_work
 
-    assert has_sprint_work() is False
+    assert has_sprint_work() is True
 
 
 def test_auto_sprint_ui_pauses_on_retry_watchdog():
