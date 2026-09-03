@@ -14,6 +14,7 @@ interface SidebarProps {
   onOpenSettings: () => void
   onLoadProject: (id: string) => void
   onOpenNewProject: () => void
+  onDeleteProject?: () => void
   onPlan: () => void
   onGenerateBacklog?: () => void
   planOutlineReady?: boolean
@@ -45,6 +46,7 @@ export default memo(function Sidebar({
   onOpenSettings,
   onLoadProject,
   onOpenNewProject,
+  onDeleteProject,
   onPlan,
   onGenerateBacklog,
   planOutlineReady = false,
@@ -160,13 +162,26 @@ export default memo(function Sidebar({
             <h3 className="text-[10px] font-bold uppercase tracking-wider text-cat-subtext">
               Project
             </h3>
-            <button
-              type="button"
-              onClick={onOpenNewProject}
-              className="text-[10px] text-indigo-400 hover:text-indigo-300 font-semibold"
-            >
-              + New
-            </button>
+            <div className="flex items-center gap-2">
+              <button
+                type="button"
+                onClick={onOpenNewProject}
+                className="text-[10px] text-indigo-400 hover:text-indigo-300 font-semibold"
+              >
+                + New
+              </button>
+              {onDeleteProject && (
+                <button
+                  type="button"
+                  onClick={onDeleteProject}
+                  disabled={(state.projectsList?.length ?? 0) <= 1}
+                  className="text-[10px] text-rose-400 hover:text-rose-300 font-semibold disabled:opacity-40"
+                  title="Delete the selected project from the dropdown (workspace folder is kept)"
+                >
+                  Delete
+                </button>
+              )}
+            </div>
           </div>
           <select
             value={state.projectId}

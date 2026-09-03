@@ -130,6 +130,13 @@ export async function createProject(
   })
 }
 
+export async function openWorkspaceProject(workspaceDir: string): Promise<AppState> {
+  return request<AppState>('/api/projects/open-workspace', {
+    method: 'POST',
+    body: JSON.stringify({ workspaceDir }),
+  })
+}
+
 export async function loadProject(projectId: string): Promise<AppState> {
   return request<AppState>(`/api/projects/load/${encodeURIComponent(projectId)}`, {
     method: 'POST',

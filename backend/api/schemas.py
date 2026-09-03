@@ -65,6 +65,10 @@ class CreateProjectPayload(BaseModel):
     workspaceDir: str
 
 
+class OpenWorkspacePayload(BaseModel):
+    workspaceDir: str
+
+
 class ManualTaskPayload(BaseModel):
     title: str
     description: str

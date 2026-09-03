@@ -18,6 +18,7 @@ import {
   fetchSkills,
   fetchSkillSuggestions,
   importProject,
+  openWorkspaceProject,
   loadProject,
   moveTask,
   patchProjectDocuments,
@@ -234,6 +235,7 @@ export default function App() {
     const saved = String(state.workflowSettings?.llmBaseUrl || '').trim()
     if (saved) setOllamaUrl(saved)
   }, [state.projectId, state.workflowSettings?.llmBaseUrl])
+  const llmCallUrl = String(state.workflowSettings?.llmBaseUrl || ollamaUrl || '').trim()
   const planDirtyRef = useRef(false)
   const documentsSaveTimerRef = useRef<number | null>(null)
 
@@ -519,7 +521,7 @@ export default function App() {
   const { autoSprint, setAutoSprint, autoSprintPaused, sprintRunning, stopAutoSprint, startAutoSprint, autoSprintSessionStartedAt, onSessionRefreshDue } =
     useAutoSprint(
       brief,
-      ollamaUrl,
+      llmCallUrl,
       state.board,
       state.workflowSettings,
       handleState,
@@ -659,6 +661,24 @@ export default function App() {
       setLoading(false)
     }
   }
+
+  const handleDeleteProject = useCallback(() => {
+    const current = state.projectsList.find((p) => p.id === state.projectId)
+    const fallback = state.projectsList.find((p) => p.id !== state.projectId)
+    if (!current || !fallback) return
+    if (
+      !window.confirm(
+        `Delete project "${current.name}" from the dropdown? You will be switched to "${fallback.name}". The workspace folder and allhands.project.json stay on disk so you can Open folder later.`,
+      )
+    ) {
+      return
+    }
+    void withLoading(async () => {
+      handleState(await loadProject(fallback.id))
+      await deleteProject(current.id)
+      handleState(await loadProject(fallback.id))
+    })
+  }, [handleState, state.projectId, state.projectsList])
 
   /** Long sprint/agent HTTP — keeps Settings/board/tabs interactive (no global loading). */
   const withSprintBusy = async (fn: () => Promise<void>) => {
@@ -1257,7 +1277,7 @@ export default function App() {
                   try {
                     const data = await runInProgressStep({
                       brief,
-                      ollama_url: ollamaUrl,
+                      ollama_url: llmCallUrl,
                       taskId: state.recovery?.taskId,
                     })
                     handleState(data)
@@ -1413,9 +1433,10 @@ export default function App() {
           })
         }
         onOpenNewProject={() => setShowNewProject(true)}
+        onDeleteProject={handleDeleteProject}
         onPlan={() =>
           void withSprintBusy(async () =>
-            handleState(await triggerPlanOutline({ brief, ollama_url: ollamaUrl })),
+            handleState(await triggerPlanOutline({ brief, ollama_url: llmCallUrl })),
           )
         }
         onGenerateBacklog={() =>
@@ -1423,7 +1444,7 @@ export default function App() {
             handleState(
               await triggerPlanBacklog({
                 brief,
-                ollama_url: ollamaUrl,
+                ollama_url: llmCallUrl,
                 outline: planOutline,
               }),
             ),
@@ -1442,7 +1463,7 @@ export default function App() {
             try {
               const data = await planAndRun({
                 brief,
-                ollama_url: ollamaUrl,
+                ollama_url: llmCallUrl,
                 max_steps: state.workflowSettings?.maxSprintSteps ?? 20,
               })
               handleState(data)
@@ -1454,7 +1475,7 @@ export default function App() {
         }
         onStep={() =>
           void withSprintBusy(async () => {
-            const data = await triggerStep({ brief, ollama_url: ollamaUrl })
+            const data = await triggerStep({ brief, ollama_url: llmCallUrl })
             handleState(data)
             applyStepOutcome(data)
             const names = Object.keys(data.files)
@@ -1471,7 +1492,7 @@ export default function App() {
           void withSprintBusy(async () => {
             setActionError(null)
             try {
-              const data = await runInProgressStep({ brief, ollama_url: ollamaUrl })
+              const data = await runInProgressStep({ brief, ollama_url: llmCallUrl })
               handleState(data)
               applyStepOutcome(data)
               const names = Object.keys(data.files)
@@ -1609,27 +1630,18 @@ export default function App() {
         onImportProject={(file) =>
           void withLoading(async () => handleState(await importProject(file)))
         }
+        onOpenWorkspace={() =>
+          void withLoading(async () => {
+            const data = await openWorkspaceProject(workspaceDir || state.workspaceDir)
+            handleState(data)
+            applyStateFields(data, setters)
+          })
+        }
         onBoardRestored={(st) => {
           handleState(st)
           applyStateFields(st, setters)
         }}
-        onDeleteProject={() => {
-          const current = state.projectsList.find((p) => p.id === state.projectId)
-          const fallback = state.projectsList.find((p) => p.id !== state.projectId)
-          if (!current || !fallback) return
-          if (
-            !window.confirm(
-              `Delete project "${current.name}"? You will be switched to "${fallback.name}". This cannot be undone.`,
-            )
-          ) {
-            return
-          }
-          void withLoading(async () => {
-            handleState(await loadProject(fallback.id))
-            await deleteProject(current.id)
-            handleState(await loadProject(fallback.id))
-          })
-        }}
+        onDeleteProject={handleDeleteProject}
         onOpenMemoryTab={handleOpenMemoryTab}
       />
 
@@ -1658,7 +1670,7 @@ export default function App() {
               handleState(
                 await triggerPlanBacklog({
                   brief,
-                  ollama_url: ollamaUrl,
+                  ollama_url: llmCallUrl,
                   outline: planOutline,
                 }),
               ),
@@ -2252,7 +2264,7 @@ export default function App() {
           void withSprintBusy(async () => {
             setActionError(null)
             try {
-              const data = await runInProgressStep({ brief, ollama_url: ollamaUrl, taskId })
+              const data = await runInProgressStep({ brief, ollama_url: llmCallUrl, taskId })
               handleState(data)
               applyStepOutcome(data)
               const updated = Object.values(data.board)
@@ -2507,7 +2519,13 @@ export default function App() {
       <SimulationConfirmModal
         pending={state.pendingSimulation}
         workflowSettings={state.workflowSettings}
-        onResolved={(data) => handleState(data)}
+        onResolved={(data) => {
+          if (!data.board) {
+            handleState({ ...state, pendingSimulation: null })
+            return
+          }
+          handleState(data)
+        }}
         focusNonce={simulationFocusNonce}
       />
     </div>

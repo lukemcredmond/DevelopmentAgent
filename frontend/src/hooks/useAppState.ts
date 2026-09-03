@@ -13,7 +13,7 @@ import {
   subscribeEvents,
 } from '../api/client'
 import { mergePendingWorkflowSettings } from '../workflowSettingsPending'
-import { mergeAppStateIdentity } from '../utils/mergeAppState'
+import { mergeAppStateIdentity, mergePendingSimulation, dismissedSimulationId } from '../utils/mergeAppState'
 import { mergeToolHistory } from '../utils/mergeToolHistory'
 import type {
   ActivityEvent,
@@ -502,6 +502,7 @@ export function useAppState() {
   const liveActivityRef = useRef<ActivityEvent[]>([])
   const activityClearedAtRef = useRef<string | null>(null)
   const lastProjectIdRef = useRef<string>(defaultState.projectId)
+  const dismissedSimIdRef = useRef<string | null>(null)
   const boardRef = useRef<Board>(defaultState.board)
   const displayRunTimerRef = useRef<number | null>(null)
   const sprintRefreshDebounceRef = useRef<number | null>(null)
@@ -666,12 +667,15 @@ export function useAppState() {
       const board = trimBoardHistory(data.board)
       setState((prev) => {
         const merged = mergeAppStateIdentity(prev, data)
+        const pendingSimulation = mergePendingSimulation(prev, data, dismissedSimIdRef.current)
+        dismissedSimIdRef.current = dismissedSimulationId(prev, pendingSimulation, dismissedSimIdRef.current)
         return {
           ...data,
           board,
           files: includeFiles ? data.files : prev.files,
           projectId: merged.projectId,
           projectsList: merged.projectsList,
+          pendingSimulation,
           workflowSettings: mergePendingWorkflowSettings(
             data.workflowSettings ?? prev.workflowSettings,
           ),
@@ -702,10 +706,13 @@ export function useAppState() {
       }
       setState((prev) => {
         const merged = mergeAppStateIdentity(prev, trimmed)
+        const pendingSimulation = mergePendingSimulation(prev, trimmed, dismissedSimIdRef.current)
+        dismissedSimIdRef.current = dismissedSimulationId(prev, pendingSimulation, dismissedSimIdRef.current)
         return {
           ...trimmed,
           projectId: merged.projectId,
           projectsList: merged.projectsList,
+          pendingSimulation,
           workflowSettings: mergePendingWorkflowSettings(
             trimmed.workflowSettings ?? prev.workflowSettings,
           ),
@@ -953,6 +960,8 @@ export function useAppState() {
       const merged = mergeAppStateIdentity(prev, data, { preserveEmptyBoard: true })
       const board = trimBoardHistory(merged.board)
       nextBoard = board
+      const pendingSimulation = mergePendingSimulation(prev, data, dismissedSimIdRef.current)
+      dismissedSimIdRef.current = dismissedSimulationId(prev, pendingSimulation, dismissedSimIdRef.current)
       return {
         ...data,
         board,
@@ -960,6 +969,7 @@ export function useAppState() {
         filePaths: data.filePaths?.length ? data.filePaths : prev.filePaths,
         projectId: merged.projectId,
         projectsList: merged.projectsList,
+        pendingSimulation,
         workflowSettings: mergePendingWorkflowSettings(
           data.workflowSettings ?? prev.workflowSettings,
         ),

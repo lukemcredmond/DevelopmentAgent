@@ -1,7 +1,7 @@
 import { describe, expect, it } from 'vitest'
-import { mergeAppStateIdentity } from './mergeAppState'
+import { dismissedSimulationId, mergeAppStateIdentity, mergePendingSimulation } from './mergeAppState'
 import { EMPTY_BOARD } from '../types'
-import type { AppState } from '../types'
+import type { AppState, PendingSimulation } from '../types'
 
 function state(partial: Partial<AppState>): AppState {
   return {
@@ -53,5 +53,38 @@ describe('mergeAppStateIdentity', () => {
     const incoming = state({ board: { ...EMPTY_BOARD } })
     const merged = mergeAppStateIdentity(prev, incoming, { preserveEmptyBoard: true })
     expect(merged.board.Backlog).toHaveLength(1)
+  })
+})
+
+const pending: PendingSimulation = {
+  id: 'sim-abc',
+  title: 'Offline',
+  summary: 'stub',
+}
+
+describe('mergePendingSimulation', () => {
+  it('clears pending when the payload sends null', () => {
+    const next = mergePendingSimulation({ pendingSimulation: pending }, { pendingSimulation: null })
+    expect(next).toBeNull()
+  })
+
+  it('does not revive a dismissed id from a stale snapshot', () => {
+    const dismissed = dismissedSimulationId({ pendingSimulation: pending }, null)
+    expect(dismissed).toBe('sim-abc')
+    const revived = mergePendingSimulation(
+      { pendingSimulation: null },
+      { pendingSimulation: pending },
+      dismissed,
+    )
+    expect(revived).toBeNull()
+  })
+
+  it('accepts a new simulation with a different id after dismiss', () => {
+    const next = mergePendingSimulation(
+      { pendingSimulation: null },
+      { pendingSimulation: { ...pending, id: 'sim-new' } },
+      'sim-abc',
+    )
+    expect(next?.id).toBe('sim-new')
   })
 })

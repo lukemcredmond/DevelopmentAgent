@@ -366,10 +366,13 @@ def test_legacy_ollama_url_default_does_not_override_lmstudio():
         }
     )
 
+    from backend.services.llm_provider import resolve_chat_base_url
+
     for legacy in (DEFAULT_OLLAMA_URL, "http://127.0.0.1:11434", "http://localhost:11434/"):
         cfg = chat_config(override_url=legacy)
         assert cfg["provider"] == "openai_compat"
         assert cfg["baseUrl"] == DEFAULT_LMSTUDIO_URL
+        assert resolve_chat_base_url(legacy) == DEFAULT_LMSTUDIO_URL
 
     # A deliberate OpenAI-compatible override is still honoured.
     remote = chat_config(override_url="http://192.168.1.9:1234/v1")

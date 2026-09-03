@@ -49,6 +49,7 @@ def get_pending_simulation_public() -> Optional[Dict[str, Any]]:
         "defaultPreview": raw.get("defaultPreview") or {},
         "createdAt": raw.get("createdAt"),
         "source": raw.get("source"),
+        "lastChatError": raw.get("lastChatError"),
     }
 
 
@@ -616,8 +617,9 @@ def build_proposal(
     default_preview: Dict[str, Any],
     source: str,
     context: Optional[Dict[str, Any]] = None,
+    last_chat_error: Optional[str] = None,
 ) -> Dict[str, Any]:
-    return {
+    payload: Dict[str, Any] = {
         "id": new_proposal_id(),
         "taskId": task_id,
         "agent": agent,
@@ -629,3 +631,7 @@ def build_proposal(
         "context": context or {},
         "createdAt": _now(),
     }
+    err = str(last_chat_error or "").strip()
+    if err:
+        payload["lastChatError"] = err[:400]
+    return payload

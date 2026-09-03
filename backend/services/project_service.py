@@ -58,6 +58,42 @@ def save_current_project_state(
         persist_board=persist_board,
         force_board=force_board,
     )
+    sidecar_board = board
+    if not wrote_board:
+        stored = state.storage.load_project(pid) or {}
+        stored_board = stored.get("board_state")
+        if isinstance(stored_board, dict):
+            sidecar_board = stored_board
+    try:
+        from backend.services.project_file import build_project_file_payload, write_project_file
+        from backend.services.workflow_settings import get_workflow_settings
+
+        write_project_file(
+            workspace,
+            build_project_file_payload(
+                project_id=pid,
+                name=name,
+                brief=brief,
+                workspace_dir=workspace,
+                board_state=sidecar_board,
+                po_skills=po_skills,
+                dev_skills=dev_skills,
+                cr_skills=cr_skills,
+                qa_skills=qa_skills,
+                po_model=po_model,
+                dev_model=dev_model,
+                cr_model=cr_model,
+                qa_model=qa_model,
+                po_backup_model=backup.get("po") or "",
+                dev_backup_model=backup.get("dev") or "",
+                cr_backup_model=backup.get("cr") or "",
+                qa_backup_model=backup.get("qa") or "",
+                plan_outline=plan_outline,
+                workflow_settings=get_workflow_settings(pid),
+            ),
+        )
+    except Exception:
+        pass
     if not persist_board or not wrote_board:
         return
     try:

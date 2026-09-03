@@ -1,4 +1,4 @@
-import type { AppState, Board } from '../types'
+import type { AppState, Board, PendingSimulation } from '../types'
 
 function countBoardTasks(board: Board | undefined | null): number {
   if (!board) return 0
@@ -28,4 +28,25 @@ export function mergeAppStateIdentity(
     board = prev.board
   }
   return { projectId, projectsList, board }
+}
+
+/** Drop pendingSimulation when missing, and ignore a snapshot that revives a dismissed id. */
+export function mergePendingSimulation(
+  prev: { pendingSimulation?: PendingSimulation | null },
+  incoming: { pendingSimulation?: PendingSimulation | null },
+  dismissedId?: string | null,
+): PendingSimulation | null {
+  const next = incoming.pendingSimulation ?? null
+  if (!next?.id) return null
+  if (dismissedId && next.id === dismissedId) return null
+  return next
+}
+
+export function dismissedSimulationId(
+  prev: { pendingSimulation?: PendingSimulation | null },
+  next: PendingSimulation | null,
+  currentDismissed?: string | null,
+): string | null {
+  if (next?.id) return null
+  return prev.pendingSimulation?.id || currentDismissed || null
 }

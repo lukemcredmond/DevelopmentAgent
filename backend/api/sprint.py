@@ -23,6 +23,12 @@ from backend.services.workflow_settings import (
 router = APIRouter()
 
 
+def _chat_url(url: str | None) -> str:
+    from backend.services.llm_provider import resolve_chat_base_url
+
+    return resolve_chat_base_url(url)
+
+
 class PhoneNotifyTestPayload(BaseModel):
     model_config = ConfigDict(populate_by_name=True)
 
@@ -38,13 +44,13 @@ class RestoreAgentPromptsPayload(BaseModel):
 @router.post("/api/plan")
 def trigger_po_plan(payload: BriefPayload):
     # Do not hold STATE_LOCK across Ollama — keeps board/settings/SSE responsive.
-    run_po_plan(payload.brief, payload.ollama_url)
+    run_po_plan(payload.brief, _chat_url(payload.ollama_url))
     return build_state_response()
 
 
 @router.post("/api/plan/outline")
 def trigger_po_plan_outline(payload: BriefPayload):
-    outline = run_po_plan_outline(payload.brief, payload.ollama_url)
+    outline = run_po_plan_outline(payload.brief, _chat_url(payload.ollama_url))
     response = build_state_response()
     response["projectPlanOutline"] = outline
     return response
@@ -52,20 +58,20 @@ def trigger_po_plan_outline(payload: BriefPayload):
 
 @router.post("/api/plan/backlog")
 def trigger_po_plan_backlog(payload: PlanBacklogPayload):
-    run_po_plan_backlog(payload.brief, payload.ollama_url, outline=payload.outline)
+    run_po_plan_backlog(payload.brief, _chat_url(payload.ollama_url), outline=payload.outline)
     return build_state_response()
 
 
 @router.post("/api/step")
 def trigger_agent_turn(payload: BriefPayload):
-    run_sprint_step(payload.brief, payload.ollama_url)
+    run_sprint_step(payload.brief, _chat_url(payload.ollama_url))
     return build_state_response()
 
 
 @router.post("/api/sprint/run-in-progress")
 def trigger_run_in_progress(payload: RunInProgressPayload):
     try:
-        run_in_progress_step(payload.brief, payload.ollama_url, task_id=payload.task_id)
+        run_in_progress_step(payload.brief, _chat_url(payload.ollama_url), task_id=payload.task_id)
     except ValueError as exc:
         raise HTTPException(status_code=409, detail=str(exc)) from exc
     return build_state_response()
@@ -95,13 +101,13 @@ def get_latest_step_diagnostics():
 
 @router.post("/api/sprint/run")
 def trigger_auto_sprint(payload: SprintRunPayload):
-    run_auto_sprint(payload.brief, payload.ollama_url, max_steps=payload.max_steps)
+    run_auto_sprint(payload.brief, _chat_url(payload.ollama_url), max_steps=payload.max_steps)
     return build_state_response()
 
 
 @router.post("/api/sprint/plan-and-run")
 def trigger_plan_and_run(payload: SprintRunPayload):
-    run_plan_and_run(payload.brief, payload.ollama_url, max_steps=payload.max_steps)
+    run_plan_and_run(payload.brief, _chat_url(payload.ollama_url), max_steps=payload.max_steps)
     return build_state_response()
 
 

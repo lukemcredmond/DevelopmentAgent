@@ -43,6 +43,5 @@ def confirm_simulation(payload: SimulationConfirmPayload):
 @router.post("/api/simulation/dismiss")
 def dismiss_simulation():
     with state.STATE_LOCK:
-        if not dismiss_pending_simulation():
-            raise HTTPException(status_code=404, detail="No pending simulation")
+        dismiss_pending_simulation()
     return build_state_response()

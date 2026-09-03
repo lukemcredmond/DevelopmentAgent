@@ -102,9 +102,8 @@ def build_state_response(*, include_files: bool = True) -> dict:
     from backend.services.simulation_gate import get_pending_simulation_public
 
     pending_sim = get_pending_simulation_public()
-    if pending_sim is not None:
-        response["pendingSimulation"] = pending_sim
-        response["sprintPausedForSimulation"] = True
+    response["pendingSimulation"] = pending_sim
+    response["sprintPausedForSimulation"] = pending_sim is not None
     from backend.services.backlog_preflight import build_backlog_preflight
 
     response["backlogPreflight"] = build_backlog_preflight()

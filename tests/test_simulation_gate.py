@@ -325,6 +325,36 @@ def test_auto_sprint_stops_when_simulation_pending(monkeypatch):
     assert step_calls["n"] == 1
 
 
+def test_dismiss_with_no_pending_returns_null_pending():
+    initialize()
+    from fastapi.testclient import TestClient
+
+    from backend.main import app
+    from backend import state
+
+    state.PENDING_SIMULATION = None
+    client = TestClient(app)
+    r = client.post("/api/simulation/dismiss")
+    assert r.status_code == 200
+    body = r.json()
+    assert "pendingSimulation" in body
+    assert body["pendingSimulation"] is None
+
+
+def test_outcome_for_failed_chat_healthy_vs_unhealthy():
+    from unittest.mock import patch
+
+    from backend.agents.scrum_agent import ScrumAgent
+
+    agent = ScrumAgent("Developer", "test-model", "system")
+    with patch.object(agent, "_provider_reachable", return_value=True):
+        out = agent._outcome_for_failed_chat("http_error", "HTTP 400 tools not allowed")
+    assert out.startswith("LLM_CALL_FAILED:")
+    assert "HTTP 400" in out
+    with patch.object(agent, "_provider_reachable", return_value=False):
+        assert agent._outcome_for_failed_chat("connection", "refused") == "SIMULATION_FALLBACK"
+
+
 def get_task_lane(task: dict) -> str:
     from backend.agents.task_context import get_task_lane as _lane
 

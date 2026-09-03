@@ -1084,6 +1084,7 @@ export interface PendingSimulation {
   summary?: string
   defaultPreview?: Record<string, unknown>
   createdAt?: string
+  lastChatError?: string
   source?: string
 }
 

@@ -428,19 +428,35 @@ class ScrumAgent:
         return [0, 2, 5, 10]
 
     def _get_provider(self):
-        from backend.services.llm_provider import get_chat_provider
+        from backend.services.llm_provider import chat_config, get_chat_provider
 
         timeout = self._ollama_timeout_sec()
+        cfg = chat_config(override_url=self.ollama_url)
+        host = str(cfg.get("baseUrl") or self.ollama_url or "")
         if (
             self._provider is None
-            or self._provider_host != self.ollama_url
+            or self._provider_host != host
             or self._provider_timeout != timeout
         ):
             self._provider = get_chat_provider(override_url=self.ollama_url)
             self._provider.timeout_sec = timeout
-            self._provider_host = self.ollama_url
+            self._provider_host = host
             self._provider_timeout = timeout
         return self._provider
+
+    def _provider_reachable(self) -> bool:
+        try:
+            health = self._get_provider().health()
+            return bool(getattr(health, "ok", False))
+        except Exception:
+            return False
+
+    def _outcome_for_failed_chat(self, err_type: str, err_detail: str) -> str:
+        """SIMULATION_FALLBACK only when the server is unreachable; else a real error."""
+        if not self._provider_reachable():
+            return "SIMULATION_FALLBACK"
+        detail = (err_detail or err_type or "unknown error").strip()[:400]
+        return f"LLM_CALL_FAILED: {detail}"
 
     def _get_client(self):
         """Ollama SDK client when the chat provider is Ollama; otherwise the provider."""
@@ -2720,16 +2736,22 @@ class ScrumAgent:
 
                 if response is None:
                     err_type = getattr(self, "_last_chat_error_type", None) or "unavailable"
+                    err_detail = str(getattr(self, "_last_chat_error", None) or err_type)
                     log_ollama_call(
                         iteration,
                         duration_ms=ollama_duration_ms,
-                        error="unavailable",
+                        error=err_detail[:200],
                         error_type=err_type,
                     )
-                    self._log_step_exit("Ollama unavailable — SIMULATION_FALLBACK", "warning")
-                    self._finish_run(status="failed", error="SIMULATION_FALLBACK")
-                    pending_lesson = ("ollama_unavailable", set(tools_used), "SIMULATION_FALLBACK")
-                    return "SIMULATION_FALLBACK"
+                    outcome = self._outcome_for_failed_chat(err_type, err_detail)
+                    if outcome == "SIMULATION_FALLBACK":
+                        self._log_step_exit("LLM provider unreachable — SIMULATION_FALLBACK", "warning")
+                        pending_lesson = ("ollama_unavailable", set(tools_used), "SIMULATION_FALLBACK")
+                    else:
+                        self._log_step_exit(outcome, "error")
+                        pending_lesson = ("llm_call_failed", set(tools_used), outcome)
+                    self._finish_run(status="failed", error=outcome)
+                    return outcome
 
                 message = response.message
                 recovered_tool_names, message = apply_tool_call_recovery(
@@ -3198,7 +3220,9 @@ class ScrumAgent:
 
         stream = self._chat(full_messages, stream=True)
         if stream is None:
-            yield "SIMULATION_FALLBACK"
+            err_type = getattr(self, "_last_chat_error_type", None) or "unavailable"
+            err_detail = str(getattr(self, "_last_chat_error", None) or err_type)
+            yield self._outcome_for_failed_chat(err_type, err_detail)
             return
 
         try:
@@ -3206,5 +3230,5 @@ class ScrumAgent:
                 content = chunk.message.content
                 if content:
                     yield content
-        except Exception:
-            yield "SIMULATION_FALLBACK"
+        except Exception as exc:
+            yield self._outcome_for_failed_chat("error", str(exc))

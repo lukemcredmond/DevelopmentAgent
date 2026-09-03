@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
-import { confirmSimulation, dismissSimulation, readWorkspaceFile } from '../api/client'
+import { confirmSimulation, dismissSimulation, readWorkspaceFile, ApiError } from '../api/client'
 import type { AppState, PendingSimulation, WorkflowSettings } from '../types'
 
 const OVERRIDE_TARGETS: { value: string; label: string }[] = [
@@ -189,8 +189,12 @@ export default function SimulationConfirmModal({
     setError(null)
     try {
       const data = await dismissSimulation()
-      onResolved(data)
+      onResolved({ ...data, pendingSimulation: null })
     } catch (err) {
+      if (err instanceof ApiError && err.status === 404) {
+        onResolved({ pendingSimulation: null } as AppState)
+        return
+      }
       setError(err instanceof Error ? err.message : String(err))
     } finally {
       setBusy(false)
@@ -218,8 +222,8 @@ export default function SimulationConfirmModal({
             Offline simulation
           </h2>
           <p className="text-[11px] text-cat-subtext mt-1">
-            Ollama is unavailable. The sprint is paused until you confirm or enter an alternative
-            value below.
+            LLM call failed / provider unreachable.
+            {pending.lastChatError ? ` ${pending.lastChatError}` : ''}
           </p>
         </div>
         <div className="px-4 py-3 space-y-2 text-[11px] text-cat-text overflow-y-auto flex-1 min-h-0">

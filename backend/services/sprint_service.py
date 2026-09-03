@@ -97,6 +97,20 @@ CONTEXT_INJECT_NOTE = (
 )
 
 PLANNING_TASK_ID = "PLANNING"
+LLM_CALL_FAILED_PREFIX = "LLM_CALL_FAILED:"
+
+
+def _is_llm_call_failed(output: str) -> bool:
+    return str(output or "").startswith(LLM_CALL_FAILED_PREFIX)
+
+
+def _log_llm_call_failed(output: str, context: str) -> None:
+    add_system_log("Product Owner", "error", f"{context} {output}")
+
+
+def _po_last_chat_error() -> str | None:
+    detail = str(getattr(agent_po, "_last_chat_error", None) or "").strip()
+    return detail[:400] if detail else None
 
 _HANDLER_AGENT: Dict[str, str] = {
     "po": "Product Owner",
@@ -2233,6 +2247,11 @@ def run_po_plan_outline(brief: str, ollama_url: str) -> str:
     finally:
         clear_active_sprint_context()
 
+    if _is_llm_call_failed(outline):
+        _log_llm_call_failed(outline, "Plan outline failed —")
+        publish_event("plan_chunk", {"phase": "done", "outline": ""})
+        return ""
+
     if outline == "SIMULATION_FALLBACK":
         from backend.services.simulation_gate import (
             build_proposal,
@@ -2249,6 +2268,7 @@ def run_po_plan_outline(brief: str, ollama_url: str) -> str:
             summary="Apply offline plan outline stub to project",
             default_preview=preview,
             source="po_plan_outline",
+            last_chat_error=_po_last_chat_error(),
         )
         if try_defer_simulation(prop):
             outline = ""
@@ -2315,6 +2335,10 @@ def run_po_plan_backlog(brief: str, ollama_url: str, outline: Optional[str] = No
     finally:
         clear_active_sprint_context()
 
+    if _is_llm_call_failed(po_output):
+        _log_llm_call_failed(po_output, "Plan backlog failed —")
+        return 0
+
     if po_output == "SIMULATION_FALLBACK":
         from backend.services.simulation_gate import (
             build_proposal,
@@ -2330,6 +2354,7 @@ def run_po_plan_backlog(brief: str, ollama_url: str, outline: Optional[str] = No
             summary="Create offline sample epics and child cards from plan",
             default_preview=preview_po_backlog_stub(),
             source="po_backlog",
+            last_chat_error=_po_last_chat_error(),
         )
         if try_defer_simulation(prop):
             return 0
@@ -2337,7 +2362,7 @@ def run_po_plan_backlog(brief: str, ollama_url: str, outline: Optional[str] = No
     return _append_po_backlog_from_output(po_output, existing_set)
 
 
-def run_po_plan(brief: str, ollama_url: str) -> None:
+def run_po_plan(brief: str, ollama_url: str) -> bool:
     max_steps = int(get_workflow_settings().get("maxSprintSteps", 20))
     if state.SPRINT_CANCEL:
         add_system_log("System", "info", "Plan & Run cancelled before PO planning.")
@@ -2349,7 +2374,7 @@ def run_po_plan(brief: str, ollama_url: str) -> None:
             task_id=PLANNING_TASK_ID,
             task_title="Cancelled",
         )
-        return
+        return False
 
     brief = resolve_brief_for_sprint(brief)
     agent_po.ollama_url = ollama_url
@@ -2409,7 +2434,20 @@ def run_po_plan(brief: str, ollama_url: str) -> None:
             task_id=PLANNING_TASK_ID,
             task_title="Cancelled during PO plan",
         )
-        return
+        return False
+
+    if _is_llm_call_failed(po_output):
+        _log_llm_call_failed(po_output, "Plan & Run failed —")
+        publish_sprint_progress(
+            phase="po_plan",
+            step=0,
+            max_steps=max_steps,
+            agent="Product Owner",
+            task_id=PLANNING_TASK_ID,
+            task_title="LLM call failed — plan not applied",
+            lane="Features",
+        )
+        return False
 
     if po_output == "SIMULATION_FALLBACK":
         from backend.services.simulation_gate import (
@@ -2426,6 +2464,7 @@ def run_po_plan(brief: str, ollama_url: str) -> None:
             summary="Create offline sample epics and child cards from brief",
             default_preview=preview_po_backlog_stub(),
             source="po_plan",
+            last_chat_error=_po_last_chat_error(),
         )
         if try_defer_simulation(prop):
             publish_sprint_progress(
@@ -2437,7 +2476,7 @@ def run_po_plan(brief: str, ollama_url: str) -> None:
                 task_title="Waiting for offline simulation confirm…",
                 lane="Features",
             )
-            return
+            return False
 
     if po_output:
         _append_po_backlog_from_output(po_output, set(existing))
@@ -2451,6 +2490,7 @@ def run_po_plan(brief: str, ollama_url: str) -> None:
         task_title="PO plan complete — epics ready",
         lane="Features",
     )
+    return True
 
 
 def run_po_add_feature(
@@ -4717,16 +4757,21 @@ def run_plan_and_run(brief: str, ollama_url: str, max_steps: int | None = None) 
     )
     add_system_log("System", "info", "Plan & Run started — PO planning, then sprint steps…")
 
-    run_po_plan(brief, ollama_url)
+    planned = run_po_plan(brief, ollama_url)
 
-    if state.SPRINT_CANCEL:
-        summary = _build_sprint_summary(0, "cancelled")
+    from backend.services.simulation_gate import has_pending_simulation
+
+    if state.SPRINT_CANCEL or not planned:
+        status = "cancelled" if state.SPRINT_CANCEL else "llm_failed"
+        if has_pending_simulation():
+            status = "simulation_pending"
+        summary = _build_sprint_summary(0, status)
         publish_sprint_progress(
-            phase="cancelled",
+            phase="cancelled" if state.SPRINT_CANCEL else "done",
             step=0,
             max_steps=limit,
             agent="System",
-            task_title="Plan & Run cancelled",
+            task_title="Plan & Run stopped",
         )
         return summary
 

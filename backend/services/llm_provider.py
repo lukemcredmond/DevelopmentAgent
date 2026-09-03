@@ -819,6 +819,11 @@ def get_chat_provider(*, override_url: Optional[str] = None) -> LlmProvider:
     return build_provider(chat_config(override_url=override_url))
 
 
+def resolve_chat_base_url(override_url: Optional[str] = None) -> str:
+    """URL Plan/Sprint should call — workflow llmBaseUrl, not a stale 11434 override."""
+    return str(chat_config(override_url=override_url).get("baseUrl") or DEFAULT_OLLAMA_URL)
+
+
 def get_embed_provider(*, override_url: Optional[str] = None) -> LlmProvider:
     return build_provider(embed_config(override_url=override_url))
 

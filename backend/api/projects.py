@@ -10,7 +10,12 @@ from fastapi import APIRouter, HTTPException, UploadFile, File
 from backend import state
 from backend.agents.registry import agent_cr, agent_dev, agent_po, agent_qa
 from backend.api.helpers import build_state_response
-from backend.api.schemas import ConfigPayload, CreateProjectPayload, ProjectDocumentsPayload
+from backend.api.schemas import (
+    ConfigPayload,
+    CreateProjectPayload,
+    OpenWorkspacePayload,
+    ProjectDocumentsPayload,
+)
 from backend.bootstrap import load_project_into_state
 from backend.config import DEFAULT_BOARD, DEFAULT_VIRTUAL_FS
 from backend.services.logs import add_system_log
@@ -66,6 +71,33 @@ def delete_project(project_id: str):
             raise HTTPException(status_code=404, detail="Project not found.")
         add_system_log("System", "info", f"Deleted project {project_id}")
     return {"ok": True, "projectsList": state.storage.list_projects()}
+
+
+@router.post("/api/projects/open-workspace")
+def open_workspace_project(payload: OpenWorkspacePayload):
+    from backend.services.project_file import PROJECT_FILE_NAME, restore_project_from_file
+
+    workspace = (payload.workspaceDir or "").strip()
+    if not workspace:
+        raise HTTPException(status_code=400, detail="workspaceDir required")
+    try:
+        project_id = restore_project_from_file(workspace)
+    except FileNotFoundError:
+        raise HTTPException(
+            status_code=404,
+            detail=f"No {PROJECT_FILE_NAME} found in {workspace}",
+        ) from None
+    except Exception as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+    with state.STATE_LOCK:
+        if not load_project_into_state(project_id):
+            raise HTTPException(status_code=500, detail="Failed to load restored project")
+        add_system_log(
+            "System",
+            "success",
+            f"Opened workspace project '{state.PROJECT_NAME}' from {PROJECT_FILE_NAME}",
+        )
+    return build_state_response()
 
 
 @router.get("/api/projects/{project_id}/export")
@@ -239,6 +271,8 @@ def reset_workspace():
                 for file in files_in_dir:
                     file_path = os.path.join(root, file)
                     if os.path.isfile(file_path) and not file.startswith("."):
+                        if file == "allhands.project.json":
+                            continue
                         try:
                             os.remove(file_path)
                         except Exception:

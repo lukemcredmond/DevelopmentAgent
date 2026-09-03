@@ -50,6 +50,7 @@ interface SettingsSlideOverProps {
   workflowSettingsSaving?: boolean
   onExportProject: () => void
   onImportProject: (file: File) => void
+  onOpenWorkspace?: () => void
   onDeleteProject: () => void
   onOpenMemoryTab?: () => void
   onOpenCustomTools?: () => void
@@ -111,6 +112,7 @@ export default function SettingsSlideOver({
   workflowSettingsSaving = false,
   onExportProject,
   onImportProject,
+  onOpenWorkspace,
   onDeleteProject,
   onOpenMemoryTab,
   onOpenCustomTools,
@@ -331,13 +333,23 @@ export default function SettingsSlideOver({
                       }}
                     />
                   </label>
+                  {onOpenWorkspace && (
+                    <button
+                      type="button"
+                      onClick={onOpenWorkspace}
+                      className="flex-1 min-w-[70px] text-[10px] bg-cat-base border border-cat-surface1 rounded py-1.5 text-cat-subtext hover:text-white"
+                      title="Re-open this folder using allhands.project.json"
+                    >
+                      Open folder
+                    </button>
+                  )}
                   <button
                     type="button"
                     onClick={onDeleteProject}
                     disabled={state.projectsList.length <= 1}
                     className="flex-1 min-w-[70px] text-[10px] bg-rose-950/20 border border-rose-500/20 rounded py-1.5 text-rose-400 hover:bg-rose-950/40 disabled:opacity-40"
                   >
-                    Delete
+                    Delete project
                   </button>
                 </div>
               </div>
@@ -360,7 +372,7 @@ export default function SettingsSlideOver({
                 <label className="block text-xs">
                   <span className="text-[10px] text-cat-subtext mb-0.5 inline-flex items-center">
                     WORKSPACE DIR
-                    <SettingHint hint="Folder on your PC where the agent reads and writes project files." />
+                    <SettingHint hint="Folder on your PC where the agent reads and writes project files. allhands.project.json in this folder is the solution-style backup of the project row." />
                   </span>
                   <input
                     type="text"
