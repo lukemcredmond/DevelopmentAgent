@@ -84,7 +84,16 @@ class TestSingleModelMode:
 class TestKeepAlive:
     def test_single_model_holds_indefinitely(self):
         # Nothing to evict, so a reload should never happen.
-        assert effective_keep_alive({"singleModelMode": "on", "ollamaKeepAlive": "30m"}) == "-1"
+        # Ollama requires a duration unit ("-1" is a 400).
+        assert effective_keep_alive({"singleModelMode": "on", "ollamaKeepAlive": "30m"}) == "-1s"
+
+    def test_bare_minus_one_and_seconds_get_a_unit(self):
+        from backend.services.agent_efficiency import normalize_ollama_keep_alive
+
+        assert normalize_ollama_keep_alive("-1") == "-1s"
+        assert normalize_ollama_keep_alive(-1) == "-1s"
+        assert normalize_ollama_keep_alive("300") == "300s"
+        assert normalize_ollama_keep_alive("45m") == "45m"
 
     def test_small_host_with_multiple_models_releases_promptly(self):
         ws = {

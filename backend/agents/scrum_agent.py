@@ -153,6 +153,16 @@ def _log_duplicate_skip(
         )
     except Exception:
         pass
+    try:
+        from backend.agents.tool_outcomes import summarize_tool_args
+        from backend.services.step_diagnostics import get_active_trace, log_tool
+
+        if get_active_trace():
+            status = "blocked" if not success else "skipped"
+            summary = f"{status} duplicate {summarize_tool_args(tool_name, arguments)}"
+            log_tool(tool_name, success, summary[:300], duration_ms=0)
+    except Exception:
+        pass
 
 
 def _duplicate_loop_stop_message(
@@ -270,7 +280,9 @@ _PO_CLARIFICATION_PLAN_REJECTION = (
     "You are the Product Owner clarifying requirements for the Developer — not implementing code. "
     "Do not list development steps or tell the Developer how to build the feature. "
     'Reply with a JSON object: {"description": "...", "acceptanceCriteria": ["..."], '
-    '"briefAddition": "..."} then call update_board to move the task back to In Progress.'
+    '"briefAddition": "..."} — that JSON is applied automatically. '
+    "Optionally call update_board with the same fields to move the task to In Progress. "
+    "Do not restate the JSON after the card has moved."
 )
 
 
@@ -1052,7 +1064,31 @@ class ScrumAgent:
         keep_alive = effective_keep_alive(ws)
         if keep_alive and provider.capabilities.keep_alive:
             opts["keep_alive"] = str(keep_alive)
+        if self.role == "Product Owner" and "num_predict" not in opts:
+            opts["num_predict"] = 1024
         return opts
+
+    def _maybe_finish_po_clarification(
+        self,
+        task_id: str,
+        content: str,
+        tools_used: set,
+    ) -> Optional[str]:
+        """Apply Needs PO JSON and stop the step if the card left Needs PO."""
+        from backend.agents.task_context import get_task_lane
+        from backend.services.po_clarification import complete_needs_po_clarification
+
+        ok, msg = complete_needs_po_clarification(task_id, text=content or "")
+        lane = get_task_lane(task_id) or ""
+        if lane in ("In Progress", "Refinement") or (ok and lane != "Needs PO"):
+            add_system_log(self.role, "info", f"Step exit: po_clarified {msg}")
+            self._finish_run(status="completed")
+            return content or msg
+        if "update_board" in tools_used and lane != "Needs PO":
+            add_system_log(self.role, "info", f"Step exit: po_clarified {msg}")
+            self._finish_run(status="completed")
+            return content or msg
+        return None
 
     @staticmethod
     def _is_context_overflow_error(error: str) -> bool:
@@ -1572,9 +1608,12 @@ class ScrumAgent:
 
         if task_id and duplicate_cross_step_block_applies(tool_name):
             from backend.agents.tool_fingerprints import is_tool_fingerprint_blocked
+            from backend.services.po_clarification import is_po_needs_po_advance
 
             live_task = find_task_by_id(task_id)
-            if is_tool_fingerprint_blocked(live_task, tool_name, arguments):
+            if is_tool_fingerprint_blocked(live_task, tool_name, arguments) and not is_po_needs_po_advance(
+                tool_name, arguments
+            ):
                 cmd = str((arguments or {}).get("command") or tool_summary)[:120]
                 tool_output = (
                     f"[blocked fingerprint] Tool '{tool_name}' with these args was blocked "
@@ -1620,7 +1659,12 @@ class ScrumAgent:
                     run_id=run_id,
                 )
                 setattr(result, "duplicate_skip", True)
-                return tool_name, arguments, result, None
+                po_stop = None
+                if self.role == "Product Owner" and tool_name == "update_board" and task_id:
+                    from backend.services.po_clarification import finish_po_board_noop
+
+                    _ok, po_stop = finish_po_board_noop(task_id, arguments)
+                return tool_name, arguments, result, po_stop
 
         with _FAILURE_LOCK:
             same_success = successful_tool_keys.count(dup_key)
@@ -1730,7 +1774,12 @@ class ScrumAgent:
                 )
                 setattr(result, "duplicate_skip", True)
                 setattr(result, "duplicate_attempt", same_success + 1)
-                return tool_name, arguments, result, None
+                po_stop = None
+                if self.role == "Product Owner" and tool_name == "update_board" and task_id:
+                    from backend.services.po_clarification import finish_po_board_noop
+
+                    _ok, po_stop = finish_po_board_noop(task_id, arguments)
+                return tool_name, arguments, result, po_stop
             cmd_hint = ""
             if tool_name == "run_command" and isinstance(arguments, dict):
                 cmd_hint = str(arguments.get("command") or "")[:80]
@@ -1851,7 +1900,12 @@ class ScrumAgent:
                 )
                 setattr(result, "duplicate_skip", True)
                 setattr(result, "duplicate_attempt", same_success + 1)
-                return tool_name, arguments, result, None
+                po_stop = None
+                if self.role == "Product Owner" and tool_name == "update_board" and task_id:
+                    from backend.services.po_clarification import finish_po_board_noop
+
+                    _ok, po_stop = finish_po_board_noop(task_id, arguments)
+                return tool_name, arguments, result, po_stop
             add_system_log(
                 self.role,
                 "info",
@@ -2852,6 +2906,21 @@ class ScrumAgent:
                         low = early_stop.lower()
                         if "duplicate" in low or "same args" in low:
                             reason = "duplicate_tool"
+                        elif (
+                            "po clarification" in low
+                            or "already in" in low
+                            or "update_board skipped" in low
+                        ):
+                            reason = (
+                                "po_clarification_incomplete"
+                                if "stays in needs po" in low or "missing" in low
+                                else "po_clarified"
+                            )
+                            self._finish_run(
+                                status="completed" if reason == "po_clarified" else "failed"
+                            )
+                            pending_lesson = (reason, set(tools_used), early_stop)
+                            return early_stop
                         elif "approval" in low:
                             reason = "awaiting_approval"
                         elif "explore tool budget" in low:
@@ -2867,6 +2936,15 @@ class ScrumAgent:
                         self._finish_run(status="completed")
                         pending_lesson = ("task_done", set(tools_used), stop_msg)
                         return stop_msg
+                    if self.role == "Product Owner" and task_id:
+                        po_done = self._maybe_finish_po_clarification(
+                            task_id,
+                            unwrap_llm_text((message.content or "")).strip(),
+                            tools_used,
+                        )
+                        if po_done:
+                            pending_lesson = ("po_clarified", set(tools_used), po_done)
+                            return po_done
                     continue
 
                 content = unwrap_llm_text((message.content or "")).strip()
@@ -2948,6 +3026,24 @@ class ScrumAgent:
                         }
                     )
                     continue
+
+                if (
+                    self.role == "Product Owner"
+                    and task_id
+                    and content
+                    and _looks_like_po_work_product(content)
+                ):
+                    po_done = self._maybe_finish_po_clarification(task_id, content, tools_used)
+                    if po_done:
+                        if task_id:
+                            record_task_transcript(
+                                task_id,
+                                "assistant",
+                                content,
+                                agent=self.role,
+                            )
+                        pending_lesson = ("po_clarified", set(tools_used), po_done)
+                        return po_done
 
                 if content and _dev_step_needs_more_tools(tools_used, task_id):
                     if task_id and is_task_done(task_id) and not state.ALLOW_DONE_RETRY:

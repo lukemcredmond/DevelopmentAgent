@@ -1262,9 +1262,14 @@ _STOP_REASON_DIRECTIVES = {
         "Write or edit files with apply_patch/write_file before moving the card.",
         "Do not claim completion without file edits.",
     ),
-    "completed_with_writes": (
-        "Continue from the files already written; finish remaining AC gaps only.",
-        "Do not redo completed edits.",
+    "po_clarification_incomplete": (
+        "Reply with clarification JSON (description + acceptanceCriteria) once. "
+        "The card will move to In Progress automatically — do not restate the JSON.",
+        "Do not dump the same JSON again or call identical update_board args.",
+    ),
+    "po_clarified": (
+        "Requirements are clarified — implement the acceptance criteria.",
+        "Do not re-clarify or stay in Needs PO.",
     ),
 }
 
@@ -1295,12 +1300,13 @@ def _format_last_step_outcome_block(task: Dict[str, Any]) -> str:
     # Never inject UI-facing suggestedAction (e.g. "Extend the step…") into the model prompt.
     do_next, do_not = _agent_directives_for_stop(stop)
 
+    agent = str(outcome.get("agent") or "Dev")
     lines = [_LAST_STEP_OUTCOME_HEADER]
     if stop:
         tool_bit = f" (tools: {tools_short})" if tools_short else ""
-        lines.append(f"Previous Dev step stopped: {stop}{tool_bit}.")
+        lines.append(f"Previous {agent} step stopped: {stop}{tool_bit}.")
     elif tools_short:
-        lines.append(f"Previous Dev step tools: {tools_short}.")
+        lines.append(f"Previous {agent} step tools: {tools_short}.")
     if why:
         # One sentence; strip UI extend wording if it leaked into whyCardStayed
         why_clean = why.split("\n")[0].strip()
@@ -1581,12 +1587,19 @@ def build_task_prompt_legacy(task: Dict[str, Any], brief: str, *, agent_role: Op
                 "Do not invent paths from old directory listings alone.\n"
             )
         for d in decisions[-decision_limit:]:
+            summary = str(d.get("summary", "") or "")
+            detail = str(d.get("detail") or "")
+            if role == "Product Owner" and d.get("type") in ("clarification", "clarification_incomplete"):
+                from backend.services.po_clarification import prune_repeated_po_json
+
+                summary = prune_repeated_po_json(summary, max_chars=180)
+                detail = prune_repeated_po_json(detail, max_chars=180)
             prompt += (
                 f"[{d.get('timestamp', '?')}] {d.get('agent', 'Agent')} "
-                f"({d.get('type', 'note')}): {d.get('summary', '')}\n"
+                f"({d.get('type', 'note')}): {summary}\n"
             )
-            if d.get("detail") and not slim:
-                prompt += f"  Detail: {d['detail'][:300]}\n"
+            if detail and not slim:
+                prompt += f"  Detail: {detail[:300]}\n"
 
     try:
         from backend.services.task_spec_markdown import read_task_spec_markdown_for_prompt
@@ -1603,7 +1616,15 @@ def build_task_prompt_legacy(task: Dict[str, Any], brief: str, *, agent_role: Op
     if task["transcript"]:
         prompt += "\n=== TASK TRANSCRIPT ===\n"
         for entry in task["transcript"][-transcript_limit:]:
-            prompt += f"[{entry.get('timestamp', '?')}] {entry.get('agent', entry.get('role', '?'))}: {entry.get('content', '')[:200]}\n"
+            body = str(entry.get("content", "") or "")
+            agent_name = str(entry.get("agent", entry.get("role", "?")) or "")
+            if role == "Product Owner" or agent_name == "Product Owner":
+                from backend.services.po_clarification import prune_repeated_po_json
+
+                body = prune_repeated_po_json(body, max_chars=200)
+            else:
+                body = body[:200]
+            prompt += f"[{entry.get('timestamp', '?')}] {agent_name}: {body}\n"
 
     try:
         from backend.services.task_qa_markdown import read_task_qa_markdown_for_prompt

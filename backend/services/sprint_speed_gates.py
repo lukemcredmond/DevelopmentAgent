@@ -41,6 +41,7 @@ CIRCUIT_BREAKER_EXITS = frozenset(
         "read_only_no_edits",
         "completed_text_only",
         "completed_with_writes_no_advance",
+        "po_clarification_incomplete",
     }
 )
 
@@ -139,7 +140,7 @@ def record_consecutive_bad_exit(
         task["lastCircuitExitReason"] = reason
         return count
     # Healthy / lane-progress exits clear the streak.
-    if (reason == "completed_with_writes" and progress_made) or reason == "fix_verify_done" or not reason:
+    if (reason == "completed_with_writes" and progress_made) or reason == "po_clarified" or not reason:
         task["consecutiveBadExits"] = 0
         task.pop("lastCircuitExitReason", None)
         clear_patch_fingerprint(task)

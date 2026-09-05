@@ -213,7 +213,9 @@ class OllamaProvider(LlmProvider):
             "options": opts,
         }
         if keep_alive is not None:
-            kwargs["keep_alive"] = keep_alive
+            from backend.services.agent_efficiency import normalize_ollama_keep_alive
+
+            kwargs["keep_alive"] = normalize_ollama_keep_alive(keep_alive)
         result = self._get_client().chat(**kwargs)
         if stream:
             return _iter_ollama_stream(result)
@@ -288,7 +290,9 @@ class OllamaProvider(LlmProvider):
                 "options": {"num_predict": 1},
             }
             if keep_alive:
-                kwargs["keep_alive"] = str(keep_alive)
+                from backend.services.agent_efficiency import normalize_ollama_keep_alive
+
+                kwargs["keep_alive"] = normalize_ollama_keep_alive(keep_alive)
             self._get_client().chat(**kwargs)
             return True
         except Exception:

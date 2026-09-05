@@ -586,7 +586,15 @@ def _section_transcript(task: Dict[str, Any], limits: _PromptLimits) -> str:
         return ""
     out = "=== TASK TRANSCRIPT ===\n"
     for entry in task["transcript"][-limits.transcript_limit :]:
-        out += f"[{entry.get('timestamp', '?')}] {entry.get('agent', entry.get('role', '?'))}: {entry.get('content', '')[:200]}\n"
+        body = str(entry.get("content", "") or "")
+        agent_name = str(entry.get("agent", entry.get("role", "?")) or "")
+        if agent_name == "Product Owner":
+            from backend.services.po_clarification import prune_repeated_po_json
+
+            body = prune_repeated_po_json(body, max_chars=200)
+        else:
+            body = body[:200]
+        out += f"[{entry.get('timestamp', '?')}] {agent_name}: {body}\n"
     return out
 
 

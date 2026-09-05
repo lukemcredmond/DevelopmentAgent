@@ -1,4 +1,4 @@
-from typing import Optional
+from typing import Any, Optional
 
 from backend import state
 from backend.agents.scrum_agent import ScrumAgent
@@ -190,7 +190,17 @@ def _format_search_results(query: str, limit: int = 20) -> str:
     return "\n".join(lines)
 
 
-def _guarded_update_board(task_id: str, target_lane: str, user_question: Optional[str] = None) -> str:
+def _guarded_update_board(
+    task_id: str,
+    target_lane: str,
+    user_question: Optional[str] = None,
+    description: Optional[str] = None,
+    acceptanceCriteria: Optional[Any] = None,
+    acceptance_criteria: Optional[Any] = None,
+    briefAddition: Optional[str] = None,
+    brief_addition: Optional[str] = None,
+    **_extra: Any,
+) -> str:
     from backend.agents.task_context import find_task_by_id, get_task_lane, normalize_task
     from backend.services.needs_user_guard import should_escalate_to_needs_user
     from backend.services.sprint_service import (
@@ -306,6 +316,28 @@ def _guarded_update_board(task_id: str, target_lane: str, user_question: Optiona
                         f"Error: Cannot move to {target_upper} — step exit '{exit_r or 'unhealthy'}' "
                         "blocks lane advance. Stay In Progress or set forceCompleteOnUnhealthyExit."
                     )
+    if state.ACTIVE_SPRINT_AGENT == "Product Owner":
+        from backend.services.po_clarification import apply_clarification_payload
+
+        ac = acceptanceCriteria if acceptanceCriteria is not None else acceptance_criteria
+        ac_list = None
+        if isinstance(ac, list):
+            ac_list = [str(c).strip() for c in ac if str(c).strip()]
+        elif isinstance(ac, str) and ac.strip():
+            ac_list = [ac.strip()]
+        apply_clarification_payload(
+            task_id,
+            description=str(description).strip() if description else None,
+            acceptance_criteria=ac_list,
+            brief_addition=str(briefAddition or brief_addition or "").strip(),
+        )
+        current_lane = get_task_lane(task_id) or ""
+        if current_lane == "Needs PO" and target_lane.strip() in ("In Progress", "Refinement"):
+            from backend.services.po_clarification import move_off_needs_po
+
+            dest = move_off_needs_po(task_id)
+            if dest:
+                return f"Task {task_id} moved to '{dest}'."
     return move_board_stage(task_id, target_lane)
 
 
@@ -425,7 +457,10 @@ tool_web_search = Tool(
 
 tool_board = Tool(
     name="update_board",
-    description="Updates Kanban Scrum board column positions.",
+    description=(
+        "Updates Kanban Scrum board column positions. Product Owner on Needs PO may pass "
+        "description, acceptanceCriteria, and briefAddition to apply clarification in the same call."
+    ),
     parameters={
         "type": "object",
         "properties": {
@@ -434,6 +469,19 @@ tool_board = Tool(
             "user_question": {
                 "type": "string",
                 "description": "Required when target_lane is Needs User — specific question for the user.",
+            },
+            "description": {
+                "type": "string",
+                "description": "Optional PO clarification: updated task description.",
+            },
+            "acceptanceCriteria": {
+                "type": "array",
+                "items": {"type": "string"},
+                "description": "Optional PO clarification: acceptance criteria.",
+            },
+            "briefAddition": {
+                "type": "string",
+                "description": "Optional PO clarification: text to append to the project brief.",
             },
         },
         "required": ["task_id", "target_lane"],

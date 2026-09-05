@@ -62,9 +62,10 @@ def warm_model(model: str, *, timeout_sec: float = 2.0) -> bool:
         if not provider.capabilities.keep_alive:
             _log_compat_noop_once("Model warmup")
             return False
-        ws = get_workflow_settings()
-        keep_alive = ws.get("ollamaKeepAlive") or "30m"
-        return provider.warm(model, keep_alive=str(keep_alive))
+        from backend.services.agent_efficiency import effective_keep_alive
+
+        keep_alive = effective_keep_alive(get_workflow_settings())
+        return provider.warm(model, keep_alive=keep_alive)
     except Exception as exc:
         add_system_log(
             "System",

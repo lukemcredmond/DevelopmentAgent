@@ -166,6 +166,43 @@ def derive_agent_work_items(task: Dict[str, Any]) -> List[Dict[str, Any]]:
 
     items: List[Dict[str, Any]] = []
 
+    if lane == "Needs PO":
+        ac = [c for c in (task.get("acceptanceCriteria") or []) if str(c).strip()]
+        desc = str(task.get("description") or "").strip()
+        items.append(
+            _item(
+                "clarify:json",
+                "Write clarification JSON (description + acceptanceCriteria)",
+                "done" if desc and ac else "pending",
+                agent_role="Product Owner",
+            )
+        )
+        items.append(
+            _item(
+                "lane:advance",
+                "Move card to In Progress",
+                "pending" if not moved else "done",
+                agent_role="Product Owner",
+            )
+        )
+        blocked_fps = task.get("blockedToolFingerprints") or []
+        if isinstance(blocked_fps, list) and blocked_fps:
+            labels = []
+            for entry in blocked_fps[-3:]:
+                if isinstance(entry, dict) and entry.get("label"):
+                    labels.append(str(entry["label"]))
+            bit = "; ".join(labels)[:120] if labels else "identical tool args"
+            blocked_names = _blocked_tool_names(task)
+            items.append(
+                _item(
+                    "blocked:tools",
+                    f"Change approach (blocked tools: {bit})",
+                    "blocked",
+                    flow_match=_flow_match_for("blocked:tools", blocked_tool_names=blocked_names),
+                )
+            )
+        return items[:AGENT_WORK_ITEMS_MAX]
+
     items.append(
         _item(
             "read:files",

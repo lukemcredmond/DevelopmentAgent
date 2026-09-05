@@ -4,6 +4,10 @@ from __future__ import annotations
 
 from typing import Any, Dict, Optional, Tuple
 
+# Ollama's Go parser rejects string keep_alive values without a unit
+# ("-1" → `time: missing unit in duration "-1"`). Forever is `-1s`.
+_KEEP_ALIVE_FOREVER = frozenset({"-1", "forever", "infinite", "inf", "indefinite"})
+
 EFFICIENCY_STANDARD = "standard"
 EFFICIENCY_HIGH = "high"
 
@@ -65,6 +69,25 @@ def single_model_mode_active(ws: Optional[Dict[str, Any]] = None) -> bool:
     return bool(capacity.known and capacity.vram_mb is not None and capacity.vram_mb < 16000)
 
 
+def normalize_ollama_keep_alive(value: Any, *, default: str = "30m") -> str:
+    """Return a keep_alive string Ollama's duration parser will accept.
+
+    JSON numbers like -1 are valid, but this app always sends keep_alive as a
+    string. Go's time.ParseDuration requires a unit, so "-1" and "300" fail.
+    """
+    raw = str(value if value is not None else "").strip()
+    if not raw:
+        return default
+    lowered = raw.lower()
+    if lowered in _KEEP_ALIVE_FOREVER:
+        return "-1s"
+    if raw[0] in "+-" and raw[1:].isdigit():
+        return f"{raw}s"
+    if raw.isdigit():
+        return f"{raw}s"
+    return raw
+
+
 def effective_keep_alive(ws: Optional[Dict[str, Any]] = None) -> str:
     """How long the server should hold the model in VRAM after a turn.
 
@@ -76,9 +99,9 @@ def effective_keep_alive(ws: Optional[Dict[str, Any]] = None) -> str:
         from backend.services.workflow_settings import get_workflow_settings
 
         ws = get_workflow_settings()
-    configured = str(ws.get("ollamaKeepAlive") or "30m").strip()
+    configured = normalize_ollama_keep_alive(ws.get("ollamaKeepAlive"), default="30m")
     if single_model_mode_active(ws):
-        return "-1"
+        return "-1s"
     try:
         from backend.services.llm_capacity import resolve_inference_capacity
 

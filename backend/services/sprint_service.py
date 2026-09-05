@@ -820,22 +820,9 @@ def extract_json_array_from_text(text: str) -> List[Dict[str, Any]]:
 
 
 def extract_json_object_from_text(text: str) -> Optional[Dict[str, Any]]:
-    bt = "```"
-    json_blocks = re.findall(rf"{bt}json\s*(.*?)\s*{bt}", text, re.DOTALL)
-    for block in json_blocks:
-        try:
-            parsed = json.loads(block.strip())
-            if isinstance(parsed, dict):
-                return parsed
-        except json.JSONDecodeError:
-            continue
-    try:
-        parsed = json.loads(text.strip())
-        if isinstance(parsed, dict):
-            return parsed
-    except json.JSONDecodeError:
-        pass
-    return None
+    from backend.services.po_clarification import extract_json_object_from_text as _extract
+
+    return _extract(text)
 
 
 def _task_in_lane(task_id: str, lane: str) -> bool:
@@ -2809,23 +2796,9 @@ def _po_clarification_retry_prompt_block(task: Dict[str, Any]) -> str:
 
 
 def _apply_po_clarification_result(active_task: Dict[str, Any], result: str) -> bool:
-    obj = extract_json_object_from_text(result)
-    if not obj:
-        return False
-    description = obj.get("description")
-    ac = obj.get("acceptanceCriteria") or obj.get("acceptance_criteria")
-    if not description and not ac:
-        return False
-    apply_po_clarification(
-        active_task["id"],
-        description=description,
-        acceptance_criteria=ac,
-    )
-    addition = obj.get("briefAddition") or obj.get("brief_addition") or ""
-    if addition:
-        append_brief_text(addition, "po", f"PO clarification for {active_task['id']}")
-    record_brief_changelog("po", f"Clarified {active_task['title']}", result[:300])
-    return True
+    from backend.services.po_clarification import apply_clarification_from_text
+
+    return apply_clarification_from_text(active_task["id"], result)
 
 
 def _apply_refinement_dev_result(task: Dict[str, Any], result: str) -> bool:
@@ -3217,7 +3190,9 @@ def _run_po_clarification(active_task: Dict[str, Any], brief: str) -> None:
             + _po_clarification_retry_prompt_block(task_for_prompt)
             + "\nDeveloper needs clarification. Reply with a JSON object: "
             '{"description": "...", "acceptanceCriteria": ["..."], "briefAddition": "..."}\n'
-            "Then use update_board to move back to 'In Progress'."
+            "Then use update_board to move back to 'In Progress' "
+            "(optional description/acceptanceCriteria on that call). "
+            "Valid JSON alone is enough — do not restate it after the board moves."
         )
         result = agent_po.execute_step(prompt, max_iterations=_llm_iterations())
 
@@ -3248,7 +3223,9 @@ def _run_po_clarification(active_task: Dict[str, Any], brief: str) -> None:
                     mark_step_outcome_simulation_pending(task_id, "Product Owner", lane_before)
                 else:
                     record_task_decision(task_id, "Product Owner", "clarification", "Offline clarification")
-                    clarified = True
+                    from backend.services.po_clarification import move_off_needs_po
+
+                    move_off_needs_po(task_id)
             else:
                 obj = extract_json_object_from_text(result)
                 if obj and (obj.get("description") or obj.get("acceptanceCriteria")):
@@ -3261,40 +3238,29 @@ def _run_po_clarification(active_task: Dict[str, Any], brief: str) -> None:
                         result[:500],
                         result,
                     )
-                clarified = _apply_po_clarification_result(task, result)
-            if not deferred_sim and _task_in_lane(task_id, "Needs PO"):
-                if clarified:
-                    ws = get_workflow_settings()
-                    if (
-                        ws.get("requireBacklogRefinement")
-                        and int(task.get("refinementRoundTrips") or 0) > 0
-                        and not task.get("refinementComplete")
-                    ):
-                        move_board_stage(task_id, "Refinement")
-                        task["refinementStatus"] = "po_updated"
-                        publish_activity(
-                            task_id,
-                            "po_clarified",
-                            "PO clarified refinement blockers — returned to Refinement",
-                            role="assistant",
-                            agent="Product Owner",
-                            lane="Refinement",
-                        )
-                    else:
-                        move_board_stage(task_id, "In Progress")
-                        publish_activity(
-                            task_id,
-                            "po_clarified",
-                            "PO clarified requirements and returned task to Dev",
-                            role="assistant",
-                            agent="Product Owner",
-                            lane="In Progress",
-                        )
-                else:
+            if not deferred_sim:
+                from backend.services.po_clarification import complete_needs_po_clarification
+
+                clarified, note = complete_needs_po_clarification(task_id, text=result)
+                dest = get_task_lane(task_id) or ""
+                if dest in ("In Progress", "Refinement") and dest != lane_before:
+                    publish_activity(
+                        task_id,
+                        "po_clarified",
+                        (
+                            "PO clarified refinement blockers — returned to Refinement"
+                            if dest == "Refinement"
+                            else "PO clarified requirements and returned task to Dev"
+                        ),
+                        role="assistant",
+                        agent="Product Owner",
+                        lane=dest,
+                    )
+                elif not clarified and _task_in_lane(task_id, "Needs PO"):
                     add_system_log(
                         "Product Owner",
                         "warning",
-                        f"Clarification incomplete for '{task['title']}' — card stays in Needs PO",
+                        f"Clarification incomplete for '{task['title']}' — {note}",
                     )
             _check_stuck_and_escalate(task_id, lane_before, agent_key="po")
     finally:

@@ -734,7 +734,7 @@ export default function SettingsSlideOver({
                   </label>
                   <p className="text-[10px] text-cat-overlay leading-relaxed -mt-1">
                     Use <code className="text-cat-subtext">30m</code> or{' '}
-                    <code className="text-cat-subtext">-1</code> to avoid cold-reloading the model
+                    <code className="text-cat-subtext">-1s</code> to avoid cold-reloading the model
                     every iteration.
                   </p>
                 </>

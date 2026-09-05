@@ -180,6 +180,11 @@ class StepDiagnosticsTracker:
                 "Plan text is not executed — model must call apply_patch or write_file."
             ),
             "interrupted": "Step was cancelled or raised an exception before completing.",
+            "po_clarification_incomplete": (
+                "Product Owner did not apply clarification JSON or leave Needs PO. "
+                "Valid JSON is applied automatically — do not restate it on the next step."
+            ),
+            "po_clarified": "PO clarification applied and the card left Needs PO.",
         }
         return hints.get(
             exit_reason,
@@ -218,7 +223,7 @@ class StepDiagnosticsTracker:
                 "used": self.llm_iterations_used,
                 "max": self.llm_iterations_max,
             },
-            "ollamaMsTotal": sum(int(c.get("durationMs") or 0) for c in self.ollama_calls),
+            "ollamaMsTotal": 0,
             "ollamaCallCount": len(self.ollama_calls),
             "promptTokensTotal": sum(int(c.get("promptTokens") or 0) for c in self.ollama_calls),
             "evalTokensTotal": sum(int(c.get("evalTokens") or 0) for c in self.ollama_calls),
@@ -234,6 +239,11 @@ class StepDiagnosticsTracker:
             "events": self.events,
             "filePath": str(self.file_path),
         }
+        ollama_sum = sum(int(c.get("durationMs") or 0) for c in self.ollama_calls)
+        # Overlapping waits / retries can sum above wall clock — never report more LLM time than the step.
+        payload["ollamaMsTotal"] = min(ollama_sum, duration_ms) if duration_ms > 0 else ollama_sum
+        if duration_ms > 0 and ollama_sum > duration_ms:
+            payload["ollamaMsCapped"] = True
         tool_ms = 0
         for entry in self.tools_log:
             if isinstance(entry.get("durationMs"), (int, float)):
@@ -955,9 +965,15 @@ def derive_exit_reason(
         return "plan_exhausted"
     if tools & {"write_file", "apply_patch"}:
         return "completed_with_writes"
+    if lane_before == "Needs PO":
+        if lane_after != "Needs PO":
+            return "po_clarified"
+        return "po_clarification_incomplete"
     if lane_before == lane_after == "In Progress" and agent_result:
         return "completed_text_only"
-    return "fix_verify_done"
+    if lane_before != lane_after:
+        return "lane_advanced"
+    return "completed_text_only"
 
 
 def finalize_active_step_trace(
