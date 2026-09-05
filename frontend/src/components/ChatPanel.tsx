@@ -325,7 +325,6 @@ export default function ChatPanel({
             : m,
         ),
       )
-      onRefreshState?.()
     } catch (err) {
       if (isAbortError(err)) {
         setMessagesCapped((prev) =>
@@ -358,6 +357,7 @@ export default function ChatPanel({
       setChatSending(false)
       setStreaming(false)
       abortRef.current = null
+      onRefreshState?.()
     }
   }
 

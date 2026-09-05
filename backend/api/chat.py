@@ -1,9 +1,11 @@
 import json
+import logging
 
 from fastapi import APIRouter, HTTPException
 from fastapi.responses import StreamingResponse
 
 from backend import state
+from backend.agents.agent_run import get_active_run
 from backend.agents.registry import AGENT_MAP
 from backend.agents.task_context import build_task_prompt, find_task_by_id, is_task_done
 from backend.api.schemas import ChatPayload, ChatRewindPayload
@@ -14,6 +16,10 @@ from backend.services.project_service import save_current_project_state
 from backend.workspace.files import build_file_context_block, expand_chat_mentions
 
 router = APIRouter()
+_log = logging.getLogger(__name__)
+
+# (task_id, agent, allow_done_retry) snapshots so chat cannot wipe a live sprint.
+_chat_context_stack: list[tuple[object, object, object]] = []
 
 CHAT_ROLE_ADDENDUM: dict[str, str] = {
     "dev": (
@@ -86,7 +92,34 @@ def _refuse_done_task_if_needed(payload: ChatPayload) -> None:
         )
 
 
+def _refuse_if_sprint_step_running() -> None:
+    """Chat shares process-wide agent run state with auto-sprint — do not overlap."""
+    run = get_active_run()
+    if run is None:
+        return
+    status = str(getattr(run, "status", "") or "")
+    if status in ("completed", "failed", "idle"):
+        return
+    agent = str(getattr(run, "agent", "") or "an agent")
+    task_id = str(getattr(run, "task_id", "") or "").strip()
+    card = f" {task_id}" if task_id else ""
+    raise HTTPException(
+        status_code=409,
+        detail=(
+            f"Cannot chat about a card while {agent} is running{card} (auto-sprint). "
+            "Pause the sprint or wait for this step to finish."
+        ),
+    )
+
+
 def _apply_chat_task_context(payload: ChatPayload) -> None:
+    _chat_context_stack.append(
+        (
+            state.ACTIVE_SPRINT_TASK_ID,
+            state.ACTIVE_SPRINT_AGENT,
+            state.ALLOW_DONE_RETRY,
+        )
+    )
     chat_task_id = payload.task_id or f"chat-{payload.agent}"
     state.ACTIVE_SPRINT_TASK_ID = chat_task_id
     state.ALLOW_DONE_RETRY = bool(payload.allow_done_retry) if payload.task_id else False
@@ -105,7 +138,16 @@ def _apply_chat_task_context(payload: ChatPayload) -> None:
 
 def _finalize_chat_task_context(payload: ChatPayload) -> None:
     if payload.task_id:
-        save_current_project_state()
+        try:
+            save_current_project_state()
+        except Exception:
+            pass
+    if _chat_context_stack:
+        task_id, agent, allow = _chat_context_stack.pop()
+        state.ACTIVE_SPRINT_TASK_ID = task_id  # type: ignore[assignment]
+        state.ACTIVE_SPRINT_AGENT = agent  # type: ignore[assignment]
+        state.ALLOW_DONE_RETRY = bool(allow)
+        return
     state.ACTIVE_SPRINT_TASK_ID = None
     state.ACTIVE_SPRINT_AGENT = None
     state.ALLOW_DONE_RETRY = False
@@ -173,14 +215,30 @@ def _persist_chat_assistant(
             publish_board_update(payload.task_id, source="chat")
     return split_hint, tool_calls
 
-@router.post("/api/chat")
-def chat_with_agent(payload: ChatPayload):
-    if payload.agent not in AGENT_MAP:
-        raise HTTPException(status_code=400, detail="Invalid agent")
-    _refuse_done_task_if_needed(payload)
 
+def _http_chat_failure(exc: BaseException) -> HTTPException:
+    _log.exception("Chat execute_step failed")
+    snippet = str(exc).strip().replace("\n", " ")[:220]
+    kind = type(exc).__name__
+    add_system_log(
+        "System",
+        "error",
+        f"Chat failed ({kind}): {snippet or 'see server log'}",
+    )
+    return HTTPException(
+        status_code=503,
+        detail=(
+            f"Chat failed ({kind}): {snippet or 'unexpected error'}. "
+            "The sprint was not cancelled — pause it if you need the agents idle."
+        ),
+    )
+
+
+def _execute_chat_turn(payload: ChatPayload) -> dict:
+    """Run one chat turn. Raises HTTPException on busy sprint or execution failure."""
+    _refuse_if_sprint_step_running()
+    agent = AGENT_MAP[payload.agent]
     with state.STATE_LOCK:
-        agent = AGENT_MAP[payload.agent]
         agent.ollama_url = payload.ollama_url
         state.storage.save_chat_message(
             state.CURRENT_PROJECT_ID, "user", payload.message, agent=agent.role
@@ -201,18 +259,31 @@ def chat_with_agent(payload: ChatPayload):
     with state.STATE_LOCK:
         log_len_before = len(state.TOOL_EXECUTION_LOG)
     try:
-        response = agent.execute_step(composed)
+        try:
+            response = agent.execute_step(composed)
+        except HTTPException:
+            raise
+        except Exception as exc:
+            raise _http_chat_failure(exc) from exc
     finally:
-        if response == "SIMULATION_FALLBACK":
-            response, deferred_sim = _handle_chat_simulation_fallback(payload, agent)
-        if deferred_sim:
-            with state.STATE_LOCK:
-                tool_calls = [dict(e) for e in state.TOOL_EXECUTION_LOG[log_len_before:]]
-                _finalize_chat_task_context(payload)
-        else:
-            split_hint, tool_calls = _persist_chat_assistant(
-                payload, response=response or "", log_len_before=log_len_before
-            )
+        try:
+            if response == "SIMULATION_FALLBACK":
+                response, deferred_sim = _handle_chat_simulation_fallback(payload, agent)
+            if deferred_sim:
+                with state.STATE_LOCK:
+                    tool_calls = [dict(e) for e in state.TOOL_EXECUTION_LOG[log_len_before:]]
+                    _finalize_chat_task_context(payload)
+            else:
+                split_hint, tool_calls = _persist_chat_assistant(
+                    payload, response=response or "", log_len_before=log_len_before
+                )
+        except HTTPException:
+            raise
+        except Exception:
+            _log.exception("Chat persist/finalize failed")
+            if _chat_context_stack:
+                with state.STATE_LOCK:
+                    _finalize_chat_task_context(payload)
 
     add_system_log(
         "System",
@@ -221,7 +292,7 @@ def chat_with_agent(payload: ChatPayload):
         f"response_len={len(response or '')} tools={len(tool_calls)}",
     )
 
-    result = {
+    result: dict = {
         "agent": payload.agent,
         "response": response,
         "messages": state.storage.get_chat_messages(state.CURRENT_PROJECT_ID),
@@ -235,6 +306,14 @@ def chat_with_agent(payload: ChatPayload):
 
         result["pendingSimulation"] = get_pending_simulation_public()
     return result
+
+
+@router.post("/api/chat")
+def chat_with_agent(payload: ChatPayload):
+    if payload.agent not in AGENT_MAP:
+        raise HTTPException(status_code=400, detail="Invalid agent")
+    _refuse_done_task_if_needed(payload)
+    return _execute_chat_turn(payload)
 
 
 @router.post("/api/chat/clear")
@@ -269,51 +348,17 @@ def chat_stream(payload: ChatPayload):
     if payload.agent not in AGENT_MAP:
         raise HTTPException(status_code=400, detail="Invalid agent")
     _refuse_done_task_if_needed(payload)
+    _refuse_if_sprint_step_running()
 
     def generate():
-        with state.STATE_LOCK:
-            agent = AGENT_MAP[payload.agent]
-            agent.ollama_url = payload.ollama_url
-            state.storage.save_chat_message(
-                state.CURRENT_PROJECT_ID, "user", payload.message, agent=agent.role
-            )
-            _apply_chat_task_context(payload)
-            composed = _compose_message(payload, agent_role=agent.role)
-
-        add_system_log(
-            "System",
-            "info",
-            f"Chat stream start agent={payload.agent} task={payload.task_id or 'none'}",
-        )
-
-        split_hint = None
-        tool_calls: list = []
-        deferred_sim = False
-        with state.STATE_LOCK:
-            log_len_before = len(state.TOOL_EXECUTION_LOG)
-        try:
-            response = agent.execute_step(composed)
-        finally:
-            if response == "SIMULATION_FALLBACK":
-                response, deferred_sim = _handle_chat_simulation_fallback(payload, agent)
-            if deferred_sim:
-                with state.STATE_LOCK:
-                    tool_calls = [dict(e) for e in state.TOOL_EXECUTION_LOG[log_len_before:]]
-                    _finalize_chat_task_context(payload)
-            else:
-                split_hint, tool_calls = _persist_chat_assistant(
-                    payload, response=response or "", log_len_before=log_len_before
-                )
-
-        payload_out: dict = {"done": True, "response": response}
-        if split_hint:
-            payload_out["splitHint"] = split_hint
-        if tool_calls:
-            payload_out["toolCalls"] = tool_calls
-        if deferred_sim:
-            from backend.services.simulation_gate import get_pending_simulation_public
-
-            payload_out["pendingSimulation"] = get_pending_simulation_public()
+        result = _execute_chat_turn(payload)
+        payload_out: dict = {"done": True, "response": result.get("response")}
+        if result.get("splitHint"):
+            payload_out["splitHint"] = result["splitHint"]
+        if result.get("toolCalls"):
+            payload_out["toolCalls"] = result["toolCalls"]
+        if result.get("pendingSimulation"):
+            payload_out["pendingSimulation"] = result["pendingSimulation"]
         yield f"data: {json.dumps(payload_out)}\n\n"
 
     return StreamingResponse(generate(), media_type="text/event-stream")
