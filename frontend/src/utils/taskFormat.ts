@@ -131,6 +131,10 @@ export function sanitizeTaskForUi(task: import('../types').Task): import('../typ
     status: formatTaskText(task.status),
     acceptanceCriteria: formatAcceptanceCriteria(task.acceptanceCriteria as unknown[] | undefined),
     userQuestion: task.userQuestion != null ? formatTaskText(task.userQuestion) : task.userQuestion,
+    needsUserReason:
+      task.needsUserReason != null ? formatTaskText(task.needsUserReason) : task.needsUserReason,
+    needsUserAction:
+      task.needsUserAction != null ? formatTaskText(task.needsUserAction) : task.needsUserAction,
     blockedBy: (task.blockedBy ?? []).map((b) => formatTaskText(b)),
     qaFailure: task.qaFailure
       ? {
@@ -164,4 +168,22 @@ export function findTaskOnBoard(
     if (task) return sanitizeTaskForUi(task)
   }
   return null
+}
+
+const GENERIC_NEEDS_USER = /could not agree after|please clarify requirements|agents made no progress|review the task and provide a decision|agent requires your input|action required —/i
+
+export function isGenericNeedsUserText(text: string | null | undefined): boolean {
+  const t = (text || '').trim()
+  if (!t) return true
+  return GENERIC_NEEDS_USER.test(t)
+}
+
+/** Card preview: the actual question, never the PO-round one-liner. */
+export function needsUserCardPreview(task: import('../types').Task): string {
+  const question = (task.userQuestion || '').trim()
+  const action = (task.needsUserAction || '').trim()
+  if (question && !isGenericNeedsUserText(question)) return question
+  if (action && !isGenericNeedsUserText(action)) return action
+  if (question) return question
+  return 'Open the card — answer the question to unblock this work.'
 }

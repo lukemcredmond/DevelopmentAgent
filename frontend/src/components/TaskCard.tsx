@@ -3,7 +3,7 @@ import { CSS } from '@dnd-kit/utilities'
 import type { BoardLane, Task } from '../types'
 import type { TaskRunInfo } from '../utils/taskRunInfo'
 import { formatCardProgressBrief, formatFixVerifyHint, formatRunStatus } from '../utils/taskRunInfo'
-import { deriveTaskFiles, formatTaskText } from '../utils/taskFormat'
+import { deriveTaskFiles, formatTaskText, needsUserCardPreview } from '../utils/taskFormat'
 import { taskLooksIncompleteOnDone } from '../utils/taskDoneAudit'
 import { formatAgentUsageBrief } from '../utils/agentUsageFormat'
 import DevPhaseStepper from './DevPhaseStepper'
@@ -364,7 +364,7 @@ export default function TaskCard({
       })()}
       {needsUser && (
         <p className="text-[10px] text-amber-200/90 line-clamp-2 mb-1">
-          {task.needsUserAction?.trim() || task.userQuestion?.trim() || 'Action required — open for details'}
+          {needsUserCardPreview(task)}
         </p>
       )}
       <p className="text-[11px] text-cat-subtext line-clamp-3">{formatTaskText(task.description)}</p>

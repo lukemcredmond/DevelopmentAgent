@@ -367,6 +367,12 @@ def normalize_task(task: Dict[str, Any]) -> Dict[str, Any]:
         task["needsUserReason"] = None
     if "needsUserAction" not in task:
         task["needsUserAction"] = None
+    if "needsUserKind" not in task:
+        task["needsUserKind"] = None
+    if "needsUserSuggestedTarget" not in task:
+        task["needsUserSuggestedTarget"] = None
+    elif task.get("needsUserSuggestedTarget") not in ("dev", "po", "refinement", None):
+        task["needsUserSuggestedTarget"] = "dev"
     if "userResolutions" not in task or not isinstance(task.get("userResolutions"), list):
         task["userResolutions"] = []
     else:

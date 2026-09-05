@@ -427,6 +427,8 @@ def cmd_answer(options: Dict[str, Any]) -> str:
     task["userQuestion"] = None
     task["needsUserReason"] = None
     task["needsUserAction"] = None
+    task["needsUserKind"] = None
+    task["needsUserSuggestedTarget"] = None
     record_task_decision(
         task_id,
         "User",
@@ -438,7 +440,7 @@ def cmd_answer(options: Dict[str, Any]) -> str:
         init_refinement_fields(task)
         task["refinementStatus"] = "pending"
         task["refinementNotes"] = answer
-    move_board_stage(task_id, target_lane)
+    move_board_stage(task_id, target_lane, honor_dev_claim_gate=False)
     _log("System", "success", f"User resolved {task_id} → {target_lane} (discord)")
     return f"Answered [{task_id}] → {target_lane}."
 

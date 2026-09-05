@@ -11,7 +11,7 @@ import type {
   TaskTranscriptEntry,
 } from '../types'
 import { fetchTaskFlowSummary } from '../api/client'
-import { formatAcceptanceCriteria, formatTaskText, deriveTaskFiles, sanitizeTaskForUi, formatQaPair } from '../utils/taskFormat'
+import { formatAcceptanceCriteria, formatTaskText, deriveTaskFiles, sanitizeTaskForUi, formatQaPair, isGenericNeedsUserText } from '../utils/taskFormat'
 import { incompleteDevProgressLabels, taskLooksIncompleteOnDone } from '../utils/taskDoneAudit'
 import {
   formatDurationMs,
@@ -494,18 +494,25 @@ export default function TaskDetailModal({
   const isFeatureEpic = safeTask.workType === 'feature' || taskLane === 'Features'
   const diagnosis = safeTask.lastDiagnosis
   const commandDiagnostics = getCommandDiagnostics(safeTask)
-  const stuckLoopCount = (safeTask.decisions ?? []).filter((d) => d.type === 'stuck_loop').length
-  const lastFailedTool = [...(safeTask.transcript ?? [])]
-    .reverse()
-    .find((e) => e.toolSuccess === false || (e.role === 'tool' && /FAILED|✗/i.test(e.content ?? '')))
+  const needsUserQuestion = (() => {
+    const q = safeTask.userQuestion?.trim() || ''
+    if (q && !isGenericNeedsUserText(q)) return q
+    const derived = deriveNeedsUserReason(safeTask).trim()
+    if (derived && !isGenericNeedsUserText(derived)) return derived
+    return q || derived || 'What should Developer do next on this card?'
+  })()
   const needsUserReason =
-    safeTask.needsUserReason?.trim() ||
-    deriveNeedsUserReason(safeTask).split('\n')[0] ||
-    'The agent could not proceed without your input.'
+    (safeTask.needsUserReason?.trim() && !isGenericNeedsUserText(safeTask.needsUserReason)
+      ? safeTask.needsUserReason.trim()
+      : '') ||
+    (safeTask.lastDiagnosis?.problem?.trim() || '') ||
+    'The agents stopped because they cannot proceed without your answer. Round-trips to Product Owner are not the question — see How to move on.'
   const needsUserAction =
-    safeTask.needsUserAction?.trim() ||
-    safeTask.userQuestion?.trim() ||
-    'Describe the missing information or decision needed to continue.'
+    (safeTask.needsUserAction?.trim() && !isGenericNeedsUserText(safeTask.needsUserAction)
+      ? safeTask.needsUserAction.trim()
+      : '') ||
+    'Type a short answer below, then click Send to Developer to resume. Use Send to Product Owner only if you are rewriting the spec.'
+  const suggestedTarget = safeTask.needsUserSuggestedTarget || 'dev'
   const priorUserAnswers = safeTask.userResolutions ?? []
   const isDuplicateQuestion = safeTask.needsUserDuplicate === true
   const workLabel = isFeatureEpic
@@ -616,28 +623,22 @@ export default function TaskDetailModal({
           {taskLane === 'Needs User' && onResolveUser && (
             <div className="bg-amber-950/20 border border-amber-500/30 rounded-lg p-3 space-y-2">
               <div className="flex items-center justify-between gap-2">
-                <h4 className="text-xs font-bold text-amber-300">Why this needs you</h4>
+                <h4 className="text-xs font-bold text-amber-300">Question for you</h4>
                 {isDuplicateQuestion && (
                   <span className="text-[9px] px-1.5 py-0.5 rounded bg-rose-950/50 text-rose-300 border border-rose-500/40">
                     Same question again?
                   </span>
                 )}
               </div>
-              <p className="text-[11px] text-amber-100/90 whitespace-pre-wrap">{needsUserReason}</p>
+              <p className="text-[11px] text-amber-100/90 whitespace-pre-wrap">{needsUserQuestion}</p>
               <div className="text-[10px] space-y-1">
-                <p className="text-amber-200 font-semibold">What to provide</p>
+                <p className="text-amber-200 font-semibold">Why we stopped</p>
+                <p className="text-amber-100/80 whitespace-pre-wrap">{needsUserReason}</p>
+              </div>
+              <div className="text-[10px] space-y-1">
+                <p className="text-amber-200 font-semibold">How to move on</p>
                 <p className="text-amber-100/80 whitespace-pre-wrap">{needsUserAction}</p>
               </div>
-              {stuckLoopCount > 0 && (
-                <p className="text-[10px] text-amber-300/80">
-                  Stuck loop rounds: {stuckLoopCount}
-                </p>
-              )}
-              {lastFailedTool && (
-                <p className="text-[10px] text-rose-300/90">
-                  Last failed tool: {lastFailedTool.toolName ?? 'unknown'}
-                </p>
-              )}
               {priorUserAnswers.length > 0 && (
                 <div className="text-[10px] space-y-1">
                   <button
@@ -680,7 +681,7 @@ export default function TaskDetailModal({
               <textarea
                 value={userAnswer}
                 onChange={(e) => setUserAnswer(e.target.value)}
-                placeholder="Your answer for the Developer…"
+                placeholder={needsUserQuestion.slice(0, 180) || 'Your answer…'}
                 className="w-full text-xs bg-cat-base border border-cat-surface1 rounded p-2 min-h-[60px]"
               />
               <div className="flex flex-wrap gap-2 pt-1">
@@ -704,11 +705,14 @@ export default function TaskDetailModal({
                       className: 'bg-indigo-700 hover:bg-indigo-600',
                     },
                   ] as const
-                ).map(({ target, label, className }) => (
+                ).map(({ target, label, className }) => {
+                  const recommended = suggestedTarget === target
+                  return (
                   <button
                     key={target}
                     type="button"
                     disabled={!userAnswer.trim()}
+                    title={recommended ? 'Recommended for this card' : undefined}
                     onClick={() => {
                       try {
                         sessionStorage.removeItem(`needs-user-draft-${task.id}`)
@@ -718,11 +722,14 @@ export default function TaskDetailModal({
                       onResolveUser(task.id, userAnswer.trim(), target)
                       setUserAnswer('')
                     }}
-                    className={`${className} disabled:opacity-50 text-white text-xs py-1.5 px-3 rounded-lg`}
+                    className={`${className} disabled:opacity-50 text-white text-xs py-1.5 px-3 rounded-lg ${
+                      recommended ? 'ring-2 ring-white/70 ring-offset-1 ring-offset-amber-950' : 'opacity-90'
+                    }`}
                   >
-                    {label}
+                    {recommended ? `${label} (recommended)` : label}
                   </button>
-                ))}
+                  )
+                })}
               </div>
             </div>
           )}

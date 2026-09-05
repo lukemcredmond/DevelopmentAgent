@@ -6,7 +6,7 @@ import datetime
 import difflib
 import hashlib
 import re
-from typing import Any, Dict, Optional, Tuple
+from typing import Any, Dict, List, Optional, Tuple
 
 from backend import state
 from backend.services.workflow_settings import get_workflow_settings
@@ -227,6 +227,326 @@ def stuck_is_tool_or_lint(task: Dict[str, Any]) -> bool:
     if isinstance(qa_fail, dict) and qa_fail.get("reason"):
         return True
     return False
+
+
+_GENERIC_NEEDS_USER_SNIPPETS = (
+    "could not agree after",
+    "please clarify requirements",
+    "agents made no progress",
+    "please clarify requirements or make a decision",
+    "review the task and provide a decision",
+    "agent requires your input",
+    "missing information or decision needed",
+)
+
+_SECRET_SNIPPETS = (
+    "api key",
+    "apikey",
+    "secret",
+    "password",
+    "credential",
+    "oauth",
+    "access token",
+    "auth token",
+    "private key",
+)
+
+_QUESTION_STARTERS = (
+    "which ",
+    "what ",
+    "should we",
+    "do you want",
+    "pick ",
+    "choose ",
+    "confirm ",
+    "provide ",
+    "paste ",
+)
+
+
+def looks_generic_needs_user_text(text: str) -> bool:
+    lower = str(text or "").strip().lower()
+    if not lower:
+        return True
+    return any(p in lower for p in _GENERIC_NEEDS_USER_SNIPPETS)
+
+
+def _looks_secret_ask(text: str) -> bool:
+    lower = str(text or "").lower()
+    return any(p in lower for p in _SECRET_SNIPPETS)
+
+
+def _looks_specific_question(text: str) -> bool:
+    raw = str(text or "").strip()
+    if len(raw) < 12 or looks_generic_needs_user_text(raw):
+        return False
+    lower = raw.lower()
+    if "?" in raw:
+        return True
+    if _looks_secret_ask(raw):
+        return True
+    return any(lower.startswith(s) or f" {s}" in f" {lower}" for s in _QUESTION_STARTERS)
+
+
+def _question_from_raw_msg(raw: str) -> str:
+    text = str(raw or "").strip()
+    if not text:
+        return ""
+    for line in text.splitlines():
+        stripped = line.strip()
+        low = stripped.lower()
+        for prefix in ("userquestion:", "user question:", "needs user:", "need user:"):
+            if low.startswith(prefix):
+                rest = stripped.split(":", 1)[1].strip()
+                if _looks_specific_question(rest):
+                    return rest
+    if _looks_specific_question(text):
+        para = text.split("\n\n", 1)[0].strip()
+        return para[:500]
+    return ""
+
+
+def _last_failed_tool(task: Dict[str, Any]) -> str:
+    for entry in reversed(task.get("transcript") or []):
+        if not isinstance(entry, dict):
+            continue
+        name = str(entry.get("toolName") or "").strip()
+        content = str(entry.get("content") or "")
+        failed = entry.get("toolSuccess") is False or (
+            name and ("fail" in content.lower() or "error" in content.lower() or "✗" in content)
+        )
+        if failed and name:
+            snippet = " ".join(content.split())[:120]
+            return f"{name}: {snippet}" if snippet else name
+    return ""
+
+
+def _first_lint_line(task: Dict[str, Any]) -> str:
+    diagnostics = task.get("lastCommandDiagnostics") or []
+    if not isinstance(diagnostics, list) or not diagnostics:
+        return ""
+    first = diagnostics[0]
+    if not isinstance(first, dict):
+        return str(first)[:160]
+    loc = f"{first.get('file', '?')}:{first.get('line', '?')}"
+    return f"{loc} — {str(first.get('message') or '')[:140]}"
+
+
+def _spec_gap_lines(task: Dict[str, Any]) -> List[str]:
+    gaps: List[str] = []
+    desc = str(task.get("description") or "").strip()
+    ac = task.get("acceptanceCriteria") or []
+    if not isinstance(ac, list):
+        ac = []
+    ac_usable = [str(x).strip() for x in ac if str(x).strip()]
+    if len(desc) < 40:
+        gaps.append("the description is too vague to implement")
+    if not ac_usable:
+        gaps.append("acceptance criteria are empty")
+    return gaps
+
+
+def _exit_reason(task: Dict[str, Any]) -> str:
+    outcome = task.get("lastStepOutcome") or {}
+    if isinstance(outcome, dict):
+        return str(
+            outcome.get("exitReason") or outcome.get("stopReason") or ""
+        ).strip().lower()
+    return str(task.get("lastCircuitExitReason") or "").strip().lower()
+
+
+def _resolve_needs_user_kind(task: Dict[str, Any], kind: str, raw_msg: str) -> str:
+    raw = str(raw_msg or "")
+    if _looks_secret_ask(raw) or _looks_secret_ask(str(task.get("userQuestion") or "")):
+        return "secret"
+    if stuck_is_tool_or_lint(task):
+        return "lint"
+    exit_r = _exit_reason(task)
+    if exit_r == "explore_budget_exhausted" or task.get("forcePatchNextDevStep"):
+        return "explore"
+    if exit_r == "patch_budget_exhausted":
+        return "patch"
+    if kind == "po_limit":
+        return "po_limit"
+    if kind == "dev_board_move" and _looks_specific_question(raw):
+        return "product_choice"
+    if kind == "dev_escalation" and int(task.get("poRoundTrips") or 0):
+        return "po_limit"
+    if _looks_specific_question(raw):
+        return "product_choice"
+    if kind:
+        return "stuck" if kind in ("stuck_loop", "clarification") else kind
+    return "stuck"
+
+
+def build_needs_user_brief(
+    task: Dict[str, Any],
+    *,
+    kind: str = "stuck_loop",
+    raw_msg: str = "",
+) -> Dict[str, str]:
+    """Structured Needs User copy: question, why, action, suggested resolve target.
+
+    Does not call an LLM — uses diagnosis, lint, last step outcome, and spec gaps.
+    """
+    title = str(task.get("title") or task.get("id") or "this card")
+    resolved_kind = _resolve_needs_user_kind(task, kind, raw_msg)
+    diagnosis = task.get("lastDiagnosis") if isinstance(task.get("lastDiagnosis"), dict) else {}
+    problem = str((diagnosis or {}).get("problem") or "").strip()
+    recommended = str((diagnosis or {}).get("recommendedAction") or "").strip()
+    lint_line = _first_lint_line(task)
+    failed_tool = _last_failed_tool(task)
+    outcome = task.get("lastStepOutcome") if isinstance(task.get("lastStepOutcome"), dict) else {}
+    why_stayed = str((outcome or {}).get("whyCardStayed") or "").strip()
+    exit_r = _exit_reason(task)
+    qa_fail = task.get("qaFailure") if isinstance(task.get("qaFailure"), dict) else {}
+    qa_reason = str((qa_fail or {}).get("reason") or "").strip()
+    gaps = _spec_gap_lines(task)
+    specific = _question_from_raw_msg(raw_msg)
+
+    question = specific
+    why_parts: List[str] = []
+    action = ""
+    suggested = "dev"
+
+    if resolved_kind == "secret":
+        question = question or (
+            "Which secret/credential should Developer use (paste the value, or name the env var)?"
+        )
+        why_parts.append("The agent cannot invent credentials or API keys.")
+        action = (
+            "Paste the secret, or write e.g. 'use env OPENAI_API_KEY and do not commit it'. "
+            "Then click Send to Developer."
+        )
+    elif resolved_kind == "lint":
+        question = question or (
+            "Which lint/tool error should Developer fix or ignore first"
+            + (f" ({lint_line})?" if lint_line else "?")
+        )
+        if lint_line:
+            why_parts.append(f"Blocked on a lint/tool error: {lint_line}.")
+        else:
+            why_parts.append("Blocked on lint or tool failures, not a missing product decision.")
+        if failed_tool:
+            why_parts.append(f"Last failed tool: {failed_tool}")
+        action = (
+            "You cannot unblock this by sending it back to Product Owner. "
+            "Reply with 'fix {file}' or 'ignore {rule} and continue', then click Send to Developer."
+        )
+    elif resolved_kind == "explore":
+        question = question or (
+            f'Which file or function should Developer change first to implement "{title}"?'
+        )
+        why_parts.append(
+            "Developer used the explore budget (read/list/search) and never called apply_patch/write_file."
+        )
+        if why_stayed:
+            why_parts.append(why_stayed[:280])
+        action = (
+            "Name the starting file/function, or say 'split this card'. "
+            "Then click Send to Developer (not Product Owner)."
+        )
+    elif resolved_kind == "patch":
+        question = question or (
+            f'How should Developer apply the change for "{title}" after patch attempts failed?'
+        )
+        why_parts.append("Patch/write attempts exhausted without a successful file edit.")
+        if failed_tool:
+            why_parts.append(f"Last failed tool: {failed_tool}")
+        action = (
+            "Describe the intended edit (path + what to change), or say 'split the card'. "
+            "Then click Send to Developer."
+        )
+    elif resolved_kind == "po_limit":
+        if not question:
+            if gaps and "acceptance criteria are empty" in gaps:
+                question = (
+                    f'What are the acceptance criteria for "{title}"? '
+                    "List 2–5 done-when bullets."
+                )
+            elif gaps:
+                question = (
+                    f'What should "{title}" do, in one paragraph, including user-visible behavior?'
+                )
+            elif problem:
+                question = f"How should we resolve: {problem[:220]}?"
+            else:
+                question = (
+                    f'What is the one product decision Developer is missing for "{title}"?'
+                )
+        if gaps:
+            why_parts.append("The spec is still incomplete: " + "; ".join(gaps) + ".")
+        if problem:
+            why_parts.append(problem[:240])
+        trips = int(task.get("poRoundTrips") or 0)
+        if trips:
+            why_parts.append(
+                f"Product Owner already reviewed this {trips} time(s); another PO bounce will not unblock it."
+            )
+        action = (
+            "Answer the question above, then click Send to Developer. "
+            "Only click Send to Product Owner if you are rewriting acceptance criteria."
+        )
+    else:
+        if not question:
+            if problem:
+                question = f"How should we resolve: {problem[:220]}?"
+            elif qa_reason:
+                question = f"QA failed — how should we treat this: {qa_reason[:180]}?"
+            elif lint_line:
+                question = f"What should Developer do about: {lint_line}?"
+            elif gaps:
+                question = f'Fill the spec gap for "{title}": {gaps[0]}.'
+            else:
+                question = (
+                    f'What decision or missing fact does Developer need to continue "{title}"?'
+                )
+        if why_stayed:
+            why_parts.append(why_stayed[:280])
+        elif exit_r:
+            why_parts.append(f"Last step ended with {exit_r}.")
+        action = (
+            "Answer in one short message, then click Send to Developer to resume implementation. "
+            "Use Send to Product Owner only to rewrite the spec."
+        )
+
+    if recommended and recommended not in (action + question):
+        why_parts.append(f"Suggested next step from diagnosis: {recommended[:200]}")
+    if qa_reason and resolved_kind != "secret" and qa_reason not in " ".join(why_parts):
+        why_parts.append(f"QA failure: {qa_reason[:160]}")
+    if not why_parts:
+        why_parts.append("The sprint stopped because the agents cannot proceed without your answer.")
+
+    why = " ".join(why_parts)
+    if (
+        recommended
+        and resolved_kind in ("po_limit", "stuck")
+        and not looks_generic_needs_user_text(recommended)
+    ):
+        if "send to" not in recommended.lower():
+            action = f"{recommended.rstrip('.')} Then click Send to Developer."
+        else:
+            action = recommended
+
+    return {
+        "kind": resolved_kind,
+        "question": question[:500],
+        "why": why[:600],
+        "action": action[:600],
+        "suggestedTarget": suggested,
+    }
+
+
+def apply_needs_user_brief(task: Dict[str, Any], brief: Dict[str, str]) -> None:
+    """Write structured Needs User fields onto the task."""
+    task["userQuestion"] = str(brief.get("question") or "")[:500]
+    task["needsUserReason"] = str(brief.get("why") or "")[:600]
+    task["needsUserAction"] = str(brief.get("action") or "")[:600]
+    task["needsUserKind"] = str(brief.get("kind") or "")[:40]
+    target = str(brief.get("suggestedTarget") or "dev").strip().lower()
+    if target not in ("dev", "po", "refinement"):
+        target = "dev"
+    task["needsUserSuggestedTarget"] = target
 
 
 def build_stuck_escalation_message(task: Dict[str, Any], lane: str, max_stuck: int) -> str:

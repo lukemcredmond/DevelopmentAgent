@@ -76,7 +76,12 @@ def publish_board_delta(
     )
 
 
-def move_board_stage(task_id: str, target_lane: str) -> str:
+def move_board_stage(
+    task_id: str,
+    target_lane: str,
+    *,
+    honor_dev_claim_gate: bool = True,
+) -> str:
     with state.STATE_LOCK:
         needle = str(task_id)
         matches: List[tuple[str, Dict[str, Any]]] = []
@@ -96,7 +101,7 @@ def move_board_stage(task_id: str, target_lane: str) -> str:
             )
         if len(matches) == 1 and source_lane == target_lane:
             return f"Task {task_id} is already in '{target_lane}'."
-        if target_lane == "In Progress":
+        if target_lane == "In Progress" and honor_dev_claim_gate:
             from backend.services.task_spec_validation import dev_claim_blocked
 
             claim_block = dev_claim_blocked(active_task, get_workflow_settings())

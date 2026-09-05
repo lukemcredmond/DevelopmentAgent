@@ -67,6 +67,8 @@ from backend.services.feature_similarity import iter_board_tasks, link_related_f
 from backend.services.git_service import git_commit, git_init
 from backend.services.logs import add_system_log
 from backend.services.needs_user_guard import (
+    apply_needs_user_brief,
+    build_needs_user_brief,
     build_stuck_escalation_message,
     dev_clarification_from_result,
     dev_explicit_needs_user,
@@ -884,17 +886,10 @@ def _needs_user_cap_reached() -> bool:
     return state.SPRINT_NEEDS_USER_COUNT >= cap
 
 
-def _set_needs_user_fields(task: Dict[str, Any], msg: str) -> None:
-    """Populate structured Needs User fields from escalation message."""
-    text = str(msg or "").strip()
-    task["userQuestion"] = text[:500]
-    lines = [ln.strip() for ln in text.splitlines() if ln.strip()]
-    if lines:
-        task["needsUserReason"] = lines[0][:240]
-        task["needsUserAction"] = (lines[1] if len(lines) > 1 else lines[0])[:240]
-    else:
-        task["needsUserReason"] = "Agent requires your input to continue."
-        task["needsUserAction"] = "Review the task and provide a decision or missing information."
+def _set_needs_user_fields(task: Dict[str, Any], msg: str, *, kind: str = "stuck_loop") -> None:
+    """Populate structured Needs User question / why / how-to-unblock fields."""
+    brief = build_needs_user_brief(task, kind=kind, raw_msg=msg)
+    apply_needs_user_brief(task, brief)
 
 
 def _redirect_to_needs_po(task_id: str, task: Dict[str, Any], msg: str, *, kind: str = "clarification") -> bool:
@@ -967,27 +962,34 @@ def _try_move_to_needs_user(
             f"{task_id}: Needs User blocked by autonomous cap ({state.SPRINT_NEEDS_USER_COUNT}) — {msg[:120]}",
         )
         return False
-    _set_needs_user_fields(task, msg)
+    brief = build_needs_user_brief(task, kind=kind, raw_msg=msg)
+    apply_needs_user_brief(task, brief)
+    activity_msg = str(brief.get("question") or msg)
     move_board_stage(task_id, "Needs User")
     state.SPRINT_NEEDS_USER_COUNT += 1
     publish_activity(
         task_id,
         kind,
-        msg,
+        activity_msg,
         role="system",
         agent="System",
         lane="Needs User",
     )
-    add_system_log("System", "warning", f"{task_id}: {msg}")
+    add_system_log("System", "warning", f"{task_id}: {activity_msg}")
     try:
         from backend.services.phone_notify import notify_if_enabled
 
         title = task.get("title") or task_id
         reason = task.get("needsUserReason") or msg
+        question = str(task.get("userQuestion") or "").strip()
         action = str(task.get("needsUserAction") or "").strip()
-        body_parts = [f"[{task_id}] {title}", str(reason)[:350]]
+        body_parts = [f"[{task_id}] {title}"]
+        if question:
+            body_parts.append(f"Question: {question[:350]}")
+        if reason and reason != question:
+            body_parts.append(str(reason)[:350])
         if action:
-            body_parts.append(f"Action: {action[:200]}")
+            body_parts.append(f"How to unblock: {action[:250]}")
         body_parts.append("Reply with /ah-answer or use the UI.")
         notify_if_enabled(
             "needs_user",

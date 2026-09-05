@@ -243,6 +243,8 @@ export interface Task {
   userQuestion?: string | null
   needsUserReason?: string | null
   needsUserAction?: string | null
+  needsUserKind?: string | null
+  needsUserSuggestedTarget?: 'dev' | 'po' | 'refinement' | null
   userResolutions?: UserResolution[]
   needsUserCooldownUntilStep?: number | null
   needsUserDuplicate?: boolean
