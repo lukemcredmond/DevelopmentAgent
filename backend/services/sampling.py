@@ -22,7 +22,7 @@ DEFAULT_SAMPLING: Dict[str, float] = {
 
 # Planning benefits from a little more diversity; editing wants determinism.
 ROLE_SAMPLING_DEFAULTS: Dict[str, Dict[str, float]] = {
-    "po": {"temperature": 0.4, "top_p": 0.95, "repeat_penalty": 1.05, "num_predict": 1024},
+    "po": {"temperature": 0.4, "top_p": 0.95, "repeat_penalty": 1.05, "num_predict": 2048},
     "dev": {"temperature": 0.15, "top_p": 0.9, "repeat_penalty": 1.08},
     "cr": {"temperature": 0.2, "top_p": 0.9, "repeat_penalty": 1.05},
     "qa": {"temperature": 0.2, "top_p": 0.9, "repeat_penalty": 1.05},

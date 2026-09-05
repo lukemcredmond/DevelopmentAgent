@@ -385,6 +385,8 @@ class ScrumAgent:
         self._last_chat_error_type: Optional[str] = None
         self._last_chat_error: Optional[str] = None
         self._step_num_ctx: Optional[int] = None
+        self._step_num_predict: Optional[int] = None
+        self._po_num_predict_bumped: bool = False
 
     def register_tool(self, tool) -> None:
         self.registry.register(tool)
@@ -1064,8 +1066,14 @@ class ScrumAgent:
         keep_alive = effective_keep_alive(ws)
         if keep_alive and provider.capabilities.keep_alive:
             opts["keep_alive"] = str(keep_alive)
-        if self.role == "Product Owner" and "num_predict" not in opts:
-            opts["num_predict"] = 1024
+        if self.role == "Product Owner":
+            cap = getattr(self, "_step_num_predict", None)
+            if cap is not None:
+                opts["num_predict"] = int(cap)
+            elif "num_predict" not in opts:
+                from backend.services.po_clarification import PO_NUM_PREDICT_DEFAULT
+
+                opts["num_predict"] = int(PO_NUM_PREDICT_DEFAULT)
         return opts
 
     def _maybe_finish_po_clarification(
@@ -1356,9 +1364,23 @@ class ScrumAgent:
         from backend.services.step_diagnostics import log_event
 
         log_event(action.stop_reason, stop_msg)
+        self._mark_force_patch_next_dev_step(action.stop_reason)
         self._log_step_exit(stop_msg, "warning")
         self._finish_run(status="failed", error=stop_msg)
         return action.stop_reason, stop_msg
+
+    def _mark_force_patch_next_dev_step(self, stop_reason: Optional[str]) -> None:
+        if stop_reason != "explore_budget_exhausted":
+            return
+        task_id = state.ACTIVE_SPRINT_TASK_ID
+        if not task_id:
+            return
+        try:
+            board_task = find_task_by_id(str(task_id))
+            if board_task:
+                board_task["forcePatchNextDevStep"] = True
+        except Exception:
+            pass
 
     def _finish_run(self, *, status: str = "completed", error: Optional[str] = None) -> None:
         """Sync live DevPhaseGraph onto the agent run, then finish (persists lastStepProgress)."""
@@ -2408,6 +2430,8 @@ class ScrumAgent:
                 stop_msg = phase_action.stop_message or phase_action.stop_reason
                 add_system_log(self.role, "warning", stop_msg)
                 log_event(phase_action.stop_reason, stop_msg)
+                if phase_action.stop_reason == "explore_budget_exhausted" and task_id:
+                    self._mark_force_patch_next_dev_step(phase_action.stop_reason)
                 self._log_step_exit(stop_msg, "warning")
                 self._finish_run(status="failed", error=stop_msg)
                 return stop_msg
@@ -2440,6 +2464,14 @@ class ScrumAgent:
         self._last_memories_used = []
         self._decisions_in_prompt = 0
         self._step_num_ctx = None
+        self._po_num_predict_bumped = False
+        self._step_num_predict = None
+        if self.role == "Product Owner":
+            from backend.services.po_clarification import PO_NUM_PREDICT_DEFAULT
+            from backend.services.sampling import sampling_options_for_role
+
+            po_opts = sampling_options_for_role(self.role, ws=ws)
+            self._step_num_predict = int(po_opts.get("num_predict") or PO_NUM_PREDICT_DEFAULT)
         ws = get_workflow_settings()
         max_tool_failures = int(ws.get("maxToolFailuresPerStep", 5))
         max_duration_sec = int(ws.get("maxAgentStepDurationSec", 2700) or 2700)
@@ -2546,11 +2578,22 @@ class ScrumAgent:
             prior_snap = None
             steps_on_card = 0
             focus_ac_index = None
+            force_patch = False
             if task_id:
                 try:
                     prior_task = find_task_by_id(str(task_id))
                     if prior_task:
                         normalize_task(prior_task)
+                        try:
+                            from backend.services.sprint_speed_gates import (
+                                should_force_patch_next_dev_step,
+                            )
+
+                            force_patch = should_force_patch_next_dev_step(prior_task)
+                            if prior_task.get("forcePatchNextDevStep"):
+                                prior_task.pop("forcePatchNextDevStep", None)
+                        except Exception:
+                            force_patch = False
                         lsp = prior_task.get("lastStepProgress") or {}
                         if isinstance(lsp, dict):
                             raw_graph = lsp.get("devPhaseGraph") or lsp.get("dev_phase_graph")
@@ -2584,6 +2627,7 @@ class ScrumAgent:
                 prior_snap=prior_snap,
                 steps_on_card=steps_on_card,
                 focus_ac_index=focus_ac_index,
+                force_patch=force_patch,
             )
             # Cycle cap: bail before burning another Ollama step on a non-converging card.
             graph = self._dev_phase_graph
@@ -2603,6 +2647,20 @@ class ScrumAgent:
                     self._log_step_exit(stop_msg, "warning")
                     self._finish_run(status="failed", error=stop_msg)
                     return stop_msg
+            graph = self._dev_phase_graph
+            if graph is not None and getattr(graph, "forced_patch", False):
+                from backend.services.dev_phase_graph import EXPLORE_NUDGE
+
+                messages.append(
+                    {
+                        "role": "system",
+                        "content": (
+                            EXPLORE_NUDGE
+                            + " This step skipped Explore because the last step exhausted "
+                            "the explore budget without a write."
+                        ),
+                    }
+                )
             if task_id:
                 try:
                     from backend.services.task_spec_markdown import ensure_task_spec_for_work
@@ -2875,6 +2933,49 @@ class ScrumAgent:
                     ECHO_REJECTION_MESSAGE,
                     detect_tool_output_echo,
                 )
+
+                if self.role == "Product Owner" and task_id:
+                    from backend.services.po_clarification import (
+                        PO_NUM_PREDICT_BUMP,
+                        PO_TRUNCATED_RETRY_MESSAGE,
+                        PO_TRUNCATED_STOP,
+                        po_turn_hit_generation_cap,
+                    )
+
+                    usage = getattr(self, "_last_token_usage", None) or {}
+                    if po_turn_hit_generation_cap(
+                        eval_tokens=int(usage.get("evalTokens") or 0),
+                        num_predict=getattr(self, "_step_num_predict", None),
+                        tool_names=tool_call_names,
+                        content=message.content or "",
+                    ):
+                        if not getattr(self, "_po_num_predict_bumped", False):
+                            self._po_num_predict_bumped = True
+                            current = int(getattr(self, "_step_num_predict", 0) or 0)
+                            self._step_num_predict = max(current * 2, int(PO_NUM_PREDICT_BUMP))
+                            messages.append(
+                                {"role": "system", "content": PO_TRUNCATED_RETRY_MESSAGE}
+                            )
+                            add_system_log(
+                                self.role,
+                                "warning",
+                                f"PO generation hit num_predict cap — retrying with "
+                                f"num_predict={self._step_num_predict}",
+                            )
+                            log_event(
+                                "po_num_predict_bump",
+                                f"num_predict={self._step_num_predict}",
+                            )
+                            continue
+                        add_system_log(self.role, "warning", PO_TRUNCATED_STOP)
+                        self._log_step_exit(PO_TRUNCATED_STOP, "warning")
+                        self._finish_run(status="failed", error=PO_TRUNCATED_STOP)
+                        pending_lesson = (
+                            "po_generation_truncated",
+                            set(tools_used),
+                            PO_TRUNCATED_STOP,
+                        )
+                        return PO_TRUNCATED_STOP
 
                 if message.tool_calls:
                     self._step_tool_call_count += len(tool_call_names)
@@ -3235,6 +3336,22 @@ class ScrumAgent:
                         agent=self.role,
                     )
                 write_tools = tools_used & {"write_file", "apply_patch"}
+                if (
+                    self.role == "Product Owner"
+                    and task_id
+                    and get_task_lane(task_id) == "Needs PO"
+                ):
+                    from backend.services.po_clarification import PO_INCOMPLETE_STOP
+
+                    add_system_log(self.role, "warning", PO_INCOMPLETE_STOP)
+                    self._log_step_exit(PO_INCOMPLETE_STOP, "warning")
+                    self._finish_run(status="failed", error=PO_INCOMPLETE_STOP)
+                    pending_lesson = (
+                        "po_clarification_incomplete",
+                        set(tools_used),
+                        PO_INCOMPLETE_STOP,
+                    )
+                    return PO_INCOMPLETE_STOP
                 if tools_used and not write_tools:
                     tool_list = ", ".join(sorted(tools_used))
                     add_system_log(

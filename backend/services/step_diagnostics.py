@@ -943,6 +943,10 @@ def derive_exit_reason(
         lower = agent_result.lower()
         if "phase cycle cap" in lower or "developer visit budget" in lower:
             return "phase_cycle_cap"
+        if "generation truncated" in lower:
+            return "po_generation_truncated"
+        if "clarification incomplete" in lower:
+            return "po_clarification_incomplete"
         if "identical arguments" in lower or "same arguments" in lower:
             return "duplicate_tool"
         if "explore tool budget" in lower:

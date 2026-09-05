@@ -60,6 +60,32 @@ def test_partial_writes_without_lane_progress_keep_bad_streak():
     assert task["lastCircuitExitReason"] == "completed_with_writes_no_advance"
 
 
+def test_needs_po_skip_after_circuit_and_latch():
+    task: dict = {}
+    ws = {
+        "enableStuckCircuitBreaker": True,
+        "circuitBreakerMaxBadExits": 3,
+        "circuitBreakerIdenticalPatchFails": 9,
+    }
+    assert gates.needs_po_should_skip_auto(task, ws) is False
+    for _ in range(3):
+        gates.record_consecutive_bad_exit(task, "po_clarification_incomplete")
+    assert gates.needs_po_should_skip_auto(task, ws) is True
+    fresh: dict = {}
+    gates.latch_needs_po_auto_skip(fresh, reason="empty PO")
+    assert gates.needs_po_should_skip_auto(fresh, ws) is True
+
+
+def test_stuck_is_explore_without_write():
+    assert gates.stuck_is_explore_without_write(
+        {"lastStepOutcome": {"exitReason": "explore_budget_exhausted"}}
+    )
+    assert gates.should_force_patch_next_dev_step({"forcePatchNextDevStep": True})
+    assert not gates.stuck_is_explore_without_write(
+        {"lastStepOutcome": {"exitReason": "po_clarified"}}
+    )
+
+
 def test_early_interrupt_backoff_escalates():
     gates.reset_interrupt_backoff_state()
     ws = {

@@ -42,6 +42,7 @@ CIRCUIT_BREAKER_EXITS = frozenset(
         "completed_text_only",
         "completed_with_writes_no_advance",
         "po_clarification_incomplete",
+        "po_generation_truncated",
     }
 )
 
@@ -174,6 +175,49 @@ def circuit_breaker_should_trip(task: Dict[str, Any], ws: Optional[Dict[str, Any
             "split the card or change approach"
         )
     return False, ""
+
+
+def latch_needs_po_auto_skip(task: Dict[str, Any], *, reason: str = "") -> None:
+    """Stop auto-sprint from re-picking this Needs PO card after empty/incomplete loops."""
+    if not isinstance(task, dict):
+        return
+    task["poAutoSkip"] = True
+    if reason:
+        task["poAutoSkipReason"] = str(reason)[:300]
+
+
+def needs_po_should_skip_auto(
+    task: Dict[str, Any], ws: Optional[Dict[str, Any]] = None
+) -> bool:
+    if not isinstance(task, dict):
+        return False
+    if task.get("poAutoSkip"):
+        return True
+    trip, _ = circuit_breaker_should_trip(task, ws)
+    return trip
+
+
+def stuck_is_explore_without_write(task: Dict[str, Any]) -> bool:
+    """True when the last Dev step burned explore tools and never wrote."""
+    if not isinstance(task, dict):
+        return False
+    outcome = task.get("lastStepOutcome") or {}
+    reason = str(
+        outcome.get("exitReason") or outcome.get("stopReason") or ""
+    ).strip().lower()
+    if reason == "explore_budget_exhausted":
+        return True
+    return str(task.get("lastCircuitExitReason") or "").strip().lower() == (
+        "explore_budget_exhausted"
+    )
+
+
+def should_force_patch_next_dev_step(task: Dict[str, Any]) -> bool:
+    if not isinstance(task, dict):
+        return False
+    if task.get("forcePatchNextDevStep"):
+        return True
+    return stuck_is_explore_without_write(task)
 
 
 def note_early_interrupt(

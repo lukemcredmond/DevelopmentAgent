@@ -5,7 +5,7 @@ from __future__ import annotations
 import hashlib
 import json
 import re
-from typing import Any, Dict, List, Optional, Tuple
+from typing import Any, Dict, List, Optional, Sequence, Tuple
 
 from backend.agents.task_context import (
     apply_po_clarification,
@@ -17,6 +17,22 @@ from backend.services.brief_service import append_brief_text, record_brief_chang
 from backend.services.logs import add_system_log
 
 _PO_ADVANCE_LANES = frozenset({"In Progress", "Refinement"})
+
+# Default PO decode cap; bump once when Gemma hits the wall with no tool/JSON.
+PO_NUM_PREDICT_DEFAULT = 2048
+PO_NUM_PREDICT_BUMP = 4096
+PO_TRUNCATED_RETRY_MESSAGE = (
+    "Your previous reply was cut off at the token cap before any update_board call "
+    "or clarification JSON. Reply now with a short JSON object "
+    '{"description": "...", "acceptanceCriteria": ["..."]} '
+    "and call update_board to In Progress. Do not write a long essay."
+)
+PO_TRUNCATED_STOP = (
+    "Stopped: PO generation truncated without clarification JSON or update_board."
+)
+PO_INCOMPLETE_STOP = (
+    "Stopped: PO clarification incomplete — no JSON or update_board."
+)
 
 
 def extract_json_object_from_text(text: str) -> Optional[Dict[str, Any]]:
@@ -254,6 +270,27 @@ def finish_po_board_noop(task_id: str, arguments: Optional[Dict[str, Any]]) -> T
         f"update_board skipped. Do not restate the clarification JSON. "
         f"Card is in '{lane or 'Needs PO'}'."
     )
+
+
+def po_turn_hit_generation_cap(
+    *,
+    eval_tokens: int,
+    num_predict: Optional[int],
+    tool_names: Sequence[str],
+    content: str,
+) -> bool:
+    """True when decode hit num_predict and produced neither tools nor parseable clarification."""
+    if tool_names:
+        return False
+    cap = int(num_predict or 0)
+    if cap <= 0:
+        return False
+    eval_n = int(eval_tokens or 0)
+    if eval_n < max(1, cap - 2):
+        return False
+    obj = extract_json_object_from_text(content or "")
+    description, ac, _ = clarification_fields_from_mapping(obj)
+    return not description and not ac
 
 
 def prune_repeated_po_json(content: str, *, max_chars: int = 200) -> str:

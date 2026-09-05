@@ -438,6 +438,10 @@ def _build_last_step_outcome(
         ):
             ok = False
             message = f"{agent_result[:200]}"
+    if stop_reason in ("po_clarification_incomplete", "po_generation_truncated"):
+        ok = False
+        if not (agent_result or "").startswith("Stopped:"):
+            message = f"PO clarification did not leave Needs PO on '{title}'."
     if tool_failures > 0:
         ok = False
         message = (
@@ -1062,6 +1066,15 @@ def _check_stuck_and_escalate(
                 "Stopping endless In Progress retries — split or escalate.",
             )
             add_system_log("System", "warning", f"{task_id}: {trip_reason}")
+            if lane_after == "Needs PO":
+                from backend.services.sprint_speed_gates import latch_needs_po_auto_skip
+
+                latch_needs_po_auto_skip(task, reason=trip_reason)
+                add_system_log(
+                    "System",
+                    "warning",
+                    f"{task_id}: skipping further auto PO on this card until it is unblocked",
+                )
     except Exception:
         pass
 
@@ -1132,10 +1145,15 @@ def _check_stuck_and_escalate(
 
     # Ladder: backup already armed above → try one auto-split before Needs PO.
     # Skip auto-split for lint/tool walls (lint fanout covers "break into bits").
+    # Skip for explore-budget exhaustion so the next Dev step can force a Patch turn.
+    from backend.services.sprint_speed_gates import stuck_is_explore_without_write
+
+    explore_no_write = stuck_is_explore_without_write(task)
     if (
         ws.get("enableSplitOnStuck", True)
         and not task.get("splitAttemptedOnStuck")
         and not stuck_is_tool_or_lint(task)
+        and not explore_no_write
     ):
         task["splitAttemptedOnStuck"] = True
         record_task_decision(
@@ -1215,6 +1233,21 @@ def _check_stuck_and_escalate(
     max_po = int(ws.get("maxPoRoundTrips", 3))
     msg = build_stuck_escalation_message(task, lane_after, max_stuck)
     latched = bool(task.get("phaseCycleCapReached"))
+    if explore_no_write and not latched:
+        task["forcePatchNextDevStep"] = True
+        record_task_decision(
+            task_id,
+            "System",
+            "stuck_loop",
+            "Explore budget exhausted without a write — staying In Progress for a forced Patch turn",
+            msg,
+        )
+        add_system_log(
+            "System",
+            "warning",
+            f"{task_id}: explore budget exhausted — not bouncing to Needs PO; next Dev step is Patch",
+        )
+        return
     if int(task.get("poRoundTrips", 0)) >= max_po:
         # Lint walls normally stay In Progress so Dev can retry. A latched card
         # cannot run Dev again, so park it instead of spinning recovery forever.
@@ -3262,11 +3295,18 @@ def _run_po_clarification(active_task: Dict[str, Any], brief: str) -> None:
                         "warning",
                         f"Clarification incomplete for '{task['title']}' — {note}",
                     )
+            _record_last_step_outcome(
+                task_id, lane_before, "Product Owner", agent_result=result or None
+            )
             _check_stuck_and_escalate(task_id, lane_before, agent_key="po")
     finally:
-        _finalize_role_step_diagnostics(
-            task_id, lane_before, "Product Owner", agent_result=result or None
-        )
+        if not (
+            isinstance(state.LAST_STEP_OUTCOME, dict)
+            and state.LAST_STEP_OUTCOME.get("taskId") == task_id
+        ):
+            _finalize_role_step_diagnostics(
+                task_id, lane_before, "Product Owner", agent_result=result or None
+            )
 
 
 def _run_developer_step(active_task: Dict[str, Any], brief: str) -> None:
@@ -3976,6 +4016,20 @@ def _log_idle_dependency_status() -> None:
     )
 
 
+def _first_runnable_needs_po(board: Optional[Dict[str, Any]] = None) -> Optional[Dict[str, Any]]:
+    """Oldest Needs PO card that is not circuit-latched / auto-skipped."""
+    from backend.services.sprint_speed_gates import needs_po_should_skip_auto
+
+    board = board if board is not None else state.SHARED_BOARD
+    for task in board.get("Needs PO") or []:
+        if not isinstance(task, dict):
+            continue
+        if needs_po_should_skip_auto(task):
+            continue
+        return task
+    return None
+
+
 def _in_progress_dev_runnable(board: Optional[Dict[str, Any]] = None) -> List[Dict[str, Any]]:
     board = board if board is not None else state.SHARED_BOARD
     return [
@@ -4278,8 +4332,9 @@ def run_sprint_step(brief: str, ollama_url: str) -> None:
 
     with state.STATE_LOCK:
         normalize_board_lanes(state.SHARED_BOARD)
-        if state.SHARED_BOARD.get("Needs PO"):
-            active_task = dict(state.SHARED_BOARD["Needs PO"][0])
+        needs_po_task = _first_runnable_needs_po()
+        if needs_po_task:
+            active_task = dict(needs_po_task)
             handler = "po"
         elif (
             get_workflow_settings().get("pauseSprintOnNeedsUser")

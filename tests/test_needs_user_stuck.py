@@ -53,3 +53,32 @@ def test_stuck_loop_skips_needs_user_for_lint_when_po_exhausted():
     _check_stuck_and_escalate("T-LINT", "In Progress")
     assert get_task_lane("T-LINT") == "In Progress"
     assert len(state.SHARED_BOARD.get("Needs User") or []) == 0
+
+
+def test_explore_budget_stuck_stays_in_progress_for_forced_patch():
+    initialize()
+    from backend import state
+    from backend.agents.task_context import init_new_task, get_task_lane
+    from backend.services.sprint_service import _check_stuck_and_escalate
+    from backend.services.workflow_settings import save_workflow_settings
+
+    save_workflow_settings(
+        {"maxStuckSteps": 2, "maxPoRoundTrips": 3, "enableSplitOnStuck": False}
+    )
+    task = init_new_task(
+        {"id": "T-EXPL", "title": "T", "description": "D", "status": "In Progress"}
+    )
+    task["stuckLoops"] = 1
+    task["lastStepOutcome"] = {"exitReason": "explore_budget_exhausted"}
+    state.SHARED_BOARD = {
+        "Backlog": [],
+        "In Progress": [task],
+        "Needs PO": [],
+        "Needs User": [],
+        "QA": [],
+        "Done": [],
+    }
+    _check_stuck_and_escalate("T-EXPL", "In Progress")
+    assert get_task_lane("T-EXPL") == "In Progress"
+    assert task.get("forcePatchNextDevStep") is True
+    assert len(state.SHARED_BOARD.get("Needs PO") or []) == 0

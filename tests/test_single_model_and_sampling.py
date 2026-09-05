@@ -122,6 +122,10 @@ class TestSampling:
         dev = sampling_options_for_role("Developer", ws={})
         assert po["temperature"] > dev["temperature"]
 
+    def test_po_sampling_num_predict_default_is_2048(self):
+        po = sampling_options_for_role("Product Owner", ws={})
+        assert po["num_predict"] == 2048
+
     def test_global_override_applies(self):
         opts = sampling_options_for_role("Developer", ws={"samplingDefaults": {"temperature": 0.7}})
         assert opts["temperature"] == 0.7

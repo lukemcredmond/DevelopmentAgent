@@ -196,6 +196,7 @@ class DevPhaseGraph:
     cycle_history: List[Dict[str, Any]] = field(default_factory=list)
     rewind_count: int = 0
     last_rewind_detail: str = ""
+    forced_patch: bool = False
 
     def __post_init__(self) -> None:
         if not self.step_label:
@@ -237,6 +238,7 @@ class DevPhaseGraph:
         prior_snap: Optional[Dict[str, Any]] = None,
         steps_on_card: int = 0,
         focus_ac_index: Optional[int] = None,
+        force_patch: bool = False,
     ) -> Optional["DevPhaseGraph"]:
         """Create a graph for a new Developer step, seeding cycle + restart status text."""
         g = cls.from_settings(ws)
@@ -246,8 +248,21 @@ class DevPhaseGraph:
             prior_snap=prior_snap,
             steps_on_card=steps_on_card,
             focus_ac_index=focus_ac_index,
+            force_patch=force_patch,
         )
         return g
+
+    def start_forced_patch(self) -> None:
+        """Skip Explore after a prior explore-only step so this turn must write."""
+        self.phase = "patch"
+        self.forced_patch = True
+        self.explore_nudge_sent = True
+        self.pending_stop_after_nudge = False
+        self.explore_count = self.explore_max
+        self.status_text = (
+            "Forced Patch — previous step used Explore without apply_patch. "
+            "Call apply_patch or write_file this turn."
+        )
 
     def seed_step_context(
         self,
@@ -255,6 +270,7 @@ class DevPhaseGraph:
         prior_snap: Optional[Dict[str, Any]] = None,
         steps_on_card: int = 0,
         focus_ac_index: Optional[int] = None,
+        force_patch: bool = False,
     ) -> None:
         """Set cycle, stepLabel, priorSummary, history, and initial statusText for a new step."""
         self.cycle = compute_cycle_from_prior(prior_snap=prior_snap, steps_on_card=steps_on_card)
@@ -298,6 +314,9 @@ class DevPhaseGraph:
                 "Split the card or narrow AC — further Explore→Patch loops blocked."
             )
             self.prior_summary = self.prior_summary or "cycle_cap"
+            return
+        if force_patch:
+            self.start_forced_patch()
 
     @staticmethod
     def applies_to(*, role: str, lane: Optional[str]) -> bool:
@@ -374,6 +393,7 @@ class DevPhaseGraph:
             "cycleHistory": list(self.cycle_history or [])[-CYCLE_HISTORY_MAX:],
             "rewindCount": int(self.rewind_count or 0),
             "lastRewindDetail": self.last_rewind_detail or "",
+            "forcedPatch": bool(self.forced_patch),
         }
 
     def record_batch(self, tools: Sequence[Tuple[str, bool]]) -> PhaseAction:
@@ -435,7 +455,7 @@ class DevPhaseGraph:
                 return self._stuck(
                     "explore_budget_exhausted",
                     "Stopped: explore tool budget reached without apply_patch/write_file. "
-                    "Split the card or narrow AC, then Run In Progress.",
+                    "Next Developer step will start in Patch — apply_patch/write_file.",
                 )
 
         if self.phase == "patch" and not self.write_succeeded and self.patch_count >= self.patch_max:
@@ -461,7 +481,7 @@ class DevPhaseGraph:
             return self._stuck(
                 "explore_budget_exhausted",
                 "Stopped: explore tool budget reached without apply_patch/write_file. "
-                "Split the card or narrow AC, then Run In Progress.",
+                "Next Developer step will start in Patch — apply_patch/write_file.",
             )
 
         self.refresh_status_text()
@@ -474,7 +494,7 @@ class DevPhaseGraph:
             return self._stuck(
                 "explore_budget_exhausted",
                 "Stopped: explore tool budget reached without apply_patch/write_file. "
-                "Split the card or narrow AC, then Run In Progress.",
+                "Next Developer step will start in Patch — apply_patch/write_file.",
             )
         return PhaseAction()
 
@@ -487,7 +507,7 @@ class DevPhaseGraph:
 def hint_for_exit_reason(exit_reason: str) -> Optional[str]:
     hints = {
         "explore_budget_exhausted": (
-            "Spent explore budget with no edits — Split card or Run In Progress after narrowing AC."
+            "Spent explore budget with no edits — next Dev step starts in Patch (apply_patch)."
         ),
         "patch_budget_exhausted": (
             "Patch attempts exhausted without a successful write — check tool errors or Split card."

@@ -111,8 +111,19 @@ def test_from_settings_respects_disable_flag():
 
 def test_hint_for_exit_reason():
     assert "explore budget" in (hint_for_exit_reason("explore_budget_exhausted") or "").lower()
+    assert "patch" in (hint_for_exit_reason("explore_budget_exhausted") or "").lower()
     assert "patch" in (hint_for_exit_reason("patch_budget_exhausted") or "").lower()
     assert hint_for_exit_reason("max_iterations") is None
+
+
+def test_force_patch_starts_in_patch_phase():
+    g = DevPhaseGraph.for_new_step(ws={"enableDevPhaseGraph": True}, force_patch=True)
+    assert g is not None
+    assert g.phase == "patch"
+    assert g.forced_patch is True
+    assert g.explore_nudge_sent is True
+    snap = g.snapshot()
+    assert snap["forcedPatch"] is True
 
 
 def test_snapshot_includes_cycle_and_status_text():

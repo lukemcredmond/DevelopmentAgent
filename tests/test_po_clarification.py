@@ -123,6 +123,54 @@ def test_po_incomplete_counts_as_bad_exit():
     assert task.get("consecutiveBadExits") == 0
 
 
+def test_po_turn_hit_generation_cap():
+    from backend.services.po_clarification import po_turn_hit_generation_cap
+
+    assert po_turn_hit_generation_cap(
+        eval_tokens=1024, num_predict=1024, tool_names=[], content=""
+    )
+    assert po_turn_hit_generation_cap(
+        eval_tokens=2048, num_predict=2048, tool_names=[], content="thinking..."
+    )
+    assert not po_turn_hit_generation_cap(
+        eval_tokens=2048,
+        num_predict=2048,
+        tool_names=["update_board"],
+        content="",
+    )
+    assert not po_turn_hit_generation_cap(
+        eval_tokens=400,
+        num_predict=2048,
+        tool_names=[],
+        content="",
+    )
+    json_ok = '{"description": "Show image", "acceptanceCriteria": ["null-safe"]}'
+    assert not po_turn_hit_generation_cap(
+        eval_tokens=2048, num_predict=2048, tool_names=[], content=json_ok
+    )
+
+
+def test_truncated_and_incomplete_exit_reasons():
+    assert (
+        derive_exit_reason(
+            agent_result="Stopped: PO generation truncated without clarification JSON or update_board.",
+            tools_used=set(),
+            lane_before="Needs PO",
+            lane_after="Needs PO",
+        )
+        == "po_generation_truncated"
+    )
+    assert (
+        derive_exit_reason(
+            agent_result="Stopped: PO clarification incomplete — no JSON or update_board.",
+            tools_used=set(),
+            lane_before="Needs PO",
+            lane_after="Needs PO",
+        )
+        == "po_clarification_incomplete"
+    )
+
+
 def test_prune_repeated_po_json():
     blob = '{"description": "x", "acceptanceCriteria": ["a"]}'
     assert "already recorded" in prune_repeated_po_json(blob)
@@ -177,3 +225,19 @@ def test_ollama_ms_capped_to_wall_clock(tmp_path, monkeypatch):
     assert payload["ollamaMsTotal"] <= payload["durationMs"]
     assert payload.get("ollamaMsCapped") is True
     clear_active_step_trace()
+
+
+def test_first_runnable_needs_po_skips_circuit_latched():
+    from backend import state
+    from backend.services.sprint_service import _first_runnable_needs_po
+    from backend.services.sprint_speed_gates import latch_needs_po_auto_skip
+
+    skipped = _needs_po_task("T-PO-SKIP")
+    latch_needs_po_auto_skip(skipped, reason="empty")
+    runnable = init_new_task(
+        {"id": "T-PO-RUN", "title": "Next", "description": "ok", "status": "Needs PO"}
+    )
+    state.SHARED_BOARD["Needs PO"] = [skipped, runnable]
+    picked = _first_runnable_needs_po()
+    assert picked is not None
+    assert picked.get("id") == "T-PO-RUN"
