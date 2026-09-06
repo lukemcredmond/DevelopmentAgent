@@ -9,6 +9,7 @@ def test_unhealthy_exit_blocks_lane_advance_by_default():
     ws = {"forceCompleteOnUnhealthyExit": False}
     assert gates.unhealthy_exit_blocks_lane_advance("ollama_fallback", ws) is True
     assert gates.unhealthy_exit_blocks_lane_advance("max_iterations", ws) is True
+    assert gates.unhealthy_exit_blocks_lane_advance("max_iterations_after_writes", ws) is True
     assert gates.unhealthy_exit_blocks_lane_advance("completed_with_writes", ws) is False
 
 

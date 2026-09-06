@@ -15,6 +15,12 @@ from backend.services.logs import add_system_log
 
 MAX_FILES_PER_PROJECT = 50
 TraceStatus = Literal["running", "complete"]
+_WRITE_TOOLS = frozenset({"write_file", "apply_patch"})
+_PATH_TOOLS = frozenset({"read_file", "list_dir", "glob_file_search", "grep"})
+_FILE_SUMMARY_RE = re.compile(r"^([^\s(]+)")
+_BOARD_LANE_RE = re.compile(r"→\s*(.+)$")
+_TOOL_SUMMARY_OK = 300
+_TOOL_SUMMARY_FAIL = 500
 
 
 def _now_str() -> str:
@@ -23,6 +29,50 @@ def _now_str() -> str:
 
 def _safe_task_slug(task_id: str) -> str:
     return re.sub(r"[^\w\-]", "_", task_id)[:40]
+
+
+def _first_error_line(summary: str, limit: int) -> str:
+    text = str(summary or "").strip()
+    if not text:
+        return ""
+    line = text.splitlines()[0].strip() or text
+    return line[:limit]
+
+
+def _lane_from_board_summary(summary: str) -> Optional[str]:
+    match = _BOARD_LANE_RE.search(str(summary or ""))
+    if not match:
+        return None
+    lane = match.group(1).strip()
+    return lane or None
+
+
+def classify_tool_failure(name: str, summary: str) -> Optional[str]:
+    text = (summary or "").lower()
+    if name == "apply_patch":
+        if any(k in text for k in ("mismatch", "old_text", "not found", "context", "fuzzy", "does not match")):
+            return "patch_mismatch"
+        return "patch_failed"
+    if name == "run_command":
+        return "command_nonzero"
+    if name in _PATH_TOOLS and any(
+        k in text for k in ("not found", "no such", "missing", "does not exist")
+    ):
+        return "path_missing"
+    if name == "update_board":
+        return "board_blocked"
+    return None
+
+
+def _write_tools_succeeded(tools_log: Optional[List[Dict[str, Any]]] = None) -> bool:
+    entries = tools_log
+    if entries is None:
+        trace = get_active_trace()
+        entries = trace.tools_log if trace else []
+    for entry in entries:
+        if str(entry.get("toolName") or "") in _WRITE_TOOLS and entry.get("success"):
+            return True
+    return False
 
 
 class StepDiagnosticsTracker:
@@ -56,6 +106,11 @@ class StepDiagnosticsTracker:
         self.tool_failures = 0
         self.last_event = "trace_started"
         self._live_logged = False
+        self.sampling: Optional[Dict[str, Any]] = None
+        self.phase_graph: Optional[Dict[str, Any]] = None
+        self.po_json_applied: Optional[bool] = None
+        self.po_num_predict_bumped = False
+        self.lane_after_tool: Optional[str] = None
 
     def log_ollama_call(
         self,
@@ -70,9 +125,21 @@ class StepDiagnosticsTracker:
         eval_tokens: int = 0,
         total_tokens: int = 0,
         tokens_reported: bool = False,
+        num_predict: Optional[int] = None,
+        num_ctx: Optional[int] = None,
+        done_reason: Optional[str] = None,
+        prompt_eval_ms: Optional[int] = None,
+        eval_ms: Optional[int] = None,
+        truncated: Optional[bool] = None,
     ) -> None:
         self.llm_iterations_used = max(self.llm_iterations_used, iteration)
         self.last_event = f"ollama:iter{iteration}"
+        cap = int(num_predict) if num_predict is not None else None
+        eval_n = int(eval_tokens or 0)
+        if truncated is None and cap and cap > 0:
+            truncated = eval_n >= max(1, cap - 2)
+        elif truncated is None and done_reason:
+            truncated = str(done_reason).lower() in ("length", "max_tokens")
         entry: Dict[str, Any] = {
             "iteration": iteration,
             "durationMs": duration_ms,
@@ -80,12 +147,24 @@ class StepDiagnosticsTracker:
             "textChars": text_chars,
             "error": error,
             "promptTokens": int(prompt_tokens or 0),
-            "evalTokens": int(eval_tokens or 0),
-            "totalTokens": int(total_tokens or (prompt_tokens or 0) + (eval_tokens or 0)),
+            "evalTokens": eval_n,
+            "totalTokens": int(total_tokens or (prompt_tokens or 0) + eval_n),
             "tokensReported": bool(tokens_reported),
         }
         if error_type:
             entry["errorType"] = error_type
+        if cap is not None:
+            entry["numPredict"] = cap
+        if num_ctx is not None:
+            entry["numCtx"] = int(num_ctx)
+        if done_reason:
+            entry["doneReason"] = str(done_reason)
+        if prompt_eval_ms is not None:
+            entry["promptEvalMs"] = int(prompt_eval_ms)
+        if eval_ms is not None:
+            entry["evalMs"] = int(eval_ms)
+        if truncated is not None:
+            entry["truncated"] = bool(truncated)
         self.ollama_calls.append(entry)
         self._flush_checkpoint()
         # Live rollup onto the card
@@ -113,14 +192,24 @@ class StepDiagnosticsTracker:
         if not success:
             self.tool_failures += 1
         self.last_event = f"tool:{name}"
+        limit = _TOOL_SUMMARY_FAIL if not success and name in {"apply_patch", "run_command"} else _TOOL_SUMMARY_OK
+        clipped = _first_error_line(summary, limit)
         entry: Dict[str, Any] = {
             "timestamp": _now_str(),
             "toolName": name,
             "success": success,
-            "summary": summary[:300],
+            "summary": clipped,
         }
         if duration_ms is not None:
             entry["durationMs"] = int(duration_ms)
+        if not success:
+            failure_class = classify_tool_failure(name, clipped)
+            if failure_class:
+                entry["failureClass"] = failure_class
+        if name == "update_board" and success:
+            lane = _lane_from_board_summary(clipped)
+            if lane:
+                self.lane_after_tool = lane
         self.tools_log.append(entry)
         self._flush_checkpoint()
 
@@ -129,6 +218,8 @@ class StepDiagnosticsTracker:
             self.plan_rejections += 1
         elif kind == "text_rejected":
             self.text_rejections += 1
+        elif kind == "po_num_predict_bump":
+            self.po_num_predict_bumped = True
         self.last_event = f"{kind}:{message[:80]}"
         self.events.append(
             {
@@ -151,6 +242,9 @@ class StepDiagnosticsTracker:
                 "Check Model tab iteration 2+ or attach this JSON."
             ),
             "max_iterations": "Agent hit max LLM iterations without finishing edits.",
+            "max_iterations_after_writes": (
+                "Agent wrote files then hit max LLM iterations before verify or a lane move."
+            ),
             "step_timeout": (
                 "Agent step exceeded maxAgentStepDurationSec — stopped to avoid an unbounded loop. "
                 "Resume with Sprint step or chat."
@@ -239,6 +333,8 @@ class StepDiagnosticsTracker:
             "events": self.events,
             "filePath": str(self.file_path),
         }
+        if self.sampling:
+            payload["sampling"] = dict(self.sampling)
         ollama_sum = sum(int(c.get("durationMs") or 0) for c in self.ollama_calls)
         # Overlapping waits / retries can sum above wall clock — never report more LLM time than the step.
         payload["ollamaMsTotal"] = min(ollama_sum, duration_ms) if duration_ms > 0 else ollama_sum
@@ -268,14 +364,61 @@ class StepDiagnosticsTracker:
 
             task = find_task_by_id(self.task_id)
             if task:
-                payload["cardCumulativeState"] = {
+                ccs: Dict[str, Any] = {
                     "devStepCount": int(task.get("devStepCount") or 0),
                     "consecutiveBadExits": int(task.get("consecutiveBadExits") or 0),
                     "phaseCycleCapReached": bool(task.get("phaseCycleCapReached")),
                     "identicalPatchFailCount": int(task.get("identicalPatchFailCount") or 0),
+                    "forcePatchNextDevStep": bool(task.get("forcePatchNextDevStep")),
                 }
+                graph = self.phase_graph
+                if isinstance(graph, dict) and graph.get("phase"):
+                    ccs["phaseGraph"] = {
+                        "phase": graph.get("phase"),
+                        "exploreCount": graph.get("exploreCount"),
+                        "patchCount": graph.get("patchCount"),
+                        "verifyCount": graph.get("verifyCount"),
+                        "writeSucceeded": graph.get("writeSucceeded"),
+                        "cycle": graph.get("cycle"),
+                        "forcedPatch": graph.get("forcedPatch"),
+                    }
+                payload["cardCumulativeState"] = ccs
         except Exception:
             pass
+
+        writes_attempted = 0
+        writes_succeeded = 0
+        write_paths: List[str] = []
+        seen_paths: Set[str] = set()
+        failure_classes: List[str] = []
+        for entry in self.tools_log:
+            name = str(entry.get("toolName") or "")
+            if name in _WRITE_TOOLS:
+                writes_attempted += 1
+                if entry.get("success"):
+                    writes_succeeded += 1
+                    summary = str(entry.get("summary") or "").strip()
+                    match = _FILE_SUMMARY_RE.match(summary)
+                    path = match.group(1) if match else ""
+                    if path and path != "?" and path not in seen_paths:
+                        seen_paths.add(path)
+                        write_paths.append(path)
+            if entry.get("success") is False:
+                cls = entry.get("failureClass") or classify_tool_failure(
+                    name, str(entry.get("summary") or "")
+                )
+                if cls and cls not in failure_classes:
+                    failure_classes.append(str(cls))
+        payload["writesAttempted"] = writes_attempted
+        payload["writesSucceeded"] = writes_succeeded
+        payload["writePaths"] = write_paths[:12]
+        if failure_classes:
+            payload["toolFailureClasses"] = failure_classes
+        if self.agent == "Product Owner":
+            payload["poJsonApplied"] = bool(self.po_json_applied)
+            payload["poNumPredictBumped"] = bool(self.po_num_predict_bumped)
+            if self.lane_after_tool:
+                payload["laneAfterTool"] = self.lane_after_tool
 
         if status == "complete":
             payload.update(
@@ -490,6 +633,12 @@ def log_ollama_call(
     eval_tokens: int = 0,
     total_tokens: int = 0,
     tokens_reported: bool = False,
+    num_predict: Optional[int] = None,
+    num_ctx: Optional[int] = None,
+    done_reason: Optional[str] = None,
+    prompt_eval_ms: Optional[int] = None,
+    eval_ms: Optional[int] = None,
+    truncated: Optional[bool] = None,
 ) -> None:
     trace = get_active_trace()
     if trace:
@@ -504,6 +653,12 @@ def log_ollama_call(
             eval_tokens=eval_tokens,
             total_tokens=total_tokens,
             tokens_reported=tokens_reported,
+            num_predict=num_predict,
+            num_ctx=num_ctx,
+            done_reason=done_reason,
+            prompt_eval_ms=prompt_eval_ms,
+            eval_ms=eval_ms,
+            truncated=truncated,
         )
         from backend.services.sprint_session import touch_session
 
@@ -545,8 +700,27 @@ def set_llm_iterations_max(max_iterations: int) -> None:
         trace.set_llm_iterations_max(max_iterations)
 
 
-_WRITE_TOOLS = frozenset({"write_file", "apply_patch"})
-_FILE_SUMMARY_RE = re.compile(r"^([^\s(]+)")
+def record_sampling_snapshot(sampling: Dict[str, Any]) -> None:
+    trace = get_active_trace()
+    if trace and sampling:
+        snap = {k: v for k, v in sampling.items() if v is not None}
+        if snap:
+            trace.sampling = snap
+            trace._flush_checkpoint()
+
+
+def record_phase_graph(snapshot: Optional[Dict[str, Any]]) -> None:
+    trace = get_active_trace()
+    if trace and isinstance(snapshot, dict) and snapshot.get("phase"):
+        trace.phase_graph = snapshot
+        trace._flush_checkpoint()
+
+
+def record_po_json_applied(applied: bool) -> None:
+    trace = get_active_trace()
+    if trace:
+        trace.po_json_applied = bool(applied)
+        trace._flush_checkpoint()
 
 
 def gates_remaining_for_lane(lane: Optional[str]) -> List[str]:
@@ -958,16 +1132,21 @@ def derive_exit_reason(
         if "identical apply_patch" in lower or "same apply_patch" in lower:
             return "tool_failure_stop"
         return "tool_failure_stop"
+    wrote = False
+    trace = get_active_trace()
+    if trace:
+        wrote = _write_tools_succeeded(trace.tools_log)
     if agent_result and agent_result.startswith("Max tool iterations"):
+        if wrote:
+            return "max_iterations_after_writes"
         return "max_iterations"
     if state.DEV_STEP_READ_ONLY_NO_EDITS:
         return "read_only_no_edits"
     if state.DEV_STEP_COMMAND_REPEAT_NO_PROGRESS:
         return "command_repeat_no_progress"
-    trace = get_active_trace()
-    if trace and trace.plan_rejections >= 2 and not (tools & {"write_file", "apply_patch"}):
+    if trace and trace.plan_rejections >= 2 and not wrote:
         return "plan_exhausted"
-    if tools & {"write_file", "apply_patch"}:
+    if wrote or (not trace and tools & _WRITE_TOOLS):
         return "completed_with_writes"
     if lane_before == "Needs PO":
         if lane_after != "Needs PO":

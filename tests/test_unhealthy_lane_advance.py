@@ -17,6 +17,7 @@ def test_unhealthy_exit_blocks_advance_helper():
     save_workflow_settings({"forceCompleteOnUnhealthyExit": False})
     assert _dev_unhealthy_exit_blocks_advance("ollama_fallback") is True
     assert _dev_unhealthy_exit_blocks_advance("max_iterations") is True
+    assert _dev_unhealthy_exit_blocks_advance("max_iterations_after_writes") is True
     assert _dev_unhealthy_exit_blocks_advance("completed_with_writes") is False
 
 
@@ -42,3 +43,19 @@ def test_provisional_exit_reason_maps_max_iterations():
         lane_before="In Progress",
     )
     assert reason == "max_iterations"
+
+
+def test_provisional_exit_reason_maps_max_iterations_after_writes():
+    from backend.services.step_diagnostics import clear_active_step_trace, start_step_trace
+
+    initialize()
+    reset_workflow_settings()
+    clear_active_step_trace()
+    trace = start_step_trace("T-PROV", "Prov", "Developer", "In Progress")
+    trace.log_tool("write_file", True, "lib/a.dart (100 chars)")
+    reason = _provisional_dev_exit_reason(
+        "Max tool iterations (6) reached",
+        lane_before="In Progress",
+    )
+    assert reason == "max_iterations_after_writes"
+    clear_active_step_trace()

@@ -356,6 +356,10 @@ def _outcome_why_card_stayed(
         return (
             f"Agent hit the LLM iteration limit on '{title}' without writing edits. {base}"
         )
+    if stop_reason == "max_iterations_after_writes":
+        return (
+            f"Agent wrote files on '{title}' then hit the LLM iteration limit before verify/lane move."
+        )
     if stop_reason == "step_timeout":
         return (
             f"Agent step hit the wall-clock duration limit on '{title}' and stopped "

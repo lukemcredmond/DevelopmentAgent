@@ -57,6 +57,69 @@ def extract_ollama_token_counts(response: Any) -> Tuple[int, int, int, bool]:
     return p, e, p + e, True
 
 
+def _response_field(response: Any, *keys: str) -> Any:
+    candidates = [response]
+    raw = getattr(response, "raw", None) if response is not None else None
+    if raw is not None and raw is not response:
+        candidates.append(raw)
+    for obj in candidates:
+        if obj is None:
+            continue
+        for key in keys:
+            val = None
+            if isinstance(obj, dict):
+                val = obj.get(key)
+            else:
+                val = getattr(obj, key, None)
+                if val is None and hasattr(obj, "model_dump"):
+                    try:
+                        dumped = obj.model_dump()
+                        if isinstance(dumped, dict):
+                            val = dumped.get(key)
+                    except Exception:
+                        val = None
+            if val is not None:
+                return val
+        if isinstance(obj, dict):
+            choices = obj.get("choices")
+            if isinstance(choices, list) and choices:
+                first = choices[0] if isinstance(choices[0], dict) else {}
+                for key in keys:
+                    if first.get(key) is not None:
+                        return first.get(key)
+    return None
+
+
+def _duration_to_ms(value: Any) -> Optional[int]:
+    try:
+        n = int(value)
+    except (TypeError, ValueError):
+        return None
+    if n < 0:
+        return None
+    # Ollama reports nanoseconds; values already in ms stay as-is.
+    if n >= 1_000_000:
+        return int(n / 1_000_000)
+    return n
+
+
+def extract_ollama_generation_meta(response: Any) -> Dict[str, Any]:
+    """done_reason / eval durations from Ollama or OpenAI-compatible payloads."""
+    if response is None:
+        return {}
+    done_reason = _response_field(response, "done_reason", "finish_reason")
+    prompt_ms = _duration_to_ms(_response_field(response, "prompt_eval_duration"))
+    eval_ms = _duration_to_ms(_response_field(response, "eval_duration"))
+    meta: Dict[str, Any] = {}
+    if done_reason:
+        meta["doneReason"] = str(done_reason)
+    if prompt_ms is not None:
+        meta["promptEvalMs"] = prompt_ms
+    if eval_ms is not None:
+        meta["evalMs"] = eval_ms
+    return meta
+
+
 def empty_usage_entry() -> Dict[str, Any]:
     return {
         "stepCount": 0,

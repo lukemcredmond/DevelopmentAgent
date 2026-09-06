@@ -11,9 +11,14 @@ from backend.bootstrap import initialize
 from backend.services.sprint_service import run_in_progress_step
 from backend.services.step_diagnostics import (
     build_card_work_snapshot,
+    classify_tool_failure,
     clear_active_step_trace,
+    derive_exit_reason,
     finalize_active_step_trace,
     get_active_trace,
+    record_phase_graph,
+    record_po_json_applied,
+    record_sampling_snapshot,
     start_step_trace,
 )
 
@@ -287,3 +292,144 @@ def test_run_in_progress_does_not_hold_state_lock(tmp_path, monkeypatch):
         runner.join(timeout=5)
 
     assert poll_ok.is_set()
+
+
+def test_sampling_and_ollama_call_fields(tmp_path, monkeypatch):
+    monkeypatch.setenv("ALLHANDS_HOME", str(tmp_path))
+    initialize()
+    state.CURRENT_PROJECT_ID = "test-proj"
+    clear_active_step_trace()
+
+    trace = start_step_trace("T-SAMP", "Sampling", "Developer", "In Progress")
+    record_sampling_snapshot(
+        {
+            "model": "gemma-4-q4km:26b",
+            "provider": "ollama",
+            "temperature": 0.15,
+            "num_predict": 2048,
+            "num_ctx": 8192,
+        }
+    )
+    trace.log_ollama_call(
+        1,
+        duration_ms=90000,
+        tool_calls=["read_file"],
+        eval_tokens=2048,
+        prompt_tokens=4000,
+        tokens_reported=True,
+        num_predict=2048,
+        num_ctx=8192,
+        done_reason="length",
+        prompt_eval_ms=1200,
+        eval_ms=88000,
+    )
+    data = json.loads(trace.file_path.read_text(encoding="utf-8"))
+    assert data["sampling"]["num_predict"] == 2048
+    assert data["sampling"]["model"] == "gemma-4-q4km:26b"
+    call = data["ollamaCalls"][0]
+    assert call["numPredict"] == 2048
+    assert call["numCtx"] == 8192
+    assert call["doneReason"] == "length"
+    assert call["truncated"] is True
+    assert call["evalMs"] == 88000
+    clear_active_step_trace()
+
+
+def test_write_rollup_and_max_iterations_after_writes(tmp_path, monkeypatch):
+    monkeypatch.setenv("ALLHANDS_HOME", str(tmp_path))
+    initialize()
+    state.CURRENT_PROJECT_ID = "test-proj"
+    state.DEV_STEP_READ_ONLY_NO_EDITS = False
+    clear_active_step_trace()
+
+    trace = start_step_trace("T-WRITE", "Writes", "Developer", "In Progress")
+    trace.log_tool("apply_patch", True, "lib/a.dart (replace 12 chars)")
+    trace.log_tool("apply_patch", False, "old_text mismatch on lib/a.dart")
+    trace.log_tool("run_command", False, "cd mealplanner && flutter test\nexit 1")
+    record_phase_graph(
+        {
+            "phase": "verify",
+            "exploreCount": 0,
+            "patchCount": 2,
+            "verifyCount": 0,
+            "writeSucceeded": True,
+            "cycle": 1,
+            "forcedPatch": True,
+        }
+    )
+    task = init_new_task({"id": "T-WRITE", "title": "Writes", "status": "In Progress"})
+    task["forcePatchNextDevStep"] = True
+    task["devStepCount"] = 2
+    state.SHARED_BOARD.setdefault("In Progress", [])
+    state.SHARED_BOARD["In Progress"] = [t for t in state.SHARED_BOARD["In Progress"] if t.get("id") != "T-WRITE"]
+    state.SHARED_BOARD["In Progress"].append(task)
+
+    reason = derive_exit_reason(
+        agent_result="Max tool iterations (6) reached",
+        tools_used={"apply_patch", "run_command"},
+        lane_before="In Progress",
+        lane_after="In Progress",
+    )
+    assert reason == "max_iterations_after_writes"
+
+    state.LAST_STEP_OUTCOME = {"ok": False, "taskId": "T-WRITE"}
+    summary = finalize_active_step_trace(
+        lane_after="In Progress",
+        agent_result="Max tool iterations (6) reached",
+    )
+    assert summary is not None
+    data = json.loads(Path(summary["filePath"]).read_text(encoding="utf-8"))
+    assert data["exitReason"] == "max_iterations_after_writes"
+    assert data["writesAttempted"] == 2
+    assert data["writesSucceeded"] == 1
+    assert "lib/a.dart" in data["writePaths"]
+    assert "patch_mismatch" in data["toolFailureClasses"]
+    assert "command_nonzero" in data["toolFailureClasses"]
+    assert data["cardCumulativeState"]["forcePatchNextDevStep"] is True
+    assert data["cardCumulativeState"]["phaseGraph"]["writeSucceeded"] is True
+    assert "wrote files" in data["hint"].lower()
+
+
+def test_max_iterations_without_successful_write(tmp_path, monkeypatch):
+    monkeypatch.setenv("ALLHANDS_HOME", str(tmp_path))
+    initialize()
+    state.CURRENT_PROJECT_ID = "test-proj"
+    state.DEV_STEP_READ_ONLY_NO_EDITS = False
+    clear_active_step_trace()
+    start_step_trace("T-NOWRITE", "No write", "Developer", "In Progress")
+    get_active_trace().log_tool("apply_patch", False, "context does not match")
+    reason = derive_exit_reason(
+        agent_result="Max tool iterations (6) reached",
+        tools_used={"apply_patch"},
+        lane_before="In Progress",
+        lane_after="In Progress",
+    )
+    assert reason == "max_iterations"
+    clear_active_step_trace()
+
+
+def test_po_lane_after_tool_not_finalize_lane(tmp_path, monkeypatch):
+    monkeypatch.setenv("ALLHANDS_HOME", str(tmp_path))
+    initialize()
+    state.CURRENT_PROJECT_ID = "test-proj"
+    clear_active_step_trace()
+    trace = start_step_trace("T-PO", "Clarify", "Product Owner", "Needs PO")
+    record_sampling_snapshot({"model": "gemma", "num_predict": 2048, "provider": "ollama"})
+    trace.log_tool("update_board", True, "TASK-T-PO → In Progress")
+    record_po_json_applied(True)
+    trace.log_event("po_num_predict_bump", "num_predict=4096")
+    state.LAST_STEP_OUTCOME = {"ok": False, "exitReason": "tool_failure_stop", "taskId": "T-PO"}
+    summary = finalize_active_step_trace(lane_after="Done", agent_result="clarified")
+    data = json.loads(Path(summary["filePath"]).read_text(encoding="utf-8"))
+    assert data["laneAfterTool"] == "In Progress"
+    assert data["laneAfter"] == "Done"
+    assert data["poJsonApplied"] is True
+    assert data["poNumPredictBumped"] is True
+    assert data["sampling"]["num_predict"] == 2048
+
+
+def test_classify_tool_failure_helpers():
+    assert classify_tool_failure("apply_patch", "old_text mismatch") == "patch_mismatch"
+    assert classify_tool_failure("run_command", "flutter pub get") == "command_nonzero"
+    assert classify_tool_failure("read_file", "path not found") == "path_missing"
+    assert classify_tool_failure("update_board", "blocked") == "board_blocked"

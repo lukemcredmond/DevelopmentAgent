@@ -9,6 +9,7 @@ from backend import state
 from backend.agents.task_context import init_new_task
 from backend.bootstrap import initialize
 from backend.services.agent_usage import (
+    extract_ollama_generation_meta,
     extract_ollama_token_counts,
     record_agent_usage,
     record_step_usage_from_trace,
@@ -53,6 +54,29 @@ def test_extract_ollama_token_counts_missing():
     assert reported is False
     assert (p, e, total) == (0, 0, 0)
     assert extract_ollama_token_counts(None)[3] is False
+
+
+def test_extract_ollama_generation_meta_from_ns_and_openai():
+    meta = extract_ollama_generation_meta(
+        SimpleNamespace(
+            done_reason="length",
+            prompt_eval_duration=1_200_000_000,
+            eval_duration=88_000_000_000,
+        )
+    )
+    assert meta["doneReason"] == "length"
+    assert meta["promptEvalMs"] == 1200
+    assert meta["evalMs"] == 88000
+
+    wrapped = SimpleNamespace(raw={"done_reason": "stop", "eval_duration": 5_000_000})
+    nested = extract_ollama_generation_meta(wrapped)
+    assert nested["doneReason"] == "stop"
+    assert nested["evalMs"] == 5
+
+    openai = extract_ollama_generation_meta(
+        {"choices": [{"finish_reason": "length"}], "usage": {"completion_tokens": 10}}
+    )
+    assert openai["doneReason"] == "length"
 
 
 def test_record_agent_usage_accumulates_two_steps():

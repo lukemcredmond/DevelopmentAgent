@@ -14,6 +14,7 @@ UNHEALTHY_LANE_ADVANCE_EXITS = frozenset(
         "tool_failure_stop",
         "interrupted",
         "max_iterations",
+        "max_iterations_after_writes",
         "plan_exhausted",
         "read_only_no_edits",
         "command_repeat_no_progress",

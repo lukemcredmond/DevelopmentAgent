@@ -1074,7 +1074,28 @@ class ScrumAgent:
                 from backend.services.po_clarification import PO_NUM_PREDICT_DEFAULT
 
                 opts["num_predict"] = int(PO_NUM_PREDICT_DEFAULT)
+        self._record_sampling_snapshot(opts, provider)
         return opts
+
+    def _record_sampling_snapshot(self, opts: Dict[str, Any], provider: Any = None) -> None:
+        try:
+            from backend.services.step_diagnostics import record_sampling_snapshot
+
+            if provider is None:
+                provider = self._get_provider()
+            snap: Dict[str, Any] = {
+                "model": self.model,
+                "provider": getattr(provider, "provider_id", None),
+                "temperature": opts.get("temperature"),
+                "top_p": opts.get("top_p"),
+                "repeat_penalty": opts.get("repeat_penalty"),
+                "num_predict": opts.get("num_predict", getattr(self, "_step_num_predict", None)),
+                "num_ctx": opts.get("num_ctx"),
+                "keep_alive": opts.get("keep_alive"),
+            }
+            record_sampling_snapshot(snap)
+        except Exception:
+            pass
 
     def _maybe_finish_po_clarification(
         self,
@@ -1087,6 +1108,12 @@ class ScrumAgent:
         from backend.services.po_clarification import complete_needs_po_clarification
 
         ok, msg = complete_needs_po_clarification(task_id, text=content or "")
+        try:
+            from backend.services.step_diagnostics import record_po_json_applied
+
+            record_po_json_applied(bool(ok))
+        except Exception:
+            pass
         lane = get_task_lane(task_id) or ""
         if lane in ("In Progress", "Refinement") or (ok and lane != "Needs PO"):
             add_system_log(self.role, "info", f"Step exit: po_clarified {msg}")
@@ -1160,12 +1187,13 @@ class ScrumAgent:
                 status="running",
             )
         try:
+            chat_opts = self._chat_options()
             result = provider.chat(
                 self.model,
                 list(messages),
                 tools=tools,
                 stream=stream,
-                options=self._chat_options(),
+                options=chat_opts,
             )
             duration_ms = int((time.time() - started) * 1000)
             prompt_tokens = eval_tokens = total_tokens = 0
@@ -1176,11 +1204,19 @@ class ScrumAgent:
                 prompt_tokens, eval_tokens, total_tokens, tokens_reported = extract_ollama_token_counts(
                     result
                 )
+                from backend.services.agent_usage import extract_ollama_generation_meta
+
+                meta = extract_ollama_generation_meta(result)
                 self._last_token_usage = {
                     "promptTokens": prompt_tokens,
                     "evalTokens": eval_tokens,
                     "totalTokens": total_tokens,
                     "tokensReported": tokens_reported,
+                    "numPredict": chat_opts.get("num_predict"),
+                    "numCtx": chat_opts.get("num_ctx"),
+                    "doneReason": meta.get("doneReason"),
+                    "promptEvalMs": meta.get("promptEvalMs"),
+                    "evalMs": meta.get("evalMs"),
                 }
                 msg = result.message
                 tool_calls = []
@@ -2391,6 +2427,12 @@ class ScrumAgent:
 
             log_event("dev_phase", phase_graph.label())
             try:
+                from backend.services.step_diagnostics import record_phase_graph
+
+                record_phase_graph(phase_graph.snapshot())
+            except Exception:
+                pass
+            try:
                 from backend.services.llm_decision_trace import (
                     build_decision_trace,
                     decision_trace_enabled,
@@ -2466,13 +2508,13 @@ class ScrumAgent:
         self._step_num_ctx = None
         self._po_num_predict_bumped = False
         self._step_num_predict = None
+        ws = get_workflow_settings()
         if self.role == "Product Owner":
             from backend.services.po_clarification import PO_NUM_PREDICT_DEFAULT
             from backend.services.sampling import sampling_options_for_role
 
             po_opts = sampling_options_for_role(self.role, ws=ws)
             self._step_num_predict = int(po_opts.get("num_predict") or PO_NUM_PREDICT_DEFAULT)
-        ws = get_workflow_settings()
         max_tool_failures = int(ws.get("maxToolFailuresPerStep", 5))
         max_duration_sec = int(ws.get("maxAgentStepDurationSec", 2700) or 2700)
         # Total tool calls, not LLM turns, is the meaningful work budget for a step.
@@ -2912,17 +2954,21 @@ class ScrumAgent:
                         "info",
                         f"Ollama responded in {ollama_duration_ms}ms — text={text_chars} chars",
                     )
+                usage = getattr(self, "_last_token_usage", None) or {}
                 log_ollama_call(
                     iteration,
                     duration_ms=ollama_duration_ms,
                     tool_calls=tool_call_names,
                     text_chars=text_chars,
-                    prompt_tokens=int((getattr(self, "_last_token_usage", None) or {}).get("promptTokens") or 0),
-                    eval_tokens=int((getattr(self, "_last_token_usage", None) or {}).get("evalTokens") or 0),
-                    total_tokens=int((getattr(self, "_last_token_usage", None) or {}).get("totalTokens") or 0),
-                    tokens_reported=bool(
-                        (getattr(self, "_last_token_usage", None) or {}).get("tokensReported")
-                    ),
+                    prompt_tokens=int(usage.get("promptTokens") or 0),
+                    eval_tokens=int(usage.get("evalTokens") or 0),
+                    total_tokens=int(usage.get("totalTokens") or 0),
+                    tokens_reported=bool(usage.get("tokensReported")),
+                    num_predict=usage.get("numPredict"),
+                    num_ctx=usage.get("numCtx"),
+                    done_reason=usage.get("doneReason"),
+                    prompt_eval_ms=usage.get("promptEvalMs"),
+                    eval_ms=usage.get("evalMs"),
                 )
                 from backend.services.llm_decision_trace import (
                     build_decision_trace,
