@@ -408,6 +408,18 @@ def test_max_iterations_without_successful_write(tmp_path, monkeypatch):
     clear_active_step_trace()
 
 
+def test_identical_write_loop_exit_reason():
+    assert (
+        derive_exit_reason(
+            agent_result="Stopped: identical write loop — the same successful patch repeated on lib/a.dart.",
+            tools_used={"apply_patch"},
+            lane_before="In Progress",
+            lane_after="In Progress",
+        )
+        == "identical_write_loop"
+    )
+
+
 def test_po_lane_after_tool_not_finalize_lane(tmp_path, monkeypatch):
     monkeypatch.setenv("ALLHANDS_HOME", str(tmp_path))
     initialize()

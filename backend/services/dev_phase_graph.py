@@ -512,5 +512,8 @@ def hint_for_exit_reason(exit_reason: str) -> Optional[str]:
         "patch_budget_exhausted": (
             "Patch attempts exhausted without a successful write — check tool errors or Split card."
         ),
+        "identical_write_loop": (
+            "Same successful patch repeated — stop rewriting; verify or Split the card."
+        ),
     }
     return hints.get(exit_reason)

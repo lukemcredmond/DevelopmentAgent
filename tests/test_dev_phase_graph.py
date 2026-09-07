@@ -113,6 +113,7 @@ def test_hint_for_exit_reason():
     assert "explore budget" in (hint_for_exit_reason("explore_budget_exhausted") or "").lower()
     assert "patch" in (hint_for_exit_reason("explore_budget_exhausted") or "").lower()
     assert "patch" in (hint_for_exit_reason("patch_budget_exhausted") or "").lower()
+    assert "successful patch" in (hint_for_exit_reason("identical_write_loop") or "").lower()
     assert hint_for_exit_reason("max_iterations") is None
 
 

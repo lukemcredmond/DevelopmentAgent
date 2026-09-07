@@ -1406,7 +1406,13 @@ class ScrumAgent:
         return action.stop_reason, stop_msg
 
     def _mark_force_patch_next_dev_step(self, stop_reason: Optional[str]) -> None:
-        if stop_reason != "explore_budget_exhausted":
+        reason = str(stop_reason or "").strip().lower()
+        if reason not in {
+            "explore_budget_exhausted",
+            "max_iterations_after_writes",
+            "completed_with_writes",
+            "identical_write_loop",
+        }:
             return
         task_id = state.ACTIVE_SPRINT_TASK_ID
         if not task_id:
@@ -2348,6 +2354,48 @@ class ScrumAgent:
             self._finish_run(status="failed", error=stop_msg)
             return stop_msg
 
+        write_loop_paths: list = []
+        for name, args, result in recovery_batch:
+            if name not in ("apply_patch", "write_file") or not bool(getattr(result, "success", False)):
+                continue
+            path = str((args or {}).get("path") or "")
+            summary = str(getattr(result, "summary", "") or "")[:200]
+            from backend.services.sprint_speed_gates import (
+                identical_write_loop_reached,
+                record_successful_write_fingerprint,
+                successful_write_fingerprint,
+            )
+
+            fp = successful_write_fingerprint(
+                path,
+                summary=summary,
+                old_text=str((args or {}).get("old_text") or ""),
+                new_text=str((args or {}).get("new_text") or (args or {}).get("content") or ""),
+            )
+            if task_id:
+                live = find_task_by_id(task_id)
+                if live:
+                    try:
+                        record_successful_write_fingerprint(live, fp)
+                        if identical_write_loop_reached(live):
+                            write_loop_paths.append(path or summary or "file")
+                    except Exception:
+                        pass
+        if write_loop_paths:
+            unique_writes = list(dict.fromkeys(p for p in write_loop_paths if p))
+            stop_msg = (
+                "Stopped: identical write loop — the same successful patch repeated on "
+                f"{', '.join(unique_writes)}. Do not rewrite this file again; verify or split the card."
+            )
+            add_system_log(self.role, "warning", stop_msg)
+            from backend.services.step_diagnostics import log_event
+
+            log_event("identical_write_loop", ",".join(unique_writes)[:240])
+            self._mark_force_patch_next_dev_step("identical_write_loop")
+            self._log_step_exit(stop_msg, "warning")
+            self._finish_run(status="failed", error=stop_msg)
+            return stop_msg
+
         failed_paths = failed_apply_patch_paths(recovery_batch)
         offenders = [
             p
@@ -3237,6 +3285,8 @@ class ScrumAgent:
                                 model_switches=int(getattr(self, "_model_switches", 0) or 0),
                             )
                         )
+                        if write_tools:
+                            self._mark_force_patch_next_dev_step("max_iterations_after_writes")
                         self._log_step_exit(max_msg, "warning")
                         self._finish_run(status="failed", error=max_msg)
                         pending_lesson = ("max_iterations", set(tools_used), max_msg)
@@ -3411,6 +3461,8 @@ class ScrumAgent:
                     "info",
                     f"Step exit: {exit_reason} tools=[{', '.join(sorted(tools_used)) or 'none'}]",
                 )
+                if write_tools:
+                    self._mark_force_patch_next_dev_step("completed_with_writes")
                 self._finish_run(status="completed")
                 pending_lesson = (exit_reason, set(tools_used), content or "")
                 return content or "Task completed."
@@ -3445,6 +3497,8 @@ class ScrumAgent:
                     model_switches=int(getattr(self, "_model_switches", 0) or 0),
                 )
             )
+            if write_tools:
+                self._mark_force_patch_next_dev_step("max_iterations_after_writes")
             self._log_step_exit(max_msg, "warning")
             self._finish_run(status="failed", error=max_msg)
             pending_lesson = ("max_iterations", set(tools_used), max_msg)

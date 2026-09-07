@@ -47,7 +47,7 @@ def test_latched_card_cannot_be_run_manually_without_override():
     assert task["devStepCount"] == 13
 
 
-def test_latched_card_first_recovery_runs_developer():
+def test_latched_card_first_recovery_parks_without_developer():
     initialize()
     reset_workflow_settings()
     save_workflow_settings(
@@ -69,12 +69,41 @@ def test_latched_card_first_recovery_runs_developer():
     state.SHARED_BOARD["In Progress"] = [task]
 
     with patch("backend.services.sprint_service._run_developer_step") as developer:
-        run_sprint_step("brief", "http://localhost:11434")
-    developer.assert_called_once()
-    assert get_task_lane("T-RECOVER") == "In Progress"
+        with patch("backend.services.sprint_service._run_po_clarification") as po:
+            run_sprint_step("brief", "http://localhost:11434")
+    developer.assert_not_called()
+    po.assert_not_called()
+    assert get_task_lane("T-RECOVER") == "Needs User"
     assert task["latchedRecoveryAttempted"] is True
-    assert task["phaseCycleCapReached"] is False
-    assert task["devStepCount"] == 0
+    assert task["phaseCycleCapReached"] is True
+    assert task["devStepCount"] == 13
+
+
+def test_latched_needs_po_card_is_parked_not_clarified():
+    initialize()
+    reset_workflow_settings()
+    save_workflow_settings(
+        {
+            "enableSplitOnStuck": False,
+            "maxStuckSteps": 1,
+            "maxPoRoundTrips": 3,
+            "pauseSprintOnNeedsUser": False,
+        }
+    )
+    _empty_board()
+    task = init_new_task(
+        {"id": "T-PO-LATCH", "title": "Latched PO", "description": "d", "status": "Needs PO"}
+    )
+    task["phaseCycleCapReached"] = True
+    task["devStepCount"] = 13
+    state.SHARED_BOARD["Needs PO"] = [task]
+
+    with patch("backend.services.sprint_service._run_po_clarification") as po:
+        with patch("backend.services.sprint_service._run_developer_step") as developer:
+            run_sprint_step("brief", "http://localhost:11434")
+    po.assert_not_called()
+    developer.assert_not_called()
+    assert get_task_lane("T-PO-LATCH") == "Needs User"
 
 
 def test_second_latch_after_recovery_parks_to_needs_user_without_dev():

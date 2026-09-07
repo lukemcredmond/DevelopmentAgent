@@ -365,6 +365,38 @@ def test_last_step_outcome_includes_why_card_stayed(tmp_path, monkeypatch):
     assert "read_file" in outcome.get("toolsUsed", [])
 
 
+def test_po_clarified_ok_despite_historic_tool_failures(tmp_path, monkeypatch):
+    monkeypatch.setenv("ALLHANDS_HOME", str(tmp_path))
+    initialize()
+    task = init_new_task(
+        {"id": "T-PO-OK", "title": "Club card", "description": "d", "status": "Needs PO"}
+    )
+    task["transcript"] = [
+        {"role": "tool", "toolSuccess": False, "content": "apply_patch FAILED"},
+    ]
+    state.SHARED_BOARD["Needs PO"] = []
+    task["status"] = "Done"
+    state.SHARED_BOARD.setdefault("Done", [])
+    state.SHARED_BOARD["Done"] = [task]
+    state.CURRENT_PROJECT_ID = "test-proj"
+    state.DEV_STEP_READ_ONLY_NO_EDITS = False
+    state.DEV_STEP_COMMAND_REPEAT_NO_PROGRESS = False
+
+    trace = start_step_trace("T-PO-OK", "Club card", "Product Owner", "Needs PO")
+    trace.log_tool("update_board", True, "TASK-T-PO-OK → In Progress")
+
+    outcome = _build_last_step_outcome(
+        "T-PO-OK",
+        "Needs PO",
+        "Product Owner",
+        agent_result="Clarified acceptance criteria.",
+    )
+
+    assert outcome["stopReason"] == "po_clarified"
+    assert outcome["ok"] is True
+    assert outcome["toolFailures"] >= 1
+
+
 def test_fenced_content_read_file_recovered_and_executed():
     initialize()
     state.SHARED_BOARD.clear()

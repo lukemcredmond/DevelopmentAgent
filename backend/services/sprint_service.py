@@ -374,6 +374,11 @@ def _outcome_why_card_stayed(
         return (
             f"Developer returned text-only on '{title}' without apply_patch/write_file. {base}"
         )
+    if stop_reason == "identical_write_loop":
+        return (
+            f"The same successful patch was applied repeatedly on '{title}'. "
+            "Stop rewriting; verify the files or split the card."
+        )
     if text_rejections or plan_rejections:
         return (
             f"Step on '{title}' ended with {plan_rejections} plan and {text_rejections} text "
@@ -387,6 +392,8 @@ def _outcome_suggested_action(stop_reason: str, lane_after: str) -> str:
         return ""
     if stop_reason == "completed_with_writes":
         return ""
+    if stop_reason == "identical_write_loop":
+        return "Do not rewrite the same file. Verify, split the card, or edit manually."
     return "Run In Progress again or edit the workspace files manually, then move the card to QA."
 
 
@@ -474,6 +481,21 @@ def _build_last_step_outcome(
             message = f"Card stayed In Progress: {why_card_stayed}"
         else:
             message = f"Dev step finished on '{title}' — card still In Progress."
+
+    if agent == "Product Owner":
+        lane_after_tool = ""
+        if trace is not None:
+            lane_after_tool = str(getattr(trace, "lane_after_tool", "") or "").strip()
+        po_success_lanes = {"In Progress", "Refinement"}
+        if stop_reason == "po_clarified" or lane_after_tool in po_success_lanes:
+            ok = True
+            if lane_after_tool in po_success_lanes:
+                message = (
+                    f"PO clarification applied on '{title}' "
+                    f"(board after tool: {lane_after_tool})."
+                )
+            else:
+                message = f"PO clarification applied on '{title}'."
 
     outcome: Dict[str, Any] = {
         "taskId": task_id,
@@ -1152,14 +1174,17 @@ def _check_stuck_and_escalate(
     # Ladder: backup already armed above → try one auto-split before Needs PO.
     # Skip auto-split for lint/tool walls (lint fanout covers "break into bits").
     # Skip for explore-budget exhaustion so the next Dev step can force a Patch turn.
+    # Skip for phase-cycle-capped cards — Auto Sprint must not call PO.
     from backend.services.sprint_speed_gates import stuck_is_explore_without_write
 
     explore_no_write = stuck_is_explore_without_write(task)
+    latched = bool(task.get("phaseCycleCapReached"))
     if (
         ws.get("enableSplitOnStuck", True)
         and not task.get("splitAttemptedOnStuck")
         and not stuck_is_tool_or_lint(task)
         and not explore_no_write
+        and not latched
     ):
         task["splitAttemptedOnStuck"] = True
         record_task_decision(
@@ -1238,7 +1263,25 @@ def _check_stuck_and_escalate(
 
     max_po = int(ws.get("maxPoRoundTrips", 3))
     msg = build_stuck_escalation_message(task, lane_after, max_stuck)
-    latched = bool(task.get("phaseCycleCapReached"))
+    if latched:
+        park_msg = (
+            "Phase cycle cap reached. Split the card or reset the Developer visit latch. "
+            "Auto Sprint will not run Product Owner or Developer on this card."
+        )
+        record_task_decision(
+            task_id,
+            "System",
+            "stuck_loop",
+            "Phase cycle cap — parking to Needs User (skip PO/Dev)",
+            park_msg,
+        )
+        add_system_log(
+            "System",
+            "warning",
+            f"{task_id}: phase cycle cap — parking to Needs User instead of Needs PO",
+        )
+        _try_move_to_needs_user(task_id, task, park_msg)
+        return
     if explore_no_write and not latched:
         task["forcePatchNextDevStep"] = True
         record_task_decision(
@@ -4116,8 +4159,13 @@ def _select_downstream_sprint_handler() -> tuple[Optional[str], Optional[Dict[st
 def has_sprint_work() -> bool:
     """True when auto-sprint has actionable (not merely blocked) work."""
     board = state.SHARED_BOARD
+    latched_needs_po = any(
+        isinstance(task, dict) and task.get("phaseCycleCapReached")
+        for task in board.get("Needs PO") or []
+    )
     if (
-        board.get("Needs PO")
+        _first_runnable_needs_po(board)
+        or latched_needs_po
         or _in_progress_dev_runnable(board)
         or _in_progress_pending_recovery(board)
         or _in_progress_exhausted_latched(board)
@@ -4268,48 +4316,31 @@ def _run_parallel_independent_dev_batch(brief: str, ollama_url: str) -> int:
 
 
 def _recover_latched_dev_card(active_task: Dict[str, Any], brief: str) -> None:
-    """Unlatch once and run Developer (LLM). A second latch parks without another Dev loop."""
+    """Park a phase-cycle-capped card. Auto Sprint must not unlatch, PO, or Dev it."""
+    del brief
     task_id = str(active_task.get("id") or "")
     if not task_id:
         return
     lane_before = get_task_lane(task_id) or "In Progress"
     title = str(active_task.get("title") or task_id)
-    run_dev = False
+    park_msg = (
+        "Phase cycle cap reached. Split the card or reset the Developer visit latch. "
+        "Auto Sprint will not run Product Owner or Developer on this card."
+    )
     with state.STATE_LOCK:
         task = find_task_by_id(task_id)
         if not task:
             return
-        if not task.get("latchedRecoveryAttempted"):
-            from backend.services.sprint_speed_gates import reset_dev_cycle_latch
-
-            reset_dev_cycle_latch(task)
-            # reset_dev_cycle_latch clears this; keep it so a second cap parks instead of looping.
-            task["latchedRecoveryAttempted"] = True
-            # Empty recovery ticks inflated this; they were not model failures.
-            task["consecutiveBadExits"] = 0
-            task.pop("lastCircuitExitReason", None)
-            run_dev = True
-            add_system_log(
-                "System",
-                "info",
-                f"{task_id}: reset phase cycle cap — running Developer so LM Studio is called",
-            )
-        else:
-            result = (
-                "Stopped: phase cycle cap reached. Developer execution is latched; "
-                "attempting split/clarification recovery."
-            )
-            _ensure_dev_step_trace(task_id, title, lane_before)
-            state.LAST_AGENT_STEP_RESULT = result
-            max_stuck = max(1, int(get_workflow_settings().get("maxStuckSteps") or 3))
-            task["stuckLoops"] = max(int(task.get("stuckLoops") or 0), max_stuck - 1)
-            _record_last_step_outcome(task_id, lane_before, "System", agent_result=result)
-            _check_stuck_and_escalate(task_id, lane_before, agent_key=None)
-            _finalize_dev_step_diagnostics_if_auto_sprint(task_id, lane_before)
-            return
-    if run_dev:
-        live = find_task_by_id(task_id) or active_task
-        _run_developer_step(live, brief)
+        task["latchedRecoveryAttempted"] = True
+        result = (
+            "Stopped: phase cycle cap reached. Developer execution is latched; "
+            "split the card or reset the latch — Auto Sprint will not run PO or Dev."
+        )
+        _ensure_dev_step_trace(task_id, title, lane_before)
+        state.LAST_AGENT_STEP_RESULT = result
+        _record_last_step_outcome(task_id, lane_before, "System", agent_result=result)
+        _try_move_to_needs_user(task_id, task, park_msg)
+        _finalize_dev_step_diagnostics_if_auto_sprint(task_id, lane_before)
 
 
 def run_sprint_step(brief: str, ollama_url: str) -> None:
@@ -4339,9 +4370,20 @@ def run_sprint_step(brief: str, ollama_url: str) -> None:
     with state.STATE_LOCK:
         normalize_board_lanes(state.SHARED_BOARD)
         needs_po_task = _first_runnable_needs_po()
+        latched_needs_po = next(
+            (
+                task
+                for task in state.SHARED_BOARD.get("Needs PO") or []
+                if isinstance(task, dict) and task.get("phaseCycleCapReached")
+            ),
+            None,
+        )
         if needs_po_task:
             active_task = dict(needs_po_task)
             handler = "po"
+        elif latched_needs_po:
+            active_task = dict(latched_needs_po)
+            handler = "dev_recovery"
         elif (
             get_workflow_settings().get("pauseSprintOnNeedsUser")
             and state.SHARED_BOARD.get("Needs User")

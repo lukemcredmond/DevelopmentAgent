@@ -25,6 +25,7 @@ UNHEALTHY_LANE_ADVANCE_EXITS = frozenset(
         "completed_text_only",
         "completed_with_writes_no_advance",
         "tool_output_echo",
+        "identical_write_loop",
     }
 )
 
@@ -118,6 +119,8 @@ def clear_patch_fingerprint(task: Dict[str, Any]) -> None:
         return
     task.pop("lastFailedPatchFingerprint", None)
     task.pop("identicalPatchFailCount", None)
+    task.pop("lastSuccessWriteFingerprint", None)
+    task.pop("identicalSuccessWriteCount", None)
 
 
 def record_consecutive_bad_exit(
@@ -192,21 +195,39 @@ def needs_po_should_skip_auto(
 ) -> bool:
     if not isinstance(task, dict):
         return False
+    if task.get("phaseCycleCapReached"):
+        return True
     if task.get("poAutoSkip"):
         return True
     trip, _ = circuit_breaker_should_trip(task, ws)
     return trip
 
 
+_FORCE_PATCH_EXITS = frozenset(
+    {
+        "explore_budget_exhausted",
+        "max_iterations_after_writes",
+        "completed_with_writes",
+        "identical_write_loop",
+    }
+)
+IDENTICAL_SUCCESS_WRITE_LIMIT = 3
+
+
+def last_step_exit_reason(task: Dict[str, Any]) -> str:
+    if not isinstance(task, dict):
+        return ""
+    outcome = task.get("lastStepOutcome") or {}
+    if not isinstance(outcome, dict):
+        return ""
+    return str(outcome.get("exitReason") or outcome.get("stopReason") or "").strip().lower()
+
+
 def stuck_is_explore_without_write(task: Dict[str, Any]) -> bool:
     """True when the last Dev step burned explore tools and never wrote."""
     if not isinstance(task, dict):
         return False
-    outcome = task.get("lastStepOutcome") or {}
-    reason = str(
-        outcome.get("exitReason") or outcome.get("stopReason") or ""
-    ).strip().lower()
-    if reason == "explore_budget_exhausted":
+    if last_step_exit_reason(task) == "explore_budget_exhausted":
         return True
     return str(task.get("lastCircuitExitReason") or "").strip().lower() == (
         "explore_budget_exhausted"
@@ -218,7 +239,53 @@ def should_force_patch_next_dev_step(task: Dict[str, Any]) -> bool:
         return False
     if task.get("forcePatchNextDevStep"):
         return True
-    return stuck_is_explore_without_write(task)
+    if stuck_is_explore_without_write(task):
+        return True
+    return last_step_exit_reason(task) in _FORCE_PATCH_EXITS
+
+
+def successful_write_fingerprint(
+    path: str, *, summary: str = "", old_text: str = "", new_text: str = ""
+) -> str:
+    """Fingerprint a successful apply_patch/write_file across Dev visits."""
+    path_n = str(path or "").replace("\\", "/")
+    extra = f"{old_text}|{new_text}" if (old_text or new_text) else str(summary or "")
+    raw = f"{path_n}|{extra}"
+    return hashlib.sha256(raw.encode("utf-8", errors="replace")).hexdigest()[:16]
+
+
+def record_successful_write_fingerprint(task: Dict[str, Any], fingerprint: str) -> int:
+    """Track identical successful writes across steps. Returns consecutive count."""
+    if not isinstance(task, dict) or not fingerprint:
+        return 0
+    prev = str(task.get("lastSuccessWriteFingerprint") or "")
+    if prev == fingerprint:
+        count = int(task.get("identicalSuccessWriteCount") or 0) + 1
+    else:
+        count = 1
+        task["lastSuccessWriteFingerprint"] = fingerprint
+    task["identicalSuccessWriteCount"] = count
+    return count
+
+
+def identical_write_loop_reached(
+    task: Dict[str, Any], ws: Optional[Dict[str, Any]] = None
+) -> bool:
+    if not isinstance(task, dict):
+        return False
+    limit = IDENTICAL_SUCCESS_WRITE_LIMIT
+    if ws is None:
+        try:
+            from backend.services.workflow_settings import get_workflow_settings
+
+            ws = get_workflow_settings()
+        except Exception:
+            ws = {}
+    try:
+        limit = max(2, int((ws or {}).get("identicalSuccessWriteLimit") or limit))
+    except (TypeError, ValueError):
+        limit = IDENTICAL_SUCCESS_WRITE_LIMIT
+    return int(task.get("identicalSuccessWriteCount") or 0) >= limit
 
 
 def note_early_interrupt(

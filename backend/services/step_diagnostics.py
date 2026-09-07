@@ -245,6 +245,10 @@ class StepDiagnosticsTracker:
             "max_iterations_after_writes": (
                 "Agent wrote files then hit max LLM iterations before verify or a lane move."
             ),
+            "identical_write_loop": (
+                "The same successful patch was applied repeatedly. Stop rewriting; "
+                "verify the files or split the card."
+            ),
             "step_timeout": (
                 "Agent step exceeded maxAgentStepDurationSec — stopped to avoid an unbounded loop. "
                 "Resume with Sprint step or chat."
@@ -1131,6 +1135,8 @@ def derive_exit_reason(
             return "tool_output_echo"
         if "identical apply_patch" in lower or "same apply_patch" in lower:
             return "tool_failure_stop"
+        if "identical write loop" in lower:
+            return "identical_write_loop"
         return "tool_failure_stop"
     wrote = False
     trace = get_active_trace()

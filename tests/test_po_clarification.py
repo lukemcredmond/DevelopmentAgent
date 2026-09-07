@@ -241,3 +241,18 @@ def test_first_runnable_needs_po_skips_circuit_latched():
     picked = _first_runnable_needs_po()
     assert picked is not None
     assert picked.get("id") == "T-PO-RUN"
+
+
+def test_first_runnable_needs_po_skips_phase_cycle_cap():
+    from backend import state
+    from backend.services.sprint_service import _first_runnable_needs_po
+
+    skipped = _needs_po_task("T-PO-CAP")
+    skipped["phaseCycleCapReached"] = True
+    runnable = init_new_task(
+        {"id": "T-PO-OK", "title": "Next", "description": "ok", "status": "Needs PO"}
+    )
+    state.SHARED_BOARD["Needs PO"] = [skipped, runnable]
+    picked = _first_runnable_needs_po()
+    assert picked is not None
+    assert picked.get("id") == "T-PO-OK"

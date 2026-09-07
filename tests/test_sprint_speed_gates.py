@@ -87,6 +87,40 @@ def test_stuck_is_explore_without_write():
     )
 
 
+def test_force_patch_after_write_exits():
+    assert gates.should_force_patch_next_dev_step(
+        {"lastStepOutcome": {"exitReason": "max_iterations_after_writes"}}
+    )
+    assert gates.should_force_patch_next_dev_step(
+        {"lastStepOutcome": {"exitReason": "completed_with_writes"}}
+    )
+    assert gates.should_force_patch_next_dev_step(
+        {"lastStepOutcome": {"exitReason": "identical_write_loop"}}
+    )
+    assert not gates.should_force_patch_next_dev_step(
+        {"lastStepOutcome": {"exitReason": "max_iterations"}}
+    )
+
+
+def test_identical_success_write_trips_at_three():
+    task: dict = {}
+    fp = gates.successful_write_fingerprint(
+        "lib/store_list_screen.dart", summary="replace 645 chars"
+    )
+    assert gates.record_successful_write_fingerprint(task, fp) == 1
+    assert gates.record_successful_write_fingerprint(task, fp) == 2
+    assert gates.identical_write_loop_reached(task, ws={"identicalSuccessWriteLimit": 3}) is False
+    assert gates.record_successful_write_fingerprint(task, fp) == 3
+    assert gates.identical_write_loop_reached(task, ws={"identicalSuccessWriteLimit": 3}) is True
+    other = gates.successful_write_fingerprint("lib/other.dart", summary="replace 10 chars")
+    assert gates.record_successful_write_fingerprint(task, other) == 1
+    assert gates.identical_write_loop_reached(task, ws={"identicalSuccessWriteLimit": 3}) is False
+
+
+def test_needs_po_skip_when_phase_cycle_cap_reached():
+    assert gates.needs_po_should_skip_auto({"phaseCycleCapReached": True}) is True
+
+
 def test_early_interrupt_backoff_escalates():
     gates.reset_interrupt_backoff_state()
     ws = {
