@@ -123,8 +123,34 @@ def test_force_patch_starts_in_patch_phase():
     assert g.phase == "patch"
     assert g.forced_patch is True
     assert g.explore_nudge_sent is True
+    assert g.pending_stop_after_nudge is True
+    assert g.explore_count == 0
     snap = g.snapshot()
     assert snap["forcedPatch"] is True
+
+
+def test_forced_patch_explore_batch_stops_immediately():
+    g = DevPhaseGraph.for_new_step(ws={"enableDevPhaseGraph": True}, force_patch=True)
+    assert g is not None
+    a = g.record_batch([("read_file", True), ("list_dir", True)])
+    assert a.stop_reason == "explore_budget_exhausted"
+    assert g.phase == "stuck"
+
+
+def test_forced_patch_write_is_allowed():
+    g = DevPhaseGraph.for_new_step(ws={"enableDevPhaseGraph": True}, force_patch=True)
+    assert g is not None
+    a = g.record_batch([("apply_patch", True)])
+    assert a.stop_reason is None
+    assert g.write_succeeded
+    assert g.phase == "verify"
+
+
+def test_forced_patch_text_only_turn_stops():
+    g = DevPhaseGraph.for_new_step(ws={"enableDevPhaseGraph": True}, force_patch=True)
+    assert g is not None
+    a = g.after_llm_turn_without_write()
+    assert a.stop_reason == "explore_budget_exhausted"
 
 
 def test_snapshot_includes_cycle_and_status_text():

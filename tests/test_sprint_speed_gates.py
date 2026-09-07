@@ -117,6 +117,29 @@ def test_identical_success_write_trips_at_three():
     assert gates.identical_write_loop_reached(task, ws={"identicalSuccessWriteLimit": 3}) is False
 
 
+def test_successful_write_fingerprint_uses_path_and_replace_size_not_text():
+    path = "mealplanner/lib/presentation/store_list_screen.dart"
+    a = gates.successful_write_fingerprint(
+        path,
+        summary="replace 107 chars",
+        old_text="old-a",
+        new_text="new-aaaaaaaa",
+    )
+    b = gates.successful_write_fingerprint(
+        path,
+        summary="replace 107 chars",
+        old_text="old-b-completely-different",
+        new_text="new-bbbbbbbb",
+    )
+    assert a == b
+    different_size = gates.successful_write_fingerprint(
+        path, summary="replace 645 chars", old_text="x", new_text="y"
+    )
+    assert a != different_size
+    from_len = gates.successful_write_fingerprint(path, old_text="", new_text="x" * 107)
+    assert from_len == a
+
+
 def test_needs_po_skip_when_phase_cycle_cap_reached():
     assert gates.needs_po_should_skip_auto({"phaseCycleCapReached": True}) is True
 

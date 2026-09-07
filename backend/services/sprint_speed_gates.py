@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import hashlib
+import re
 import time
 from typing import Any, Dict, Optional, Set
 
@@ -244,13 +245,30 @@ def should_force_patch_next_dev_step(task: Dict[str, Any]) -> bool:
     return last_step_exit_reason(task) in _FORCE_PATCH_EXITS
 
 
+_REPLACE_SIZE_RE = re.compile(r"replace\s+(\d+)\s+chars", re.I)
+
+
+def successful_write_size(
+    *, summary: str = "", old_text: str = "", new_text: str = ""
+) -> int:
+    """Replace-size or content length — not the full patch text."""
+    match = _REPLACE_SIZE_RE.search(str(summary or ""))
+    if match:
+        return int(match.group(1))
+    if new_text:
+        return len(new_text)
+    if old_text:
+        return len(old_text)
+    return 0
+
+
 def successful_write_fingerprint(
     path: str, *, summary: str = "", old_text: str = "", new_text: str = ""
 ) -> str:
-    """Fingerprint a successful apply_patch/write_file across Dev visits."""
+    """Fingerprint a successful write by path + replace size so similar rewrites trip."""
     path_n = str(path or "").replace("\\", "/")
-    extra = f"{old_text}|{new_text}" if (old_text or new_text) else str(summary or "")
-    raw = f"{path_n}|{extra}"
+    size = successful_write_size(summary=summary, old_text=old_text, new_text=new_text)
+    raw = f"{path_n}|{size}"
     return hashlib.sha256(raw.encode("utf-8", errors="replace")).hexdigest()[:16]
 
 

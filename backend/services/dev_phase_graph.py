@@ -257,11 +257,12 @@ class DevPhaseGraph:
         self.phase = "patch"
         self.forced_patch = True
         self.explore_nudge_sent = True
-        self.pending_stop_after_nudge = False
-        self.explore_count = self.explore_max
+        # First explore-only or text-only turn stops; apply_patch/write_file required.
+        self.pending_stop_after_nudge = True
+        self.explore_count = 0
         self.status_text = (
-            "Forced Patch — previous step used Explore without apply_patch. "
-            "Call apply_patch or write_file this turn."
+            "Forced Patch — do not read/grep/list. "
+            "This turn MUST call apply_patch or write_file."
         )
 
     def seed_step_context(

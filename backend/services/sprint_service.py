@@ -483,19 +483,10 @@ def _build_last_step_outcome(
             message = f"Dev step finished on '{title}' — card still In Progress."
 
     if agent == "Product Owner":
-        lane_after_tool = ""
-        if trace is not None:
-            lane_after_tool = str(getattr(trace, "lane_after_tool", "") or "").strip()
-        po_success_lanes = {"In Progress", "Refinement"}
-        if stop_reason == "po_clarified" or lane_after_tool in po_success_lanes:
+        left_needs_po = lane_before == "Needs PO" and lane_after != "Needs PO"
+        if stop_reason == "po_clarified" and left_needs_po:
             ok = True
-            if lane_after_tool in po_success_lanes:
-                message = (
-                    f"PO clarification applied on '{title}' "
-                    f"(board after tool: {lane_after_tool})."
-                )
-            else:
-                message = f"PO clarification applied on '{title}'."
+            message = f"PO clarification applied on '{title}' ({lane_before} → {lane_after})."
 
     outcome: Dict[str, Any] = {
         "taskId": task_id,

@@ -397,6 +397,31 @@ def test_po_clarified_ok_despite_historic_tool_failures(tmp_path, monkeypatch):
     assert outcome["toolFailures"] >= 1
 
 
+def test_po_incomplete_not_ok_when_card_stays_needs_po(tmp_path, monkeypatch):
+    monkeypatch.setenv("ALLHANDS_HOME", str(tmp_path))
+    initialize()
+    task = init_new_task(
+        {"id": "T-PO-STAY", "title": "Club card", "description": "d", "status": "Needs PO"}
+    )
+    state.SHARED_BOARD["Needs PO"] = [task]
+    state.CURRENT_PROJECT_ID = "test-proj"
+    state.DEV_STEP_READ_ONLY_NO_EDITS = False
+    state.DEV_STEP_COMMAND_REPEAT_NO_PROGRESS = False
+
+    trace = start_step_trace("T-PO-STAY", "Club card", "Product Owner", "Needs PO")
+    trace.log_tool("update_board", True, "TASK-T-PO-STAY → In Progress")
+
+    outcome = _build_last_step_outcome(
+        "T-PO-STAY",
+        "Needs PO",
+        "Product Owner",
+        agent_result="Clarified acceptance criteria.",
+    )
+
+    assert outcome["stopReason"] == "po_clarification_incomplete"
+    assert outcome["ok"] is False
+
+
 def test_fenced_content_read_file_recovered_and_executed():
     initialize()
     state.SHARED_BOARD.clear()
