@@ -359,6 +359,9 @@ def _resolve_needs_user_kind(task: Dict[str, Any], kind: str, raw_msg: str) -> s
     raw = str(raw_msg or "")
     if _looks_secret_ask(raw) or _looks_secret_ask(str(task.get("userQuestion") or "")):
         return "secret"
+    # Cycle-cap park must not be rewritten as lint/missing-file questions.
+    if kind == "phase_cycle_cap" or task.get("phaseCycleCapReached"):
+        return "phase_cycle_cap"
     if stuck_is_tool_or_lint(task):
         return "lint"
     exit_r = _exit_reason(task)
@@ -417,6 +420,23 @@ def build_needs_user_brief(
         action = (
             "Paste the secret, or write e.g. 'use env OPENAI_API_KEY and do not commit it'. "
             "Then click Send to Developer."
+        )
+    elif resolved_kind == "phase_cycle_cap":
+        question = (
+            f'Split "{title}" into smaller cards, or reset the Developer visit latch '
+            "so implementation can continue?"
+        )
+        why_parts.append(
+            "This card hit its Developer visit cap. Auto Sprint will not run Product Owner "
+            "or Developer on it until it is split or the latch is reset."
+        )
+        why_parts.append(
+            "Failed reads, missing paths, patch mismatches, and lint are agent tool errors — "
+            "not a product decision you can answer."
+        )
+        action = (
+            "Split the card, or reset the phase cycle cap and click Send to Developer. "
+            "Do not reply with file paths or 'the file does not exist'."
         )
     elif resolved_kind == "lint":
         question = question or (

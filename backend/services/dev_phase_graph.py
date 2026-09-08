@@ -257,12 +257,13 @@ class DevPhaseGraph:
         self.phase = "patch"
         self.forced_patch = True
         self.explore_nudge_sent = True
-        # First explore-only or text-only turn stops; apply_patch/write_file required.
-        self.pending_stop_after_nudge = True
+        # Prompt already has a write nudge. First explore-only batch nudges again;
+        # a second explore-only batch with no write stops.
+        self.pending_stop_after_nudge = False
         self.explore_count = 0
         self.status_text = (
-            "Forced Patch — do not read/grep/list. "
-            "This turn MUST call apply_patch or write_file."
+            "Forced Patch — previous step used Explore without apply_patch. "
+            "Call apply_patch or write_file this turn."
         )
 
     def seed_step_context(
@@ -469,15 +470,30 @@ class DevPhaseGraph:
         if self.phase == "verify" and self.write_succeeded and self.verify_count >= self.verify_max:
             self.phase = "done"
 
+        explore_only = (
+            bool(tools)
+            and not any(n in WRITE_TOOLS for n, _ in tools)
+            and any(n in EXPLORE_TOOLS for n, _ in tools)
+        )
+        # Forced Patch: Gemma always opens with read_file — nudge once, then stop.
+        if (
+            self.forced_patch
+            and not self.write_succeeded
+            and explore_only
+            and not self.pending_stop_after_nudge
+        ):
+            self.explore_nudge_sent = True
+            self.pending_stop_after_nudge = True
+            action.nudge = EXPLORE_NUDGE
+            nudged_this_batch = True
+
         # After an earlier nudge, another explore-only batch without write → stop
         if (
             not nudged_this_batch
             and self.pending_stop_after_nudge
             and not self.write_succeeded
             and self.explore_nudge_sent
-            and tools
-            and not any(n in WRITE_TOOLS for n, _ in tools)
-            and any(n in EXPLORE_TOOLS for n, _ in tools)
+            and explore_only
         ):
             return self._stuck(
                 "explore_budget_exhausted",

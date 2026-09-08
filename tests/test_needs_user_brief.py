@@ -73,6 +73,37 @@ def test_explore_brief_asks_for_first_file():
     assert "send to developer" in brief["action"].lower()
 
 
+def test_phase_cycle_cap_brief_ignores_lint_and_missing_files():
+    task = {
+        "id": "T-CAP",
+        "title": "Create Store Form",
+        "description": "Store creation screen with name persistence.",
+        "acceptanceCriteria": ["Name required", "Persist store"],
+        "phaseCycleCapReached": True,
+        "forcePatchNextDevStep": True,
+        "lastStepOutcome": {"exitReason": "explore_budget_exhausted"},
+        "lastCommandDiagnostics": [
+            {
+                "file": "lib/missing.dart",
+                "line": 1,
+                "message": "Target of URI doesn't exist",
+            }
+        ],
+    }
+    brief = build_needs_user_brief(
+        task,
+        kind="phase_cycle_cap",
+        raw_msg="Phase cycle cap reached. Split the card or reset the Developer visit latch.",
+    )
+    blob = f"{brief['question']} {brief['why']} {brief['action']}".lower()
+    assert brief["kind"] == "phase_cycle_cap"
+    assert "split" in brief["question"].lower()
+    assert "lib/missing.dart" not in blob
+    assert "doesn't exist" not in blob
+    assert "which file or function" not in blob
+    assert "send to developer" in brief["action"].lower()
+
+
 def test_specific_agent_question_preserved():
     task = {"id": "T-Q", "title": "Auth", "description": "Add login", "acceptanceCriteria": ["OAuth"]}
     raw = "Needs User: Which OAuth provider should we use?"

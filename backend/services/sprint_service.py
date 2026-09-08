@@ -1271,7 +1271,7 @@ def _check_stuck_and_escalate(
             "warning",
             f"{task_id}: phase cycle cap — parking to Needs User instead of Needs PO",
         )
-        _try_move_to_needs_user(task_id, task, park_msg)
+        _try_move_to_needs_user(task_id, task, park_msg, kind="phase_cycle_cap")
         return
     if explore_no_write and not latched:
         task["forcePatchNextDevStep"] = True
@@ -3353,6 +3353,16 @@ def _run_developer_step(active_task: Dict[str, Any], brief: str) -> None:
     task_id = active_task["id"]
     lane_before = get_task_lane(task_id) or "In Progress"
     title = str(active_task.get("title", task_id))
+    if lane_before == "Needs PO":
+        add_system_log(
+            "System",
+            "warning",
+            f"{task_id}: skipping Developer — card is in Needs PO (no begin_dev_step)",
+        )
+        live = find_task_by_id(task_id) or active_task
+        if live.get("phaseCycleCapReached"):
+            _recover_latched_dev_card(dict(live), brief)
+        return
     step_started = _mark_sprint_step_start()
     set_active_sprint_context(task_id, "Developer")
     live_task = find_task_by_id(task_id) or active_task
@@ -4330,7 +4340,7 @@ def _recover_latched_dev_card(active_task: Dict[str, Any], brief: str) -> None:
         _ensure_dev_step_trace(task_id, title, lane_before)
         state.LAST_AGENT_STEP_RESULT = result
         _record_last_step_outcome(task_id, lane_before, "System", agent_result=result)
-        _try_move_to_needs_user(task_id, task, park_msg)
+        _try_move_to_needs_user(task_id, task, park_msg, kind="phase_cycle_cap")
         _finalize_dev_step_diagnostics_if_auto_sprint(task_id, lane_before)
 
 

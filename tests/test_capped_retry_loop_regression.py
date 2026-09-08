@@ -74,6 +74,10 @@ def test_latched_card_first_recovery_parks_without_developer():
     developer.assert_not_called()
     po.assert_not_called()
     assert get_task_lane("T-RECOVER") == "Needs User"
+    assert task.get("needsUserKind") == "phase_cycle_cap"
+    q = (task.get("userQuestion") or "").lower()
+    assert "split" in q
+    assert "which file or function" not in q
     assert task["latchedRecoveryAttempted"] is True
     assert task["phaseCycleCapReached"] is True
     assert task["devStepCount"] == 13
@@ -104,6 +108,26 @@ def test_latched_needs_po_card_is_parked_not_clarified():
     po.assert_not_called()
     developer.assert_not_called()
     assert get_task_lane("T-PO-LATCH") == "Needs User"
+
+
+def test_developer_step_does_not_begin_dev_on_needs_po():
+    initialize()
+    _empty_board()
+    task = init_new_task(
+        {"id": "T-NPO-DEV", "title": "Verify name", "description": "d", "status": "Needs PO"}
+    )
+    task["phaseCycleCapReached"] = True
+    task["devStepCount"] = 13
+    state.SHARED_BOARD["Needs PO"] = [task]
+
+    with patch("backend.services.sprint_speed_gates.begin_dev_step") as begin:
+        with patch("backend.services.sprint_service._recover_latched_dev_card") as recover:
+            from backend.services.sprint_service import _run_developer_step
+
+            _run_developer_step(task, "brief")
+    begin.assert_not_called()
+    recover.assert_called_once()
+    assert task["devStepCount"] == 13
 
 
 def test_second_latch_after_recovery_parks_to_needs_user_without_dev():

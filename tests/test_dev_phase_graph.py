@@ -123,17 +123,23 @@ def test_force_patch_starts_in_patch_phase():
     assert g.phase == "patch"
     assert g.forced_patch is True
     assert g.explore_nudge_sent is True
-    assert g.pending_stop_after_nudge is True
+    assert g.pending_stop_after_nudge is False
     assert g.explore_count == 0
     snap = g.snapshot()
     assert snap["forcedPatch"] is True
 
 
-def test_forced_patch_explore_batch_stops_immediately():
+def test_forced_patch_first_explore_nudges_second_stops():
     g = DevPhaseGraph.for_new_step(ws={"enableDevPhaseGraph": True}, force_patch=True)
     assert g is not None
-    a = g.record_batch([("read_file", True), ("list_dir", True)])
-    assert a.stop_reason == "explore_budget_exhausted"
+    a1 = g.record_batch([("read_file", True), ("list_dir", True)])
+    assert a1.stop_reason is None
+    assert a1.nudge == EXPLORE_NUDGE
+    assert g.phase == "patch"
+    assert g.pending_stop_after_nudge is True
+
+    a2 = g.record_batch([("grep", True)])
+    assert a2.stop_reason == "explore_budget_exhausted"
     assert g.phase == "stuck"
 
 
@@ -146,9 +152,18 @@ def test_forced_patch_write_is_allowed():
     assert g.phase == "verify"
 
 
-def test_forced_patch_text_only_turn_stops():
+def test_forced_patch_text_only_before_explore_does_not_stop():
     g = DevPhaseGraph.for_new_step(ws={"enableDevPhaseGraph": True}, force_patch=True)
     assert g is not None
+    a = g.after_llm_turn_without_write()
+    assert a.stop_reason is None
+    assert g.phase == "patch"
+
+
+def test_forced_patch_text_only_after_explore_nudge_stops():
+    g = DevPhaseGraph.for_new_step(ws={"enableDevPhaseGraph": True}, force_patch=True)
+    assert g is not None
+    g.record_batch([("read_file", True)])
     a = g.after_llm_turn_without_write()
     assert a.stop_reason == "explore_budget_exhausted"
 
