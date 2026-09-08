@@ -109,6 +109,81 @@ def test_latched_needs_po_card_is_parked_not_clarified():
     developer.assert_not_called()
     assert get_task_lane("T-PO-LATCH") == "Needs User"
 
+    from backend.services.sprint_service import has_sprint_work
+
+    assert has_sprint_work() is False
+
+
+def test_latched_needs_po_does_not_block_claimable_backlog():
+    initialize()
+    reset_workflow_settings()
+    save_workflow_settings(
+        {
+            "enableSplitOnStuck": False,
+            "requireBacklogRefinement": False,
+            "pauseSprintOnNeedsUser": False,
+            "splitCardWhenAcOver": 20,
+        }
+    )
+    _empty_board()
+    latched = init_new_task(
+        {"id": "T-NPO-LATCH", "title": "Latched PO", "description": "d", "status": "Needs PO"}
+    )
+    latched["phaseCycleCapReached"] = True
+    latched["devStepCount"] = 13
+    ready = init_new_task(
+        {
+            "id": "T-READY-NPO",
+            "title": "Ready work",
+            "description": "Implement the feature",
+            "status": "Backlog",
+            "acceptanceCriteria": ["a", "b"],
+            "scope": "One screen",
+            "testPlan": "Run unit tests",
+            "workType": "implementation",
+            "requiresDev": True,
+            "requiresQa": True,
+        }
+    )
+    state.SHARED_BOARD["Needs PO"] = [latched]
+    state.SHARED_BOARD["Backlog"] = [ready]
+
+    from backend.services.sprint_service import has_sprint_work
+
+    assert has_sprint_work() is True
+
+    with patch("backend.services.sprint_service._run_developer_step") as developer:
+        with patch("backend.services.sprint_service._run_po_clarification") as po:
+            run_sprint_step("brief", "http://localhost:11434")
+    po.assert_not_called()
+    developer.assert_called_once()
+    assert get_task_lane("T-READY-NPO") == "In Progress"
+    assert get_task_lane("T-NPO-LATCH") == "Needs User"
+
+
+def test_phase_cycle_cap_park_not_redirected_to_needs_po():
+    initialize()
+    reset_workflow_settings()
+    save_workflow_settings({"pauseSprintOnNeedsUser": False, "maxPoRoundTrips": 3})
+    _empty_board()
+    task = init_new_task(
+        {"id": "T-CAP-PO", "title": "Capped", "description": "d", "status": "In Progress"}
+    )
+    task["phaseCycleCapReached"] = True
+    task["poRoundTrips"] = 0
+    state.SHARED_BOARD["In Progress"] = [task]
+
+    from backend.services.sprint_service import _try_move_to_needs_user
+
+    parked = _try_move_to_needs_user(
+        "T-CAP-PO",
+        task,
+        "Please clarify requirements. Split the card or reset the Developer visit latch.",
+        kind="phase_cycle_cap",
+    )
+    assert parked is True
+    assert get_task_lane("T-CAP-PO") == "Needs User"
+
 
 def test_developer_step_does_not_begin_dev_on_needs_po():
     initialize()
@@ -209,7 +284,7 @@ def test_recovered_latched_card_does_not_block_backlog_claim():
     assert get_task_lane("T-LATCHED") == "In Progress"
 
 
-def test_only_recovered_latched_in_progress_is_sprint_work_until_parked():
+def test_only_recovered_latched_in_progress_is_not_sprint_work():
     initialize()
     reset_workflow_settings()
     _empty_board()
@@ -222,7 +297,50 @@ def test_only_recovered_latched_in_progress_is_sprint_work_until_parked():
 
     from backend.services.sprint_service import has_sprint_work
 
-    assert has_sprint_work() is True
+    assert has_sprint_work() is False
+
+
+def test_latched_needs_po_after_park_attempt_is_not_sprint_work():
+    initialize()
+    reset_workflow_settings()
+    _empty_board()
+    task = init_new_task(
+        {"id": "T-NPO-DONE", "title": "Already parked", "description": "d", "status": "Needs PO"}
+    )
+    task["phaseCycleCapReached"] = True
+    task["latchedRecoveryAttempted"] = True
+    task["poAutoSkip"] = True
+    state.SHARED_BOARD["Needs PO"] = [task]
+
+    from backend.services.sprint_service import has_sprint_work
+
+    assert has_sprint_work() is False
+
+
+def test_auto_sprint_idles_after_parking_only_latched_needs_po():
+    initialize()
+    reset_workflow_settings()
+    save_workflow_settings(
+        {
+            "maxSprintSteps": 5,
+            "pauseSprintOnNeedsUser": False,
+            "autoSprintSessionRefreshEnabled": False,
+            "enableSplitOnStuck": False,
+        }
+    )
+    _empty_board()
+    task = init_new_task(
+        {"id": "T-IDLE-NPO", "title": "Latched only", "description": "d", "status": "Needs PO"}
+    )
+    task["phaseCycleCapReached"] = True
+    task["devStepCount"] = 13
+    state.SHARED_BOARD["Needs PO"] = [task]
+
+    from backend.services.sprint_service import run_auto_sprint
+
+    summary = run_auto_sprint("brief", "http://localhost:11434", max_steps=5)
+    assert get_task_lane("T-IDLE-NPO") == "Needs User"
+    assert summary.get("status") == "idle"
 
 
 def test_auto_sprint_ui_pauses_on_retry_watchdog():

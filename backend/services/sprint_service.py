@@ -951,9 +951,9 @@ def _try_move_to_needs_user(
     *,
     kind: str = "stuck_loop",
 ) -> bool:
-    allowed, block_reason = should_escalate_to_needs_user(task, msg)
+    allowed, block_reason = should_escalate_to_needs_user(task, msg, kind=kind)
     if not allowed:
-        if block_reason == "clarification_use_po":
+        if block_reason == "clarification_use_po" and kind != "phase_cycle_cap":
             max_po = int(get_workflow_settings().get("maxPoRoundTrips", 3))
             if int(task.get("poRoundTrips") or 0) < max_po:
                 return _redirect_to_needs_po(task_id, task, msg, kind=kind)
@@ -4112,6 +4112,18 @@ def _in_progress_exhausted_latched(board: Optional[Dict[str, Any]] = None) -> Li
     ]
 
 
+def _needs_po_pending_park(board: Optional[Dict[str, Any]] = None) -> List[Dict[str, Any]]:
+    """Latched Needs PO cards that have not been parked yet."""
+    board = board if board is not None else state.SHARED_BOARD
+    return [
+        task
+        for task in board.get("Needs PO") or []
+        if isinstance(task, dict)
+        and task.get("phaseCycleCapReached")
+        and not task.get("latchedRecoveryAttempted")
+    ]
+
+
 def _select_downstream_sprint_handler() -> tuple[Optional[str], Optional[Dict[str, Any]]]:
     """Backlog / refinement / CR / QA / idle. Caller holds STATE_LOCK."""
     handler: Optional[str] = None
@@ -4160,16 +4172,11 @@ def _select_downstream_sprint_handler() -> tuple[Optional[str], Optional[Dict[st
 def has_sprint_work() -> bool:
     """True when auto-sprint has actionable (not merely blocked) work."""
     board = state.SHARED_BOARD
-    latched_needs_po = any(
-        isinstance(task, dict) and task.get("phaseCycleCapReached")
-        for task in board.get("Needs PO") or []
-    )
     if (
         _first_runnable_needs_po(board)
-        or latched_needs_po
+        or _needs_po_pending_park(board)
         or _in_progress_dev_runnable(board)
         or _in_progress_pending_recovery(board)
-        or _in_progress_exhausted_latched(board)
     ):
         return True
     ws = get_workflow_settings()
@@ -4278,9 +4285,9 @@ def _run_parallel_independent_dev_batch(brief: str, ollama_url: str) -> int:
     ws = get_workflow_settings()
     if not ws.get("enableParallelIndependentCards"):
         return 0
-    # Prefer Needs PO / other handlers first — only batch when Dev is the natural next work.
+    # Prefer runnable Needs PO / other handlers first — latched Needs PO must not starve Dev.
     with state.STATE_LOCK:
-        if state.SHARED_BOARD.get("Needs PO"):
+        if _first_runnable_needs_po():
             return 0
         if ws.get("pauseSprintOnNeedsUser") and state.SHARED_BOARD.get("Needs User"):
             return 0
@@ -4316,7 +4323,12 @@ def _run_parallel_independent_dev_batch(brief: str, ollama_url: str) -> int:
     return ran
 
 
-def _recover_latched_dev_card(active_task: Dict[str, Any], brief: str) -> None:
+def _recover_latched_dev_card(
+    active_task: Dict[str, Any],
+    brief: str,
+    *,
+    quiet: bool = False,
+) -> None:
     """Park a phase-cycle-capped card. Auto Sprint must not unlatch, PO, or Dev it."""
     del brief
     task_id = str(active_task.get("id") or "")
@@ -4333,15 +4345,37 @@ def _recover_latched_dev_card(active_task: Dict[str, Any], brief: str) -> None:
         if not task:
             return
         task["latchedRecoveryAttempted"] = True
+        task["poAutoSkip"] = True
         result = (
             "Stopped: phase cycle cap reached. Developer execution is latched; "
             "split the card or reset the latch — Auto Sprint will not run PO or Dev."
         )
-        _ensure_dev_step_trace(task_id, title, lane_before)
-        state.LAST_AGENT_STEP_RESULT = result
-        _record_last_step_outcome(task_id, lane_before, "System", agent_result=result)
-        _try_move_to_needs_user(task_id, task, park_msg, kind="phase_cycle_cap")
-        _finalize_dev_step_diagnostics_if_auto_sprint(task_id, lane_before)
+        if not quiet:
+            _ensure_step_trace(task_id, title, "System", lane_before)
+            state.LAST_AGENT_STEP_RESULT = result
+            _record_last_step_outcome(task_id, lane_before, "System", agent_result=result)
+        parked = _try_move_to_needs_user(task_id, task, park_msg, kind="phase_cycle_cap")
+        if not parked:
+            add_system_log(
+                "System",
+                "warning",
+                f"{task_id}: phase-cycle-cap park did not move to Needs User — "
+                "skipping Auto Sprint PO/Dev on this card",
+            )
+        if not quiet:
+            _finalize_dev_step_diagnostics_if_auto_sprint(task_id, lane_before)
+
+
+def _side_park_latched_needs_po(brief: str, exclude_id: str = "") -> None:
+    """Park latched Needs PO cards that are not the active sprint handler."""
+    pending: List[Dict[str, Any]] = []
+    with state.STATE_LOCK:
+        for task in _needs_po_pending_park():
+            if str(task.get("id") or "") == exclude_id:
+                continue
+            pending.append(dict(task))
+    for task in pending:
+        _recover_latched_dev_card(task, brief, quiet=True)
 
 
 def run_sprint_step(brief: str, ollama_url: str) -> None:
@@ -4371,20 +4405,9 @@ def run_sprint_step(brief: str, ollama_url: str) -> None:
     with state.STATE_LOCK:
         normalize_board_lanes(state.SHARED_BOARD)
         needs_po_task = _first_runnable_needs_po()
-        latched_needs_po = next(
-            (
-                task
-                for task in state.SHARED_BOARD.get("Needs PO") or []
-                if isinstance(task, dict) and task.get("phaseCycleCapReached")
-            ),
-            None,
-        )
         if needs_po_task:
             active_task = dict(needs_po_task)
             handler = "po"
-        elif latched_needs_po:
-            active_task = dict(latched_needs_po)
-            handler = "dev_recovery"
         elif (
             get_workflow_settings().get("pauseSprintOnNeedsUser")
             and state.SHARED_BOARD.get("Needs User")
@@ -4402,10 +4425,15 @@ def run_sprint_step(brief: str, ollama_url: str) -> None:
             else:
                 handler, active_task = _select_downstream_sprint_handler()
                 if handler in (None, "idle"):
-                    exhausted = _in_progress_exhausted_latched()
-                    if exhausted:
-                        active_task = dict(exhausted[0])
+                    pending_npo = _needs_po_pending_park()
+                    if pending_npo:
+                        active_task = dict(pending_npo[0])
                         handler = "dev_recovery"
+                    else:
+                        exhausted = _in_progress_exhausted_latched()
+                        if exhausted:
+                            active_task = dict(exhausted[0])
+                            handler = "dev_recovery"
 
     if active_task and active_task.get("id"):
         lane_before = get_task_lane(str(active_task["id"])) or ""
@@ -4429,6 +4457,10 @@ def run_sprint_step(brief: str, ollama_url: str) -> None:
             "info",
             f"{needs_user_count} task(s) in Needs User — continuing other lanes this step.",
         )
+
+    if handler not in ("idle", "needs_user", "blocked", "dev_recovery"):
+        exclude = str(active_task.get("id") or "") if active_task else ""
+        _side_park_latched_needs_po(brief, exclude_id=exclude)
 
     if handler and handler not in ("idle", "needs_user", "blocked") and active_task:
         _start_sprint_session(handler, active_task)
@@ -4665,6 +4697,7 @@ def run_auto_sprint(brief: str, ollama_url: str, max_steps: int | None = None) -
     refresh_minutes = int(ws.get("autoSprintSessionRefreshMinutes") or 60)
     refresh_sec = max(60, refresh_minutes * 60)
     zero_work_watchdog: Dict[str, Any] = {}
+    saw_ollama = False
 
     try:
         from backend.services.sprint_speed_gates import reset_interrupt_backoff_state
@@ -4743,6 +4776,8 @@ def run_auto_sprint(brief: str, ollama_url: str, max_steps: int | None = None) -
         task_id = str(outcome.get("taskId") or diag.get("taskId") or "")
         ollama_calls = int(diag.get("ollamaCallCount") or len(diag.get("ollamaCalls") or []) or 0)
         tool_calls = int(diag.get("toolCallCount") or len(diag.get("toolCalls") or []) or 0)
+        if ollama_calls > 0:
+            saw_ollama = True
         from backend.services.sprint_speed_gates import note_zero_work_exit
 
         if note_zero_work_exit(
@@ -4780,6 +4815,26 @@ def run_auto_sprint(brief: str, ollama_url: str, max_steps: int | None = None) -
                 "Auto sprint paused — waiting for offline simulation confirm in the UI.",
             )
             break
+
+    if (
+        status not in (
+            "cancelled",
+            "idle",
+            "retry_watchdog",
+            "session_refresh",
+            "simulation_pending",
+        )
+        and not saw_ollama
+    ):
+        with state.STATE_LOCK:
+            still_work = has_sprint_work()
+        if not still_work:
+            status = "idle"
+            add_system_log(
+                "System",
+                "info",
+                "Auto sprint paused — no model work and no remaining actionable cards.",
+            )
 
     if state.SPRINT_CANCEL:
         status = "cancelled"

@@ -294,6 +294,7 @@ export interface Task {
   stuckLoops?: number
   phaseCycleCapReached?: boolean
   latchedRecoveryAttempted?: boolean
+  poAutoSkip?: boolean
   lastStepProgress?: StepProgress | null
   agentWorkItems?: AgentWorkItem[]
   qaMarkdownPath?: string | null
@@ -1827,10 +1828,21 @@ export function hasSprintWork(board: Board, settings?: WorkflowSettings): boolea
   if (settings?.requireCodeReview) lanes.push('Code Review')
   lanes.push('QA')
   return lanes.some((lane) => {
-    if (lane === 'In Progress') {
-      return (board[lane] ?? []).length > 0
+    const cards = board[lane] ?? []
+    if (lane === 'Needs PO') {
+      return cards.some((t) => {
+        if (t.poAutoSkip) return false
+        if (t.phaseCycleCapReached) return !t.latchedRecoveryAttempted
+        return true
+      })
     }
-    return (board[lane]?.length ?? 0) > 0
+    if (lane === 'In Progress') {
+      return cards.some((t) => {
+        if (!t.phaseCycleCapReached) return true
+        return !t.latchedRecoveryAttempted
+      })
+    }
+    return cards.length > 0
   })
 }
 

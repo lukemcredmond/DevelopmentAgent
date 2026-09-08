@@ -168,6 +168,8 @@ def append_user_resolution(
 def should_escalate_to_needs_user(
     task: Dict[str, Any],
     msg: str,
+    *,
+    kind: str = "",
 ) -> Tuple[bool, str]:
     """Return (allowed, block_reason). block_reason is empty when allowed."""
     text = str(msg or "").strip()
@@ -199,11 +201,13 @@ def should_escalate_to_needs_user(
         task["needsUserDuplicate"] = True
         return False, "same_reason_hash"
 
-    if is_clarification_shaped(text) and not dev_explicit_needs_user(text):
-        return False, "clarification_use_po"
+    # Phase-cycle cap is a latch park, not a PO clarification bounce.
+    if kind != "phase_cycle_cap":
+        if is_clarification_shaped(text) and not dev_explicit_needs_user(text):
+            return False, "clarification_use_po"
 
-    if is_import_check_shaped(text) and not dev_explicit_needs_user(text):
-        return False, "clarification_use_po"
+        if is_import_check_shaped(text) and not dev_explicit_needs_user(text):
+            return False, "clarification_use_po"
 
     task["needsUserDuplicate"] = False
     task["lastNeedsUserReasonHash"] = h

@@ -12,7 +12,7 @@ function task(partial: Partial<Task> & { id: string }): Task {
 }
 
 describe('hasSprintWork', () => {
-  it('counts In Progress cards that are latched after recovery (park step)', () => {
+  it('does not count exhausted latched In Progress as work', () => {
     const board = {
       ...EMPTY_BOARD,
       'In Progress': [
@@ -23,7 +23,7 @@ describe('hasSprintWork', () => {
         }),
       ],
     }
-    expect(hasSprintWork(board)).toBe(true)
+    expect(hasSprintWork(board)).toBe(false)
   })
 
   it('still counts latched cards that have not been recovered', () => {
@@ -34,6 +34,59 @@ describe('hasSprintWork', () => {
           id: 'pending',
           phaseCycleCapReached: true,
           latchedRecoveryAttempted: false,
+        }),
+      ],
+    }
+    expect(hasSprintWork(board)).toBe(true)
+  })
+
+  it('counts latched Needs PO until a park has been attempted', () => {
+    const board = {
+      ...EMPTY_BOARD,
+      'Needs PO': [
+        task({
+          id: 'npo',
+          status: 'Needs PO',
+          phaseCycleCapReached: true,
+        }),
+      ],
+    }
+    expect(hasSprintWork(board)).toBe(true)
+  })
+
+  it('does not count latched Needs PO after park or auto-skip', () => {
+    const boarded = {
+      ...EMPTY_BOARD,
+      'Needs PO': [
+        task({
+          id: 'npo-done',
+          status: 'Needs PO',
+          phaseCycleCapReached: true,
+          latchedRecoveryAttempted: true,
+        }),
+      ],
+    }
+    expect(hasSprintWork(boarded)).toBe(false)
+    const skipped = {
+      ...EMPTY_BOARD,
+      'Needs PO': [
+        task({
+          id: 'npo-skip',
+          status: 'Needs PO',
+          poAutoSkip: true,
+        }),
+      ],
+    }
+    expect(hasSprintWork(skipped)).toBe(false)
+  })
+
+  it('counts runnable Needs PO cards', () => {
+    const board = {
+      ...EMPTY_BOARD,
+      'Needs PO': [
+        task({
+          id: 'npo-ready',
+          status: 'Needs PO',
         }),
       ],
     }
