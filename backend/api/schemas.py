@@ -288,6 +288,7 @@ class WorkflowSettingsPayload(BaseModel):
     enableStuckCircuitBreaker: Optional[bool] = None
     circuitBreakerMaxBadExits: Optional[int] = None
     circuitBreakerIdenticalPatchFails: Optional[int] = None
+    maxConsecutiveNoWriteStall: Optional[int] = None
     enableZeroWorkRetryWatchdog: Optional[bool] = None
     zeroWorkRetryWatchdogMax: Optional[int] = None
     agentEfficiencyMode: Optional[str] = None

@@ -127,6 +127,9 @@ def test_force_patch_starts_in_patch_phase():
     assert g.explore_count == 0
     snap = g.snapshot()
     assert snap["forcedPatch"] is True
+    assert g.should_block_explore_tool("read_file") is True
+    assert g.should_block_explore_tool("run_command") is True
+    assert g.should_block_explore_tool("apply_patch") is False
 
 
 def test_forced_patch_first_explore_nudges_second_stops():
@@ -150,6 +153,20 @@ def test_forced_patch_write_is_allowed():
     assert a.stop_reason is None
     assert g.write_succeeded
     assert g.phase == "verify"
+    assert g.should_block_explore_tool("run_command") is False
+    assert g.should_block_explore_tool("read_file") is False
+
+
+def test_forced_patch_run_command_nudges_then_stops():
+    g = DevPhaseGraph.for_new_step(ws={"enableDevPhaseGraph": True}, force_patch=True)
+    assert g is not None
+    assert g.should_block_explore_tool("run_command") is True
+    a1 = g.record_batch([("run_command", True)])
+    assert a1.stop_reason is None
+    assert a1.nudge == EXPLORE_NUDGE
+    a2 = g.record_batch([("run_test", True)])
+    assert a2.stop_reason == "explore_budget_exhausted"
+    assert g.phase == "stuck"
 
 
 def test_forced_patch_text_only_before_explore_does_not_stop():

@@ -319,8 +319,19 @@ def _provisional_dev_exit_reason(
 
 def _dev_unhealthy_exit_blocks_advance(exit_reason: Optional[str]) -> bool:
     from backend.services.sprint_speed_gates import unhealthy_exit_blocks_lane_advance
+    from backend.services.step_diagnostics import _write_tools_succeeded, get_active_trace
 
-    return unhealthy_exit_blocks_lane_advance(exit_reason)
+    writes = 0
+    try:
+        trace = get_active_trace()
+        if trace:
+            writes = int(_write_tools_succeeded(getattr(trace, "tools_log", None) or []) or 0)
+    except Exception:
+        writes = 0
+    lint_clean = bool(getattr(state, "FIX_VERIFY_LINT_CLEAN", False))
+    return unhealthy_exit_blocks_lane_advance(
+        exit_reason, writes_succeeded=writes, lint_clean=lint_clean
+    )
 
 
 def _outcome_why_card_stayed(
@@ -656,6 +667,7 @@ def _record_last_step_outcome(
                 task,
                 exit_r,
                 progress_made=lane_after != lane_before or focus_completed,
+                writes_succeeded=int(diag.get("writesSucceeded") or 0),
             )
         except Exception:
             pass
@@ -972,7 +984,7 @@ def _try_move_to_needs_user(
             )
         if not allowed:
             return False
-    if _needs_user_cap_reached():
+    if kind != "phase_cycle_cap" and _needs_user_cap_reached():
         add_system_log(
             "System",
             "warning",
@@ -3366,8 +3378,16 @@ def _run_developer_step(active_task: Dict[str, Any], brief: str) -> None:
     step_started = _mark_sprint_step_start()
     set_active_sprint_context(task_id, "Developer")
     live_task = find_task_by_id(task_id) or active_task
-    from backend.services.sprint_speed_gates import begin_dev_step
+    from backend.services.sprint_speed_gates import begin_dev_step, no_write_stall_should_park
 
+    if no_write_stall_should_park(live_task) and int(state.SPRINT_PROGRESS_MAX or 1) != 1:
+        add_system_log(
+            "System",
+            "warning",
+            f"{task_id}: skipping Developer — consecutive explore/duplicate stalls with no write",
+        )
+        _recover_latched_dev_card(dict(live_task), brief)
+        return
     visit, capped = begin_dev_step(live_task)
     if capped:
         result = (
@@ -4081,27 +4101,36 @@ def _first_runnable_needs_po(board: Optional[Dict[str, Any]] = None) -> Optional
 
 
 def _in_progress_dev_runnable(board: Optional[Dict[str, Any]] = None) -> List[Dict[str, Any]]:
-    board = board if board is not None else state.SHARED_BOARD
-    return [
-        task
-        for task in board.get("In Progress") or []
-        if isinstance(task, dict) and not task.get("phaseCycleCapReached")
-    ]
+    from backend.services.sprint_speed_gates import no_write_stall_should_park
 
-
-def _in_progress_pending_recovery(board: Optional[Dict[str, Any]] = None) -> List[Dict[str, Any]]:
     board = board if board is not None else state.SHARED_BOARD
     return [
         task
         for task in board.get("In Progress") or []
         if isinstance(task, dict)
-        and task.get("phaseCycleCapReached")
+        and not task.get("phaseCycleCapReached")
+        and not no_write_stall_should_park(task)
+    ]
+
+
+def _in_progress_pending_recovery(board: Optional[Dict[str, Any]] = None) -> List[Dict[str, Any]]:
+    from backend.services.sprint_speed_gates import no_write_stall_should_park
+
+    board = board if board is not None else state.SHARED_BOARD
+    return [
+        task
+        for task in board.get("In Progress") or []
+        if isinstance(task, dict)
         and not task.get("latchedRecoveryAttempted")
+        and (
+            task.get("phaseCycleCapReached")
+            or no_write_stall_should_park(task)
+        )
     ]
 
 
 def _in_progress_exhausted_latched(board: Optional[Dict[str, Any]] = None) -> List[Dict[str, Any]]:
-    """Latched after the one LLM recovery — park when nothing else is runnable."""
+    """Latched after one recovery — park once more unless a prior park already failed."""
     board = board if board is not None else state.SHARED_BOARD
     return [
         task
@@ -4109,6 +4138,7 @@ def _in_progress_exhausted_latched(board: Optional[Dict[str, Any]] = None) -> Li
         if isinstance(task, dict)
         and task.get("phaseCycleCapReached")
         and task.get("latchedRecoveryAttempted")
+        and not task.get("parkFailed")
     ]
 
 
@@ -4356,12 +4386,15 @@ def _recover_latched_dev_card(
             _record_last_step_outcome(task_id, lane_before, "System", agent_result=result)
         parked = _try_move_to_needs_user(task_id, task, park_msg, kind="phase_cycle_cap")
         if not parked:
+            task["parkFailed"] = True
             add_system_log(
                 "System",
                 "warning",
                 f"{task_id}: phase-cycle-cap park did not move to Needs User — "
                 "skipping Auto Sprint PO/Dev on this card",
             )
+        else:
+            task.pop("parkFailed", None)
         if not quiet:
             _finalize_dev_step_diagnostics_if_auto_sprint(task_id, lane_before)
 

@@ -30,6 +30,31 @@ UNHEALTHY_LANE_ADVANCE_EXITS = frozenset(
     }
 )
 
+# Write-success exits that may advance after a clean lint pass.
+LINT_OK_ADVANCE_EXITS = frozenset(
+    {
+        "max_iterations_after_writes",
+        "completed_with_writes",
+    }
+)
+
+NO_WRITE_STALL_EXITS = frozenset(
+    {
+        "explore_budget_exhausted",
+        "duplicate_tool",
+    }
+)
+
+# Write (or patch) exits that still leave the card In Progress — count toward stall park.
+STALL_NO_ADVANCE_EXITS = frozenset(
+    {
+        "max_iterations_after_writes",
+        "identical_write_loop",
+        "completed_with_writes_no_advance",
+        "patch_budget_exhausted",
+    }
+)
+
 # Consecutive bad exits that feed the stuck-card circuit breaker.
 CIRCUIT_BREAKER_EXITS = frozenset(
     {
@@ -63,6 +88,9 @@ def reset_interrupt_backoff_state() -> None:
 def unhealthy_exit_blocks_lane_advance(
     exit_reason: Optional[str],
     ws: Optional[Dict[str, Any]] = None,
+    *,
+    writes_succeeded: int = 0,
+    lint_clean: bool = False,
 ) -> bool:
     """True when Dev must stay In Progress despite prior writes."""
     if ws is None:
@@ -73,6 +101,12 @@ def unhealthy_exit_blocks_lane_advance(
         return False
     reason = str(exit_reason or "").strip().lower()
     if not reason:
+        return False
+    if (
+        reason in LINT_OK_ADVANCE_EXITS
+        and int(writes_succeeded or 0) > 0
+        and lint_clean
+    ):
         return False
     return reason in UNHEALTHY_LANE_ADVANCE_EXITS
 
@@ -129,6 +163,7 @@ def record_consecutive_bad_exit(
     exit_reason: Optional[str],
     *,
     progress_made: bool = False,
+    writes_succeeded: int = 0,
 ) -> int:
     """Increment consecutive unhealthy exits; reset on healthy completion."""
     if not isinstance(task, dict):
@@ -136,6 +171,12 @@ def record_consecutive_bad_exit(
     reason = str(exit_reason or "").strip().lower()
     if reason == "completed_with_writes" and not progress_made:
         reason = "completed_with_writes_no_advance"
+    _record_no_write_stall(
+        task,
+        reason,
+        writes_succeeded=writes_succeeded,
+        progress_made=progress_made,
+    )
     if reason in CIRCUIT_BREAKER_EXITS:
         prev = str(task.get("lastCircuitExitReason") or "")
         if prev == reason or prev in CIRCUIT_BREAKER_EXITS:
@@ -152,6 +193,42 @@ def record_consecutive_bad_exit(
         clear_patch_fingerprint(task)
         return 0
     return int(task.get("consecutiveBadExits") or 0)
+
+
+def _record_no_write_stall(
+    task: Dict[str, Any],
+    reason: str,
+    *,
+    writes_succeeded: int = 0,
+    progress_made: bool = False,
+) -> None:
+    if progress_made:
+        task["consecutiveNoWriteStall"] = 0
+        return
+    if reason in NO_WRITE_STALL_EXITS and int(writes_succeeded or 0) == 0:
+        task["consecutiveNoWriteStall"] = int(task.get("consecutiveNoWriteStall") or 0) + 1
+        return
+    if reason in STALL_NO_ADVANCE_EXITS:
+        task["consecutiveNoWriteStall"] = int(task.get("consecutiveNoWriteStall") or 0) + 1
+        return
+    if int(writes_succeeded or 0) > 0:
+        return
+    if reason and reason not in CIRCUIT_BREAKER_EXITS:
+        task["consecutiveNoWriteStall"] = 0
+
+
+def no_write_stall_should_park(
+    task: Dict[str, Any], ws: Optional[Dict[str, Any]] = None
+) -> bool:
+    """True after consecutive explore-exhaust / duplicate-tool steps with no write."""
+    if not isinstance(task, dict):
+        return False
+    if ws is None:
+        from backend.services.workflow_settings import get_workflow_settings
+
+        ws = get_workflow_settings()
+    limit = max(1, int(ws.get("maxConsecutiveNoWriteStall") or 2))
+    return int(task.get("consecutiveNoWriteStall") or 0) >= limit
 
 
 def circuit_breaker_should_trip(task: Dict[str, Any], ws: Optional[Dict[str, Any]] = None) -> tuple[bool, str]:
@@ -455,3 +532,5 @@ def reset_dev_cycle_latch(task: Dict[str, Any]) -> None:
     task["phaseCycleCapReason"] = None
     task["phaseCycleCapTimestamp"] = None
     task["latchedRecoveryAttempted"] = False
+    task["consecutiveNoWriteStall"] = 0
+    task["parkFailed"] = False

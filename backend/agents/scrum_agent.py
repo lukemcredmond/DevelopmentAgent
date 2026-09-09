@@ -1649,6 +1649,28 @@ class ScrumAgent:
 
         dup_key = _duplicate_success_key()
 
+        from backend.services.dev_phase_graph import DevPhaseGraph, FORCED_PATCH_EXPLORE_BLOCK
+        from backend.services.tool_execution_service import ToolExecutionResult
+
+        graph = getattr(self, "_dev_phase_graph", None)
+        if isinstance(graph, DevPhaseGraph) and graph.should_block_explore_tool(tool_name):
+            add_system_log(self.role, "warning", FORCED_PATCH_EXPLORE_BLOCK)
+            blocked = ToolExecutionResult(
+                tool_name=tool_name,
+                arguments=arguments if isinstance(arguments, dict) else {},
+                safe_args=sanitize_tool_args_for_log(tool_name, arguments),
+                tool_output=FORCED_PATCH_EXPLORE_BLOCK,
+                success=False,
+                duration_ms=0,
+                timestamp="",
+                agent=self.role,
+                agent_id=agent_id,
+                task_id=task_id,
+                source="agent",
+                run_id=run_id,
+            )
+            return tool_name, arguments, blocked, None
+
         def _track_fingerprint(*, block: bool = False) -> None:
             if not task_id:
                 return

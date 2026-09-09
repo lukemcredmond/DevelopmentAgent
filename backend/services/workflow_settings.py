@@ -42,6 +42,8 @@ DEFAULT_WORKFLOW_SETTINGS: Dict[str, Any] = {
     "enableStuckCircuitBreaker": True,
     "circuitBreakerMaxBadExits": 3,
     "circuitBreakerIdenticalPatchFails": 3,
+    # Park a card after this many consecutive explore-exhaust / duplicate-tool steps with no write.
+    "maxConsecutiveNoWriteStall": 2,
     # Auto-sprint: backoff when steps interrupt before any Ollama call (crash/retry storms).
     "enableAutoSprintInterruptBackoff": True,
     "autoSprintInterruptBackoffSec": 5,

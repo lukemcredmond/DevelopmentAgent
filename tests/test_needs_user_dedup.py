@@ -86,3 +86,22 @@ def test_cooldown_blocks_re_escalation():
     allowed, reason = should_escalate_to_needs_user(task, "Need production API key")
     assert allowed is False
     assert reason == "cooldown_active"
+
+
+def test_phase_cycle_cap_park_bypasses_cooldown():
+    initialize()
+    from backend import state
+    from backend.agents.task_context import init_new_task, normalize_task
+
+    state.SPRINT_PROGRESS_STEP = 5
+    task = init_new_task({"id": "T-CAP-COOL", "title": "T", "description": "D"})
+    task["phaseCycleCapReached"] = True
+    set_needs_user_cooldown(task, steps=3)
+    normalize_task(task)
+    allowed, reason = should_escalate_to_needs_user(
+        task,
+        "Phase cycle cap reached. Split the card or reset the Developer visit latch.",
+        kind="phase_cycle_cap",
+    )
+    assert allowed is True
+    assert reason == ""

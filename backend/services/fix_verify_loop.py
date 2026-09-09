@@ -32,6 +32,57 @@ def _is_hard_stop_result(result: str) -> bool:
     return any(lower.startswith(m) or m in lower[:80] for m in _HARD_STOP_MARKERS)
 
 
+def _is_explore_budget_result(result: str) -> bool:
+    lower = (result or "").strip().lower()
+    return "explore tool budget" in lower or "explore_budget_exhausted" in lower
+
+
+def _agent_had_successful_write(agent) -> bool:
+    from backend.services.dev_phase_graph import DevPhaseGraph
+
+    graph = getattr(agent, "_dev_phase_graph", None)
+    if isinstance(graph, DevPhaseGraph) and getattr(graph, "write_succeeded", False):
+        return True
+    try:
+        from backend.services.step_diagnostics import _write_tools_succeeded, get_active_trace
+
+        trace = get_active_trace()
+        if trace and _write_tools_succeeded(getattr(trace, "tools_log", None) or []):
+            return True
+    except Exception:
+        pass
+    return False
+
+
+def _run_lint_once(task_id: str, task: Dict[str, Any], lint_cmd: str) -> Any:
+    lint_started = time.time()
+    cmd_result = run_workspace_command(lint_cmd)
+    lint_duration_ms = int((time.time() - lint_started) * 1000)
+    finding_count = len(cmd_result.diagnostics) if cmd_result.diagnostics else 0
+    add_system_log(
+        "Developer",
+        "info",
+        f"Fix-verify lint finished in {lint_duration_ms}ms — {finding_count} finding(s)",
+    )
+    log_event(
+        "lint_run",
+        f"{lint_cmd} {lint_duration_ms}ms findings={finding_count} outcome={cmd_result.outcome}",
+    )
+    from backend import state as _state
+
+    clean = cmd_result.outcome == "ok" or not cmd_result.diagnostics
+    _state.FIX_VERIFY_LINT_CLEAN = clean
+    board_task = find_task_by_id(task_id)
+    target = board_task or task
+    if target is not None:
+        target["fixVerifyLintClean"] = clean
+        if cmd_result.diagnostics:
+            target["lastCommandDiagnostics"] = cmd_result.diagnostics[:50]
+        else:
+            target["lastCommandDiagnostics"] = []
+    return cmd_result, clean
+
+
 def run_fix_verify_loop(
     agent,
     task: Dict[str, Any],
@@ -64,6 +115,7 @@ def run_fix_verify_loop(
     from backend import state as _state
 
     _state.FIX_VERIFY_MAX_ROUNDS = max_rounds
+    _state.FIX_VERIFY_LINT_CLEAN = False
     try:
         for round_num in range(1, max_rounds + 1):
             if getattr(_state, "SPRINT_CANCEL", False):
@@ -83,8 +135,19 @@ def run_fix_verify_loop(
             )
             log_event("fix_verify_start", f"round {round_num}/{max_rounds}")
             last_result = agent.execute_step(prompt, max_iterations=iterations_per_round)
+            wrote = _agent_had_successful_write(agent)
+            hard = abort_on_hard and _is_hard_stop_result(last_result)
 
-            if abort_on_hard and _is_hard_stop_result(last_result):
+            if hard and _is_explore_budget_result(last_result):
+                add_system_log(
+                    "Developer",
+                    "warning",
+                    "Fix-verify skipping lint — explore budget exhausted with no write to verify",
+                )
+                log_event("fix_verify_done", "skipped_lint_explore_stop")
+                return last_result
+
+            if hard and not wrote:
                 add_system_log(
                     "Developer",
                     "warning",
@@ -94,27 +157,9 @@ def run_fix_verify_loop(
                 log_event("fix_verify_done", f"aborted_hard_stop round={round_num}")
                 return last_result
 
-            lint_started = time.time()
-            cmd_result = run_workspace_command(lint_cmd)
-            lint_duration_ms = int((time.time() - lint_started) * 1000)
+            cmd_result, clean = _run_lint_once(task_id, task, lint_cmd)
             finding_count = len(cmd_result.diagnostics) if cmd_result.diagnostics else 0
-            add_system_log(
-                "Developer",
-                "info",
-                f"Fix-verify lint finished in {lint_duration_ms}ms — {finding_count} finding(s)",
-            )
-            log_event(
-                "lint_run",
-                f"{lint_cmd} {lint_duration_ms}ms findings={finding_count} outcome={cmd_result.outcome}",
-            )
-            board_task = find_task_by_id(task_id)
-            if board_task:
-                if cmd_result.diagnostics:
-                    board_task["lastCommandDiagnostics"] = cmd_result.diagnostics[:50]
-                else:
-                    board_task["lastCommandDiagnostics"] = []
-
-            if cmd_result.outcome == "ok" or not cmd_result.diagnostics:
+            if clean:
                 record_task_decision(
                     task_id,
                     "Developer",
@@ -124,6 +169,17 @@ def run_fix_verify_loop(
                 )
                 log_event("fix_verify_done", f"clean after round {round_num}")
                 return last_result
+
+            if hard:
+                add_system_log(
+                    "Developer",
+                    "warning",
+                    "Fix-verify lint ran after write-stop; not starting another LLM round",
+                )
+                log_event("fix_verify_done", f"lint_after_write_stop round={round_num}")
+                return last_result
+
+            board_task = find_task_by_id(task_id)
 
             # Hybrid: fan out leftovers when over threshold; re-prompt only the in-card budget.
             fanout_task = board_task or task

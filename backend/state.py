@@ -96,6 +96,7 @@ STEP_PATCH_FAILURES: Dict[str, int] = {}
 # Set during run_fix_verify_loop so SSE agent_run can show fix-verify round.
 FIX_VERIFY_ROUND: Optional[int] = None
 FIX_VERIFY_MAX_ROUNDS: Optional[int] = None
+FIX_VERIFY_LINT_CLEAN: bool = False
 
 # Dev focus micro-step prompt rotation (set per sprint step in sprint_service).
 SPRINT_PROMPT_ROTATION_ENABLED: bool = False

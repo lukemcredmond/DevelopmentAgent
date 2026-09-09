@@ -11,6 +11,24 @@ def test_unhealthy_exit_blocks_lane_advance_by_default():
     assert gates.unhealthy_exit_blocks_lane_advance("max_iterations", ws) is True
     assert gates.unhealthy_exit_blocks_lane_advance("max_iterations_after_writes", ws) is True
     assert gates.unhealthy_exit_blocks_lane_advance("completed_with_writes", ws) is False
+    assert (
+        gates.unhealthy_exit_blocks_lane_advance(
+            "max_iterations_after_writes",
+            ws,
+            writes_succeeded=1,
+            lint_clean=True,
+        )
+        is False
+    )
+    assert (
+        gates.unhealthy_exit_blocks_lane_advance(
+            "max_iterations_after_writes",
+            ws,
+            writes_succeeded=1,
+            lint_clean=False,
+        )
+        is True
+    )
 
 
 def test_force_complete_overrides_unhealthy_gate():
@@ -205,3 +223,64 @@ def test_three_identical_zero_work_exits_trip_watchdog():
         tool_call_count=0,
         ws=ws,
     )
+
+
+def test_no_write_stall_parks_after_two_explore_exhausts():
+    task: dict = {}
+    ws = {"maxConsecutiveNoWriteStall": 2}
+    gates.record_consecutive_bad_exit(task, "explore_budget_exhausted", writes_succeeded=0)
+    assert gates.no_write_stall_should_park(task, ws) is False
+    gates.record_consecutive_bad_exit(task, "explore_budget_exhausted", writes_succeeded=0)
+    assert gates.no_write_stall_should_park(task, ws) is True
+    assert task["consecutiveNoWriteStall"] == 2
+
+
+def test_duplicate_tool_with_writes_does_not_reset_stall():
+    task: dict = {}
+    ws = {"maxConsecutiveNoWriteStall": 2}
+    gates.record_consecutive_bad_exit(task, "duplicate_tool", writes_succeeded=0)
+    gates.record_consecutive_bad_exit(task, "duplicate_tool", writes_succeeded=2)
+    assert task.get("consecutiveNoWriteStall") == 1
+    assert gates.no_write_stall_should_park(task, ws) is False
+
+
+def test_duplicate_tool_without_writes_stalls():
+    task: dict = {}
+    ws = {"maxConsecutiveNoWriteStall": 2}
+    gates.record_consecutive_bad_exit(task, "duplicate_tool", writes_succeeded=0)
+    gates.record_consecutive_bad_exit(task, "duplicate_tool", writes_succeeded=0)
+    assert gates.no_write_stall_should_park(task, ws) is True
+
+
+def test_write_cap_without_lane_advance_counts_toward_stall():
+    task: dict = {}
+    ws = {"maxConsecutiveNoWriteStall": 2}
+    gates.record_consecutive_bad_exit(task, "explore_budget_exhausted", writes_succeeded=0)
+    gates.record_consecutive_bad_exit(
+        task, "max_iterations_after_writes", writes_succeeded=2, progress_made=False
+    )
+    assert task["consecutiveNoWriteStall"] == 2
+    assert gates.no_write_stall_should_park(task, ws) is True
+
+
+def test_identical_write_loop_counts_toward_stall():
+    task: dict = {}
+    ws = {"maxConsecutiveNoWriteStall": 2}
+    gates.record_consecutive_bad_exit(
+        task, "identical_write_loop", writes_succeeded=1, progress_made=False
+    )
+    gates.record_consecutive_bad_exit(
+        task, "identical_write_loop", writes_succeeded=1, progress_made=False
+    )
+    assert gates.no_write_stall_should_park(task, ws) is True
+
+
+def test_write_that_advances_lane_resets_stall():
+    task: dict = {}
+    ws = {"maxConsecutiveNoWriteStall": 2}
+    gates.record_consecutive_bad_exit(task, "explore_budget_exhausted", writes_succeeded=0)
+    gates.record_consecutive_bad_exit(
+        task, "completed_with_writes", writes_succeeded=1, progress_made=True
+    )
+    assert task.get("consecutiveNoWriteStall") == 0
+    assert gates.no_write_stall_should_park(task, ws) is False

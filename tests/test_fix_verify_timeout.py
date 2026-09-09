@@ -105,6 +105,7 @@ def test_fix_verify_aborts_on_hard_stop_without_extra_round():
     normalize_task(task)
     state.SPRINT_CANCEL = False
     agent = MagicMock()
+    agent._dev_phase_graph = None
     agent.execute_step.return_value = "Stopped: 4 tool failures this step (limit 4)."
 
     with patch(
@@ -121,6 +122,135 @@ def test_fix_verify_aborts_on_hard_stop_without_extra_round():
     assert "tool failures" in out.lower()
     assert agent.execute_step.call_count == 1
     lint_mock.assert_not_called()
+
+
+def test_fix_verify_skips_lint_on_explore_budget_stop():
+    initialize()
+    reset_workflow_settings()
+    save_workflow_settings(
+        {
+            "enableFixVerifyLoop": True,
+            "requireCleanLint": True,
+            "maxFixVerifyRounds": 3,
+            "fixVerifyAbortOnHardStop": True,
+        }
+    )
+    task = init_new_task({"id": "T-FV-EXP", "title": "Explore stop", "description": "d"})
+    normalize_task(task)
+    state.SPRINT_CANCEL = False
+    agent = MagicMock()
+    agent._dev_phase_graph = None
+    agent.execute_step.return_value = (
+        "Stopped: explore tool budget reached without apply_patch/write_file. "
+        "Next Developer step will start in Patch — apply_patch/write_file."
+    )
+    with patch(
+        "backend.services.fix_verify_loop.derive_project_lint_command",
+        return_value="flutter analyze",
+    ), patch(
+        "backend.services.fix_verify_loop.run_workspace_command",
+    ) as lint_mock, patch(
+        "backend.services.fix_verify_loop.find_task_by_id",
+        return_value=task,
+    ):
+        out = run_fix_verify_loop(agent, task, "prompt", max_iterations=4)
+    assert "explore tool budget" in out.lower()
+    assert agent.execute_step.call_count == 1
+    lint_mock.assert_not_called()
+
+
+def test_fix_verify_skips_lint_on_forced_patch_run_command_stop():
+    initialize()
+    reset_workflow_settings()
+    save_workflow_settings(
+        {
+            "enableFixVerifyLoop": True,
+            "requireCleanLint": True,
+            "maxFixVerifyRounds": 3,
+            "fixVerifyAbortOnHardStop": True,
+        }
+    )
+    task = init_new_task({"id": "T-FV-CMD", "title": "Verify-only stop", "description": "d"})
+    normalize_task(task)
+    state.SPRINT_CANCEL = False
+    from backend.services.dev_phase_graph import DevPhaseGraph
+
+    agent = MagicMock()
+    graph = DevPhaseGraph.for_new_step(ws={"enableDevPhaseGraph": True}, force_patch=True)
+    assert graph is not None
+    graph.record_batch([("run_command", True)])
+    graph.record_batch([("run_test", True)])
+    agent._dev_phase_graph = graph
+    agent.execute_step.return_value = (
+        "Stopped: explore tool budget reached without apply_patch/write_file. "
+        "Next Developer step will start in Patch — apply_patch/write_file."
+    )
+    events: list[str] = []
+
+    def _log(event, *args, **kwargs):
+        events.append(str(event) + " " + " ".join(str(a) for a in args))
+
+    with patch(
+        "backend.services.fix_verify_loop.derive_project_lint_command",
+        return_value="flutter analyze",
+    ), patch(
+        "backend.services.fix_verify_loop.run_workspace_command",
+    ) as lint_mock, patch(
+        "backend.services.fix_verify_loop.find_task_by_id",
+        return_value=task,
+    ), patch(
+        "backend.services.fix_verify_loop.log_event",
+        side_effect=_log,
+    ):
+        out = run_fix_verify_loop(agent, task, "prompt", max_iterations=4)
+    assert "explore tool budget" in out.lower()
+    assert agent.execute_step.call_count == 1
+    lint_mock.assert_not_called()
+    assert any("skipped_lint_explore_stop" in e for e in events)
+    assert not any("aborted_hard_stop" in e for e in events)
+
+
+def test_fix_verify_lints_after_write_iteration_cap():
+    initialize()
+    reset_workflow_settings()
+    save_workflow_settings(
+        {
+            "enableFixVerifyLoop": True,
+            "requireCleanLint": True,
+            "maxFixVerifyRounds": 3,
+            "fixVerifyAbortOnHardStop": True,
+        }
+    )
+    task = init_new_task({"id": "T-FV-WRITE", "title": "Wrote then cap", "description": "d"})
+    normalize_task(task)
+    state.SPRINT_CANCEL = False
+    from backend.services.dev_phase_graph import DevPhaseGraph
+
+    agent = MagicMock()
+    graph = DevPhaseGraph(explore_max=3, patch_max=4, verify_max=2)
+    graph.record_batch([("apply_patch", True)])
+    agent._dev_phase_graph = graph
+    agent.execute_step.return_value = "Max tool iterations reached without completing the task."
+    lint_ok = MagicMock()
+    lint_ok.outcome = "ok"
+    lint_ok.diagnostics = []
+    lint_ok.summary = "clean"
+    with patch(
+        "backend.services.fix_verify_loop.derive_project_lint_command",
+        return_value="flutter analyze",
+    ), patch(
+        "backend.services.fix_verify_loop.run_workspace_command",
+        return_value=lint_ok,
+    ) as lint_mock, patch(
+        "backend.services.fix_verify_loop.find_task_by_id",
+        return_value=task,
+    ):
+        out = run_fix_verify_loop(agent, task, "prompt", max_iterations=4)
+    assert "max tool iterations" in out.lower()
+    assert agent.execute_step.call_count == 1
+    lint_mock.assert_called_once()
+    assert state.FIX_VERIFY_LINT_CLEAN is True
+    assert task.get("fixVerifyLintClean") is True
 
 
 def test_rrf_hybrid_ranks_expected_path():

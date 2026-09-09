@@ -415,6 +415,10 @@ def normalize_task(task: Dict[str, Any]) -> Dict[str, Any]:
     task.setdefault("phaseCycleCapReason", None)
     task.setdefault("phaseCycleCapTimestamp", None)
     task["latchedRecoveryAttempted"] = bool(task.get("latchedRecoveryAttempted", False))
+    try:
+        task["consecutiveNoWriteStall"] = int(task.get("consecutiveNoWriteStall") or 0)
+    except (TypeError, ValueError):
+        task["consecutiveNoWriteStall"] = 0
     from backend.agents.tool_fingerprints import normalize_fingerprint_fields
 
     normalize_fingerprint_fields(task)

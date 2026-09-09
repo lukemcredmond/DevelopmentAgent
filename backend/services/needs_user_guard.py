@@ -176,16 +176,19 @@ def should_escalate_to_needs_user(
     if not text:
         return False, "empty_question"
 
-    if cooldown_active(task):
+    latch_park = kind == "phase_cycle_cap" or bool(task.get("phaseCycleCapReached"))
+
+    if not latch_park and cooldown_active(task):
         return False, "cooldown_active"
 
-    for res in task.get("userResolutions") or []:
-        if not isinstance(res, dict):
-            continue
-        q = str(res.get("question") or "")
-        if question_similarity(text, q) >= 0.85:
-            task["needsUserDuplicate"] = True
-            return False, "duplicate_question"
+    if not latch_park:
+        for res in task.get("userResolutions") or []:
+            if not isinstance(res, dict):
+                continue
+            q = str(res.get("question") or "")
+            if question_similarity(text, q) >= 0.85:
+                task["needsUserDuplicate"] = True
+                return False, "duplicate_question"
 
     current_reason = task.get("needsUserReason") or task.get("userQuestion") or ""
     if current_reason and question_similarity(text, current_reason) >= 0.85:
@@ -197,7 +200,7 @@ def should_escalate_to_needs_user(
 
     last_hash = task.get("lastNeedsUserReasonHash")
     h = reason_hash(text)
-    if last_hash and last_hash == h:
+    if last_hash and last_hash == h and not latch_park:
         task["needsUserDuplicate"] = True
         return False, "same_reason_hash"
 

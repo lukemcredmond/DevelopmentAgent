@@ -343,6 +343,109 @@ def test_auto_sprint_idles_after_parking_only_latched_needs_po():
     assert summary.get("status") == "idle"
 
 
+def test_consecutive_no_write_stall_parks_without_dev():
+    initialize()
+    reset_workflow_settings()
+    save_workflow_settings(
+        {
+            "enableSplitOnStuck": False,
+            "maxConsecutiveNoWriteStall": 2,
+            "pauseSprintOnNeedsUser": False,
+            "maxStuckSteps": 1,
+            "maxPoRoundTrips": 1,
+        }
+    )
+    _empty_board()
+    task = init_new_task(
+        {"id": "T-STALL", "title": "Explore wheel", "description": "d", "status": "In Progress"}
+    )
+    task["consecutiveNoWriteStall"] = 2
+    task["devStepCount"] = 4
+    state.SHARED_BOARD["In Progress"] = [task]
+    state.SPRINT_PROGRESS_MAX = 20
+
+    from backend.services.sprint_service import has_sprint_work
+
+    assert has_sprint_work() is True
+
+    with patch("backend.services.sprint_service._run_developer_step") as developer:
+        with patch("backend.services.sprint_service._recover_latched_dev_card") as recover:
+            run_sprint_step("brief", "http://localhost:11434")
+    developer.assert_not_called()
+    recover.assert_called_once()
+
+
+def test_run_developer_step_parks_stall_before_begin_dev():
+    initialize()
+    reset_workflow_settings()
+    save_workflow_settings({"maxConsecutiveNoWriteStall": 2, "pauseSprintOnNeedsUser": False})
+    _empty_board()
+    task = init_new_task(
+        {"id": "T-STALL-DEV", "title": "Stall", "description": "d", "status": "In Progress"}
+    )
+    task["consecutiveNoWriteStall"] = 2
+    state.SHARED_BOARD["In Progress"] = [task]
+    state.SPRINT_PROGRESS_MAX = 8
+
+    with patch("backend.services.sprint_speed_gates.begin_dev_step") as begin:
+        with patch("backend.services.sprint_service._recover_latched_dev_card") as recover:
+            from backend.services.sprint_service import _run_developer_step
+
+            _run_developer_step(task, "brief")
+    begin.assert_not_called()
+    recover.assert_called_once()
+
+
+def test_recover_parks_to_needs_user_despite_cooldown():
+    initialize()
+    reset_workflow_settings()
+    save_workflow_settings({"pauseSprintOnNeedsUser": False, "enableSplitOnStuck": False})
+    _empty_board()
+    from backend.services.needs_user_guard import set_needs_user_cooldown
+    from backend.services.sprint_service import _recover_latched_dev_card
+
+    task = init_new_task(
+        {"id": "T-CAP-COOL", "title": "Capped cool", "description": "d", "status": "In Progress"}
+    )
+    task["phaseCycleCapReached"] = True
+    task["devStepCount"] = 13
+    set_needs_user_cooldown(task, steps=8)
+    state.SHARED_BOARD["In Progress"] = [task]
+    state.SPRINT_PROGRESS_STEP = 1
+
+    _recover_latched_dev_card(task, "brief")
+    assert get_task_lane("T-CAP-COOL") == "Needs User"
+    assert not task.get("parkFailed")
+
+
+def test_park_failed_exhausted_card_not_selected_again():
+    initialize()
+    reset_workflow_settings()
+    save_workflow_settings(
+        {
+            "enableSplitOnStuck": False,
+            "pauseSprintOnNeedsUser": False,
+            "requireBacklogRefinement": False,
+        }
+    )
+    _empty_board()
+    task = init_new_task(
+        {"id": "T-PARK-FAIL", "title": "Stuck IP", "description": "d", "status": "In Progress"}
+    )
+    task["phaseCycleCapReached"] = True
+    task["latchedRecoveryAttempted"] = True
+    task["parkFailed"] = True
+    task["devStepCount"] = 13
+    state.SHARED_BOARD["In Progress"] = [task]
+
+    with patch("backend.services.sprint_service._run_developer_step") as developer:
+        with patch("backend.services.sprint_service._recover_latched_dev_card") as recover:
+            run_sprint_step("brief", "http://localhost:11434")
+    developer.assert_not_called()
+    recover.assert_not_called()
+    assert get_task_lane("T-PARK-FAIL") == "In Progress"
+
+
 def test_auto_sprint_ui_pauses_on_retry_watchdog():
     from pathlib import Path
 

@@ -644,6 +644,7 @@ export interface WorkflowSettings {
   enableStuckCircuitBreaker?: boolean
   circuitBreakerMaxBadExits?: number
   circuitBreakerIdenticalPatchFails?: number
+  maxConsecutiveNoWriteStall?: number
   enableZeroWorkRetryWatchdog?: boolean
   zeroWorkRetryWatchdogMax?: number
   /** high = lean prompts + phase routing defaults; standard = full prompts. */
@@ -1375,6 +1376,7 @@ export interface WorkflowSettingsPayload {
   enableStuckCircuitBreaker?: boolean
   circuitBreakerMaxBadExits?: number
   circuitBreakerIdenticalPatchFails?: number
+  maxConsecutiveNoWriteStall?: number
   enableZeroWorkRetryWatchdog?: boolean
   zeroWorkRetryWatchdogMax?: number
   agentEfficiencyMode?: 'high' | 'standard' | string
@@ -1783,6 +1785,7 @@ export const DEFAULT_WORKFLOW_SETTINGS: WorkflowSettings = {
   enableStuckCircuitBreaker: true,
   circuitBreakerMaxBadExits: 3,
   circuitBreakerIdenticalPatchFails: 3,
+  maxConsecutiveNoWriteStall: 2,
   enableZeroWorkRetryWatchdog: true,
   zeroWorkRetryWatchdogMax: 3,
   maxFocusStepsPerCard: 8,

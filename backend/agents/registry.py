@@ -311,7 +311,18 @@ def _guarded_update_board(
                         )
                 except Exception:
                     pass
-                if unhealthy_exit_blocks_lane_advance(exit_r):
+                if unhealthy_exit_blocks_lane_advance(
+                    exit_r,
+                    writes_succeeded=int(
+                        (diag or {}).get("writesSucceeded")
+                        or (outcome or {}).get("writesSucceeded")
+                        or 0
+                    ),
+                    lint_clean=bool(
+                        getattr(state, "FIX_VERIFY_LINT_CLEAN", False)
+                        or (task.get("fixVerifyLintClean") if isinstance(task, dict) else False)
+                    ),
+                ):
                     return (
                         f"Error: Cannot move to {target_upper} — step exit '{exit_r or 'unhealthy'}' "
                         "blocks lane advance. Stay In Progress or set forceCompleteOnUnhealthyExit."

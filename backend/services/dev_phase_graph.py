@@ -28,6 +28,12 @@ EXPLORE_NUDGE = (
     "Next message MUST call apply_patch or write_file for this card's acceptance criteria."
 )
 
+FORCED_PATCH_EXPLORE_BLOCK = (
+    "Error: Forced Patch — Patch required: apply_patch/write_file. "
+    "Do not call read_file/grep/list_dir/glob_file_search or "
+    "run_command/run_test until a successful write this step."
+)
+
 DONE_STATUS = (
     "Verify budget finished for this step (not board Done). "
     "Another step may restart at Explore if the card stays In Progress."
@@ -266,6 +272,15 @@ class DevPhaseGraph:
             "Call apply_patch or write_file this turn."
         )
 
+    def should_block_explore_tool(self, tool_name: Optional[str]) -> bool:
+        """Reject explore/verify tools until a successful write on a Forced Patch step."""
+        name = str(tool_name or "")
+        return (
+            bool(self.forced_patch)
+            and not bool(self.write_succeeded)
+            and name in EXPLORE_TOOLS | VERIFY_TOOLS
+        )
+
     def seed_step_context(
         self,
         *,
@@ -473,9 +488,9 @@ class DevPhaseGraph:
         explore_only = (
             bool(tools)
             and not any(n in WRITE_TOOLS for n, _ in tools)
-            and any(n in EXPLORE_TOOLS for n, _ in tools)
+            and any(n in EXPLORE_TOOLS | VERIFY_TOOLS for n, _ in tools)
         )
-        # Forced Patch: Gemma always opens with read_file — nudge once, then stop.
+        # Forced Patch: Gemma opens with read_file/run_command — nudge once, then stop.
         if (
             self.forced_patch
             and not self.write_succeeded
