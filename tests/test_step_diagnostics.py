@@ -15,7 +15,9 @@ from backend.services.step_diagnostics import (
     clear_active_step_trace,
     derive_exit_reason,
     finalize_active_step_trace,
+    format_ollama_wait_event,
     get_active_trace,
+    log_event,
     record_phase_graph,
     record_po_json_applied,
     record_sampling_snapshot,
@@ -445,3 +447,32 @@ def test_classify_tool_failure_helpers():
     assert classify_tool_failure("run_command", "flutter pub get") == "command_nonzero"
     assert classify_tool_failure("read_file", "path not found") == "path_missing"
     assert classify_tool_failure("update_board", "blocked") == "board_blocked"
+
+
+def test_ollama_wait_heartbeat_includes_elapsed(tmp_path, monkeypatch):
+    monkeypatch.setenv("ALLHANDS_HOME", str(tmp_path))
+    initialize()
+    state.CURRENT_PROJECT_ID = "test-proj"
+    msg0 = format_ollama_wait_event(
+        iteration=2, max_iterations=6, model="gemma-4-q4km:26b", elapsed_sec=0
+    )
+    msg1 = format_ollama_wait_event(
+        iteration=2,
+        max_iterations=6,
+        model="gemma-4-q4km:26b",
+        elapsed_sec=45,
+        last_tool="write_file",
+    )
+    assert "elapsed=0s" in msg0
+    assert "elapsed=45s" in msg1
+    assert "last_tool=write_file" in msg1
+    assert msg0 != msg1
+    trace = start_step_trace("T-WAIT", "Wait", "Developer", "In Progress")
+    log_event("ollama_wait", msg0)
+    assert trace.last_event.startswith("ollama_wait:iter 2/6 elapsed=0s")
+    log_event("ollama_wait", msg1)
+    assert "elapsed=45s" in trace.last_event
+    assert "write_file" in trace.last_event
+    summary = finalize_active_step_trace(lane_after="In Progress")
+    kinds = [e.get("kind") for e in (summary or {}).get("events") or []]
+    assert kinds.count("ollama_wait") >= 2

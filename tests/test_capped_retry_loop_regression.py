@@ -205,7 +205,7 @@ def test_developer_step_does_not_begin_dev_on_needs_po():
     assert task["devStepCount"] == 13
 
 
-def test_second_latch_after_recovery_parks_to_needs_user_without_dev():
+def test_second_latch_with_lint_stays_in_progress_for_dev():
     initialize()
     reset_workflow_settings()
     save_workflow_settings(
@@ -226,14 +226,25 @@ def test_second_latch_after_recovery_parks_to_needs_user_without_dev():
     task["devStepCount"] = 13
     task["poRoundTrips"] = 1
     task["latchedRecoveryAttempted"] = True
-    task["lastCommandDiagnostics"] = [{"command": "flutter analyze", "ok": False}]
+    task["lastCommandDiagnostics"] = [
+        {
+            "file": "lib/presentation/store_bloc.dart",
+            "line": 64,
+            "message": "invalid_annotation",
+            "code": "invalid_annotation",
+        }
+    ]
     state.SHARED_BOARD["In Progress"] = [task]
 
-    with patch("backend.services.sprint_service._run_developer_step") as developer:
-        run_sprint_step("brief", "http://localhost:11434")
-    developer.assert_not_called()
-    assert get_task_lane("T-LATCH-LINT") == "Needs User"
-    assert task["devStepCount"] == 13
+    from backend.services.sprint_service import _recover_latched_dev_card
+
+    _recover_latched_dev_card(task, "brief")
+    live = next(t for t in state.SHARED_BOARD["In Progress"] if t["id"] == "T-LATCH-LINT")
+    assert get_task_lane("T-LATCH-LINT") == "In Progress"
+    assert live.get("forcePatchNextDevStep") is True
+    assert live.get("phaseCycleCapReached") is False
+    assert int(live.get("lintUnlatchCount") or 0) == 1
+    assert len(state.SHARED_BOARD.get("Needs User") or []) == 0
 
 
 def test_recovered_latched_card_does_not_block_backlog_claim():
@@ -418,6 +429,71 @@ def test_recover_parks_to_needs_user_despite_cooldown():
     assert not task.get("parkFailed")
 
 
+def test_recover_uri_errors_stay_in_progress_forced_patch():
+    initialize()
+    reset_workflow_settings()
+    save_workflow_settings({"pauseSprintOnNeedsUser": False, "enableSplitOnStuck": False})
+    _empty_board()
+    from backend.services.sprint_service import _recover_latched_dev_card
+
+    task = init_new_task(
+        {
+            "id": "T-URI",
+            "title": "Store repository",
+            "description": "d",
+            "status": "In Progress",
+        }
+    )
+    task["phaseCycleCapReached"] = True
+    task["devStepCount"] = 13
+    task["consecutiveNoWriteStall"] = 2
+    task["lastCommandDiagnostics"] = [
+        {
+            "file": "mealplanner/lib/data/json_store_data_source.dart",
+            "line": 6,
+            "message": "Target of URI doesn't exist: '../domain/meal.dart'",
+            "code": "uri_does_not_exist",
+        },
+        {
+            "file": "lib/presentation/store_bloc.dart",
+            "line": 7,
+            "message": "Classes can only extend other classes",
+            "code": "extends_non_class",
+        },
+    ]
+    state.SHARED_BOARD["In Progress"] = [task]
+    _recover_latched_dev_card(task, "brief")
+    live = next(t for t in state.SHARED_BOARD["In Progress"] if t["id"] == "T-URI")
+    assert get_task_lane("T-URI") == "In Progress"
+    assert live.get("forcePatchNextDevStep") is True
+    assert int(live.get("consecutiveNoWriteStall") or 0) == 0
+    assert live.get("phaseCycleCapReached") is False
+    assert len(state.SHARED_BOARD.get("Needs User") or []) == 0
+
+
+def test_lint_unlatch_used_skips_without_needs_user():
+    initialize()
+    reset_workflow_settings()
+    save_workflow_settings({"pauseSprintOnNeedsUser": False, "enableSplitOnStuck": False})
+    _empty_board()
+    from backend.services.sprint_service import _recover_latched_dev_card
+
+    task = init_new_task(
+        {"id": "T-UNLATCH-USED", "title": "Still lint", "description": "d", "status": "In Progress"}
+    )
+    task["phaseCycleCapReached"] = True
+    task["devStepCount"] = 13
+    task["lintUnlatchCount"] = 1
+    task["lastCommandDiagnostics"] = [
+        {"file": "a.dart", "line": 1, "message": "invalid_annotation", "code": "invalid_annotation"}
+    ]
+    state.SHARED_BOARD["In Progress"] = [task]
+    _recover_latched_dev_card(task, "brief")
+    assert get_task_lane("T-UNLATCH-USED") == "In Progress"
+    assert task.get("parkFailed") is True
+    assert len(state.SHARED_BOARD.get("Needs User") or []) == 0
+
+
 def test_park_failed_exhausted_card_not_selected_again():
     initialize()
     reset_workflow_settings()
@@ -507,3 +583,56 @@ def test_manual_dev_move_routes_missing_spec_to_needs_po():
 
     move_board_stage("T-NOT-READY", "In Progress")
     assert get_task_lane("T-NOT-READY") == "Needs PO"
+
+
+def test_lint_clean_writes_advance_to_qa():
+    initialize()
+    reset_workflow_settings()
+    save_workflow_settings({"requireCodeReview": False, "requireCleanLint": True})
+    _empty_board()
+    task = init_new_task(
+        {"id": "T-ADV", "title": "Wrote tests", "description": "d", "status": "In Progress"}
+    )
+    task["files"] = ["test/data/store_repository_test.dart"]
+    task["fixVerifyLintClean"] = True
+    state.SHARED_BOARD["In Progress"] = [task]
+    state.FIX_VERIFY_LINT_CLEAN = True
+
+    class _Trace:
+        tools_log = [{"toolName": "write_file", "success": True, "summary": "test/x.dart (10 chars)"}]
+
+    from backend.services.sprint_service import _maybe_advance_dev_after_lint_write
+
+    with patch(
+        "backend.services.step_diagnostics.get_active_trace",
+        return_value=_Trace(),
+    ):
+        moved = _maybe_advance_dev_after_lint_write("T-ADV", task, "In Progress")
+    assert moved is True
+    assert get_task_lane("T-ADV") == "QA"
+
+
+def test_dirty_lint_does_not_auto_advance():
+    initialize()
+    reset_workflow_settings()
+    save_workflow_settings({"requireCodeReview": False})
+    _empty_board()
+    task = init_new_task(
+        {"id": "T-DIRTY", "title": "Lint dirty", "description": "d", "status": "In Progress"}
+    )
+    task["fixVerifyLintClean"] = False
+    state.SHARED_BOARD["In Progress"] = [task]
+    state.FIX_VERIFY_LINT_CLEAN = False
+
+    class _Trace:
+        tools_log = [{"toolName": "write_file", "success": True, "summary": "a.dart"}]
+
+    from backend.services.sprint_service import _maybe_advance_dev_after_lint_write
+
+    with patch(
+        "backend.services.step_diagnostics.get_active_trace",
+        return_value=_Trace(),
+    ):
+        moved = _maybe_advance_dev_after_lint_write("T-DIRTY", task, "In Progress")
+    assert moved is False
+    assert get_task_lane("T-DIRTY") == "In Progress"

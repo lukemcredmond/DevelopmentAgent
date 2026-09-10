@@ -366,11 +366,11 @@ def _resolve_needs_user_kind(task: Dict[str, Any], kind: str, raw_msg: str) -> s
     raw = str(raw_msg or "")
     if _looks_secret_ask(raw) or _looks_secret_ask(str(task.get("userQuestion") or "")):
         return "secret"
-    # Cycle-cap park must not be rewritten as lint/missing-file questions.
-    if kind == "phase_cycle_cap" or task.get("phaseCycleCapReached"):
-        return "phase_cycle_cap"
     if stuck_is_tool_or_lint(task):
         return "lint"
+    # Cycle-cap park must not be rewritten as missing-file questions unless lint is present.
+    if kind == "phase_cycle_cap" or task.get("phaseCycleCapReached"):
+        return "phase_cycle_cap"
     exit_r = _exit_reason(task)
     if exit_r == "explore_budget_exhausted" or task.get("forcePatchNextDevStep"):
         return "explore"

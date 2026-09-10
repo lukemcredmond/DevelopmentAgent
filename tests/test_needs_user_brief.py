@@ -73,7 +73,7 @@ def test_explore_brief_asks_for_first_file():
     assert "send to developer" in brief["action"].lower()
 
 
-def test_phase_cycle_cap_brief_ignores_lint_and_missing_files():
+def test_phase_cycle_cap_with_lint_classifies_as_lint():
     task = {
         "id": "T-CAP",
         "title": "Create Store Form",
@@ -95,12 +95,10 @@ def test_phase_cycle_cap_brief_ignores_lint_and_missing_files():
         kind="phase_cycle_cap",
         raw_msg="Phase cycle cap reached. Split the card or reset the Developer visit latch.",
     )
+    assert brief["kind"] == "lint"
     blob = f"{brief['question']} {brief['why']} {brief['action']}".lower()
-    assert brief["kind"] == "phase_cycle_cap"
-    assert "split" in brief["question"].lower()
-    assert "lib/missing.dart" not in blob
-    assert "doesn't exist" not in blob
-    assert "which file or function" not in blob
+    assert "split" not in brief["question"].lower()
+    assert "doesn't exist" in blob or "lint" in blob
     assert "send to developer" in brief["action"].lower()
 
 

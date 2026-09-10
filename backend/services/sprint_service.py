@@ -649,6 +649,8 @@ def _record_last_step_outcome(
             "ok": diag.get("ok"),
             "ollamaCallCount": diag.get("ollamaCallCount")
             or len(diag.get("ollamaCalls") or []),
+            "fixVerifyLintClean": diag.get("fixVerifyLintClean"),
+            "writesSucceeded": diag.get("writesSucceeded"),
         }
         try:
             from backend.services.sprint_speed_gates import record_consecutive_bad_exit
@@ -1266,6 +1268,16 @@ def _check_stuck_and_escalate(
 
     max_po = int(ws.get("maxPoRoundTrips", 3))
     msg = build_stuck_escalation_message(task, lane_after, max_stuck)
+    if latched and stuck_is_tool_or_lint(task):
+        record_task_decision(
+            task_id,
+            "System",
+            "stuck_loop",
+            "Lint/tool blocker on a latched card — staying In Progress for Developer",
+            msg,
+        )
+        _keep_lint_card_for_developer(task)
+        return
     if latched:
         park_msg = (
             "Phase cycle cap reached. Split the card or reset the Developer visit latch. "
@@ -1301,9 +1313,8 @@ def _check_stuck_and_escalate(
         )
         return
     if int(task.get("poRoundTrips", 0)) >= max_po:
-        # Lint walls normally stay In Progress so Dev can retry. A latched card
-        # cannot run Dev again, so park it instead of spinning recovery forever.
-        if stuck_is_tool_or_lint(task) and not latched:
+        # Lint walls stay In Progress so Dev can retry (including after a visit cap).
+        if stuck_is_tool_or_lint(task):
             record_task_decision(
                 task_id,
                 "System",
@@ -1316,14 +1327,8 @@ def _check_stuck_and_escalate(
                 "warning",
                 f"{task_id}: stuck on lint/tools — fix code or run diagnosis; not moving to Needs User",
             )
+            _keep_lint_card_for_developer(task)
         else:
-            if latched and stuck_is_tool_or_lint(task):
-                add_system_log(
-                    "System",
-                    "warning",
-                    f"{task_id}: phase cycle cap — parking to Needs User "
-                    "(Dev cannot retry lint/tools while latched)",
-                )
             _try_move_to_needs_user(task_id, task, msg)
     else:
         stuck_msg = (
@@ -2124,6 +2129,59 @@ def _append_tasks(tasks: List[Dict[str, Any]]) -> int:
 
 def _dev_complete_lane() -> str:
     return "Code Review" if get_workflow_settings().get("requireCodeReview") else "QA"
+
+
+def _maybe_advance_dev_after_lint_write(
+    task_id: str,
+    task: Dict[str, Any],
+    lane_before: str,
+) -> bool:
+    """Move In Progress → QA/CR when this step wrote and fix-verify lint is clean."""
+    del lane_before
+    if get_task_lane(task_id) != "In Progress":
+        return False
+    lint_clean = bool(
+        getattr(state, "FIX_VERIFY_LINT_CLEAN", False) or task.get("fixVerifyLintClean")
+    )
+    if not lint_clean:
+        return False
+    writes = 0
+    try:
+        from backend.services.step_diagnostics import _write_tools_succeeded, get_active_trace
+
+        trace = get_active_trace()
+        if trace and _write_tools_succeeded(getattr(trace, "tools_log", None) or []):
+            writes = 1
+    except Exception:
+        writes = 0
+    if writes <= 0:
+        return False
+    from backend.services.focus_slice import should_block_lane_advance_for_focus
+    from backend.services.subtask_service import subtask_gate_blocks_advance
+
+    if should_block_lane_advance_for_focus(task):
+        return False
+    blocked, reason = subtask_gate_blocks_advance(task)
+    if blocked:
+        add_system_log("Developer", "warning", f"{task_id}: {reason}")
+        return False
+    target = _dev_complete_lane()
+    clear_qa_failure(task_id)
+    move_board_stage(task_id, target)
+    add_system_log(
+        "Developer",
+        "info",
+        f"{task_id}: lint clean after writes — advancing to {target} (no update_board)",
+    )
+    publish_activity(
+        task_id,
+        "lane_advanced",
+        f"Orchestrator moved card to {target} after clean lint following writes",
+        role="system",
+        agent="Developer",
+        lane=target,
+    )
+    return True
 
 
 def _log_sprint_step_outcome(
@@ -3641,6 +3699,15 @@ def _run_developer_step(active_task: Dict[str, Any], brief: str) -> None:
                                 "staying In Progress",
                             )
             # Hybrid lint fan-out when fix-verify is off or leftovers remain after the step.
+            if (
+                result != "SIMULATION_FALLBACK"
+                and not state.DEV_STEP_READ_ONLY_NO_EDITS
+                and not state.DEV_STEP_COMMAND_REPEAT_NO_PROGRESS
+                and _task_in_lane(task_id, "In Progress")
+            ):
+                _maybe_advance_dev_after_lint_write(
+                    task_id, find_task_by_id(task_id) or task, lane_before
+                )
             fresh_for_lint = find_task_by_id(task_id) or task
             diags = fresh_for_lint.get("lastCommandDiagnostics") or []
             if isinstance(diags, list) and diags:
@@ -4353,13 +4420,62 @@ def _run_parallel_independent_dev_batch(brief: str, ollama_url: str) -> int:
     return ran
 
 
+def _keep_lint_card_for_developer(task: Dict[str, Any]) -> bool:
+    """Keep analyzer/lint walls on In Progress for a Forced Patch Dev step.
+
+    Unlatches the visit cap once. After that, skip Auto Sprint without Needs User.
+    Returns True when Developer should run again.
+    """
+    from backend.services.sprint_speed_gates import reset_dev_cycle_latch
+
+    task_id = str(task.get("id") or "")
+    task["forcePatchNextDevStep"] = True
+    task["consecutiveNoWriteStall"] = 0
+    task.pop("parkFailed", None)
+    task["latchedRecoveryAttempted"] = False
+    task["poAutoSkip"] = False
+    lane = get_task_lane(task_id) if task_id else ""
+    if task_id and lane and lane != "In Progress":
+        move_board_stage(task_id, "In Progress")
+    if task.get("phaseCycleCapReached"):
+        used = int(task.get("lintUnlatchCount") or 0)
+        if used >= 1:
+            task["parkFailed"] = True
+            task["poAutoSkip"] = True
+            task["latchedRecoveryAttempted"] = True
+            task["forcePatchNextDevStep"] = True
+            add_system_log(
+                "System",
+                "warning",
+                f"{task_id}: lint wall after one visit-cap unlatch — "
+                "skipping Auto Sprint (not Needs User)",
+            )
+            return False
+        task["lintUnlatchCount"] = used + 1
+        reset_dev_cycle_latch(task)
+        task["forcePatchNextDevStep"] = True
+        add_system_log(
+            "System",
+            "info",
+            f"{task_id}: lint/tool errors — staying In Progress; "
+            f"unlatched visit cap ({task['lintUnlatchCount']}/1) for Forced Patch",
+        )
+        return True
+    add_system_log(
+        "System",
+        "info",
+        f"{task_id}: lint/tool errors — staying In Progress for Forced Patch",
+    )
+    return True
+
+
 def _recover_latched_dev_card(
     active_task: Dict[str, Any],
     brief: str,
     *,
     quiet: bool = False,
 ) -> None:
-    """Park a phase-cycle-capped card. Auto Sprint must not unlatch, PO, or Dev it."""
+    """Park a phase-cycle-capped card, or keep lint walls on Developer."""
     del brief
     task_id = str(active_task.get("id") or "")
     if not task_id:
@@ -4373,6 +4489,18 @@ def _recover_latched_dev_card(
     with state.STATE_LOCK:
         task = find_task_by_id(task_id)
         if not task:
+            return
+        if stuck_is_tool_or_lint(task):
+            _keep_lint_card_for_developer(task)
+            if not quiet:
+                result = (
+                    "Lint/tool errors remain — staying In Progress so Developer can patch. "
+                    "Not moving to Needs User."
+                )
+                _ensure_step_trace(task_id, title, "System", lane_before)
+                state.LAST_AGENT_STEP_RESULT = result
+                _record_last_step_outcome(task_id, lane_before, "System", agent_result=result)
+                _finalize_dev_step_diagnostics_if_auto_sprint(task_id, lane_before)
             return
         task["latchedRecoveryAttempted"] = True
         task["poAutoSkip"] = True

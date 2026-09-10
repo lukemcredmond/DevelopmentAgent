@@ -55,6 +55,43 @@ def test_stuck_loop_skips_needs_user_for_lint_when_po_exhausted():
     assert len(state.SHARED_BOARD.get("Needs User") or []) == 0
 
 
+def test_stuck_loop_latched_lint_stays_in_progress():
+    initialize()
+    from backend import state
+    from backend.agents.task_context import init_new_task, get_task_lane
+    from backend.services.sprint_service import _check_stuck_and_escalate
+    from backend.services.workflow_settings import save_workflow_settings
+
+    save_workflow_settings({"maxStuckSteps": 2, "maxPoRoundTrips": 1, "enableSplitOnStuck": False})
+    task = init_new_task({"id": "T-LAT-LINT", "title": "T", "description": "D", "status": "In Progress"})
+    task["stuckLoops"] = 2
+    task["poRoundTrips"] = 1
+    task["phaseCycleCapReached"] = True
+    task["devStepCount"] = 13
+    task["lastCommandDiagnostics"] = [
+        {
+            "file": "lib/presentation/store_bloc.dart",
+            "line": 41,
+            "message": "Classes can only extend other classes",
+            "code": "extends_non_class",
+        }
+    ]
+    state.SHARED_BOARD = {
+        "Backlog": [],
+        "In Progress": [task],
+        "Needs PO": [],
+        "Needs User": [],
+        "QA": [],
+        "Done": [],
+    }
+    _check_stuck_and_escalate("T-LAT-LINT", "In Progress")
+    live = next(t for t in state.SHARED_BOARD["In Progress"] if t["id"] == "T-LAT-LINT")
+    assert get_task_lane("T-LAT-LINT") == "In Progress"
+    assert live.get("forcePatchNextDevStep") is True
+    assert live.get("phaseCycleCapReached") is False
+    assert len(state.SHARED_BOARD.get("Needs User") or []) == 0
+
+
 def test_explore_budget_stuck_stays_in_progress_for_forced_patch():
     initialize()
     from backend import state

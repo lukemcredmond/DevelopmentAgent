@@ -2666,6 +2666,8 @@ class ScrumAgent:
 
         from backend.services.step_diagnostics import (
             build_live_intent,
+            format_ollama_wait_event,
+            last_tool_name_from_active_trace,
             log_event,
             set_llm_iterations_max,
         )
@@ -2912,7 +2914,13 @@ class ScrumAgent:
                 )
                 log_event(
                     "ollama_wait",
-                    f"iter {iteration}/{max_iterations} model={model_in_use}",
+                    format_ollama_wait_event(
+                        iteration=iteration,
+                        max_iterations=max_iterations,
+                        model=str(model_in_use or ""),
+                        elapsed_sec=0,
+                        last_tool=last_tool_name_from_active_trace(),
+                    ),
                 )
                 ollama_started = time.time()
                 ollama_wait_done = threading.Event()
@@ -2920,6 +2928,14 @@ class ScrumAgent:
                 def _tick_ollama_wait() -> None:
                     while not ollama_wait_done.wait(15):
                         elapsed = int(time.time() - ollama_started)
+                        wait_msg = format_ollama_wait_event(
+                            iteration=iteration,
+                            max_iterations=max_iterations,
+                            model=str(model_in_use or self.model or ""),
+                            elapsed_sec=elapsed,
+                            last_tool=last_tool_name_from_active_trace(),
+                        )
+                        log_event("ollama_wait", wait_msg)
                         tick_intent = build_live_intent(
                             phase="awaiting_ollama",
                             iteration=iteration,

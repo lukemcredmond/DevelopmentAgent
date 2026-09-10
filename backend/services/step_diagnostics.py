@@ -416,6 +416,16 @@ class StepDiagnosticsTracker:
         payload["writesAttempted"] = writes_attempted
         payload["writesSucceeded"] = writes_succeeded
         payload["writePaths"] = write_paths[:12]
+        lint_clean = bool(getattr(state, "FIX_VERIFY_LINT_CLEAN", False))
+        try:
+            from backend.agents.task_context import find_task_by_id as _find
+
+            board_task = _find(self.task_id)
+            if board_task is not None:
+                lint_clean = lint_clean or bool(board_task.get("fixVerifyLintClean"))
+        except Exception:
+            pass
+        payload["fixVerifyLintClean"] = lint_clean
         if failure_classes:
             payload["toolFailureClasses"] = failure_classes
         if self.agent == "Product Owner":
@@ -684,6 +694,33 @@ def log_tool(
             last_event=f"tool:{name}",
             diagnostics_file=str(trace.file_path),
         )
+
+
+def format_ollama_wait_event(
+    *,
+    iteration: int,
+    max_iterations: int,
+    model: str = "",
+    elapsed_sec: int = 0,
+    last_tool: Optional[str] = None,
+) -> str:
+    """lastEvent / diagnostics line while an Ollama call is in flight."""
+    msg = (
+        f"iter {int(iteration)}/{int(max_iterations)} "
+        f"elapsed={int(elapsed_sec)}s model={str(model or '?')}"
+    )
+    tool = str(last_tool or "").strip()
+    if tool:
+        msg += f" last_tool={tool}"
+    return msg
+
+
+def last_tool_name_from_active_trace() -> str:
+    trace = get_active_trace()
+    log = getattr(trace, "tools_log", None) or []
+    if not log:
+        return ""
+    return str((log[-1] or {}).get("toolName") or "").strip()
 
 
 def log_event(kind: str, message: str) -> None:
