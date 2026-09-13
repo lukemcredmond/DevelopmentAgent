@@ -1700,7 +1700,7 @@ export default function WorkflowPanel({
           onChange={(e) => onSettingsChange({ enableCardLedger: e.target.checked })}
         />
         Per-card ledger (plan/notes/tasks on disk)
-        <SettingHint hint="GVS5H-style bounded working set under .allhands/cards/{id}/. Injected before the long transcript." />
+        <SettingHint hint="GVS5H-style bounded working set under docs/tasks/{id}/ (plan.md, notes.md, README.md). Injected before the long transcript." />
       </label>
       <label className="flex items-center gap-2 text-[11px] text-cat-subtext cursor-pointer pl-5">
         <input

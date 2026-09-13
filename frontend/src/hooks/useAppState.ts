@@ -40,6 +40,7 @@ const defaultState: AppState = {
   projectId: '',
   projectName: 'My Local Scrum Project',
   brief: '',
+  originalBrief: '',
   workspaceDir: './workspace',
   skillsDir: './global_skills',
   board: { ...EMPTY_BOARD },

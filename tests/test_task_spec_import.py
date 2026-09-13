@@ -96,3 +96,65 @@ _No blockers._
     again = import_cards_from_task_specs()
     assert again["skippedCount"] == 1
     assert again["importedCount"] == 0
+
+
+def test_import_readme_folder_prefers_over_legacy_spec(tmp_path):
+    initialize()
+    state.WORKSPACE_DIR = str(tmp_path)
+    state.VIRTUAL_FILESYSTEM = {}
+    state.SHARED_BOARD = {
+        lane: []
+        for lane in (
+            "Backlog",
+            "In Progress",
+            "Needs PO",
+            "Needs User",
+            "QA",
+            "Done",
+            "Features",
+            "Refinement",
+            "Code Review",
+            "Blocked",
+        )
+    }
+    spec_dir = Path(tmp_path) / "docs" / "tasks"
+    spec_dir.mkdir(parents=True)
+    (spec_dir / "TASK-BOTH-spec.md").write_text(
+        """# Task TASK-BOTH — Specification
+
+## Overview
+- **Title:** Legacy title
+- **Status:** Backlog
+- **Work type:** implementation
+- **Requires Dev:** True
+- **Requires QA:** True
+
+## Description
+From flat spec
+""",
+        encoding="utf-8",
+    )
+    folder = spec_dir / "TASK-BOTH"
+    folder.mkdir()
+    (folder / "README.md").write_text(
+        """# Task TASK-BOTH — Specification
+
+## Overview
+- **Title:** Folder title
+- **Status:** In Progress
+- **Work type:** implementation
+- **Requires Dev:** True
+- **Requires QA:** True
+
+## Description
+From README
+""",
+        encoding="utf-8",
+    )
+    stats = import_cards_from_task_specs()
+    assert stats["importedCount"] == 1
+    assert get_task_lane("TASK-BOTH") == "In Progress"
+    from backend.agents.task_context import find_task_by_id
+
+    card = find_task_by_id("TASK-BOTH")
+    assert card["title"] == "Folder title"

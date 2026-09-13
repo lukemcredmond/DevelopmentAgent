@@ -53,6 +53,30 @@ PO_EPIC_DECOMPOSITION_GUIDANCE = (
 )
 
 
+def is_placeholder_brief(text: str) -> bool:
+    """True for empty or dummy sprint/API payloads that must not replace a real brief."""
+    incoming = (text or "").strip()
+    if not incoming:
+        return True
+    return incoming.lower() in {
+        "brief",
+        "plan",
+        "the brief",
+        "project brief",
+        "product brief",
+    }
+
+
+def _capture_original_brief_if_needed(brief: str) -> None:
+    incoming = (brief or "").strip()
+    if is_placeholder_brief(incoming):
+        return
+    existing_original = (getattr(state, "PROJECT_ORIGINAL_BRIEF", None) or "").strip()
+    if existing_original and not is_placeholder_brief(existing_original):
+        return
+    state.PROJECT_ORIGINAL_BRIEF = incoming
+
+
 def append_feature_to_brief(title: str, description: str, source: str = "user") -> str:
     """Appends a user feature request to the persisted project brief."""
     entry = f"- {title}: {description}"
@@ -60,6 +84,7 @@ def append_feature_to_brief(title: str, description: str, source: str = "user") 
         state.PROJECT_BRIEF = f"{state.PROJECT_BRIEF.rstrip()}\n\n{entry}"
     else:
         state.PROJECT_BRIEF = entry
+    _capture_original_brief_if_needed(state.PROJECT_BRIEF)
     save_current_project_state()
     record_brief_changelog(source, f"Added feature: {title}", entry)
     return state.PROJECT_BRIEF
@@ -72,6 +97,7 @@ def append_brief_text(text: str, source: str, summary: str) -> str:
         state.PROJECT_BRIEF = f"{state.PROJECT_BRIEF.rstrip()}\n\n{text.strip()}"
     else:
         state.PROJECT_BRIEF = text.strip()
+    _capture_original_brief_if_needed(state.PROJECT_BRIEF)
     save_current_project_state()
     record_brief_changelog(source, summary, text[:300])
     return state.PROJECT_BRIEF
@@ -80,28 +106,30 @@ def append_brief_text(text: str, source: str, summary: str) -> str:
 def set_project_brief(brief: str, source: str = "user") -> None:
     incoming = (brief or "").strip()
     existing = (state.PROJECT_BRIEF or "").strip()
-    if not incoming and existing:
+    if is_placeholder_brief(incoming) and existing and not is_placeholder_brief(existing):
         from backend.services.logs import add_system_log
 
         add_system_log(
             "System",
             "warning",
-            "Ignored empty brief from client — keeping saved project brief.",
+            "Ignored placeholder brief from client — keeping saved project brief.",
         )
         return
     if brief != state.PROJECT_BRIEF:
         record_brief_changelog(source, "Project brief updated", (brief or "")[:300])
     state.PROJECT_BRIEF = brief
+    _capture_original_brief_if_needed(state.PROJECT_BRIEF)
     save_current_project_state()
 
 
 def resolve_brief_for_sprint(client_brief: str) -> str:
-    """Use client brief when non-empty; otherwise keep server copy."""
+    """Use a real client brief when provided; never persist placeholders over a saved brief."""
     incoming = (client_brief or "").strip()
-    if incoming:
-        set_project_brief(client_brief, source="user")
-        return client_brief
-    return state.PROJECT_BRIEF or ""
+    existing = (state.PROJECT_BRIEF or "").strip()
+    if is_placeholder_brief(incoming):
+        return existing or incoming
+    set_project_brief(client_brief, source="user")
+    return client_brief
 
 
 def set_project_plan_outline(outline: str, *, source: str = "user") -> None:

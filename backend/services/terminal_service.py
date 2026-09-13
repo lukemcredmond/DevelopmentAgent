@@ -4,9 +4,11 @@ from typing import Any, Dict, List
 from backend import state
 from backend.config import TERMINAL_TIMEOUT_SEC
 from backend.services.command_policy import split_chained_commands, validate_command
+from backend.services.scaffold_commands import rewrite_scaffold_command
 
 
 def _run_single(command: str, timeout: int) -> Dict[str, Any]:
+    command, rewrite_note = rewrite_scaffold_command(command)
     try:
         if state.WORKSPACE_DIR:
             import os
@@ -21,25 +23,31 @@ def _run_single(command: str, timeout: int) -> Dict[str, Any]:
             text=True,
             timeout=timeout,
         )
+        stdout = result.stdout or ""
+        if rewrite_note:
+            stdout = f"{rewrite_note}\n{stdout}" if stdout else rewrite_note
         return {
             "success": result.returncode == 0,
-            "stdout": result.stdout,
+            "stdout": stdout,
             "stderr": result.stderr,
             "returncode": result.returncode,
+            "command": command,
         }
     except subprocess.TimeoutExpired:
         return {
             "success": False,
-            "stdout": "",
+            "stdout": rewrite_note or "",
             "stderr": f"Command timed out after {timeout}s",
             "returncode": -1,
+            "command": command,
         }
     except Exception as e:
         return {
             "success": False,
-            "stdout": "",
+            "stdout": rewrite_note or "",
             "stderr": str(e),
             "returncode": -1,
+            "command": command,
         }
 
 
@@ -63,7 +71,8 @@ def run_command(command: str, timeout: int = TERMINAL_TIMEOUT_SEC) -> Dict[str, 
     last_code = 0
     for i, seg in enumerate(segments, start=1):
         result = _run_single(seg, timeout)
-        combined_out.append(f"--- [{i}/{len(segments)}] {seg} ---\n{result.get('stdout') or ''}")
+        shown = result.get("command") or seg
+        combined_out.append(f"--- [{i}/{len(segments)}] {shown} ---\n{result.get('stdout') or ''}")
         if result.get("stderr"):
             combined_err.append(str(result["stderr"]))
         last_code = int(result.get("returncode") or 0)

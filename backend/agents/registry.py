@@ -50,7 +50,10 @@ agent_qa = ScrumAgent(
 
 tool_write = Tool(
     name="write_file",
-    description="Creates or modifies code and configurations inside workspace directories.",
+    description=(
+        "Creates or modifies code and configurations inside the workspace root. "
+        "Path is relative to the workspace (e.g. lib/main.dart), never a nested project folder name."
+    ),
     parameters={
         "type": "object",
         "properties": {
@@ -675,6 +678,8 @@ tool_run_command = Tool(
     name="run_command",
     description=(
         "Run shell command(s) in the workspace root. "
+        "The workspace is the app: use flutter create . (not flutter create <name>) "
+        "and do not cd into a subfolder. "
         "Use background=true for long-running servers. "
         "When allowChainedCommands is enabled, use && or ; to chain steps."
     ),

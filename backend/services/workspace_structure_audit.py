@@ -236,7 +236,100 @@ def detect_dotnet(ws: str) -> Optional[Dict[str, Any]]:
     }
 
 
+def detect_flutter(ws: str) -> Optional[Dict[str, Any]]:
+    nested = _nested_pubspec_dirs(ws)
+    root_pub = os.path.join(ws, "pubspec.yaml")
+    has_root = os.path.isfile(root_pub)
+    has_lib_dart = _has_lib_dart(ws)
+    if not has_root and not has_lib_dart and not nested:
+        return None
+    if os.path.isdir(os.path.join(ws, "Assets")) and os.path.isfile(
+        os.path.join(ws, "ProjectSettings", "ProjectVersion.txt")
+    ):
+        return None
+
+    present: List[str] = []
+    missing: List[str] = []
+    warnings: List[str] = []
+    if has_root:
+        present.append("pubspec.yaml")
+    else:
+        missing.append("pubspec.yaml")
+    main = _any_exists(ws, ("lib/main.dart",))
+    if main:
+        present.append(main)
+    elif has_lib_dart:
+        present.append("lib/")
+    else:
+        missing.append("lib/main.dart")
+    if not has_root and len(nested) == 1:
+        child = nested[0]
+        present.append(f"{child}/pubspec.yaml")
+        warnings.append(
+            f"Nested Flutter project in {child}/ — workspace root should contain pubspec.yaml. "
+            "Do not scaffold into a subfolder; use flutter create ."
+        )
+    return {
+        "stack": "flutter",
+        "present": present,
+        "missing": missing,
+        "warnings": warnings,
+        "critical": bool(missing),
+    }
+
+
+def _nested_pubspec_dirs(ws: str) -> List[str]:
+    skip = {
+        "lib",
+        "src",
+        "android",
+        "ios",
+        "macos",
+        "linux",
+        "windows",
+        "web",
+        "test",
+        "tests",
+        "packages",
+        "apps",
+        "node_modules",
+        "build",
+        "dist",
+        "bin",
+        "obj",
+        "integration_test",
+    }
+    found: List[str] = []
+    if not os.path.isdir(ws):
+        return found
+    try:
+        for name in os.listdir(ws):
+            if name.startswith(".") or name in skip:
+                continue
+            child = os.path.join(ws, name)
+            if os.path.isdir(child) and os.path.isfile(os.path.join(child, "pubspec.yaml")):
+                found.append(name)
+    except OSError:
+        return found
+    return found
+
+
+def _has_lib_dart(ws: str) -> bool:
+    lib = os.path.join(ws, "lib")
+    if not os.path.isdir(lib):
+        return False
+    try:
+        for root, dirs, files in os.walk(lib):
+            dirs[:] = [d for d in dirs if d not in (".dart_tool",)]
+            if any(fn.endswith(".dart") for fn in files):
+                return True
+    except OSError:
+        return False
+    return False
+
+
 def detect_unity_quest(ws: str) -> Optional[Dict[str, Any]]:
+
     assets = os.path.join(ws, "Assets")
     version = os.path.join(ws, "ProjectSettings", "ProjectVersion.txt")
     if not (os.path.isdir(assets) and os.path.isfile(version)):
@@ -270,6 +363,7 @@ def detect_unknown(ws: str) -> Optional[Dict[str, Any]]:
 
 _DETECTORS: Tuple[Detector, ...] = (
     detect_unity_quest,
+    detect_flutter,
     detect_react_vite,
     detect_dotnet,
     detect_python,
@@ -356,4 +450,6 @@ def workspace_looks_empty_for_stack(audit: Dict[str, Any], workspace_dir: Option
             os.path.isfile(os.path.join(ws, m))
             for m in ("pyproject.toml", "requirements.txt")
         )
+    if stack == "flutter":
+        return not os.path.isfile(os.path.join(ws, "pubspec.yaml"))
     return False

@@ -1,4 +1,4 @@
-"""Rebuild board cards from generated docs/tasks/*-spec.md files."""
+"""Rebuild board cards from docs/tasks/{id}/README.md (and leftover *-spec.md)."""
 
 from __future__ import annotations
 
@@ -10,8 +10,8 @@ from typing import Any, Dict, List, Optional, Tuple
 from backend import state
 from backend.agents.task_context import find_task_by_id, init_new_task
 from backend.services.board_lanes import BASE_LANES, normalize_board_lanes
-from backend.services.task_qa_markdown import task_qa_markdown_path
-from backend.services.task_spec_markdown import SPEC_PATH_PREFIX, task_spec_markdown_path
+from backend.services.task_docs import TASKS_PREFIX, legacy_qa_markdown_path, task_qa_markdown_path
+from backend.services.task_spec_markdown import task_spec_markdown_path
 
 _TITLE_RE = re.compile(r"^#\s+Task\s+(\S+)\s+[—–-]\s+", re.IGNORECASE)
 _OVERVIEW_RE = re.compile(r"^-\s+\*\*([^*]+):\*\*\s*(.*)$")
@@ -139,17 +139,38 @@ def _id_from_spec_filename(name: str) -> str:
     return stem
 
 
+def _id_from_readme_path(path: str) -> str:
+    parts = Path(str(path).replace("\\", "/")).parts
+    if len(parts) >= 2 and parts[-1].lower() == "readme.md":
+        return parts[-2]
+    return Path(path).stem
+
+
+def _remember_spec(found: Dict[str, str], task_id: str, text: str, *, overwrite: bool) -> None:
+    tid = str(task_id or "").strip()
+    body = str(text or "").strip()
+    if not tid or not body:
+        return
+    if overwrite or tid not in found:
+        found[tid] = body
+
+
 def collect_spec_markdown_sources() -> List[Tuple[str, str]]:
     """Return (task_id_hint, markdown) from VFS and workspace disk."""
     found: Dict[str, str] = {}
-    prefix = f"{SPEC_PATH_PREFIX}/"
+    prefix = f"{TASKS_PREFIX}/"
     for key, content in (state.VIRTUAL_FILESYSTEM or {}).items():
         path = str(key).replace("\\", "/")
-        if not path.startswith(prefix) or not path.endswith("-spec.md"):
+        if not path.startswith(prefix):
             continue
         text = str(content or "").strip()
-        if text:
-            found[_id_from_spec_filename(path)] = text
+        if not text:
+            continue
+        lower = path.lower()
+        if lower.endswith("/readme.md"):
+            _remember_spec(found, _id_from_readme_path(path), text, overwrite=True)
+        elif path.endswith("-spec.md"):
+            _remember_spec(found, _id_from_spec_filename(path), text, overwrite=False)
     workspace = Path(state.WORKSPACE_DIR or "")
     disk_dir = workspace / "docs" / "tasks"
     if disk_dir.is_dir():
@@ -158,18 +179,24 @@ def collect_spec_markdown_sources() -> List[Tuple[str, str]]:
                 text = path.read_text(encoding="utf-8").strip()
             except OSError:
                 continue
-            if text:
-                found.setdefault(_id_from_spec_filename(path.name), text)
+            _remember_spec(found, _id_from_spec_filename(path.name), text, overwrite=False)
+        for path in sorted(disk_dir.glob("*/README.md")):
+            try:
+                text = path.read_text(encoding="utf-8").strip()
+            except OSError:
+                continue
+            _remember_spec(found, _id_from_readme_path(str(path)), text, overwrite=True)
     return list(found.items())
 
 
 def _qa_path_if_present(task_id: str) -> Optional[str]:
-    rel = task_qa_markdown_path(task_id)
-    if state.VIRTUAL_FILESYSTEM.get(rel) or state.VIRTUAL_FILESYSTEM.get(rel.replace("\\", "/")):
-        return rel.replace("\\", "/")
-    phys = os.path.join(state.WORKSPACE_DIR or "", rel.replace("/", os.sep))
-    if os.path.isfile(phys):
-        return rel.replace("\\", "/")
+    for rel in (task_qa_markdown_path(task_id), legacy_qa_markdown_path(task_id)):
+        norm = rel.replace("\\", "/")
+        if state.VIRTUAL_FILESYSTEM.get(rel) or state.VIRTUAL_FILESYSTEM.get(norm):
+            return norm
+        phys = os.path.join(state.WORKSPACE_DIR or "", norm.replace("/", os.sep))
+        if os.path.isfile(phys):
+            return norm
     return None
 
 

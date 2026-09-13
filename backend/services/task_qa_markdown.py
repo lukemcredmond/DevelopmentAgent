@@ -9,8 +9,15 @@ import json
 import re
 from typing import Any, Dict, List, Optional, Tuple
 
+from backend.services.task_docs import (
+    TASKS_PREFIX,
+    legacy_qa_markdown_path,
+    migrate_legacy_task_docs,
+    task_qa_markdown_path,
+)
+
 QA_MARKDOWN_MAX_CHARS = 10000
-QA_PATH_PREFIX = "docs/tasks"
+QA_PATH_PREFIX = TASKS_PREFIX
 
 _PREFERRED_TEXT_KEYS = (
     "question",
@@ -28,11 +35,6 @@ _PREFERRED_TEXT_KEYS = (
     "title",
     "criteria",
 )
-
-
-def task_qa_markdown_path(task_id: str) -> str:
-    safe = "".join(c if c.isalnum() or c in "-_" else "_" for c in str(task_id))[:80]
-    return f"{QA_PATH_PREFIX}/{safe}-qa.md"
 
 
 def _try_parse_json(value: str) -> Any:
@@ -236,7 +238,7 @@ def question_similarity_soft(a: str, b: str) -> bool:
 
 
 def update_task_qa_markdown(task_id: str) -> Optional[str]:
-    """Write/update docs/tasks/{id}-qa.md; returns path or None."""
+    """Write/update docs/tasks/{id}/qa.md; returns path or None."""
     import os
 
     from backend import state
@@ -246,6 +248,7 @@ def update_task_qa_markdown(task_id: str) -> Optional[str]:
     if not task:
         return None
     normalize_task(task)
+    migrate_legacy_task_docs(str(task.get("id") or task_id))
     path = task_qa_markdown_path(str(task.get("id") or task_id))
     content = build_task_qa_markdown(task)
     # Write without going through write_workspace_file (avoids decision spam / agent attribution).
@@ -271,19 +274,31 @@ def read_task_qa_markdown_for_prompt(task: Dict[str, Any], *, max_chars: int = 4
     """Load existing Q&A markdown for prompt injection."""
     from backend import state
 
-    path = str(task.get("qaMarkdownPath") or "").strip()
-    if not path:
-        path = task_qa_markdown_path(str(task.get("id") or ""))
-    content = state.VIRTUAL_FILESYSTEM.get(path)
-    if not content:
+    tid = str(task.get("id") or "")
+    if tid:
+        migrate_legacy_task_docs(tid)
+    paths = []
+    stored = str(task.get("qaMarkdownPath") or "").strip()
+    if stored:
+        paths.append(stored.replace("\\", "/"))
+    if tid:
+        for rel in (task_qa_markdown_path(tid), legacy_qa_markdown_path(tid)):
+            if rel not in paths:
+                paths.append(rel)
+    content = None
+    for path in paths:
+        content = state.VIRTUAL_FILESYSTEM.get(path)
+        if content:
+            break
         try:
             from backend.workspace.files import read_workspace_file
 
             raw = read_workspace_file(path)
             if isinstance(raw, str) and not raw.startswith("Error"):
                 content = raw
+                break
         except Exception:
-            content = None
+            continue
     if not content or not str(content).strip():
         return ""
     text = str(content).strip()

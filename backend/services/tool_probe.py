@@ -30,6 +30,7 @@ TOOL_HINTS: Dict[str, List[str]] = {
     ],
     "write_file": [
         "Prefer apply_patch for edits to existing files; write_file for new files.",
+        "Pass a workspace-relative path (lib/main.dart), not a nested project folder.",
         "Destructive — not smoke-tested automatically.",
     ],
     "apply_patch": [
@@ -42,6 +43,7 @@ TOOL_HINTS: Dict[str, List[str]] = {
     "run_command": [
         "Use a single allowlisted command (no && chains unless enabled).",
         "Prefer project lint/test commands from the stack catalog.",
+        "Scaffold into workspace root (flutter create ., npm create vite@latest .) — not a subfolder.",
         "Skipped in Health by default (slow / side effects).",
     ],
     "grep": [

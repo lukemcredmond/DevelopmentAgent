@@ -13,7 +13,7 @@ from typing import Any, Dict, Optional
 
 PROJECT_FILE_NAME = "allhands.project.json"
 PROJECT_FILE_FORMAT = "allhands-project"
-PROJECT_FILE_VERSION = 1
+PROJECT_FILE_VERSION = 2
 
 _SECRET_KEYS = (
     "llmApiKey",
@@ -41,7 +41,6 @@ def build_project_file_payload(
     name: str,
     brief: str,
     workspace_dir: str,
-    board_state: Dict[str, Any],
     po_skills: list,
     dev_skills: list,
     cr_skills: list,
@@ -55,6 +54,7 @@ def build_project_file_payload(
     cr_backup_model: str = "",
     qa_backup_model: str = "",
     plan_outline: str = "",
+    original_brief: str = "",
     workflow_settings: Optional[Dict[str, Any]] = None,
 ) -> Dict[str, Any]:
     return {
@@ -63,8 +63,8 @@ def build_project_file_payload(
         "id": project_id,
         "name": name,
         "brief": brief or "",
+        "original_brief": original_brief or "",
         "workspace_dir": workspace_dir,
-        "board_state": board_state or {},
         "po_skills": list(po_skills or []),
         "dev_skills": list(dev_skills or []),
         "cr_skills": list(cr_skills or []),
@@ -120,24 +120,15 @@ def write_current_project_file() -> Optional[Path]:
     from backend import state
     from backend.agents.registry import agent_cr, agent_dev, agent_po, agent_qa
     from backend.services.workflow_settings import get_workflow_settings
-    from backend.storage.project_storage import count_board_tasks
 
-    stored = state.storage.load_project(state.CURRENT_PROJECT_ID) or {}
-    stored_board = stored.get("board_state") if isinstance(stored.get("board_state"), dict) else {}
-    memory_board = state.SHARED_BOARD or {}
-    board = (
-        stored_board
-        if count_board_tasks(stored_board) >= count_board_tasks(memory_board)
-        else memory_board
-    )
     primary = getattr(state, "PRIMARY_MODELS", {}) or {}
     backup = getattr(state, "BACKUP_MODELS", {}) or {}
     payload = build_project_file_payload(
         project_id=state.CURRENT_PROJECT_ID,
         name=state.PROJECT_NAME,
         brief=state.PROJECT_BRIEF,
+        original_brief=getattr(state, "PROJECT_ORIGINAL_BRIEF", "") or "",
         workspace_dir=state.WORKSPACE_DIR,
-        board_state=board,
         po_skills=agent_po.assigned_skills,
         dev_skills=agent_dev.assigned_skills,
         cr_skills=agent_cr.assigned_skills,
@@ -160,22 +151,27 @@ def restore_project_from_file(workspace_dir: str) -> str:
     """Insert or refresh the SQLite row from allhands.project.json. Returns project id."""
     from backend import state
     from backend.config import DEFAULT_BOARD, DEFAULT_VIRTUAL_FS
-    from backend.storage.project_storage import count_board_tasks
 
     data = read_project_file(workspace_dir)
     if not data:
         raise FileNotFoundError(f"No {PROJECT_FILE_NAME} in {workspace_dir}")
     pid = str(data["id"])
-    board = data.get("board_state") if isinstance(data.get("board_state"), dict) else dict(DEFAULT_BOARD)
     existing = state.storage.load_project(pid)
-    stored_count = count_board_tasks((existing or {}).get("board_state"))
-    incoming_count = count_board_tasks(board)
-    force = existing is None or incoming_count >= stored_count
+    if existing and isinstance(existing.get("board_state"), dict):
+        board = existing["board_state"]
+        persist_board = False
+        force = False
+    else:
+        board = dict(DEFAULT_BOARD)
+        persist_board = True
+        force = True
     files = (existing or {}).get("files") or dict(DEFAULT_VIRTUAL_FS)
+    incoming_brief = str(data.get("brief") or "")
+    incoming_original = str(data.get("original_brief") or "") or incoming_brief
     state.storage.save_project(
         pid,
         str(data.get("name") or "Restored project"),
-        str(data.get("brief") or ""),
+        incoming_brief,
         str(data.get("workspace_dir") or workspace_dir),
         board,
         files,
@@ -192,8 +188,9 @@ def restore_project_from_file(workspace_dir: str) -> str:
         str(data.get("cr_backup_model") or ""),
         str(data.get("qa_backup_model") or ""),
         plan_outline=str(data.get("plan_outline") or ""),
-        persist_board=True,
+        persist_board=persist_board,
         force_board=force,
+        original_brief=incoming_original,
     )
     settings = data.get("workflow_settings")
     if isinstance(settings, dict) and settings:

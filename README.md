@@ -819,18 +819,18 @@ After a crash or power loss mid-sprint, a **recovery banner** shows the interrup
 | `decisions` | array | Agent/user decisions with timestamp |
 | `transcript` | array | Full LLM + tool audit trail |
 | `agentUsage` | object | Per-role rollup: duration, Ollama/tool ms, prompt/eval tokens, call/step counts |
-| `qaMarkdownPath` | string \| null | Path to summarized working-notes markdown (`docs/tasks/…-qa.md`) |
+| `qaMarkdownPath` | string \| null | Path to summarized working-notes markdown (`docs/tasks/{id}/qa.md`) |
 | `userStory` | string | Optional one-line user story (As a … I want … so that …) |
 | `scope`, `outOfScope` | string | In-scope / out-of-scope bullets (newline-separated on the card) |
 | `testPlan` | string | How Dev/QA verify (commands, manual steps) |
-| `specMarkdownPath` | string \| null | Generated spec markdown (`docs/tasks/…-spec.md`) — authoritative SDD view of the card |
+| `specMarkdownPath` | string \| null | Generated spec markdown (`docs/tasks/{id}/README.md`) — authoritative SDD view of the card |
 | `specVersion` | number | Bumped when spec-relevant card fields change |
 
 **Field history:** Task Detail shows a **clock** on Title, Description, Specification (SDD), and Acceptance Criteria. Click to list prior versions (datetime + source); open a row to see the full value at that time. Stored in SQLite `task_field_changelog` (not on the card JSON). First edit also keeps a baseline of the previous value.
 
 **Clarify with PO:** Under Description, **Clarify description with PO…** opens chat as Product Owner, pins the card, and seeds a rewrite prompt (replace boilerplate with concrete requirements / AC).
 
-Generated docs: **`*-spec.md`** is the human-readable spec (from card JSON). **`*-qa.md`** is operational working notes (Q&A, decisions, recent actions).
+Generated docs live in **`docs/tasks/{id}/`**: **`README.md`** is the human-readable spec (from card JSON). **`qa.md`** is operational working notes (Q&A, decisions, recent actions). **`plan.md`** and **`notes.md`** are the bounded agent ledger (legacy `docs/tasks/{id}-spec.md` and `.allhands/cards/` are still read).
 
 **Epic vs card (SDD):** Feature cards in the Features lane hold the living epic context. Child backlog cards link via `featureId`; empty `userStory` / `scope` may be auto-filled from the epic (story template + this card’s title/description/AC slice). `acceptanceCriteria` and `testPlan` stay per card.
 
@@ -1151,7 +1151,7 @@ Per-card evidence lives in **Task Detail → Agent progress** (LLM/tool counts p
 | **SQLite project memory** | Categorized notes with embeddings; TF-IDF fallback if embed fails |
 | **Step-lesson memory** | Optional end-of-step lessons saved for later retrieval |
 | **Dev core memory block** | Pinned `core_block` (~800 chars) always injected for Developer (`enableDevCoreMemoryBlock`); lessons merge in. Not a full Letta stack |
-| **Card ledger** | Size-capped `plan.md` / `notes.md` / `tasks.json` per card under `.allhands/cards/` (`enableCardLedger`); injected before transcript |
+| **Card ledger** | Size-capped `plan.md` / `notes.md` per card under `docs/tasks/{id}/` (`enableCardLedger`); injected before transcript |
 | **Graphify (optional)** | Structural graph context alongside RAG when Graphify is on PATH |
 
 Key code: `backend/storage/code_index.py`, `backend/storage/memory_engine.py`, `backend/services/graphify_service.py`.

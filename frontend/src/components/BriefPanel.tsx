@@ -36,6 +36,7 @@ function readBriefTab(): BriefTab {
 
 interface BriefPanelProps {
   brief: string
+  originalBrief?: string
   onBriefChange: (value: string) => void
   onOpenManualTask: () => void
   autonomousMode?: boolean
@@ -51,6 +52,7 @@ interface BriefPanelProps {
 
 export default memo(function BriefPanel({
   brief,
+  originalBrief = '',
   onBriefChange,
   onOpenManualTask,
   autonomousMode = false,
@@ -157,6 +159,16 @@ export default memo(function BriefPanel({
                 className="w-full min-h-[140px] bg-cat-base border border-cat-surface1 rounded-lg p-3 text-sm text-white focus:outline-none focus:border-indigo-500 resize-y font-mono"
                 placeholder="Describe your project goals, features, and constraints…"
               />
+              {originalBrief.trim() && originalBrief.trim() !== brief.trim() && (
+                <details className="text-[11px] text-cat-subtext border border-cat-surface1 rounded-lg px-3 py-2 bg-cat-mantle/40">
+                  <summary className="cursor-pointer font-semibold text-cat-overlay">
+                    Original brief
+                  </summary>
+                  <pre className="mt-2 whitespace-pre-wrap font-mono text-[11px] text-cat-subtext">
+                    {originalBrief}
+                  </pre>
+                </details>
+              )}
             </>
           ) : (
             <>

@@ -38,6 +38,7 @@ def build_state_response(*, include_files: bool = True) -> dict:
         "projectId": state.CURRENT_PROJECT_ID,
         "projectName": state.PROJECT_NAME,
         "brief": state.PROJECT_BRIEF,
+        "originalBrief": getattr(state, "PROJECT_ORIGINAL_BRIEF", "") or "",
         "projectPlanOutline": state.PROJECT_PLAN_OUTLINE,
         "workspaceDir": state.WORKSPACE_DIR,
         "skillsDir": state.SKILLS_DIR,

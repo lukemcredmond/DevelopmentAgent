@@ -36,6 +36,36 @@ def test_set_project_brief_ignores_empty_overwrite(tmp_path, monkeypatch):
     assert state.PROJECT_BRIEF == "Saved brief"
 
 
+def test_set_project_brief_ignores_placeholder_overwrite(tmp_path, monkeypatch):
+    from backend.services.brief_service import resolve_brief_for_sprint
+
+    monkeypatch.setenv("ALLHANDS_HOME", str(tmp_path))
+    initialize()
+    state.PROJECT_BRIEF = "Real product brief about meals"
+    state.PROJECT_ORIGINAL_BRIEF = "Real product brief about meals"
+    set_project_brief("brief", source="user")
+    assert state.PROJECT_BRIEF == "Real product brief about meals"
+    assert resolve_brief_for_sprint("brief") == "Real product brief about meals"
+
+
+def test_original_brief_set_once(tmp_path, monkeypatch):
+    monkeypatch.setenv("ALLHANDS_HOME", str(tmp_path))
+    initialize()
+    state.CURRENT_PROJECT_ID = "orig-brief"
+    state.PROJECT_NAME = "Orig"
+    state.PROJECT_BRIEF = ""
+    state.PROJECT_ORIGINAL_BRIEF = ""
+    state.WORKSPACE_DIR = str(tmp_path / "origws")
+    state.SHARED_BOARD = {"Backlog": [], "In Progress": [], "Done": [], "QA": []}
+    set_project_brief("First real brief about the product", source="user")
+    assert state.PROJECT_ORIGINAL_BRIEF == "First real brief about the product"
+    set_project_brief("Edited brief with more details about the product", source="user")
+    assert state.PROJECT_BRIEF == "Edited brief with more details about the product"
+    assert state.PROJECT_ORIGINAL_BRIEF == "First real brief about the product"
+    proj = state.storage.load_project("orig-brief")
+    assert proj["original_brief"] == "First real brief about the product"
+
+
 def test_patch_project_documents_api(tmp_path, monkeypatch):
     monkeypatch.setenv("ALLHANDS_HOME", str(tmp_path))
     initialize()

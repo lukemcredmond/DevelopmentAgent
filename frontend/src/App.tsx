@@ -105,12 +105,11 @@ import { buildTaskRunInfo } from './utils/taskRunInfo'
 import { chatAgentForLane } from './utils/chatAgentForLane'
 import {
   queuePendingWorkflowSettings,
-  mergePendingWorkflowSettings,
   markWorkflowSaveFailed,
   markWorkflowSaveSucceeded,
-  setWorkflowSaveTimerActive,
   snapshotPendingWorkflowPayloadForSave,
   clearCommittedLlmSettings,
+  hasPendingWorkflowSettings,
 } from './workflowSettingsPending'
 
 type BottomTab =
@@ -232,67 +231,44 @@ export default function App() {
 
   const [ollamaUrl, setOllamaUrl] = useState('http://localhost:11434')
   const [brief, setBrief] = useState('')
-  const briefDirtyRef = useRef(false)
+  const [briefDirty, setBriefDirty] = useState(false)
+  const [planDirty, setPlanDirty] = useState(false)
 
   useEffect(() => {
     const saved = String(state.workflowSettings?.llmBaseUrl || '').trim()
     if (saved) setOllamaUrl(saved)
   }, [state.projectId, state.workflowSettings?.llmBaseUrl])
   const llmCallUrl = String(state.workflowSettings?.llmBaseUrl || ollamaUrl || '').trim()
-  const planDirtyRef = useRef(false)
-  const documentsSaveTimerRef = useRef<number | null>(null)
 
   const handleBriefChange = useCallback((v: string) => {
-    briefDirtyRef.current = true
+    setBriefDirty(true)
     setBrief(v)
   }, [])
 
   const handlePlanOutlineChange = useCallback(
     (v: string) => {
-      planDirtyRef.current = true
+      setPlanDirty(true)
       setPlanOutline(v)
     },
     [setPlanOutline],
   )
 
   useEffect(() => {
-    if (documentsSaveTimerRef.current) {
-      window.clearTimeout(documentsSaveTimerRef.current)
-    }
-    if (!briefDirtyRef.current && !planDirtyRef.current) {
-      return
-    }
-    documentsSaveTimerRef.current = window.setTimeout(() => {
-      documentsSaveTimerRef.current = null
-      const payload: { brief?: string; projectPlanOutline?: string } = {}
-      if (briefDirtyRef.current) payload.brief = brief
-      if (planDirtyRef.current) payload.projectPlanOutline = planOutline
-      void patchProjectDocuments(payload)
-        .then((data) => {
-          applyState(data)
-          briefDirtyRef.current = false
-          planDirtyRef.current = false
-        })
-        .catch(() => {})
-    }, 1500)
-    return () => {
-      if (documentsSaveTimerRef.current) {
-        window.clearTimeout(documentsSaveTimerRef.current)
-      }
-    }
-  }, [brief, planOutline, applyState])
+    setBriefDirty(false)
+    setPlanDirty(false)
+  }, [state.projectId])
 
   useEffect(() => {
-    if (briefDirtyRef.current) return
+    if (briefDirty) return
     const server = state.brief ?? ''
     if (server !== brief) setBrief(server)
-  }, [state.brief, brief])
+  }, [state.brief, brief, briefDirty])
 
   useEffect(() => {
-    if (planDirtyRef.current || planOutlineStreaming) return
+    if (planDirty || planOutlineStreaming) return
     const server = state.projectPlanOutline
     if (server != null && server !== planOutline) setPlanOutline(server)
-  }, [state.projectPlanOutline, planOutline, planOutlineStreaming, setPlanOutline])
+  }, [state.projectPlanOutline, planOutline, planOutlineStreaming, setPlanOutline, planDirty])
 
   const [projectName, setProjectName] = useState('My Local Scrum Project')
   const [workspaceDir, setWorkspaceDir] = useState('./workspace')
@@ -526,7 +502,7 @@ export default function App() {
 
   const { autoSprint, setAutoSprint, autoSprintPaused, sprintRunning, stopAutoSprint, startAutoSprint, autoSprintSessionStartedAt, onSessionRefreshDue } =
     useAutoSprint(
-      brief,
+      state.brief,
       llmCallUrl,
       state.board,
       state.workflowSettings,
@@ -1035,17 +1011,8 @@ export default function App() {
     toggleBottomPanelCollapse,
   ])
 
-  const workflowSaveTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null)
   const [workflowSettingsSaveError, setWorkflowSettingsSaveError] = useState<string | null>(null)
   const [workflowSettingsSaving, setWorkflowSettingsSaving] = useState(false)
-
-  useEffect(() => {
-    return () => {
-      if (workflowSaveTimerRef.current) clearTimeout(workflowSaveTimerRef.current)
-      setWorkflowSaveTimerActive(false)
-      setWorkflowSettingsSaving(false)
-    }
-  }, [])
 
   const handleWorkflowSettingsChange = useCallback(
     (partial: Partial<WorkflowSettings>) => {
@@ -1058,36 +1025,138 @@ export default function App() {
         } as WorkflowSettings,
       }))
       queuePendingWorkflowSettings(partial)
-      if (workflowSaveTimerRef.current) clearTimeout(workflowSaveTimerRef.current)
-      setWorkflowSaveTimerActive(true)
-      setWorkflowSettingsSaving(true)
-      workflowSaveTimerRef.current = setTimeout(() => {
-        workflowSaveTimerRef.current = null
-        setWorkflowSaveTimerActive(false)
-        const payload = snapshotPendingWorkflowPayloadForSave()
-        void updateWorkflowSettings(payload)
-          .then((data) => {
-            markWorkflowSaveSucceeded(data.workflowSettings, payload)
-            setWorkflowSettingsSaveError(null)
-            setWorkflowSettingsSaving(false)
-            setState((prev) => ({
-              ...prev,
-              workflowSettings: mergePendingWorkflowSettings(
-                data.workflowSettings ?? prev.workflowSettings,
-              ) as WorkflowSettings,
-              activeLanes: data.activeLanes ?? prev.activeLanes,
-              notifications: data.notifications ?? prev.notifications,
-            }))
-          })
-          .catch(() => {
-            markWorkflowSaveFailed(payload)
-            setWorkflowSettingsSaving(false)
-            setWorkflowSettingsSaveError('Could not save workflow settings. Will retry when you change a setting.')
-          })
-      }, 350)
     },
     [setState],
   )
+
+  const buildConfigPayload = useCallback(
+    () => ({
+      projectName,
+      workspaceDir,
+      skillsDir,
+      poModel,
+      devModel,
+      crModel,
+      qaModel,
+      poBackupModel,
+      devBackupModel,
+      crBackupModel,
+      qaBackupModel,
+      llmProvider: state.workflowSettings?.llmProvider,
+      llmProviderPreset: state.workflowSettings?.llmProviderPreset,
+      llmBaseUrl: ollamaUrl || state.workflowSettings?.llmBaseUrl,
+    }),
+    [
+      projectName,
+      workspaceDir,
+      skillsDir,
+      poModel,
+      devModel,
+      crModel,
+      qaModel,
+      poBackupModel,
+      devBackupModel,
+      crBackupModel,
+      qaBackupModel,
+      state.workflowSettings?.llmProvider,
+      state.workflowSettings?.llmProviderPreset,
+      state.workflowSettings?.llmBaseUrl,
+      ollamaUrl,
+    ],
+  )
+
+  const configDirty = useMemo(() => {
+    return (
+      projectName !== state.projectName ||
+      workspaceDir !== state.workspaceDir ||
+      skillsDir !== state.skillsDir ||
+      poModel !== (state.models?.po || '') ||
+      devModel !== (state.models?.dev || '') ||
+      crModel !== (state.models?.cr || '') ||
+      qaModel !== (state.models?.qa || '') ||
+      poBackupModel !== (state.backupModels?.po || '') ||
+      devBackupModel !== (state.backupModels?.dev || '') ||
+      crBackupModel !== (state.backupModels?.cr || '') ||
+      qaBackupModel !== (state.backupModels?.qa || '') ||
+      (ollamaUrl || '') !== String(state.workflowSettings?.llmBaseUrl || '')
+    )
+  }, [
+    projectName,
+    workspaceDir,
+    skillsDir,
+    poModel,
+    devModel,
+    crModel,
+    qaModel,
+    poBackupModel,
+    devBackupModel,
+    crBackupModel,
+    qaBackupModel,
+    ollamaUrl,
+    state.projectName,
+    state.workspaceDir,
+    state.skillsDir,
+    state.models,
+    state.backupModels,
+    state.workflowSettings?.llmBaseUrl,
+  ])
+
+  const unsavedChanges =
+    briefDirty || planDirty || configDirty || hasPendingWorkflowSettings()
+
+  const handleSaveAll = useCallback(async () => {
+    setWorkflowSettingsSaveError(null)
+    setWorkflowSettingsSaving(true)
+    try {
+      let data = await updateConfig(buildConfigPayload())
+      const llmPatch = {
+        llmProvider: data.workflowSettings?.llmProvider,
+        llmProviderPreset: data.workflowSettings?.llmProviderPreset,
+        llmBaseUrl: ollamaUrl || data.workflowSettings?.llmBaseUrl,
+      }
+      markWorkflowSaveSucceeded(data.workflowSettings, llmPatch)
+      const workflowPayload = snapshotPendingWorkflowPayloadForSave()
+      if (Object.keys(workflowPayload).length > 0) {
+        try {
+          data = await updateWorkflowSettings(workflowPayload)
+          markWorkflowSaveSucceeded(data.workflowSettings, workflowPayload)
+        } catch {
+          markWorkflowSaveFailed(workflowPayload)
+          setWorkflowSettingsSaveError('Could not save workflow settings.')
+          throw new Error('workflow')
+        }
+      } else {
+        markWorkflowSaveSucceeded(data.workflowSettings)
+      }
+      if (briefDirty || planDirty) {
+        const docs: { brief?: string; projectPlanOutline?: string } = {}
+        if (briefDirty) docs.brief = brief
+        if (planDirty) docs.projectPlanOutline = planOutline
+        data = await patchProjectDocuments(docs)
+        setBriefDirty(false)
+        setPlanDirty(false)
+      }
+      handleState(data)
+      applyStateFields(data, setters)
+    } catch (err) {
+      if (!(err instanceof Error && err.message === 'workflow')) {
+        setWorkflowSettingsSaveError(
+          err instanceof Error ? err.message : 'Could not save project.',
+        )
+      }
+    } finally {
+      setWorkflowSettingsSaving(false)
+    }
+  }, [
+    buildConfigPayload,
+    briefDirty,
+    planDirty,
+    brief,
+    planOutline,
+    ollamaUrl,
+    handleState,
+    setters,
+  ])
 
   const handleEscalateNeedsUserToPo = useCallback(() => {
     if (
@@ -1300,7 +1369,7 @@ export default function App() {
                   setActionError(null)
                   try {
                     const data = await runInProgressStep({
-                      brief,
+                      brief: state.brief,
                       ollama_url: llmCallUrl,
                       taskId: state.recovery?.taskId,
                     })
@@ -1450,6 +1519,9 @@ export default function App() {
         }
         isDark={isDark}
         onOpenSettings={() => setSettingsOpen(true)}
+        onSaveProject={() => void withLoading(handleSaveAll)}
+        unsavedChanges={unsavedChanges}
+        saveBusy={workflowSettingsSaving}
         onLoadProject={(id) =>
           void withLoading(async () => {
             clearCommittedLlmSettings()
@@ -1460,14 +1532,14 @@ export default function App() {
         onDeleteProject={handleDeleteProject}
         onPlan={() =>
           void withSprintBusy(async () =>
-            handleState(await triggerPlanOutline({ brief, ollama_url: llmCallUrl })),
+            handleState(await triggerPlanOutline({ brief: state.brief, ollama_url: llmCallUrl })),
           )
         }
         onGenerateBacklog={() =>
           void withSprintBusy(async () =>
             handleState(
               await triggerPlanBacklog({
-                brief,
+                brief: state.brief,
                 ollama_url: llmCallUrl,
                 outline: planOutline,
               }),
@@ -1486,7 +1558,7 @@ export default function App() {
             }
             try {
               const data = await planAndRun({
-                brief,
+                brief: state.brief,
                 ollama_url: llmCallUrl,
                 max_steps: state.workflowSettings?.maxSprintSteps ?? 20,
               })
@@ -1499,7 +1571,7 @@ export default function App() {
         }
         onStep={() =>
           void withSprintBusy(async () => {
-            const data = await triggerStep({ brief, ollama_url: llmCallUrl })
+            const data = await triggerStep({ brief: state.brief, ollama_url: llmCallUrl })
             handleState(data)
             applyStepOutcome(data)
             const names = Object.keys(data.files)
@@ -1516,7 +1588,7 @@ export default function App() {
           void withSprintBusy(async () => {
             setActionError(null)
             try {
-              const data = await runInProgressStep({ brief, ollama_url: llmCallUrl })
+              const data = await runInProgressStep({ brief: state.brief, ollama_url: llmCallUrl })
               handleState(data)
               applyStepOutcome(data)
               const names = Object.keys(data.files)
@@ -1621,20 +1693,8 @@ export default function App() {
             handleState(await loadProject(id))
           })
         }
-        onSaveConfig={(payload) =>
-          void withLoading(async () => {
-            const data = await updateConfig(payload)
-            if (payload.llmProvider || payload.llmProviderPreset || payload.llmBaseUrl) {
-              markWorkflowSaveSucceeded(data.workflowSettings, {
-                llmProvider: payload.llmProvider,
-                llmProviderPreset: payload.llmProviderPreset,
-                llmBaseUrl: payload.llmBaseUrl,
-              })
-            }
-            handleState(data)
-            applyStateFields(data, setters)
-          })
-        }
+        onSaveConfig={() => void withLoading(handleSaveAll)}
+        unsavedChanges={unsavedChanges}
         onOpenNewProject={() => setShowNewProject(true)}
         onOpenSkillModal={(agent) => void openSkillModal(agent)}
         onRemoveSkill={(agent, skill) =>
@@ -1676,6 +1736,7 @@ export default function App() {
 
         <BriefPanel
           brief={brief}
+          originalBrief={state.originalBrief}
           onBriefChange={handleBriefChange}
           open={briefOpen}
           onOpenChange={setBriefOpen}
@@ -1694,7 +1755,7 @@ export default function App() {
             void withLoading(async () =>
               handleState(
                 await triggerPlanBacklog({
-                  brief,
+                  brief: state.brief,
                   ollama_url: llmCallUrl,
                   outline: planOutline,
                 }),
@@ -2298,7 +2359,7 @@ export default function App() {
           void withSprintBusy(async () => {
             setActionError(null)
             try {
-              const data = await runInProgressStep({ brief, ollama_url: llmCallUrl, taskId })
+              const data = await runInProgressStep({ brief: state.brief, ollama_url: llmCallUrl, taskId })
               handleState(data)
               applyStepOutcome(data)
               const updated = Object.values(data.board)

@@ -84,8 +84,19 @@ def scaffold_dotnet(task: Optional[Dict[str, Any]] = None) -> Dict[str, Any]:
     elif any(w in blob for w in ("console", "cli tool")):
         template = "console"
     name = _safe_project_slug()
-    cmd = f"dotnet new {template} -n {name} --force"
+    cmd = f"dotnet new {template} -n {name} -o . --force"
     return {"method": "cli", "command": cmd, "template": template, **_run_allowlisted(cmd)}
+
+
+def scaffold_flutter() -> Dict[str, Any]:
+    from backend.services.scaffold_commands import dart_package_name
+
+    ws = state.WORKSPACE_DIR
+    if os.path.isfile(os.path.join(ws, "pubspec.yaml")):
+        return {"ok": False, "skipped": "pubspec_exists"}
+    name = dart_package_name(_safe_project_slug())
+    cmd = f"flutter create . --project-name {name} --overwrite"
+    return {"method": "cli", "command": cmd, **_run_allowlisted(cmd)}
 
 
 def maybe_auto_scaffold(
@@ -135,6 +146,8 @@ def maybe_auto_scaffold(
             result = scaffold_react_vite()
     elif stack == "dotnet":
         result = scaffold_dotnet(board_task or task)
+    elif stack == "flutter":
+        result = scaffold_flutter()
     elif stack == "python":
         result = scaffold_python_stubs()
     else:

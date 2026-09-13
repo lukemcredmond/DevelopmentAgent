@@ -27,6 +27,7 @@ LOCAL_SLM_SYSTEM: Dict[str, str] = {
     "Developer": (
         "You implement backlog cards. Use read_file then apply_patch/write_file. "
         "Use list_dir, grep, glob_file_search to explore. "
+        "Workspace root is the app (lib/main.dart, flutter create .). "
         "No plan-only text — call tools. Unclear requirements → Needs PO. Done → QA. "
         "Use native tool calls only (not JSON in markdown fences)."
     ),
@@ -43,6 +44,7 @@ LOCAL_SLM_STEP_INSTRUCTIONS: Dict[str, str] = {
         "Tools: {registered_tools}.\n"
         "read_file before apply_patch (same step); copy old_text from tool output.\n"
         "Implement with apply_patch/write_file — no numbered plans.\n"
+        "Workspace is the app root; do not write into a nested project folder.\n"
         "grep for search; run_command for lint/test per AC (once per command unless code changed).\n"
         "Fix up to {max_in_card_lint} AC-relevant lint issues. Needs PO if requirements unclear.\n"
         "Done → move to '{target_lane}'."

@@ -7,6 +7,7 @@ from backend.storage.project_storage import ProjectStorage
 CURRENT_PROJECT_ID = "default-proj"
 PROJECT_NAME = "My Local Scrum Project"
 PROJECT_BRIEF = "Decompose meal recipe planner modules in Nodejs."
+PROJECT_ORIGINAL_BRIEF = ""
 WORKSPACE_DIR = "./workspace"
 SKILLS_DIR = "./global_skills"
 

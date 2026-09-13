@@ -128,12 +128,16 @@ def build_command_result(
 
 def run_workspace_command(command: str, timeout: Optional[int] = None) -> CommandResult:
     """Run a shell command in the workspace and return structured results."""
-    effective = resolve_command_timeout(command, explicit=timeout)
+    from backend.services.scaffold_commands import rewrite_scaffold_command
+
+    executed, _note = rewrite_scaffold_command(command)
+    effective = resolve_command_timeout(executed, explicit=timeout)
     started = time.time()
-    result = run_command(command, timeout=effective)
+    result = run_command(executed, timeout=effective)
     duration_ms = int((time.time() - started) * 1000)
+    shown = str(result.get("command") or executed)
     return build_command_result(
-        command,
+        shown,
         exit_code=int(result.get("returncode", -1)),
         stdout=result.get("stdout") or "",
         stderr=result.get("stderr") or "",

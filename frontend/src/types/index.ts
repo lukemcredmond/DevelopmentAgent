@@ -1135,6 +1135,7 @@ export interface AppState {
   projectId: string
   projectName: string
   brief: string
+  originalBrief?: string
   projectPlanOutline?: string
   workspaceDir: string
   skillsDir: string

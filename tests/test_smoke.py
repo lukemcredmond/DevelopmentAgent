@@ -17,6 +17,7 @@ def test_app_starts_and_serves_state():
     assert "board" in data
     assert "workflowSettings" in data
     assert "briefChangelog" in data
+    assert "originalBrief" in data
     assert "notifications" in data
     assert "sprintReports" in data
     assert "currentSprintReport" in data

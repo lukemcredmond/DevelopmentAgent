@@ -190,6 +190,47 @@ def test_prompt_and_ui_markers():
     assert "requireWorkspaceStructure" in readme
 
 
+def test_flutter_nested_pubspec_warning(tmp_path):
+    from backend import state
+
+    initialize()
+    ws = str(tmp_path / "nested_fl")
+    os.makedirs(os.path.join(ws, "mealplanner"))
+    state.WORKSPACE_DIR = ws
+    _write(ws, "mealplanner/pubspec.yaml", "name: mealplanner\n")
+    audit = audit_workspace_structure(ws)
+    assert audit["stack"] == "flutter"
+    assert audit["critical"] is True
+    assert any("Nested Flutter project" in w for w in (audit.get("warnings") or []))
+
+
+def test_flutter_scaffold_uses_dot(tmp_path, monkeypatch):
+    from backend import state
+    from backend.services import workspace_scaffold as ws_mod
+
+    initialize()
+    reset_workflow_settings()
+    save_workflow_settings({"autoScaffoldOnStructureGap": True})
+    ws = str(tmp_path / "flscaff")
+    os.makedirs(os.path.join(ws, "lib"))
+    state.WORKSPACE_DIR = ws
+    state.PROJECT_NAME = "Meal Planner"
+    _write(ws, "lib/main.dart", "void main() {}\n")
+
+    captured = {}
+
+    def fake_run(command: str):
+        captured["cmd"] = command
+        return {"ok": True, "exit_code": 0, "summary": "ok", "output": "created"}
+
+    monkeypatch.setattr(ws_mod, "_run_allowlisted", fake_run)
+    task = init_new_task({"id": "T-FL", "title": "t", "description": "d"})
+    result = maybe_auto_scaffold(task)
+    assert "flutter create ." in captured.get("cmd", "")
+    assert "--project-name" in captured.get("cmd", "")
+    assert result.get("skipped") != "unsupported_stack:flutter"
+
+
 def test_format_audit_contains_header(tmp_path):
     from backend import state
 

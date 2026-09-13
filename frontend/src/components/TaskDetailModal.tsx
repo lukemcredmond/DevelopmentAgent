@@ -773,8 +773,8 @@ export default function TaskDetailModal({
               </p>
             )}
             <p className="text-[10px] text-cat-overlay mb-2">
-              Card fields generate <code className="text-cat-subtext">docs/tasks/…-spec.md</code> for
-              agents and review. Working notes stay in the Q&A doc.
+              Card fields generate <code className="text-cat-subtext">{'docs/tasks/{id}/README.md'}</code> for
+              agents and review. Working notes stay in that folder.
             </p>
             {(() => {
               const wt = (safeTask.workType ?? 'implementation').toLowerCase()
@@ -882,7 +882,7 @@ export default function TaskDetailModal({
                     onClick={() =>
                       onOpenFile(
                         safeTask.specMarkdownPath ||
-                          `docs/tasks/${safeTask.id}-spec.md`,
+                          `docs/tasks/${safeTask.id}/README.md`,
                       )
                     }
                   >
@@ -2139,7 +2139,7 @@ export default function TaskDetailModal({
             const resolutions = safeTask.userResolutions ?? []
             const qaPath =
               safeTask.qaMarkdownPath ||
-              (safeTask.id ? `docs/tasks/${safeTask.id}-qa.md` : '')
+              (safeTask.id ? `docs/tasks/${safeTask.id}/qa.md` : '')
             const recentTools = (safeTask.transcript ?? [])
               .filter((e) => e.toolName)
               .slice(-8)

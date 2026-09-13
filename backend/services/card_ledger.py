@@ -1,7 +1,8 @@
-"""Per-card filesystem ledger (GVS5H-style bounded plan/notes/tasks).
+"""Per-card filesystem ledger (bounded plan/notes next-work).
 
-State lives under ``{workspace}/.allhands/cards/{task_id}/`` so each Dev visit
-can start from a small named working set instead of dumping the full transcript.
+State lives under ``{workspace}/docs/tasks/{task_id}/`` (same folder as the spec)
+so AllHands, Cursor, and other tools share one markdown working set.
+Legacy ``.allhands/cards/{task_id}/`` is read and copied on first access.
 """
 
 from __future__ import annotations
@@ -11,17 +12,23 @@ import re
 from pathlib import Path
 from typing import Any, Dict, List, Optional
 
+from backend.services.task_docs import (
+    TASKS_PREFIX,
+    legacy_ledger_dir,
+    migrate_legacy_task_docs,
+    safe_task_id,
+)
 from backend.services.workflow_settings import get_workflow_settings
 
-LEDGER_REL = Path(".allhands") / "cards"
+LEDGER_REL = Path(TASKS_PREFIX)
 MAX_PLAN_CHARS = 4000
 MAX_NOTES_CHARS = 8000
 MAX_ORACLE_CHARS = 2000
 MAX_TASKS = 12
 MAX_TASK_MD_CHARS = 6000
 
-_TASK_ID_SAFE = re.compile(r"[^A-Za-z0-9._-]+")
 _WS_RE = re.compile(r"\s+")
+_PLAN_ITEM_RE = re.compile(r"^[-*]\s+\[([^\]]+)\]\s+(.*\S)")
 
 LENGTH_CUTOFF_REASONS = frozenset(
     {"length", "max_tokens", "max_length", "max_output_tokens"}
@@ -81,11 +88,6 @@ def _workspace_root() -> Optional[Path]:
     return Path(raw).expanduser()
 
 
-def safe_task_id(task_id: str) -> str:
-    cleaned = _TASK_ID_SAFE.sub("_", str(task_id or "").strip())[:80]
-    return cleaned or "unknown"
-
-
 def ledger_dir(task_id: str) -> Optional[Path]:
     root = _workspace_root()
     if root is None:
@@ -114,13 +116,20 @@ def _append(path: Path, content: str) -> None:
 
 
 def read_file(task_id: str, name: str) -> str:
+    migrate_legacy_task_docs(task_id)
     folder = ledger_dir(task_id)
-    if folder is None:
-        return ""
-    return _read(folder / name)
+    if folder is not None:
+        text = _read(folder / name)
+        if text:
+            return text
+    old = legacy_ledger_dir(task_id)
+    if old is not None:
+        return _read(old / name)
+    return ""
 
 
 def write_file(task_id: str, name: str, content: str, *, cap: int = MAX_NOTES_CHARS) -> None:
+    migrate_legacy_task_docs(task_id)
     folder = ledger_dir(task_id)
     if folder is None:
         return
@@ -128,6 +137,7 @@ def write_file(task_id: str, name: str, content: str, *, cap: int = MAX_NOTES_CH
 
 
 def append_notes(task_id: str, heading: str, body: str) -> None:
+    migrate_legacy_task_docs(task_id)
     folder = ledger_dir(task_id)
     if folder is None:
         return
@@ -204,9 +214,8 @@ def oracle_blocks_done(task: Dict[str, Any], ws: Optional[Dict[str, Any]] = None
     return False, ""
 
 
-def load_tasks(task_id: str) -> List[Dict[str, Any]]:
-    raw = read_file(task_id, "tasks.json").strip()
-    if not raw:
+def _tasks_from_json(raw: str) -> List[Dict[str, Any]]:
+    if not raw.strip():
         return []
     try:
         data = json.loads(raw)
@@ -232,11 +241,75 @@ def load_tasks(task_id: str) -> List[Dict[str, Any]]:
     return out
 
 
+def _parse_plan_tasks(text: str) -> List[Dict[str, Any]]:
+    out: List[Dict[str, Any]] = []
+    for line in (text or "").splitlines():
+        match = _PLAN_ITEM_RE.match(line.strip())
+        if not match:
+            continue
+        mark = match.group(1).strip().lower()
+        rest = match.group(2).strip()
+        desc, result = rest, ""
+        if " — " in rest:
+            desc, result = rest.split(" — ", 1)
+        elif " -- " in rest:
+            desc, result = rest.split(" -- ", 1)
+        desc = desc.strip()
+        if not desc:
+            continue
+        status = "done" if mark in {"x", "done"} else "pending"
+        out.append(
+            {
+                "id": len(out) + 1,
+                "desc": desc[:400],
+                "status": status,
+                "result": result.strip()[:400],
+            }
+        )
+        if len(out) >= MAX_TASKS:
+            break
+    return out
+
+
+def _format_plan_tasks(tasks: List[Dict[str, Any]]) -> str:
+    lines: List[str] = []
+    for item in tasks[:MAX_TASKS]:
+        mark = "x" if str(item.get("status") or "") == "done" else " "
+        extra = f" — {item['result']}" if item.get("result") else ""
+        desc = str(item.get("desc") or "").strip()
+        if not desc:
+            continue
+        lines.append(f"- [{mark}] {desc}{extra}")
+    return ("\n".join(lines) + "\n") if lines else ""
+
+
+def load_tasks(task_id: str) -> List[Dict[str, Any]]:
+    parsed = _parse_plan_tasks(read_file(task_id, "plan.md"))
+    if parsed:
+        return parsed
+    from_json = _tasks_from_json(read_file(task_id, "tasks.json"))
+    if from_json:
+        return from_json
+    old = legacy_ledger_dir(task_id)
+    if old is not None:
+        return _tasks_from_json(_read(old / "tasks.json"))
+    return []
+
+
 def save_tasks(task_id: str, tasks: List[Dict[str, Any]]) -> None:
-    folder = ledger_dir(task_id)
-    if folder is None:
-        return
-    _write(folder / "tasks.json", json.dumps(tasks[:MAX_TASKS], indent=2))
+    existing = read_file(task_id, "plan.md")
+    prose = [
+        line
+        for line in existing.splitlines()
+        if line.strip() and not _PLAN_ITEM_RE.match(line.strip())
+    ]
+    checklists = _format_plan_tasks(tasks).rstrip()
+    parts = []
+    if prose:
+        parts.append("\n".join(prose).strip())
+    if checklists:
+        parts.append(checklists)
+    write_file(task_id, "plan.md", ("\n\n".join(parts) + "\n") if parts else "", cap=MAX_PLAN_CHARS)
 
 
 def seed_ledger_from_task(task: Dict[str, Any]) -> None:
@@ -254,8 +327,6 @@ def seed_ledger_from_task(task: Dict[str, Any]) -> None:
         if acs:
             body += "\n## Acceptance criteria\n" + "\n".join(f"- {c}" for c in acs) + "\n"
         write_file(tid, "task.md", body, cap=MAX_TASK_MD_CHARS)
-    if not read_file(tid, "plan.md").strip() and (desc or title):
-        write_plan(tid, (desc or title)[:MAX_PLAN_CHARS])
     if not load_tasks(tid) and acs:
         save_tasks(
             tid,
@@ -264,6 +335,8 @@ def seed_ledger_from_task(task: Dict[str, Any]) -> None:
                 for i, ac in enumerate(acs[:MAX_TASKS])
             ],
         )
+    if not read_file(tid, "plan.md").strip() and (desc or title):
+        write_plan(tid, (desc or title)[:MAX_PLAN_CHARS])
 
 
 def format_ledger_for_prompt(task: Dict[str, Any], *, max_chars: int = 6000) -> str:

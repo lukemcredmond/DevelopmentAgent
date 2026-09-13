@@ -91,6 +91,10 @@ class ProjectStorage:
                 conn.execute("ALTER TABLE projects ADD COLUMN plan_outline TEXT")
             except sqlite3.OperationalError:
                 pass
+            try:
+                conn.execute("ALTER TABLE projects ADD COLUMN original_brief TEXT")
+            except sqlite3.OperationalError:
+                pass
             conn.execute(
                 """
                 CREATE TABLE IF NOT EXISTS settings (
@@ -205,6 +209,7 @@ class ProjectStorage:
         plan_outline: str = "",
         persist_board: bool = True,
         force_board: bool = False,
+        original_brief: Optional[str] = None,
     ) -> bool:
         existing = self.load_project(proj_id) if proj_id else None
         board_to_write = board_state
@@ -237,6 +242,11 @@ class ProjectStorage:
                         )
                     except Exception:
                         pass
+        resolved_original = (
+            original_brief
+            if original_brief is not None
+            else str((existing or {}).get("original_brief") or "")
+        )
         with self._connect() as conn:
             conn.execute(
                 """
@@ -245,10 +255,10 @@ class ProjectStorage:
                     po_skills, dev_skills, cr_skills, qa_skills,
                     po_model, dev_model, cr_model, qa_model,
                     po_backup_model, dev_backup_model, cr_backup_model, qa_backup_model,
-                    plan_outline,
+                    plan_outline, original_brief,
                     updated_at
                 )
-                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, CURRENT_TIMESTAMP)
+                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, CURRENT_TIMESTAMP)
                 ON CONFLICT(id) DO UPDATE SET
                     name=excluded.name,
                     brief=excluded.brief,
@@ -268,6 +278,7 @@ class ProjectStorage:
                     cr_backup_model=excluded.cr_backup_model,
                     qa_backup_model=excluded.qa_backup_model,
                     plan_outline=excluded.plan_outline,
+                    original_brief=excluded.original_brief,
                     updated_at=CURRENT_TIMESTAMP
                 """,
                 (
@@ -290,6 +301,7 @@ class ProjectStorage:
                     cr_backup_model or "",
                     qa_backup_model or "",
                     plan_outline or "",
+                    resolved_original,
                 ),
             )
             conn.commit()
@@ -341,6 +353,9 @@ class ProjectStorage:
                     else "",
                     "plan_outline": row["plan_outline"]
                     if "plan_outline" in row.keys() and row["plan_outline"]
+                    else "",
+                    "original_brief": row["original_brief"]
+                    if "original_brief" in row.keys() and row["original_brief"]
                     else "",
                 }
         return None

@@ -63,6 +63,189 @@ def _path_tool_failure_message(tool: str, safe_path: str, base_message: str) -> 
     return base_message
 
 
+_KEEP_FIRST_SEGMENTS = frozenset(
+    {
+        "lib",
+        "src",
+        "test",
+        "tests",
+        "android",
+        "ios",
+        "macos",
+        "linux",
+        "windows",
+        "web",
+        "packages",
+        "apps",
+        "integration_test",
+        "docs",
+        "assets",
+        "bin",
+        "node_modules",
+        "build",
+    }
+)
+_NESTED_APP_SECOND = frozenset(
+    {
+        "lib",
+        "src",
+        "test",
+        "tests",
+        "android",
+        "ios",
+        "macos",
+        "linux",
+        "windows",
+        "web",
+        "pubspec.yaml",
+        "package.json",
+        "analysis_options.yaml",
+    }
+)
+_NESTED_STACK_SKIP_DIRS = _KEEP_FIRST_SEGMENTS | frozenset({".git", ".dart_tool", "dist", "obj"})
+
+
+def _project_name_slugs() -> List[str]:
+    raw = str(getattr(state, "PROJECT_NAME", None) or "").strip()
+    if not raw:
+        return []
+    lower = raw.lower()
+    unders = re.sub(r"[^a-z0-9]+", "_", lower).strip("_")
+    compact = re.sub(r"[^a-z0-9]+", "", lower)
+    slugs: List[str] = []
+    for item in (unders, compact, raw, raw.replace(" ", "")):
+        if item and item not in slugs:
+            slugs.append(item)
+    return slugs
+
+
+def _root_pubspec_package_name(workspace_root: str) -> Optional[str]:
+    pubspec = os.path.join(workspace_root, "pubspec.yaml")
+    if not os.path.isfile(pubspec):
+        return None
+    try:
+        with open(pubspec, "r", encoding="utf-8") as handle:
+            for line in handle:
+                stripped = line.strip()
+                if stripped.startswith("name:"):
+                    return stripped.split(":", 1)[1].strip().strip("'\"")
+    except OSError:
+        return None
+    return None
+
+
+def _prefixes_to_strip(workspace_root: str) -> List[str]:
+    prefixes: List[str] = []
+    basename = os.path.basename(workspace_root.rstrip(os.sep)).replace("\\", "/")
+    if basename:
+        prefixes.append(basename)
+    prefixes.extend(_project_name_slugs())
+    pub_name = _root_pubspec_package_name(workspace_root)
+    if pub_name:
+        prefixes.append(pub_name)
+    seen = set()
+    unique: List[str] = []
+    for item in prefixes:
+        key = item.replace("\\", "/")
+        if not key or key in seen:
+            continue
+        seen.add(key)
+        unique.append(key)
+    return unique
+
+
+def _looks_like_nested_app_path(parts: List[str]) -> bool:
+    if len(parts) < 2:
+        return False
+    return parts[1] in _NESTED_APP_SECOND
+
+
+def _is_nested_duplicate_stack(workspace_root: str, first: str) -> bool:
+    if not first or first in _NESTED_STACK_SKIP_DIRS:
+        return False
+    child = os.path.join(workspace_root, first)
+    if not os.path.isdir(child):
+        return False
+    try:
+        names = os.listdir(child)
+    except OSError:
+        names = []
+    has_child_marker = (
+        os.path.isfile(os.path.join(child, "pubspec.yaml"))
+        or os.path.isfile(os.path.join(child, "package.json"))
+        or any(
+            name.endswith(".csproj")
+            for name in names
+            if os.path.isfile(os.path.join(child, name))
+        )
+    )
+    if not has_child_marker:
+        return False
+    root_has_tree = (
+        os.path.isfile(os.path.join(workspace_root, "pubspec.yaml"))
+        or os.path.isfile(os.path.join(workspace_root, "package.json"))
+        or os.path.isdir(os.path.join(workspace_root, "lib"))
+        or os.path.isdir(os.path.join(workspace_root, "src"))
+    )
+    return root_has_tree
+
+
+def _strip_leading_segment(normalized: str, segment: str) -> Optional[str]:
+    if not segment:
+        return None
+    if normalized == segment:
+        return "."
+    prefix = segment + "/"
+    if normalized.startswith(prefix):
+        rest = normalized[len(prefix) :]
+        return rest or "."
+    return None
+
+
+def canonical_path_note(raw: str, safe: str) -> Optional[str]:
+    """Agent-facing note when a nested/absolute path was rewritten to workspace-relative."""
+    raw_s = str(raw or "").strip().strip('"').strip("'")
+    if not raw_s or not safe:
+        return None
+    workspace_root = os.path.realpath(state.WORKSPACE_DIR)
+    candidate = os.path.normpath(raw_s).replace("\\", "/")
+    while candidate.startswith("./"):
+        candidate = candidate[2:]
+    if os.path.isabs(raw_s) or (len(raw_s) > 1 and raw_s[1] == ":"):
+        try:
+            abs_path = os.path.realpath(raw_s)
+            if abs_path == workspace_root or abs_path.startswith(workspace_root + os.sep):
+                candidate = os.path.relpath(abs_path, workspace_root).replace("\\", "/")
+        except OSError:
+            return None
+    if candidate in (safe, ".", ""):
+        return None
+    if safe == ".":
+        prefix = candidate.rstrip("/")
+        if prefix:
+            return (
+                f"using workspace-relative path '{safe}' "
+                f"(dropped nested prefix '{prefix}/')."
+            )
+        return None
+    suffix = "/" + safe
+    if candidate.endswith(suffix):
+        prefix = candidate[: -len(safe)].rstrip("/")
+        if prefix:
+            return (
+                f"using workspace-relative path '{safe}' "
+                f"(dropped nested prefix '{prefix}/')."
+            )
+    return None
+
+
+def _append_canonical_note(message: str, raw: str, safe: str) -> str:
+    note = canonical_path_note(raw, safe)
+    if not note:
+        return message
+    return f"{message}\n{note}"
+
+
 def resolve_workspace_path(path: str) -> str:
     """Returns a safe relative path within the workspace root."""
     if not path or not str(path).strip():
@@ -95,14 +278,28 @@ def resolve_workspace_path(path: str) -> str:
                 f"Use relative paths like lib/main.dart (workspace: {state.WORKSPACE_DIR})"
             ) from None
 
-    workspace_basename = os.path.basename(workspace_root.rstrip(os.sep)).replace("\\", "/")
-    if workspace_basename and (
-        normalized.startswith(workspace_basename + "/")
-        or normalized == workspace_basename
-    ):
-        stripped = normalized[len(workspace_basename) :].lstrip("/")
-        if stripped:
-            normalized = stripped
+    if normalized in (".", ""):
+        assert_plausible_workspace_path(".", raw)
+        return "."
+
+    parts = [p for p in normalized.split("/") if p and p != "."]
+    if parts and parts[0] not in _KEEP_FIRST_SEGMENTS:
+        stripped = False
+        for prefix in _prefixes_to_strip(workspace_root):
+            if parts[0] != prefix:
+                continue
+            if len(parts) == 1 or _looks_like_nested_app_path(parts) or prefix == os.path.basename(
+                workspace_root.rstrip(os.sep)
+            ).replace("\\", "/"):
+                trial = _strip_leading_segment(normalized, prefix)
+                if trial is not None:
+                    normalized = trial
+                    stripped = True
+                    break
+        if not stripped and _is_nested_duplicate_stack(workspace_root, parts[0]):
+            trial = _strip_leading_segment(normalized, parts[0])
+            if trial is not None:
+                normalized = trial
 
     if normalized.startswith("..") or os.path.isabs(normalized):
         raise ValueError(
@@ -303,7 +500,7 @@ def write_workspace_file(path: str, content: str, author: Optional[str] = None) 
         msg = f"Successfully saved file physically at: '{phys_path}'"
         if format_note:
             msg += f"\n{format_note}"
-        return msg
+        return _append_canonical_note(msg, path, safe_path)
     except Exception as e:
         msg = f"Error: physical write failed for '{safe_path}': {e}"
         add_system_log(state.ACTIVE_SPRINT_AGENT or "Developer", "error", msg)
@@ -679,7 +876,7 @@ def list_workspace_dir(path: str = ".", limit: int = 200) -> str:
     except OSError as exc:
         return f"Error listing '{safe_path}': {exc}"
     header = f"Directory: {safe_path or '.'} ({len(entries)} entries)"
-    return header + "\n" + "\n".join(entries)
+    return _append_canonical_note(header + "\n" + "\n".join(entries), path or ".", safe_path)
 
 
 def _workspace_has_dotnet_project(ws: str) -> bool:
@@ -1311,7 +1508,7 @@ def delete_workspace_file(path: str) -> str:
             f"Deleted file '{safe_path}'",
         )
     save_current_project_state()
-    return f"Deleted '{safe_path}'."
+    return _append_canonical_note(f"Deleted '{safe_path}'.", path, safe_path)
 
 
 def expand_chat_mentions(message: str, max_file_chars: int = 4000, max_folder_files: int = 5) -> str:

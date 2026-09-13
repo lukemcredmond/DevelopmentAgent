@@ -28,6 +28,13 @@ def load_project_into_state(project_id: str) -> bool:
     state.CURRENT_PROJECT_ID = proj["id"]
     state.PROJECT_NAME = proj["name"]
     state.PROJECT_BRIEF = proj.get("brief") or ""
+    original = str(proj.get("original_brief") or "").strip()
+    if not original and (state.PROJECT_BRIEF or "").strip():
+        from backend.services.brief_service import is_placeholder_brief
+
+        if not is_placeholder_brief(state.PROJECT_BRIEF):
+            original = state.PROJECT_BRIEF
+    state.PROJECT_ORIGINAL_BRIEF = original
     state.PROJECT_PLAN_OUTLINE = proj.get("plan_outline") or ""
     state.WORKSPACE_DIR = proj["workspace_dir"]
     state.SHARED_BOARD = normalize_board_lanes(proj["board_state"])

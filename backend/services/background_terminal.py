@@ -11,6 +11,7 @@ from typing import Any, Dict, List, Optional
 
 from backend import state
 from backend.services.command_policy import validate_command
+from backend.services.scaffold_commands import rewrite_scaffold_command
 from backend.services.events import publish_event
 from backend.services.logs import add_system_log
 
@@ -93,6 +94,8 @@ def start_background_command(command: str) -> tuple[bool, str, Optional[str]]:
     ok, reason = validate_command(command)
     if not ok:
         return False, reason, None
+
+    command, _note = rewrite_scaffold_command(command)
 
     session_id = uuid.uuid4().hex[:12]
     started = datetime.now().strftime("%Y-%m-%d %H:%M:%S")

@@ -48,6 +48,7 @@ interface SettingsSlideOverProps {
   onWorkflowSettingsChange: (partial: Partial<WorkflowSettings>) => void
   workflowSettingsSaveError?: string | null
   workflowSettingsSaving?: boolean
+  unsavedChanges?: boolean
   onExportProject: () => void
   onImportProject: (file: File) => void
   onOpenWorkspace?: () => void
@@ -110,6 +111,7 @@ export default function SettingsSlideOver({
   onWorkflowSettingsChange,
   workflowSettingsSaveError = null,
   workflowSettingsSaving = false,
+  unsavedChanges = false,
   onExportProject,
   onImportProject,
   onOpenWorkspace,
@@ -284,6 +286,34 @@ export default function SettingsSlideOver({
         <div className="flex-1 min-w-0 overflow-y-auto p-4 space-y-4">
           {tab === 'project' && (
             <div className="space-y-4">
+              <button
+                type="button"
+                onClick={() =>
+                  onSaveConfig({
+                    projectName,
+                    workspaceDir,
+                    skillsDir,
+                    poModel,
+                    devModel,
+                    crModel,
+                    qaModel,
+                    poBackupModel,
+                    devBackupModel,
+                    crBackupModel,
+                    qaBackupModel,
+                    llmProvider: state.workflowSettings?.llmProvider,
+                    llmProviderPreset: state.workflowSettings?.llmProviderPreset,
+                    llmBaseUrl: ollamaUrl || state.workflowSettings?.llmBaseUrl,
+                  })
+                }
+                className={`w-full font-bold py-2.5 rounded-lg text-sm transition-colors ${
+                  unsavedChanges
+                    ? 'bg-amber-500 hover:bg-amber-400 text-cat-crust'
+                    : 'bg-indigo-600 hover:bg-indigo-500 text-white'
+                }`}
+              >
+                {workflowSettingsSaving ? 'Saving…' : unsavedChanges ? 'Save (unsaved changes)' : 'Save'}
+              </button>
               <div className="space-y-3">
                 <div className="flex items-center justify-between">
                   <h3 className="text-xs font-bold uppercase tracking-wider text-cat-subtext">
@@ -415,7 +445,7 @@ export default function SettingsSlideOver({
                   }
                   className="w-full bg-indigo-600/40 hover:bg-indigo-600/80 border border-indigo-500/30 text-white font-semibold py-2 rounded text-[11px] transition-colors mt-2"
                 >
-                  Save Custom Configurations
+                  Save
                 </button>
               </div>
               <BoardRecoveryPanel
@@ -795,8 +825,7 @@ export default function SettingsSlideOver({
                 onPickModelForRole={(role, model) => assignModel(role, model)}
               />
               <p className="text-[10px] text-cat-overlay leading-relaxed">
-                Model changes apply after{' '}
-                <strong className="text-cat-subtext">Save Custom Configurations</strong>.
+                Model changes apply after <strong className="text-cat-subtext">Save</strong>.
               </p>
               <button
                 type="button"
@@ -820,7 +849,7 @@ export default function SettingsSlideOver({
                 }
                 className="w-full bg-indigo-600/40 hover:bg-indigo-600/80 border border-indigo-500/30 text-white font-semibold py-2 rounded text-[11px] transition-colors"
               >
-                Save Custom Configurations
+                Save
               </button>
             </div>
           )}

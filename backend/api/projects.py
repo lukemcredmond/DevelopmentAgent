@@ -35,6 +35,7 @@ def create_new_project(payload: CreateProjectPayload):
         state.CURRENT_PROJECT_ID = str(uuid.uuid4())
         state.PROJECT_NAME = payload.projectName
         state.PROJECT_BRIEF = ""
+        state.PROJECT_ORIGINAL_BRIEF = ""
         state.WORKSPACE_DIR = payload.workspaceDir
 
         state.SHARED_BOARD = {k: list(v) for k, v in DEFAULT_BOARD.items()}
@@ -165,6 +166,7 @@ async def import_project_zip(file: UploadFile = File(...)):
                     meta.get("cr_backup_model", ""),
                     meta.get("qa_backup_model", ""),
                     plan_outline=meta.get("plan_outline", meta.get("projectPlanOutline", "")),
+                    original_brief=meta.get("original_brief", meta.get("originalBrief", "")),
                 )
                 if "logs.json" in zf.namelist():
                     logs = json.loads(zf.read("logs.json"))
@@ -395,7 +397,7 @@ def restore_board_from_recovery(project_id: str, payload: dict):
 
 @router.post("/api/projects/{project_id}/board-recovery/import-specs")
 def import_board_from_task_specs(project_id: str, payload: dict | None = None):
-    """Rebuild missing (or overwrite) cards from workspace docs/tasks/*-spec.md."""
+    """Rebuild missing (or overwrite) cards from docs/tasks/{id}/README.md (and leftover *-spec.md)."""
     from backend.agents.task_context import dedupe_board_tasks, normalize_board_tasks
     from backend.services.board_lanes import normalize_board_lanes
     from backend.services.board_service import publish_board_update

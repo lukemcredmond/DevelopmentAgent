@@ -86,7 +86,7 @@ export default function BoardRecoveryPanel({ projectId, onRestored }: BoardRecov
       <p className="text-[10px] text-cat-overlay leading-relaxed">
         If cards disappeared, restore from an automatic snapshot or a legacy database copy.
         Deleted projects still listed under snapshots can be re-inserted from this panel.
-        You can also rebuild cards from <code className="text-cat-subtext">docs/tasks/*-spec.md</code>.
+        You can also rebuild cards from <code className="text-cat-subtext">{'docs/tasks/{id}/README.md'}</code> (legacy <code className="text-cat-subtext">*-spec.md</code> still works).
         Skills and model assignments are kept. Live board:{' '}
         <span className="text-cat-subtext font-mono">
           {liveCount == null ? '—' : `${liveCount} card(s)`}

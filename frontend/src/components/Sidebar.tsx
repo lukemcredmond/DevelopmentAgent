@@ -32,6 +32,9 @@ interface SidebarProps {
   onToggleAutoSprint: (enabled: boolean) => void
   onCancelSprint: () => void
   onSessionRefreshDue?: () => void
+  onSaveProject?: () => void
+  unsavedChanges?: boolean
+  saveBusy?: boolean
 }
 
 export default memo(function Sidebar({
@@ -65,6 +68,9 @@ export default memo(function Sidebar({
   onToggleAutoSprint,
   onCancelSprint,
   onSessionRefreshDue,
+  onSaveProject,
+  unsavedChanges = false,
+  saveBusy = false,
 }: SidebarProps) {
   const boardEmpty =
     (state.board.Backlog?.length ?? 0) === 0 &&
@@ -164,6 +170,21 @@ export default memo(function Sidebar({
           <i className="fa-solid fa-gear text-indigo-400" />
           Settings
         </button>
+        {onSaveProject && (
+          <button
+            type="button"
+            onClick={onSaveProject}
+            disabled={saveBusy}
+            className={`w-full font-bold py-2.5 rounded-lg text-sm transition-colors flex items-center justify-center gap-2 ${
+              unsavedChanges
+                ? 'bg-amber-500 hover:bg-amber-400 text-cat-crust'
+                : 'bg-indigo-600 hover:bg-indigo-500 text-white'
+            } disabled:opacity-50`}
+          >
+            <i className={`fa-solid ${saveBusy ? 'fa-spinner animate-spin' : 'fa-floppy-disk'}`} />
+            {saveBusy ? 'Saving…' : unsavedChanges ? 'Save (unsaved changes)' : 'Save'}
+          </button>
+        )}
 
         <div className="bg-cat-surface0 p-2.5 rounded-xl border border-cat-surface1 space-y-2">
           <div className="flex items-center justify-between">

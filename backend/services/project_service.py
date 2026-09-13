@@ -26,6 +26,7 @@ def save_current_project_state(
         }
         files = dict(state.VIRTUAL_FILESYSTEM or {})
         plan_outline = getattr(state, "PROJECT_PLAN_OUTLINE", "") or ""
+        original_brief = getattr(state, "PROJECT_ORIGINAL_BRIEF", "") or ""
         po_skills = list(agent_po.assigned_skills)
         dev_skills = list(agent_dev.assigned_skills)
         cr_skills = list(agent_cr.assigned_skills)
@@ -57,13 +58,8 @@ def save_current_project_state(
         plan_outline=plan_outline,
         persist_board=persist_board,
         force_board=force_board,
+        original_brief=original_brief,
     )
-    sidecar_board = board
-    if not wrote_board:
-        stored = state.storage.load_project(pid) or {}
-        stored_board = stored.get("board_state")
-        if isinstance(stored_board, dict):
-            sidecar_board = stored_board
     try:
         from backend.services.project_file import build_project_file_payload, write_project_file
         from backend.services.workflow_settings import get_workflow_settings
@@ -74,8 +70,8 @@ def save_current_project_state(
                 project_id=pid,
                 name=name,
                 brief=brief,
+                original_brief=original_brief,
                 workspace_dir=workspace,
-                board_state=sidecar_board,
                 po_skills=po_skills,
                 dev_skills=dev_skills,
                 cr_skills=cr_skills,

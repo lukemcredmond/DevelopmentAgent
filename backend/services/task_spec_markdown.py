@@ -7,15 +7,39 @@ import re
 from typing import Any, Dict, List, Optional
 
 from backend.agents.task_context import coerce_task_text, normalize_acceptance_criteria
+from backend.services.task_docs import (
+    TASKS_PREFIX,
+    legacy_spec_markdown_path,
+    migrate_legacy_task_docs,
+    task_spec_markdown_path,
+)
 from backend.services.task_qa_markdown import humanize_field
 
-SPEC_PATH_PREFIX = "docs/tasks"
+SPEC_PATH_PREFIX = TASKS_PREFIX
 SPEC_MARKDOWN_MAX_CHARS = 12000
 
+__all__ = [
+    "SPEC_PATH_PREFIX",
+    "build_task_spec_markdown",
+    "ensure_task_spec_for_work",
+    "read_task_spec_markdown_for_prompt",
+    "sync_task_spec_docs",
+    "task_spec_markdown_path",
+    "update_task_spec_markdown",
+]
 
-def task_spec_markdown_path(task_id: str) -> str:
-    safe = "".join(c if c.isalnum() or c in "-_" else "_" for c in str(task_id))[:80]
-    return f"{SPEC_PATH_PREFIX}/{safe}-spec.md"
+
+def _spec_path_candidates(task_id: str, stored: str = "") -> List[str]:
+    seen: List[str] = []
+    for path in (
+        stored,
+        task_spec_markdown_path(task_id),
+        legacy_spec_markdown_path(task_id),
+    ):
+        cleaned = str(path or "").replace("\\", "/").strip()
+        if cleaned and cleaned not in seen:
+            seen.append(cleaned)
+    return seen
 
 
 def _scope_section(value: Any) -> List[str]:
@@ -169,12 +193,14 @@ def build_task_spec_markdown(task: Dict[str, Any]) -> str:
 
 
 def read_task_spec_markdown_for_prompt(task: Dict[str, Any], *, max_chars: int = 5000) -> str:
-    from backend import state
-
-    path = str(task.get("specMarkdownPath") or "").strip()
-    if not path:
-        path = task_spec_markdown_path(str(task.get("id") or ""))
-    content = state.VIRTUAL_FILESYSTEM.get(path)
+    tid = str(task.get("id") or "")
+    if tid:
+        migrate_legacy_task_docs(tid)
+    content = None
+    for path in _spec_path_candidates(tid, str(task.get("specMarkdownPath") or "")):
+        content = _read_spec_file_content(path)
+        if content:
+            break
     if not content:
         content = build_task_spec_markdown(task)
     content = (content or "").strip()
@@ -203,6 +229,7 @@ def update_task_spec_markdown(task_id: str) -> Optional[str]:
         task["specVersion"] = int(task.get("specVersion") or 0) + 1
         task["_specContentHash"] = content_hash
 
+    migrate_legacy_task_docs(str(task.get("id") or task_id))
     path = task_spec_markdown_path(str(task.get("id") or task_id))
     try:
         from backend.workspace.files import resolve_workspace_path
@@ -277,18 +304,17 @@ def ensure_task_spec_for_work(task_id: Optional[str]) -> Optional[str]:
         return None
     normalize_task(task)
 
-    path = str(task.get("specMarkdownPath") or "").strip()
-    default_path = task_spec_markdown_path(str(task.get("id") or task_id))
+    migrate_legacy_task_docs(str(task.get("id") or task_id))
+    stored = str(task.get("specMarkdownPath") or "").strip()
+    default_path = task_spec_markdown_path(str(task.get("id") or task_id)).replace("\\", "/")
+    legacy_path = legacy_spec_markdown_path(str(task.get("id") or task_id)).replace("\\", "/")
 
-    if path:
+    for path in _spec_path_candidates(str(task.get("id") or task_id), stored):
         content = _read_spec_file_content(path)
         if content:
-            return path.replace("\\", "/")
-
-    content = _read_spec_file_content(default_path)
-    if content:
-        task["specMarkdownPath"] = default_path.replace("\\", "/")
-        return task["specMarkdownPath"]
+            canonical = default_path if path.replace("\\", "/") == legacy_path else path.replace("\\", "/")
+            task["specMarkdownPath"] = canonical
+            return canonical
 
     # Build and persist from card fields
     try:
