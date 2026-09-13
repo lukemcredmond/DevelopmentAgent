@@ -4,6 +4,7 @@ import os
 import shutil
 import uuid
 import zipfile
+from pathlib import Path
 
 from fastapi import APIRouter, HTTPException, UploadFile, File
 
@@ -26,6 +27,8 @@ router = APIRouter()
 
 @router.post("/api/projects/create")
 def create_new_project(payload: CreateProjectPayload):
+    from backend.services.recent_workspaces import touch_recent
+
     with state.STATE_LOCK:
         if state.CURRENT_PROJECT_ID and state.storage.load_project(state.CURRENT_PROJECT_ID):
             try:
@@ -47,6 +50,11 @@ def create_new_project(payload: CreateProjectPayload):
 
         save_current_project_state()
         state.storage.set_active_project_id(state.CURRENT_PROJECT_ID)
+        touch_recent(
+            project_id=state.CURRENT_PROJECT_ID,
+            name=state.PROJECT_NAME,
+            workspace_dir=state.WORKSPACE_DIR,
+        )
 
         add_system_log("System", "success", f"Created and loaded new project: '{state.PROJECT_NAME}' at {state.WORKSPACE_DIR}")
     return build_state_response()
@@ -54,50 +62,62 @@ def create_new_project(payload: CreateProjectPayload):
 
 @router.post("/api/projects/load/{project_id}")
 def load_existing_project(project_id: str):
+    from backend.services.recent_workspaces import find_recent
+    from backend.services.workspace_open import open_workspace_folder
+
+    recent = find_recent(project_id)
+    workspace = str((recent or {}).get("path") or "").strip()
+    if workspace and Path(workspace).expanduser().is_dir():
+        try:
+            open_workspace_folder(workspace)
+        except Exception as exc:
+            raise HTTPException(status_code=400, detail=str(exc)) from exc
+        add_system_log("System", "success", f"Successfully loaded project workspace: '{state.PROJECT_NAME}'")
+        return build_state_response()
     with state.STATE_LOCK:
         if not load_project_into_state(project_id):
             raise HTTPException(status_code=404, detail="Workspace project not located.")
+        from backend.services.recent_workspaces import touch_recent
+
+        touch_recent(
+            project_id=state.CURRENT_PROJECT_ID,
+            name=state.PROJECT_NAME,
+            workspace_dir=state.WORKSPACE_DIR,
+        )
         add_system_log("System", "success", f"Successfully loaded project workspace: '{state.PROJECT_NAME}'")
     return build_state_response()
 
 
 @router.delete("/api/projects/{project_id}")
 def delete_project(project_id: str):
+    from backend.services.recent_workspaces import projects_list_for_client, remove_recent
+
     with state.STATE_LOCK:
         if project_id == state.CURRENT_PROJECT_ID:
             raise HTTPException(status_code=400, detail="Cannot delete the active project.")
-        if len(state.storage.list_projects()) <= 1:
-            raise HTTPException(status_code=400, detail="Cannot delete the last remaining project.")
-        if not state.storage.delete_project(project_id):
+        removed = remove_recent(project_id)
+        if not removed and not state.storage.delete_project(project_id):
             raise HTTPException(status_code=404, detail="Project not found.")
-        add_system_log("System", "info", f"Deleted project {project_id}")
-    return {"ok": True, "projectsList": state.storage.list_projects()}
+        add_system_log("System", "info", f"Removed project {project_id} from recents")
+    return {"ok": True, "projectsList": projects_list_for_client()}
 
 
 @router.post("/api/projects/open-workspace")
 def open_workspace_project(payload: OpenWorkspacePayload):
-    from backend.services.project_file import PROJECT_FILE_NAME, restore_project_from_file
+    from backend.services.workspace_open import open_workspace_folder
 
     workspace = (payload.workspaceDir or "").strip()
     if not workspace:
         raise HTTPException(status_code=400, detail="workspaceDir required")
     try:
-        project_id = restore_project_from_file(workspace)
-    except FileNotFoundError:
-        raise HTTPException(
-            status_code=404,
-            detail=f"No {PROJECT_FILE_NAME} found in {workspace}",
-        ) from None
+        open_workspace_folder(workspace)
     except Exception as exc:
         raise HTTPException(status_code=400, detail=str(exc)) from exc
-    with state.STATE_LOCK:
-        if not load_project_into_state(project_id):
-            raise HTTPException(status_code=500, detail="Failed to load restored project")
-        add_system_log(
-            "System",
-            "success",
-            f"Opened workspace project '{state.PROJECT_NAME}' from {PROJECT_FILE_NAME}",
-        )
+    add_system_log(
+        "System",
+        "success",
+        f"Opened workspace project '{state.PROJECT_NAME}' from folder {workspace}",
+    )
     return build_state_response()
 
 
@@ -189,7 +209,7 @@ def patch_project_documents(payload: ProjectDocumentsPayload):
             brief=payload.brief,
             project_plan_outline=payload.projectPlanOutline,
         )
-    return build_state_response()
+    return build_state_response(include_files=False)
 
 
 @router.post("/api/config")
@@ -247,7 +267,7 @@ def update_config(payload: ConfigPayload):
             f"global skills: '{state.SKILLS_DIR}'. Models: PO({agent_po.model}), Dev({agent_dev.model}), "
             f"Reviewer({agent_cr.model}), QA({agent_qa.model})",
         )
-    return build_state_response()
+    return build_state_response(include_files=False)
 
 
 @router.post("/api/reset")

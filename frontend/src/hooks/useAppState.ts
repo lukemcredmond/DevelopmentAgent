@@ -717,6 +717,11 @@ export function useAppState() {
           workflowSettings: mergePendingWorkflowSettings(
             trimmed.workflowSettings ?? prev.workflowSettings,
           ),
+          files:
+            !trimmed.files || Object.keys(trimmed.files).length === 0
+              ? prev.files
+              : trimmed.files,
+          filePaths: trimmed.filePaths?.length ? trimmed.filePaths : prev.filePaths,
         }
       })
       if (trimmed.projectPlanOutline != null) {

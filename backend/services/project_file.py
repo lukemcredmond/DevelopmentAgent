@@ -7,13 +7,23 @@ be re-opened from disk.
 from __future__ import annotations
 
 import json
+import logging
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any, Dict, Optional
 
+logger = logging.getLogger(__name__)
+
 PROJECT_FILE_NAME = "allhands.project.json"
 PROJECT_FILE_FORMAT = "allhands-project"
 PROJECT_FILE_VERSION = 2
+
+DEFAULT_ROLE_MODELS = {
+    "po": "llama3:8b",
+    "dev": "qwen2.5-coder:14b",
+    "cr": "qwen2.5-coder:7b",
+    "qa": "qwen2.5-coder:7b",
+}
 
 _SECRET_KEYS = (
     "llmApiKey",
@@ -56,6 +66,7 @@ def build_project_file_payload(
     plan_outline: str = "",
     original_brief: str = "",
     workflow_settings: Optional[Dict[str, Any]] = None,
+    skills_dir: str = "",
 ) -> Dict[str, Any]:
     return {
         "format": PROJECT_FILE_FORMAT,
@@ -65,6 +76,7 @@ def build_project_file_payload(
         "brief": brief or "",
         "original_brief": original_brief or "",
         "workspace_dir": workspace_dir,
+        "skills_dir": skills_dir or "",
         "po_skills": list(po_skills or []),
         "dev_skills": list(dev_skills or []),
         "cr_skills": list(cr_skills or []),
@@ -100,6 +112,7 @@ def write_project_file(workspace_dir: str, payload: Dict[str, Any]) -> Optional[
         path.write_text(serialized, encoding="utf-8")
         return path
     except OSError:
+        logger.exception("Failed to write %s in %s", PROJECT_FILE_NAME, workspace_dir)
         return None
 
 
@@ -143,8 +156,55 @@ def write_current_project_file() -> Optional[Path]:
         qa_backup_model=backup.get("qa") or "",
         plan_outline=getattr(state, "PROJECT_PLAN_OUTLINE", "") or "",
         workflow_settings=get_workflow_settings(state.CURRENT_PROJECT_ID),
+        skills_dir=str(getattr(state, "SKILLS_DIR", "") or ""),
     )
     return write_project_file(state.WORKSPACE_DIR, payload)
+
+
+def role_models_for_new_project() -> Dict[str, str]:
+    """Defaults for a brand-new sidecar — do not inherit another workspace's models."""
+    return dict(DEFAULT_ROLE_MODELS)
+
+
+def sync_project_sidecar(project_id: str | None = None) -> Optional[Path]:
+    """Rewrite allhands.project.json for the given project from SQLite + live state."""
+    from backend import state
+    from backend.services.workflow_settings import get_workflow_settings
+
+    pid = project_id or state.CURRENT_PROJECT_ID
+    if not pid:
+        return None
+    if pid == state.CURRENT_PROJECT_ID:
+        return write_current_project_file()
+    proj = state.storage.load_project(pid)
+    if not proj:
+        return None
+    skills = state.storage.get_setting("skills_dir") or getattr(state, "SKILLS_DIR", "") or ""
+    return write_project_file(
+        str(proj.get("workspace_dir") or ""),
+        build_project_file_payload(
+            project_id=pid,
+            name=str(proj.get("name") or ""),
+            brief=str(proj.get("brief") or ""),
+            original_brief=str(proj.get("original_brief") or ""),
+            workspace_dir=str(proj.get("workspace_dir") or ""),
+            po_skills=list(proj.get("po_skills") or []),
+            dev_skills=list(proj.get("dev_skills") or []),
+            cr_skills=list(proj.get("cr_skills") or []),
+            qa_skills=list(proj.get("qa_skills") or []),
+            po_model=str(proj.get("po_model") or DEFAULT_ROLE_MODELS["po"]),
+            dev_model=str(proj.get("dev_model") or DEFAULT_ROLE_MODELS["dev"]),
+            cr_model=str(proj.get("cr_model") or DEFAULT_ROLE_MODELS["cr"]),
+            qa_model=str(proj.get("qa_model") or DEFAULT_ROLE_MODELS["qa"]),
+            po_backup_model=str(proj.get("po_backup_model") or ""),
+            dev_backup_model=str(proj.get("dev_backup_model") or ""),
+            cr_backup_model=str(proj.get("cr_backup_model") or ""),
+            qa_backup_model=str(proj.get("qa_backup_model") or ""),
+            plan_outline=str(proj.get("plan_outline") or ""),
+            workflow_settings=get_workflow_settings(pid),
+            skills_dir=str(skills),
+        ),
+    )
 
 
 def restore_project_from_file(workspace_dir: str) -> str:
@@ -157,14 +217,24 @@ def restore_project_from_file(workspace_dir: str) -> str:
         raise FileNotFoundError(f"No {PROJECT_FILE_NAME} in {workspace_dir}")
     pid = str(data["id"])
     existing = state.storage.load_project(pid)
-    if existing and isinstance(existing.get("board_state"), dict):
-        board = existing["board_state"]
+    from backend.storage.project_storage import count_board_tasks
+
+    sidecar_board = data.get("board_state")
+    existing_board = existing.get("board_state") if existing else None
+    existing_count = count_board_tasks(existing_board)
+    sidecar_count = count_board_tasks(sidecar_board)
+    if existing_count > 0:
+        board = existing_board
         persist_board = False
         force = False
-    else:
-        board = dict(DEFAULT_BOARD)
+    elif sidecar_count > 0 and isinstance(sidecar_board, dict):
+        board = sidecar_board
         persist_board = True
         force = True
+    else:
+        board = existing_board if isinstance(existing_board, dict) else dict(DEFAULT_BOARD)
+        persist_board = existing_board is None
+        force = existing_board is None
     files = (existing or {}).get("files") or dict(DEFAULT_VIRTUAL_FS)
     incoming_brief = str(data.get("brief") or "")
     incoming_original = str(data.get("original_brief") or "") or incoming_brief
@@ -192,9 +262,13 @@ def restore_project_from_file(workspace_dir: str) -> str:
         force_board=force,
         original_brief=incoming_original,
     )
+    skills_dir = str(data.get("skills_dir") or "").strip()
+    if skills_dir:
+        state.SKILLS_DIR = skills_dir
+        state.storage.set_setting("skills_dir", skills_dir)
     settings = data.get("workflow_settings")
     if isinstance(settings, dict) and settings:
         from backend.services.workflow_settings import save_workflow_settings
 
-        save_workflow_settings(settings, project_id=pid)
+        save_workflow_settings(settings, project_id=pid, sync_sidecar=False)
     return pid

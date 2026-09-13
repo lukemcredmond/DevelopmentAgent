@@ -1,4 +1,5 @@
 import os
+from pathlib import Path
 
 from backend import state
 from backend.agents.registry import agent_cr, agent_dev, agent_po, agent_qa
@@ -101,25 +102,63 @@ def load_project_into_state(project_id: str) -> bool:
 def initialize() -> None:
     add_system_log("System", "info", "All Hands Multi-Agent Backend framework live.")
 
+    from backend.services.recent_workspaces import seed_recents_from_storage, load_recents, find_recent, touch_recent
+    from backend.services.workspace_open import open_workspace_folder
+
     saved_skills = state.storage.get_setting("skills_dir")
     if saved_skills:
         state.SKILLS_DIR = saved_skills
 
-    os.makedirs(state.WORKSPACE_DIR, exist_ok=True)
+    if state.WORKSPACE_DIR:
+        os.makedirs(state.WORKSPACE_DIR, exist_ok=True)
     os.makedirs(state.SKILLS_DIR, exist_ok=True)
     scan_skills_directory()
 
-    saved_projects = state.storage.list_projects()
+    seed_recents_from_storage()
+    recents = load_recents()
     active_id = state.storage.get_active_project_id()
+    loaded = False
 
-    if active_id and load_project_into_state(active_id):
-        add_system_log("System", "info", f"Loaded active workspace project: '{state.PROJECT_NAME}'")
-    elif saved_projects:
-        load_project_into_state(saved_projects[0]["id"])
+    if active_id:
+        recent = find_recent(active_id)
+        workspace = str((recent or {}).get("path") or "").strip()
+        if workspace and Path(workspace).expanduser().is_dir():
+            try:
+                open_workspace_folder(workspace)
+                loaded = True
+            except Exception:
+                loaded = False
+        if not loaded:
+            loaded = load_project_into_state(active_id)
+            if loaded:
+                touch_recent(
+                    project_id=state.CURRENT_PROJECT_ID,
+                    name=state.PROJECT_NAME,
+                    workspace_dir=state.WORKSPACE_DIR,
+                )
+    if not loaded and recents:
+        workspace = str(recents[0].get("path") or "").strip()
+        if workspace and Path(workspace).expanduser().is_dir():
+            try:
+                open_workspace_folder(workspace)
+                loaded = True
+            except Exception:
+                loaded = False
+    if not loaded:
+        saved_projects = state.storage.list_projects()
+        if saved_projects:
+            loaded = load_project_into_state(saved_projects[0]["id"])
+            if loaded:
+                touch_recent(
+                    project_id=state.CURRENT_PROJECT_ID,
+                    name=state.PROJECT_NAME,
+                    workspace_dir=state.WORKSPACE_DIR,
+                )
+
+    if loaded:
         add_system_log("System", "info", f"Loaded workspace project: '{state.PROJECT_NAME}'")
     else:
-        save_current_project_state()
-        state.storage.set_active_project_id(state.CURRENT_PROJECT_ID)
+        add_system_log("System", "info", "No recent workspace — open a folder to start.")
 
     from backend.agents.registry import configure_agent_tools, configure_agent_prompts
 

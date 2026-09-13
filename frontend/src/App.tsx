@@ -110,6 +110,7 @@ import {
   snapshotPendingWorkflowPayloadForSave,
   clearCommittedLlmSettings,
   hasPendingWorkflowSettings,
+  queuedWorkflowPatchPending,
 } from './workflowSettingsPending'
 
 type BottomTab =
@@ -233,6 +234,8 @@ export default function App() {
   const [brief, setBrief] = useState('')
   const [briefDirty, setBriefDirty] = useState(false)
   const [planDirty, setPlanDirty] = useState(false)
+  const briefDirtyRef = useRef(false)
+  const planDirtyRef = useRef(false)
 
   useEffect(() => {
     const saved = String(state.workflowSettings?.llmBaseUrl || '').trim()
@@ -241,12 +244,14 @@ export default function App() {
   const llmCallUrl = String(state.workflowSettings?.llmBaseUrl || ollamaUrl || '').trim()
 
   const handleBriefChange = useCallback((v: string) => {
+    briefDirtyRef.current = true
     setBriefDirty(true)
     setBrief(v)
   }, [])
 
   const handlePlanOutlineChange = useCallback(
     (v: string) => {
+      planDirtyRef.current = true
       setPlanDirty(true)
       setPlanOutline(v)
     },
@@ -254,6 +259,8 @@ export default function App() {
   )
 
   useEffect(() => {
+    briefDirtyRef.current = false
+    planDirtyRef.current = false
     setBriefDirty(false)
     setPlanDirty(false)
   }, [state.projectId])
@@ -493,7 +500,10 @@ export default function App() {
     (data: AppState) => {
       applyState(data)
       if (workspaceOpen || selectedFile) {
-        setLocalFiles(data.files)
+        const incoming = data.files
+        if (incoming && Object.keys(incoming).length > 0) {
+          setLocalFiles(incoming)
+        }
       }
       setFileTreeKey((k) => k + 1)
     },
@@ -1106,56 +1116,71 @@ export default function App() {
 
   const handleSaveAll = useCallback(async () => {
     setWorkflowSettingsSaveError(null)
+    setActionError(null)
     setWorkflowSettingsSaving(true)
     try {
-      let data = await updateConfig(buildConfigPayload())
-      const llmPatch = {
-        llmProvider: data.workflowSettings?.llmProvider,
-        llmProviderPreset: data.workflowSettings?.llmProviderPreset,
-        llmBaseUrl: ollamaUrl || data.workflowSettings?.llmBaseUrl,
+      let data: AppState | null = null
+      if (configDirty) {
+        data = await updateConfig(buildConfigPayload())
+        const llmPatch = {
+          llmProvider: data.workflowSettings?.llmProvider,
+          llmProviderPreset: data.workflowSettings?.llmProviderPreset,
+          llmBaseUrl: ollamaUrl || data.workflowSettings?.llmBaseUrl,
+        }
+        markWorkflowSaveSucceeded(data.workflowSettings, llmPatch)
       }
-      markWorkflowSaveSucceeded(data.workflowSettings, llmPatch)
-      const workflowPayload = snapshotPendingWorkflowPayloadForSave()
-      if (Object.keys(workflowPayload).length > 0) {
+      if (queuedWorkflowPatchPending()) {
+        const workflowPayload = snapshotPendingWorkflowPayloadForSave()
         try {
           data = await updateWorkflowSettings(workflowPayload)
           markWorkflowSaveSucceeded(data.workflowSettings, workflowPayload)
         } catch {
           markWorkflowSaveFailed(workflowPayload)
           setWorkflowSettingsSaveError('Could not save workflow settings.')
+          setActionError('Could not save workflow settings.')
           throw new Error('workflow')
         }
-      } else {
-        markWorkflowSaveSucceeded(data.workflowSettings)
       }
-      if (briefDirty || planDirty) {
-        const docs: { brief?: string; projectPlanOutline?: string } = {}
-        if (briefDirty) docs.brief = brief
-        if (planDirty) docs.projectPlanOutline = planOutline
+      const docs: { brief?: string; projectPlanOutline?: string } = {}
+      if (briefDirtyRef.current || brief !== (state.brief ?? '')) {
+        docs.brief = brief
+      }
+      if (planDirtyRef.current || planOutline !== (state.projectPlanOutline ?? '')) {
+        docs.projectPlanOutline = planOutline
+      }
+      if (Object.keys(docs).length > 0) {
         data = await patchProjectDocuments(docs)
+        briefDirtyRef.current = false
+        planDirtyRef.current = false
         setBriefDirty(false)
         setPlanDirty(false)
       }
-      handleState(data)
-      applyStateFields(data, setters)
+      if (data) {
+        handleState(data)
+        applyStateFields(data, setters)
+        if (docs.brief != null) setBrief(docs.brief)
+        if (docs.projectPlanOutline != null) setPlanOutline(docs.projectPlanOutline)
+      }
     } catch (err) {
       if (!(err instanceof Error && err.message === 'workflow')) {
-        setWorkflowSettingsSaveError(
-          err instanceof Error ? err.message : 'Could not save project.',
-        )
+        const message = err instanceof Error ? err.message : 'Could not save project.'
+        setWorkflowSettingsSaveError(message)
+        setActionError(message)
       }
     } finally {
       setWorkflowSettingsSaving(false)
     }
   }, [
     buildConfigPayload,
-    briefDirty,
-    planDirty,
+    configDirty,
     brief,
     planOutline,
     ollamaUrl,
     handleState,
     setters,
+    state.brief,
+    state.projectPlanOutline,
+    setPlanOutline,
   ])
 
   const handleEscalateNeedsUserToPo = useCallback(() => {
@@ -1519,7 +1544,7 @@ export default function App() {
         }
         isDark={isDark}
         onOpenSettings={() => setSettingsOpen(true)}
-        onSaveProject={() => void withLoading(handleSaveAll)}
+        onSaveProject={() => void handleSaveAll()}
         unsavedChanges={unsavedChanges}
         saveBusy={workflowSettingsSaving}
         onLoadProject={(id) =>
@@ -1529,6 +1554,13 @@ export default function App() {
           })
         }
         onOpenNewProject={() => setShowNewProject(true)}
+        onOpenWorkspace={() =>
+          void withLoading(async () => {
+            const data = await openWorkspaceProject(workspaceDir || state.workspaceDir)
+            handleState(data)
+            applyStateFields(data, setters)
+          })
+        }
         onDeleteProject={handleDeleteProject}
         onPlan={() =>
           void withSprintBusy(async () =>
@@ -1693,7 +1725,7 @@ export default function App() {
             handleState(await loadProject(id))
           })
         }
-        onSaveConfig={() => void withLoading(handleSaveAll)}
+        onSaveConfig={() => void handleSaveAll()}
         unsavedChanges={unsavedChanges}
         onOpenNewProject={() => setShowNewProject(true)}
         onOpenSkillModal={(agent) => void openSkillModal(agent)}
@@ -2467,6 +2499,7 @@ export default function App() {
             ...new Set([...prev, ...(state.assignedSkills[skillModalAgent] ?? [])]),
           ])
         }
+        recents={state.projectsList}
         onClose={() => setSkillModalAgent(null)}
       />
 

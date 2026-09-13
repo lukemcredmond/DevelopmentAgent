@@ -35,6 +35,7 @@ interface SidebarProps {
   onSaveProject?: () => void
   unsavedChanges?: boolean
   saveBusy?: boolean
+  onOpenWorkspace?: () => void
 }
 
 export default memo(function Sidebar({
@@ -71,6 +72,7 @@ export default memo(function Sidebar({
   onSaveProject,
   unsavedChanges = false,
   saveBusy = false,
+  onOpenWorkspace,
 }: SidebarProps) {
   const boardEmpty =
     (state.board.Backlog?.length ?? 0) === 0 &&
@@ -215,7 +217,8 @@ export default memo(function Sidebar({
           <select
             value={state.projectId}
             onChange={(e) => onLoadProject(e.target.value)}
-            className="w-full bg-cat-base border border-cat-surface1 rounded-lg p-1.5 text-[11px] text-white focus:outline-none focus:border-indigo-500"
+            disabled={state.projectsList.length === 0}
+            className="w-full bg-cat-base border border-cat-surface1 rounded-lg p-1.5 text-[11px] text-white focus:outline-none focus:border-indigo-500 disabled:opacity-50"
           >
             {state.projectsList.map((p) => (
               <option key={p.id} value={p.id}>
@@ -223,9 +226,19 @@ export default memo(function Sidebar({
               </option>
             ))}
             {state.projectsList.length === 0 && (
-              <option value="default-proj">Default Project Workspace</option>
+              <option value="">No recent folders</option>
             )}
           </select>
+          {onOpenWorkspace && (
+            <button
+              type="button"
+              onClick={onOpenWorkspace}
+              className="w-full text-[10px] bg-cat-base border border-cat-surface1 rounded-lg py-1.5 text-indigo-300 hover:text-white"
+              title="Open a folder that contains allhands.project.json"
+            >
+              Open folder
+            </button>
+          )}
         </div>
 
         <div className="bg-cat-surface0 p-2.5 rounded-xl border border-cat-surface1 space-y-2">

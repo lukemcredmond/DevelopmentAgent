@@ -331,7 +331,8 @@ export default function SettingsSlideOver({
                 <select
                   value={state.projectId}
                   onChange={(e) => onLoadProject(e.target.value)}
-                  className="w-full bg-cat-base border border-cat-surface1 rounded-lg p-2 text-xs text-white focus:outline-none focus:border-indigo-500"
+                  disabled={state.projectsList.length === 0}
+                  className="w-full bg-cat-base border border-cat-surface1 rounded-lg p-2 text-xs text-white focus:outline-none focus:border-indigo-500 disabled:opacity-50"
                 >
                   {state.projectsList.map((p) => (
                     <option key={p.id} value={p.id}>
@@ -339,7 +340,7 @@ export default function SettingsSlideOver({
                     </option>
                   ))}
                   {state.projectsList.length === 0 && (
-                    <option value="default-proj">Default Project Workspace</option>
+                    <option value="">No recent folders — Open folder below</option>
                   )}
                 </select>
                 <div className="flex flex-wrap gap-1.5">

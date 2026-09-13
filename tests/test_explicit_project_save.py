@@ -11,3 +11,6 @@ def test_app_has_no_document_or_workflow_autosave():
     assert "handleSaveAll" in app
     assert "patchProjectDocuments" in app
     assert "1500" not in app or "documentsSaveTimer" not in app
+    assert "queuedWorkflowPatchPending" in app
+    projects = (root / "backend" / "api" / "projects.py").read_text(encoding="utf-8")
+    assert projects.count("build_state_response(include_files=False)") >= 2

@@ -93,6 +93,15 @@ export default function AgentToolsPanel({
     onSettingsChange({ agentTools: next })
   }
 
+  const selectAllForRole = (role: string) => {
+    onSettingsChange({
+      agentTools: {
+        ...agentTools,
+        [role]: [...builtinNames, ...customNames].sort(),
+      },
+    })
+  }
+
   return (
     <div className="space-y-3 border-t border-cat-surface1 pt-3 mt-2">
       <div>
@@ -136,21 +145,30 @@ export default function AgentToolsPanel({
         ))}
       </div>
 
-      <div className="flex items-center justify-between">
+      <div className="flex items-center justify-between gap-2">
         <span className="text-[10px] text-cat-overlay">
           {usingOverride(activeRole)
             ? 'Custom allowlist (saved)'
             : 'Using built-in defaults (click a tool to start an allowlist)'}
         </span>
-        {usingOverride(activeRole) && (
+        <div className="flex items-center gap-2 shrink-0">
           <button
             type="button"
-            className="text-[10px] text-amber-300 hover:underline"
-            onClick={() => resetRoleToDefault(activeRole)}
+            className="text-[10px] text-indigo-300 hover:underline"
+            onClick={() => selectAllForRole(activeRole)}
           >
-            Reset to defaults
+            Select all
           </button>
-        )}
+          {usingOverride(activeRole) && (
+            <button
+              type="button"
+              className="text-[10px] text-amber-300 hover:underline"
+              onClick={() => resetRoleToDefault(activeRole)}
+            >
+              Reset to defaults
+            </button>
+          )}
+        </div>
       </div>
 
       <div className="max-h-40 overflow-y-auto grid grid-cols-2 gap-x-2 gap-y-0.5 bg-cat-base/50 rounded border border-cat-surface1 p-2">

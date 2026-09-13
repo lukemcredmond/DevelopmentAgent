@@ -6,7 +6,13 @@ from fastapi import APIRouter, HTTPException
 from backend import state
 from backend.agents.registry import AGENT_LABELS, AGENT_MAP
 from backend.api.helpers import build_state_response
-from backend.api.schemas import BulkSkillPayload, CombineSkillsPayload, SaveBuiltSkillPayload, SkillPayload
+from backend.api.schemas import (
+    BulkSkillPayload,
+    CombineSkillsPayload,
+    ImportSkillsPayload,
+    SaveBuiltSkillPayload,
+    SkillPayload,
+)
 from backend.services.logs import add_system_log
 from backend.services.project_service import save_current_project_state
 from backend.services.skills import normalize_skill_rel, resolve_skill_read_path, workspace_skill_path
@@ -14,12 +20,12 @@ from backend.services.skills import normalize_skill_rel, resolve_skill_read_path
 router = APIRouter()
 
 
-def _assign_one_skill(agent_key: str, skill_file: str) -> bool:
+def _assign_one_skill(agent_key: str, skill_file: str, *, source_path: str | None = None) -> bool:
     """Copy skill to workspace and assign to agent. Returns True if newly assigned."""
     agent = AGENT_MAP[agent_key]
     skill_rel = normalize_skill_rel(skill_file)
-    src_path = resolve_skill_read_path(skill_rel)
-    if not src_path:
+    src_path = source_path or resolve_skill_read_path(skill_rel)
+    if not src_path or not os.path.isfile(src_path):
         raise HTTPException(
             status_code=404,
             detail=f"Skill file '{skill_rel}' not found in workspace or global skills dir.",
@@ -185,5 +191,66 @@ def remove_skill_from_agent(payload: SkillPayload):
             payload.agent.upper() + " Agent",
             "info",
             f"Removed skill '{skill_rel}' from active agent system context.",
+        )
+    return build_state_response()
+
+
+@router.post("/api/skills/import")
+def import_skills_from_workspace(payload: ImportSkillsPayload):
+    from pathlib import Path
+
+    from backend.services.project_file import read_project_file
+
+    source = Path(payload.sourceWorkspaceDir or "").expanduser()
+    if not source.is_dir():
+        raise HTTPException(status_code=400, detail="sourceWorkspaceDir is not a folder")
+    data = read_project_file(str(source)) or {}
+    agent_keys = payload.agents or ["po", "dev", "cr", "qa"]
+    json_lists = {
+        "po": [normalize_skill_rel(x) for x in (data.get("po_skills") or []) if str(x).strip()],
+        "dev": [normalize_skill_rel(x) for x in (data.get("dev_skills") or []) if str(x).strip()],
+        "cr": [normalize_skill_rel(x) for x in (data.get("cr_skills") or []) if str(x).strip()],
+        "qa": [normalize_skill_rel(x) for x in (data.get("qa_skills") or []) if str(x).strip()],
+    }
+    skills_root = source / "skills"
+    listed = {rel for files in json_lists.values() for rel in files}
+    extras: list[str] = []
+    if skills_root.is_dir():
+        for path in skills_root.rglob("*"):
+            if not path.is_file() or path.suffix.lower() not in {".md", ".txt"}:
+                continue
+            rel = normalize_skill_rel(str(path.relative_to(skills_root)))
+            if rel not in listed:
+                extras.append(rel)
+    copied = 0
+    assigned = 0
+    with state.STATE_LOCK:
+        for key in agent_keys:
+            if key not in AGENT_MAP:
+                continue
+            for rel in json_lists.get(key, []):
+                src = skills_root / rel.replace("/", os.sep)
+                if not src.is_file():
+                    continue
+                if _assign_one_skill(key, rel, source_path=str(src)):
+                    assigned += 1
+                copied += 1
+        for rel in extras:
+            src = skills_root / rel.replace("/", os.sep)
+            if not src.is_file():
+                continue
+            dest = workspace_skill_path(rel)
+            os.makedirs(os.path.dirname(dest), exist_ok=True)
+            try:
+                if os.path.realpath(src) != os.path.realpath(dest):
+                    shutil.copy2(src, dest)
+                    copied += 1
+            except OSError:
+                continue
+        save_current_project_state(persist_board=False)
+        add_system_log(
+            "System",
+            "success",
+            f"Imported skills from {source}: {assigned} assignment(s), {copied} file(s).",
         )
     return build_state_response()

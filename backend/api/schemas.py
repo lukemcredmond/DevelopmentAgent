@@ -47,6 +47,11 @@ class BulkSkillPayload(BaseModel):
     skillFiles: List[str] = Field(default_factory=list)
 
 
+class ImportSkillsPayload(BaseModel):
+    sourceWorkspaceDir: str
+    agents: Optional[List[str]] = None
+
+
 class CombineSkillsPayload(BaseModel):
     agent: str
     skillFiles: List[str] = Field(default_factory=list)

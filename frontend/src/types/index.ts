@@ -1104,6 +1104,8 @@ export interface SkillSuggestionsResponse {
 export interface ProjectSummary {
   id: string
   name: string
+  workspaceDir?: string
+  updated_at?: string
 }
 
 export interface ProjectToolEvidence {

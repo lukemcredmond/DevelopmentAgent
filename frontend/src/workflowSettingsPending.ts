@@ -127,6 +127,11 @@ export function requeuePendingWorkflowPayload(payload: Partial<WorkflowSettings>
   workflowSaveInFlight = false
 }
 
+export function queuedWorkflowPatchPending(): boolean {
+  return Object.keys(pendingPatch).length > 0
+}
+
+
 export function hasPendingWorkflowSettings(): boolean {
   return (
     saveTimerActive ||

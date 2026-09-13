@@ -1,6 +1,9 @@
 from typing import Optional
+import logging
 
 from backend import state
+
+logger = logging.getLogger(__name__)
 
 
 def save_current_project_state(
@@ -86,10 +89,11 @@ def save_current_project_state(
                 qa_backup_model=backup.get("qa") or "",
                 plan_outline=plan_outline,
                 workflow_settings=get_workflow_settings(pid),
+                skills_dir=str(getattr(state, "SKILLS_DIR", "") or ""),
             ),
         )
     except Exception:
-        pass
+        logger.exception("Failed to write allhands.project.json for project %s", pid)
     if not persist_board or not wrote_board:
         return
     try:

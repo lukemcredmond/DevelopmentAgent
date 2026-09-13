@@ -17,6 +17,12 @@ from backend.workspace.files import (
 )
 
 
+def _projects_list() -> list:
+    from backend.services.recent_workspaces import projects_list_for_client
+
+    return projects_list_for_client()
+
+
 def build_state_response(*, include_files: bool = True) -> dict:
     normalize_board_tasks()
     from backend.services.board_lanes import FEATURES_LANE
@@ -67,7 +73,7 @@ def build_state_response(*, include_files: bool = True) -> dict:
             "cr": (getattr(state, "BACKUP_MODELS", {}) or {}).get("cr") or "",
             "qa": (getattr(state, "BACKUP_MODELS", {}) or {}).get("qa") or "",
         },
-        "projectsList": state.storage.list_projects(),
+        "projectsList": _projects_list(),
         "sprintCancel": state.SPRINT_CANCEL,
         "sprintCancelIntent": getattr(state, "SPRINT_CANCEL_INTENT", None),
         "workflowSettings": sanitize_workflow_settings_for_client(ws),

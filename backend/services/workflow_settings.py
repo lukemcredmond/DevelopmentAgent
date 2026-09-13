@@ -1,10 +1,13 @@
 """Per-project workflow settings and sprint summary persistence."""
 
 import json
+import logging
 from typing import Any, Dict, List
 
 from backend import state
 from backend.config import MAX_SPRINT_STEPS
+
+logger = logging.getLogger(__name__)
 
 DEFAULT_WORKFLOW_SETTINGS: Dict[str, Any] = {
     "requireBacklogApproval": False,
@@ -293,7 +296,21 @@ def get_workflow_settings(project_id: str | None = None) -> Dict[str, Any]:
         return dict(DEFAULT_WORKFLOW_SETTINGS)
 
 
-def save_workflow_settings(settings: Dict[str, Any], project_id: str | None = None) -> Dict[str, Any]:
+def _sync_project_sidecar(project_id: str) -> None:
+    try:
+        from backend.services.project_file import sync_project_sidecar
+
+        sync_project_sidecar(project_id)
+    except Exception:
+        logger.exception("Failed to sync allhands.project.json after workflow settings save")
+
+
+def save_workflow_settings(
+    settings: Dict[str, Any],
+    project_id: str | None = None,
+    *,
+    sync_sidecar: bool = True,
+) -> Dict[str, Any]:
     from backend.services.prompt_defaults import validate_agent_prompts_patch
 
     pid = project_id or state.CURRENT_PROJECT_ID
@@ -337,6 +354,8 @@ def save_workflow_settings(settings: Dict[str, Any], project_id: str | None = No
 
     current = normalize_llm_provider_settings(current)
     state.storage.set_setting(_settings_key(pid), json.dumps(current))
+    if sync_sidecar:
+        _sync_project_sidecar(pid)
     return current
 
 
@@ -345,6 +364,7 @@ def reset_workflow_settings(project_id: str | None = None) -> Dict[str, Any]:
     pid = project_id or state.CURRENT_PROJECT_ID
     defaults = dict(DEFAULT_WORKFLOW_SETTINGS)
     state.storage.set_setting(_settings_key(pid), json.dumps(defaults))
+    _sync_project_sidecar(pid)
     return defaults
 
 
@@ -362,6 +382,7 @@ def restore_agent_prompt_overrides(
     current = get_workflow_settings(pid)
     merged = clear_agent_prompt_overrides(current, role=role)
     state.storage.set_setting(_settings_key(pid), json.dumps(merged))
+    _sync_project_sidecar(pid)
     return merged
 
 

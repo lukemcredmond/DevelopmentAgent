@@ -4,6 +4,7 @@ import { AGENT_LABELS } from '../types'
 import {
   assignSkill,
   combineSkills,
+  importSkillsFromWorkspace,
   removeSkill,
   saveBuiltSkill,
 } from '../api/client'
@@ -28,6 +29,7 @@ interface SkillModalProps {
   onAfterAssign?: () => void
   onSelectAllAssigned?: () => void
   onClose: () => void
+  recents?: { id: string; name: string; workspaceDir?: string }[]
 }
 
 export default function SkillModal({
@@ -49,6 +51,7 @@ export default function SkillModal({
   onAfterAssign,
   onSelectAllAssigned,
   onClose,
+  recents = [],
 }: SkillModalProps) {
   const [view, setView] = useState<'list' | 'build'>('list')
   const [combining, setCombining] = useState(false)
@@ -66,6 +69,8 @@ export default function SkillModal({
   const [buildRequestedSkillRel, setBuildRequestedSkillRel] = useState<string | null>(null)
   const [replaceExistingBuilt, setReplaceExistingBuilt] = useState(false)
   const [removeSourcesAfterAssign, setRemoveSourcesAfterAssign] = useState(false)
+  const [importDir, setImportDir] = useState('')
+  const [importing, setImporting] = useState(false)
 
   useEffect(() => {
     if (agent) {
@@ -153,7 +158,23 @@ export default function SkillModal({
     }
   }
 
-  const busy = assigning || combining || savingBuilt
+  const busy = assigning || combining || savingBuilt || importing
+
+  async function importFromPrevious() {
+    const source = importDir.trim()
+    if (!source) return
+    setImporting(true)
+    setCombineError(null)
+    try {
+      const data = await importSkillsFromWorkspace({ sourceWorkspaceDir: source })
+      onAppState(data)
+      onAfterAssign?.()
+    } catch (e) {
+      setCombineError(e instanceof Error ? e.message : 'Import failed')
+    } finally {
+      setImporting(false)
+    }
+  }
 
   return (
     <SlideOver
@@ -320,6 +341,50 @@ export default function SkillModal({
           </div>
         ) : (
           <>
+            <div className="space-y-1.5 border border-cat-surface1 rounded-lg p-3 bg-cat-base/40">
+              <div className="text-[10px] uppercase tracking-wider text-cat-overlay">
+                Import from previous project
+              </div>
+              <p className="text-[10px] text-cat-overlay leading-relaxed">
+                Copy skills from another workspace folder (its allhands.project.json assignments and
+                skills/ files) into this project.
+              </p>
+              {recents.length > 0 && (
+                <select
+                  value=""
+                  onChange={(e) => {
+                    if (e.target.value) setImportDir(e.target.value)
+                  }}
+                  className="w-full bg-cat-base border border-cat-surface1 rounded px-2 py-1 text-[11px] text-white"
+                >
+                  <option value="">Recent folders…</option>
+                  {recents
+                    .filter((p) => p.workspaceDir)
+                    .map((p) => (
+                      <option key={p.id} value={p.workspaceDir}>
+                        {p.name}
+                      </option>
+                    ))}
+                </select>
+              )}
+              <div className="flex gap-2">
+                <input
+                  type="text"
+                  value={importDir}
+                  onChange={(e) => setImportDir(e.target.value)}
+                  placeholder="Path to other workspace folder"
+                  className="flex-1 bg-cat-base border border-cat-surface1 rounded px-2 py-1 font-mono text-[11px]"
+                />
+                <button
+                  type="button"
+                  disabled={busy || !importDir.trim()}
+                  onClick={() => void importFromPrevious()}
+                  className="text-[10px] font-semibold bg-cat-surface0 border border-cat-surface1 rounded px-2 py-1 text-indigo-200 disabled:opacity-40"
+                >
+                  {importing ? 'Importing…' : 'Import'}
+                </button>
+              </div>
+            </div>
             {selectedFiles.length > 15 && (
               <p className="text-xs text-amber-300/90 border border-amber-500/30 bg-amber-950/25 rounded px-2 py-1.5">
                 Large merge: {selectedFiles.length} skills selected. This may take several minutes
