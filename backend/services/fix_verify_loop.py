@@ -82,6 +82,15 @@ def _run_lint_once(task_id: str, task: Dict[str, Any], lint_cmd: str) -> Any:
             target["lastCommandDiagnostics"] = cmd_result.diagnostics[:50]
         else:
             target["lastCommandDiagnostics"] = []
+    try:
+        from backend.services.card_ledger import write_oracle
+
+        detail = cmd_result.summary or cmd_result.outcome or lint_cmd
+        if cmd_result.diagnostics:
+            detail = f"{finding_count} lint finding(s): {detail}"
+        write_oracle(task_id, passed=bool(clean), detail=str(detail)[:500])
+    except Exception:
+        pass
     return cmd_result, clean
 
 

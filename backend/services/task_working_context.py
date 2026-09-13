@@ -120,6 +120,39 @@ def record_tool_working_context(
             kind="command",
             summary=f"run_command {status}: {cmd} — {snippet}",
         )
+        try:
+            from backend.services.card_ledger import maybe_record_tool_oracle
+
+            maybe_record_tool_oracle(
+                task,
+                tool_name="run_command",
+                arguments=arguments,
+                tool_output=tool_output or "",
+                success=success,
+            )
+        except Exception:
+            pass
+        return
+
+    if tool_name == "run_test":
+        snippet = (tool_output or "").replace("\n", " ")[:120]
+        append_working_context(
+            task,
+            kind="command",
+            summary=f"run_test {'ok' if success else 'FAIL'} — {snippet}",
+        )
+        try:
+            from backend.services.card_ledger import maybe_record_tool_oracle
+
+            maybe_record_tool_oracle(
+                task,
+                tool_name="run_test",
+                arguments=arguments or {},
+                tool_output=tool_output or "",
+                success=success,
+            )
+        except Exception:
+            pass
         return
 
     if tool_name == "read_file" and success:

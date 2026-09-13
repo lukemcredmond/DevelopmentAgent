@@ -277,6 +277,15 @@ def identical_write_loop_should_park(task: Dict[str, Any]) -> bool:
     return last_step_exit_reason(task) == "identical_write_loop"
 
 
+def same_next_task_should_park(
+    task: Dict[str, Any], ws: Optional[Dict[str, Any]] = None
+) -> bool:
+    """True when the next unit of work is identical to the last visit with no progress."""
+    from backend.services.card_ledger import same_next_task_should_park as _same
+
+    return _same(task, ws)
+
+
 def circuit_breaker_should_trip(task: Dict[str, Any], ws: Optional[Dict[str, Any]] = None) -> tuple[bool, str]:
     """
     Return (trip, reason) when the card should stop endless In Progress retries.

@@ -1455,6 +1455,14 @@ def build_task_prompt_legacy(task: Dict[str, Any], brief: str, *, agent_role: Op
     wc = format_working_context_for_prompt(task)
     if wc:
         prompt += wc + "\n"
+    try:
+        from backend.services.card_ledger import format_ledger_for_prompt
+
+        ledger_block = format_ledger_for_prompt(task)
+        if ledger_block:
+            prompt += ledger_block + "\n"
+    except Exception:
+        pass
     prompt += (
         f"Task ID: {task['id']}\n"
         f"Title: {task.get('title', '')}\n"

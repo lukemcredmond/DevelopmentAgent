@@ -300,6 +300,11 @@ class WorkflowSettingsPayload(BaseModel):
     maxToolsPerLlmTurn: Optional[int] = None
     enableStepLessonMemory: Optional[bool] = None
     enableDevCoreMemoryBlock: Optional[bool] = None
+    enableCardLedger: Optional[bool] = None
+    enableDevIdeation: Optional[bool] = None
+    enableOracleDoneOverride: Optional[bool] = None
+    enableSameNextTaskStop: Optional[bool] = None
+    enableCutoffSummarizer: Optional[bool] = None
     enableLlmContextCompress: Optional[bool] = None
     contextCompressMinChars: Optional[int] = None
     contextCompressMaxChars: Optional[int] = None

@@ -230,6 +230,16 @@ DEFAULT_WORKFLOW_SETTINGS: Dict[str, Any] = {
     "duplicateToolPolicy": "strict",
     "duplicateToolHardStopExclude": [],
     "duplicateRunCommandPolicy": "strict",
+    # GVS5H-style per-card ledger (plan.md / notes.md / tasks.json) injected before transcript.
+    "enableCardLedger": True,
+    # First Dev visit: no-code brainstorm into notes.md before Explore/Patch.
+    "enableDevIdeation": True,
+    # Failing subprocess lint/test overrides Done even if the agent claims solved.
+    "enableOracleDoneOverride": True,
+    # Reissued identical next-work with no writes parks the card.
+    "enableSameNextTaskStop": True,
+    # Summarize truncated (non-empty) generations; never retry empty-gen.
+    "enableCutoffSummarizer": True,
     # Focus micro-steps: one AC/subtask per Dev sprint tick; rotate prompt sections per LLM iter.
     "enableFocusMicroSteps": True,
     "maxFocusStepsPerCard": 8,

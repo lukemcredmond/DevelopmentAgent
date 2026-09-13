@@ -240,6 +240,7 @@ _MICRO_STEP_SECTIONS = [
     "task_spec_summary",
     "dod",
     "working_context",
+    "card_ledger",
     "dependencies",
     "related_cards",
     "qa_failure",
@@ -252,7 +253,7 @@ _MICRO_STEP_SECTIONS = [
 ]
 
 _ROTATION_BUNDLES: List[List[str]] = [
-    ["card_core", "ac_focus", "working_context"],
+    ["card_core", "ac_focus", "working_context", "card_ledger"],
     ["decisions_recent", "transcript_recent", "related_cards"],
     ["dependencies", "task_spec_summary", "project_evidence"],
 ]

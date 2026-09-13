@@ -654,6 +654,22 @@ def _record_last_step_outcome(
             refresh_agent_work_items(task)
         except Exception:
             pass
+        if str(agent or "") == "Developer":
+            try:
+                from backend.services.card_ledger import last_oracle_passed, record_next_work_visit
+                from backend.services.step_diagnostics import _write_tools_succeeded, get_active_trace
+
+                writes = 0
+                trace = get_active_trace()
+                if trace and _write_tools_succeeded(getattr(trace, "tools_log", None) or []):
+                    writes = 1
+                record_next_work_visit(
+                    task,
+                    writes_succeeded=writes,
+                    oracle_passed=last_oracle_passed(task_id, task),
+                )
+            except Exception:
+                pass
         # Persist a thin diagnostics pointer when available after finalize below.
     _finalize_step_diagnostics_if_traced(task_id)
     if task and isinstance(state.LAST_STEP_DIAGNOSTICS, dict):
@@ -2084,6 +2100,11 @@ def qa_gate_blocks_done(task: Dict[str, Any]) -> tuple[bool, str]:
                     f"Acceptance criteria unchecked ({unchecked}/{len(acs)}) — "
                     "check all ACs in the card (or set qaEvidence.userOverride).",
                 )
+    from backend.services.card_ledger import oracle_blocks_done
+
+    blocked, reason = oracle_blocks_done(task)
+    if blocked:
+        return True, reason
     return False, ""
 
 
@@ -2267,6 +2288,11 @@ def dev_gate_blocks_advance(task: Dict[str, Any]) -> tuple[bool, str]:
     status = _dev_verification_status(task, state.SPRINT_STEP_STARTED_AT or "")
     if status == "ran_with_findings":
         return True, "Lint/test command reported findings — resolve before advancing."
+    from backend.services.card_ledger import oracle_blocks_done
+
+    blocked_oracle, oracle_reason = oracle_blocks_done(task)
+    if blocked_oracle:
+        return True, oracle_reason
     return False, ""
 
 
@@ -2370,6 +2396,13 @@ def _maybe_advance_dev_after_writes(
     )
     if require_lint_clean and not lint_clean:
         _log_lane_advance_event("lane_advance_skipped", "lint_dirty")
+        return False
+    from backend.services.card_ledger import oracle_blocks_done
+
+    blocked_oracle, oracle_reason = oracle_blocks_done(task)
+    if blocked_oracle:
+        _log_lane_advance_event("lane_advance_skipped", "oracle_fail")
+        add_system_log("Developer", "warning", f"{task_id}: {oracle_reason}")
         return False
     writes = 0
     tools_log: list = []
@@ -3730,11 +3763,19 @@ def _run_developer_step(active_task: Dict[str, Any], brief: str) -> None:
         empty_gen_should_skip,
         identical_write_loop_should_park,
         no_write_stall_should_park,
+        same_next_task_should_park,
     )
 
     if identical_write_loop_should_park(live_task):
         park_msg = (
             "Identical write loop — skipping another Developer rewrite of the same file."
+        )
+        add_system_log("System", "warning", f"{task_id}: {park_msg}")
+        _try_move_to_needs_user(task_id, dict(live_task), park_msg, kind="phase_cycle_cap")
+        return
+    if same_next_task_should_park(live_task):
+        park_msg = (
+            "Same next task reissued with no writes or better oracle — parking instead of another generate."
         )
         add_system_log("System", "warning", f"{task_id}: {park_msg}")
         _try_move_to_needs_user(task_id, dict(live_task), park_msg, kind="phase_cycle_cap")
@@ -3842,6 +3883,13 @@ def _run_developer_step(active_task: Dict[str, Any], brief: str) -> None:
             add_system_log("Developer", "info", f"{task_id}: using prefetched sprint context")
         if not prompt:
             prompt = _inject_sprint_context(active_task, brief, "Developer", instructions)
+        try:
+            from backend.services.card_ledger import run_dev_ideation, seed_ledger_from_task
+
+            seed_ledger_from_task(find_task_by_id(task_id) or active_task)
+            run_dev_ideation(agent_dev, find_task_by_id(task_id) or active_task)
+        except Exception:
+            pass
         from backend.services.fix_verify_loop import run_fix_verify_loop
 
         result = run_fix_verify_loop(

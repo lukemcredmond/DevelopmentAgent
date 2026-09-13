@@ -66,6 +66,7 @@ LOCAL_SLM_SECTIONS: List[str] = [
     "qa_failure",
     "last_outcome",
     "working_context",
+    "card_ledger",
     "dependencies",
 ]
 

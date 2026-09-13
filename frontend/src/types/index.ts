@@ -603,6 +603,11 @@ export interface WorkflowSettings {
   toolOutputEchoStopAfter?: number
   enableStepLessonMemory?: boolean
   enableDevCoreMemoryBlock?: boolean
+  enableCardLedger?: boolean
+  enableDevIdeation?: boolean
+  enableOracleDoneOverride?: boolean
+  enableSameNextTaskStop?: boolean
+  enableCutoffSummarizer?: boolean
   enableLlmContextCompress?: boolean
   contextCompressMinChars?: number
   contextCompressMaxChars?: number
@@ -1335,6 +1340,11 @@ export interface WorkflowSettingsPayload {
   toolOutputEchoStopAfter?: number
   enableStepLessonMemory?: boolean
   enableDevCoreMemoryBlock?: boolean
+  enableCardLedger?: boolean
+  enableDevIdeation?: boolean
+  enableOracleDoneOverride?: boolean
+  enableSameNextTaskStop?: boolean
+  enableCutoffSummarizer?: boolean
   enableLlmContextCompress?: boolean
   contextCompressMinChars?: number
   contextCompressMaxChars?: number
@@ -1749,6 +1759,11 @@ export const DEFAULT_WORKFLOW_SETTINGS: WorkflowSettings = {
   toolOutputEchoStopAfter: 2,
   enableStepLessonMemory: true,
   enableDevCoreMemoryBlock: true,
+  enableCardLedger: true,
+  enableDevIdeation: true,
+  enableOracleDoneOverride: true,
+  enableSameNextTaskStop: true,
+  enableCutoffSummarizer: true,
   enableLlmContextCompress: false,
   contextCompressMinChars: 8000,
   contextCompressMaxChars: 3500,

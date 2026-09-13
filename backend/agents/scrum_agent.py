@@ -2765,6 +2765,8 @@ class ScrumAgent:
         # Total tool calls, not LLM turns, is the meaningful work budget for a step.
         max_tool_calls = int(ws.get("maxToolCallsPerStep", 80) or 0)
         self._step_tool_call_count = 0
+        self._cutoff_summarized = False
+        self._skip_cutoff_summary = False
         step_started_mono = time.monotonic()
         self._mid_step_backup_switched = False
         try:
@@ -3245,6 +3247,32 @@ class ScrumAgent:
                     prompt_eval_ms=usage.get("promptEvalMs"),
                     eval_ms=usage.get("evalMs"),
                 )
+                if (
+                    self.role == "Developer"
+                    and not getattr(self, "_skip_cutoff_summary", False)
+                    and not getattr(self, "_cutoff_summarized", False)
+                ):
+                    done_r = str(usage.get("doneReason") or "")
+                    partial = (message.content or "").strip()
+                    if partial and not tool_call_names:
+                        try:
+                            from backend.agents.task_context import find_task_by_id
+                            from backend.services.card_ledger import (
+                                is_length_cutoff,
+                                summarize_truncated_generation,
+                            )
+
+                            if is_length_cutoff(done_r):
+                                live = find_task_by_id(task_id or "") if task_id else None
+                                if live:
+                                    summarize_truncated_generation(
+                                        self,
+                                        live,
+                                        partial_text=partial,
+                                        done_reason=done_r,
+                                    )
+                        except Exception:
+                            pass
                 from backend.services.llm_decision_trace import (
                     build_decision_trace,
                     decision_trace_enabled,

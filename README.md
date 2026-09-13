@@ -1151,6 +1151,7 @@ Per-card evidence lives in **Task Detail → Agent progress** (LLM/tool counts p
 | **SQLite project memory** | Categorized notes with embeddings; TF-IDF fallback if embed fails |
 | **Step-lesson memory** | Optional end-of-step lessons saved for later retrieval |
 | **Dev core memory block** | Pinned `core_block` (~800 chars) always injected for Developer (`enableDevCoreMemoryBlock`); lessons merge in. Not a full Letta stack |
+| **Card ledger** | Size-capped `plan.md` / `notes.md` / `tasks.json` per card under `.allhands/cards/` (`enableCardLedger`); injected before transcript |
 | **Graphify (optional)** | Structural graph context alongside RAG when Graphify is on PATH |
 
 Key code: `backend/storage/code_index.py`, `backend/storage/memory_engine.py`, `backend/services/graphify_service.py`.
@@ -1164,6 +1165,7 @@ AllHands keeps its own ScrumAgent + board + Ollama loop. These projects are usef
 | [DSPy](https://github.com/stanfordnlp/dspy) | Program LM pipelines + metric-driven optimizers | Optional offline compile of prompts; do **not** replace the tool loop with DSPy ReAct |
 | [GEPA](https://github.com/gepa-ai/gepa) | Reflective prompt/code evolution (also `dspy.GEPA`) | Offline Dev system-prompt optimize from step diagnostics |
 | [Letta](https://github.com/letta-ai/letta) | Stateful agents with advanced memory | **Borrowed:** one pinned Dev core memory block. **Not:** Letta server, archival/recall tiers, agent memory-edit tools |
+| [GVS5H](https://github.com/slee-persis/GVS5H) | Ledger-based zero-shot self-orchestration (manager/worker over a shared filesystem) | **Borrowed:** per-card ledger, ideation-before-code, test-oracle veto of Done, same-next-task stop, truncation summarizer. **Not:** contest harness, five parallel same-model workers, replacing Scrum roles |
 | [Sutando](https://github.com/sonichi/sutando) | Personal Mac “Stand” (voice, meetings, night rewrite) | Ideas only (overnight self-improve). No Sutando cron/voice integration in-app |
 
 **Core memory block vs full Letta-inspired memory:** the block is a single always-injected sticky note (system merges step lessons; you can edit via `GET/PUT /api/memory/core-block`). Full Letta would add mid-turn memory tools, archival search, and consolidation jobs — out of scope for now.

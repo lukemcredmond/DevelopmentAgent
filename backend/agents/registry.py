@@ -340,6 +340,11 @@ def _guarded_update_board(
                         f"Error: Cannot move to {target_upper} — step exit '{exit_r or 'unhealthy'}' "
                         "blocks lane advance. Stay In Progress or set forceCompleteOnUnhealthyExit."
                     )
+                from backend.services.card_ledger import oracle_blocks_done
+
+                blocked_oracle, oracle_reason = oracle_blocks_done(task)
+                if blocked_oracle:
+                    return f"Error: {oracle_reason}"
     if state.ACTIVE_SPRINT_AGENT == "Product Owner":
         from backend.services.po_clarification import apply_clarification_payload
 

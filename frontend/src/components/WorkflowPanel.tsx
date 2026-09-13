@@ -1668,6 +1668,51 @@ export default function WorkflowPanel({
       <label className="flex items-center gap-2 text-[11px] text-cat-subtext cursor-pointer pl-5">
         <input
           type="checkbox"
+          checked={settings.enableCardLedger !== false}
+          onChange={(e) => onSettingsChange({ enableCardLedger: e.target.checked })}
+        />
+        Per-card ledger (plan/notes/tasks on disk)
+        <SettingHint hint="GVS5H-style bounded working set under .allhands/cards/{id}/. Injected before the long transcript." />
+      </label>
+      <label className="flex items-center gap-2 text-[11px] text-cat-subtext cursor-pointer pl-5">
+        <input
+          type="checkbox"
+          checked={settings.enableDevIdeation !== false}
+          onChange={(e) => onSettingsChange({ enableDevIdeation: e.target.checked })}
+        />
+        Ideation before first write
+        <SettingHint hint="On the first Dev visit with empty notes and no files, one no-code brainstorm is written to notes.md." />
+      </label>
+      <label className="flex items-center gap-2 text-[11px] text-cat-subtext cursor-pointer pl-5">
+        <input
+          type="checkbox"
+          checked={settings.enableOracleDoneOverride !== false}
+          onChange={(e) => onSettingsChange({ enableOracleDoneOverride: e.target.checked })}
+        />
+        Test/lint oracle overrides Done
+        <SettingHint hint="A failing subprocess lint/test is ground truth: the card cannot go to QA/Done until it passes." />
+      </label>
+      <label className="flex items-center gap-2 text-[11px] text-cat-subtext cursor-pointer pl-5">
+        <input
+          type="checkbox"
+          checked={settings.enableSameNextTaskStop !== false}
+          onChange={(e) => onSettingsChange({ enableSameNextTaskStop: e.target.checked })}
+        />
+        Park on identical next-task (no progress)
+        <SettingHint hint="If the next unit of work is the same as last visit and nothing was written, park instead of another generate." />
+      </label>
+      <label className="flex items-center gap-2 text-[11px] text-cat-subtext cursor-pointer pl-5">
+        <input
+          type="checkbox"
+          checked={settings.enableCutoffSummarizer !== false}
+          onChange={(e) => onSettingsChange({ enableCutoffSummarizer: e.target.checked })}
+        />
+        Summarize truncated generations
+        <SettingHint hint="When a call hits the token cap with partial text, salvage a short summary into notes. Empty generations are not retried." />
+      </label>
+      <label className="flex items-center gap-2 text-[11px] text-cat-subtext cursor-pointer pl-5">
+        <input
+          type="checkbox"
           checked={settings.enableLlmContextCompress === true}
           onChange={(e) => onSettingsChange({ enableLlmContextCompress: e.target.checked })}
         />

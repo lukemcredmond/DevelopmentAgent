@@ -26,6 +26,7 @@ SECTION_IDS = (
     "task_spec_full",
     "dod",
     "working_context",
+    "card_ledger",
     "dependencies",
     "related_cards",
     "qa_failure",
@@ -42,6 +43,7 @@ ALL_SECTIONS_FULL: List[str] = [
     "brief_slice",
     "dod",
     "working_context",
+    "card_ledger",
     "card_core",
     "ac_focus",
     "scope_focus",
@@ -61,6 +63,7 @@ ALL_SECTIONS_SLIM: List[str] = [
     "brief_slice",
     "dod",
     "working_context",
+    "card_ledger",
     "card_core",
     "ac_focus",
     "project_evidence",
@@ -134,6 +137,7 @@ def full_sections_for_role(role: str, focus: FocusContext) -> List[str]:
         "task_spec_summary",
         "dod",
         "working_context",
+        "card_ledger",
         "dependencies",
         "related_cards",
         "qa_failure",
@@ -228,6 +232,11 @@ def build_section(
         max_lines = 3 if is_local_slm_profile() else 12
         wc = format_working_context_for_prompt(task, max_lines=max_lines)
         return (wc + "\n") if wc else ""
+    if section_id == "card_ledger":
+        from backend.services.card_ledger import format_ledger_for_prompt
+
+        block = format_ledger_for_prompt(task)
+        return block.strip() if block else ""
     if section_id == "card_core":
         return _section_card_core(task, focus)
     if section_id == "ac_focus":
