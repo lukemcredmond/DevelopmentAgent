@@ -27,6 +27,8 @@ UNHEALTHY_LANE_ADVANCE_EXITS = frozenset(
         "completed_with_writes_no_advance",
         "tool_output_echo",
         "identical_write_loop",
+        "empty_generation_timeout",
+        "llm_call_failed",
     }
 )
 
@@ -42,6 +44,8 @@ NO_WRITE_STALL_EXITS = frozenset(
     {
         "explore_budget_exhausted",
         "duplicate_tool",
+        "empty_generation_timeout",
+        "llm_call_failed",
     }
 )
 
@@ -71,6 +75,9 @@ CIRCUIT_BREAKER_EXITS = frozenset(
         "completed_with_writes_no_advance",
         "po_clarification_incomplete",
         "po_generation_truncated",
+        "empty_generation_timeout",
+        "llm_call_failed",
+        "step_timeout",
     }
 )
 
@@ -178,6 +185,7 @@ def record_consecutive_bad_exit(
         writes_succeeded=writes_succeeded,
         progress_made=progress_made,
     )
+    _record_empty_generation_backoff(task, reason, progress_made=progress_made)
     if reason in CIRCUIT_BREAKER_EXITS:
         prev = str(task.get("lastCircuitExitReason") or "")
         if prev == reason or prev in CIRCUIT_BREAKER_EXITS:
@@ -216,6 +224,38 @@ def _record_no_write_stall(
         return
     if reason and reason not in CIRCUIT_BREAKER_EXITS:
         task["consecutiveNoWriteStall"] = 0
+
+
+def _record_empty_generation_backoff(
+    task: Dict[str, Any],
+    reason: str,
+    *,
+    progress_made: bool = False,
+) -> None:
+    if progress_made:
+        task.pop("emptyGenBackoffUntil", None)
+        task["consecutiveEmptyGen"] = 0
+        return
+    if reason in ("empty_generation_timeout", "llm_call_failed"):
+        task["emptyGenBackoffUntil"] = time.time() + EMPTY_GEN_BACKOFF_SEC
+        count = int(task.get("consecutiveEmptyGen") or 0) + 1
+        task["consecutiveEmptyGen"] = count
+        if count >= 2:
+            latch_needs_po_auto_skip(task, reason=f"repeated {reason}")
+        return
+    task.pop("emptyGenBackoffUntil", None)
+    task["consecutiveEmptyGen"] = 0
+
+
+def empty_gen_should_skip(task: Dict[str, Any]) -> bool:
+    """True while a card is in the post-empty-generation GPU cool-off."""
+    if not isinstance(task, dict):
+        return False
+    try:
+        until = float(task.get("emptyGenBackoffUntil") or 0)
+    except (TypeError, ValueError):
+        return False
+    return until > time.time()
 
 
 def no_write_stall_should_park(
@@ -283,6 +323,8 @@ def needs_po_should_skip_auto(
         return True
     if task.get("poAutoSkip"):
         return True
+    if empty_gen_should_skip(task):
+        return True
     trip, _ = circuit_breaker_should_trip(task, ws)
     return trip
 
@@ -296,6 +338,7 @@ _FORCE_PATCH_EXITS = frozenset(
     }
 )
 IDENTICAL_SUCCESS_WRITE_LIMIT = 2
+EMPTY_GEN_BACKOFF_SEC = 120
 
 
 def last_step_exit_reason(task: Dict[str, Any]) -> str:

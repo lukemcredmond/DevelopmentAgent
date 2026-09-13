@@ -131,6 +131,8 @@ class StepDiagnosticsTracker:
         prompt_eval_ms: Optional[int] = None,
         eval_ms: Optional[int] = None,
         truncated: Optional[bool] = None,
+        attempt: Optional[int] = None,
+        phase: Optional[str] = None,
     ) -> None:
         self.llm_iterations_used = max(self.llm_iterations_used, iteration)
         self.last_event = f"ollama:iter{iteration}"
@@ -151,6 +153,10 @@ class StepDiagnosticsTracker:
             "totalTokens": int(total_tokens or (prompt_tokens or 0) + eval_n),
             "tokensReported": bool(tokens_reported),
         }
+        if attempt is not None:
+            entry["attempt"] = int(attempt)
+        if phase:
+            entry["phase"] = str(phase)
         if error_type:
             entry["errorType"] = error_type
         if cap is not None:
@@ -654,6 +660,8 @@ def log_ollama_call(
     prompt_eval_ms: Optional[int] = None,
     eval_ms: Optional[int] = None,
     truncated: Optional[bool] = None,
+    attempt: Optional[int] = None,
+    phase: Optional[str] = None,
 ) -> None:
     trace = get_active_trace()
     if trace:
@@ -674,6 +682,8 @@ def log_ollama_call(
             prompt_eval_ms=prompt_eval_ms,
             eval_ms=eval_ms,
             truncated=truncated,
+            attempt=attempt,
+            phase=phase,
         )
         from backend.services.sprint_session import touch_session
 
@@ -1182,6 +1192,11 @@ def derive_exit_reason(
         return "interrupted"
     if agent_result == "SIMULATION_FALLBACK":
         return "ollama_fallback"
+    if agent_result and str(agent_result).startswith("LLM_CALL_FAILED"):
+        lower = str(agent_result).lower()
+        if "empty generation" in lower:
+            return "empty_generation_timeout"
+        return "llm_call_failed"
     if agent_result and agent_result.startswith("Timed out:"):
         return "step_timeout"
     if agent_result and agent_result.startswith("Stopped:"):

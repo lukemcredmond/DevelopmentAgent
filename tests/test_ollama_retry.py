@@ -87,6 +87,29 @@ def test_chat_does_not_retry_timeout():
     assert agent._last_chat_error_type == "timeout"
 
 
+def test_chat_does_not_retry_empty_generation_timeout():
+    initialize()
+    reset_workflow_settings()
+    save_workflow_settings(
+        {
+            "ollamaMaxRetries": 4,
+            "ollamaRetryDelaySec": [0, 0, 0, 0],
+            "ollamaCooldownRetryEnabled": True,
+            "ollamaCooldownRetrySec": 0,
+            "ollamaCooldownRetryAttempts": 2,
+        }
+    )
+    agent = ScrumAgent("Developer", "test-model", "system", "http://localhost:11434")
+    mock_provider = MagicMock()
+    mock_provider.chat.side_effect = Exception("Ollama empty generation timed out after 90s")
+    with patch.object(agent, "_get_provider", return_value=mock_provider):
+        with patch("backend.agents.scrum_agent.time.sleep"):
+            result = agent._chat([{"role": "user", "content": "hi"}])
+    assert result is None
+    assert mock_provider.chat.call_count == 1
+    assert agent._last_chat_error_type == "empty_generation_timeout"
+
+
 def test_chat_skips_cooldown_on_context_overflow():
     initialize()
     reset_workflow_settings()
@@ -267,3 +290,42 @@ def test_consume_chat_stream_times_out_on_silent_iterator():
         raise AssertionError("expected EmptyGenerationTimeout")
     except EmptyGenerationTimeout:
         pass
+
+
+def test_consume_chat_stream_wall_clock_ignores_empty_heartbeats():
+    import time
+
+    from backend.services.llm_provider import (
+        ChatResult,
+        EmptyGenerationTimeout,
+        ProviderMessage,
+        consume_chat_stream,
+    )
+
+    def heartbeats():
+        for _ in range(20):
+            time.sleep(0.05)
+            yield ChatResult(message=ProviderMessage(content=None), prompt_eval_count=10, eval_count=0)
+
+    started = time.monotonic()
+    try:
+        consume_chat_stream(heartbeats(), empty_timeout_sec=0.2)
+        raise AssertionError("expected EmptyGenerationTimeout")
+    except EmptyGenerationTimeout:
+        pass
+    elapsed = time.monotonic() - started
+    assert elapsed < 0.8
+
+
+def test_close_chat_stream_calls_close():
+    from backend.services.llm_provider import close_chat_stream
+
+    class Box:
+        closed = False
+
+        def close(self):
+            self.closed = True
+
+    box = Box()
+    close_chat_stream(box)
+    assert box.closed is True

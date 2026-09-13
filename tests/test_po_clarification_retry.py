@@ -47,6 +47,21 @@ def test_po_llm_skip_block_reason_missing_ac():
     }
     assert should_move_off_needs_po_without_llm(task) is True
     assert should_move_off_needs_po_without_llm({"description": "x"}) is False
+    spec = {
+        "description": "Lint remaining overflow files",
+        "acceptanceCriteria": ["analyze is clean"],
+    }
+    for reason in (
+        "max_iterations",
+        "po_clarification_incomplete",
+        "completed_text_only",
+        "empty_generation_timeout",
+        "llm_call_failed",
+        "interrupted",
+    ):
+        assert should_move_off_needs_po_without_llm(
+            {**spec, "lastStepOutcome": {"exitReason": reason}}
+        ) is True
 
 
 def test_run_po_clarification_skips_llm_when_spec_present():
@@ -112,3 +127,31 @@ def test_run_po_clarification_logs_started_when_skip_blocked():
     assert "po_llm_started" in kinds
     assert "po_llm_skipped" not in kinds
     assert any("missing_acceptance_criteria" in str(e.get("message")) for e in events)
+
+
+def test_run_po_clarification_skips_llm_after_max_iterations():
+    from unittest.mock import patch
+
+    from backend.agents.task_context import get_task_lane
+    from backend.bootstrap import initialize
+    from backend.services.sprint_service import _run_po_clarification
+    from backend.services.workflow_settings import reset_workflow_settings
+
+    initialize()
+    reset_workflow_settings()
+    task = init_new_task(
+        {
+            "id": "T-SKIP-MAXITER",
+            "title": "Lint overflow",
+            "description": "Fix overflow lint",
+            "acceptanceCriteria": ["no overflow warnings"],
+            "status": "Needs PO",
+        }
+    )
+    task["lastStepOutcome"] = {"exitReason": "max_iterations", "agent": "Product Owner"}
+    state.SHARED_BOARD.setdefault("Needs PO", [])
+    state.SHARED_BOARD["Needs PO"] = [task]
+    with patch("backend.services.sprint_service.agent_po.execute_step") as execute:
+        _run_po_clarification(task, "brief")
+    execute.assert_not_called()
+    assert get_task_lane("T-SKIP-MAXITER") == "In Progress"

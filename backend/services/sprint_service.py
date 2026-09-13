@@ -3727,6 +3727,7 @@ def _run_developer_step(active_task: Dict[str, Any], brief: str) -> None:
     live_task = find_task_by_id(task_id) or active_task
     from backend.services.sprint_speed_gates import (
         begin_dev_step,
+        empty_gen_should_skip,
         identical_write_loop_should_park,
         no_write_stall_should_park,
     )
@@ -3737,6 +3738,13 @@ def _run_developer_step(active_task: Dict[str, Any], brief: str) -> None:
         )
         add_system_log("System", "warning", f"{task_id}: {park_msg}")
         _try_move_to_needs_user(task_id, dict(live_task), park_msg, kind="phase_cycle_cap")
+        return
+    if empty_gen_should_skip(live_task):
+        add_system_log(
+            "System",
+            "warning",
+            f"{task_id}: skipping Developer — empty-generation GPU cool-off",
+        )
         return
     if no_write_stall_should_park(live_task) and int(state.SPRINT_PROGRESS_MAX or 1) != 1:
         add_system_log(
@@ -4472,7 +4480,7 @@ def _first_runnable_needs_po(board: Optional[Dict[str, Any]] = None) -> Optional
 
 
 def _in_progress_dev_runnable(board: Optional[Dict[str, Any]] = None) -> List[Dict[str, Any]]:
-    from backend.services.sprint_speed_gates import no_write_stall_should_park
+    from backend.services.sprint_speed_gates import no_write_stall_should_park, empty_gen_should_skip
 
     board = board if board is not None else state.SHARED_BOARD
     return [
@@ -4482,6 +4490,7 @@ def _in_progress_dev_runnable(board: Optional[Dict[str, Any]] = None) -> List[Di
         and not task.get("phaseCycleCapReached")
         and not task.get("pendingSplit")
         and not no_write_stall_should_park(task)
+        and not empty_gen_should_skip(task)
     ]
 
 

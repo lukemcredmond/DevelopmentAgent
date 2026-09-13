@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import json
 import threading
+import time
 from dataclasses import dataclass, field
 from typing import Any, Dict, Iterator, List, Optional, Sequence, Union
 
@@ -948,16 +949,52 @@ def chat_result_from_openai(payload: Dict[str, Any]) -> ChatResult:
     )
 
 
+def close_chat_stream(stream: Any) -> None:
+    """Best-effort close of a provider stream so Ollama can drop the job."""
+    seen: set[int] = set()
+    stack = [stream]
+    while stack:
+        obj = stack.pop()
+        if obj is None:
+            continue
+        ident = id(obj)
+        if ident in seen:
+            continue
+        seen.add(ident)
+        for attr in ("close", "release_conn"):
+            fn = getattr(obj, attr, None)
+            if callable(fn):
+                try:
+                    fn()
+                except Exception:
+                    pass
+        for attr in ("response", "_response", "raw", "gi_frame"):
+            inner = getattr(obj, attr, None)
+            if inner is not None and id(inner) not in seen:
+                stack.append(inner)
+        f_locals = getattr(obj, "f_locals", None)
+        if isinstance(f_locals, dict):
+            for key in ("result", "response", "self"):
+                inner = f_locals.get(key)
+                if inner is not None and id(inner) not in seen:
+                    stack.append(inner)
+
+
 def _iter_ollama_stream(result: Any) -> Iterator[ChatResult]:
-    for chunk in result:
-        yield chat_result_from_ollama(chunk)
+    try:
+        for chunk in result:
+            yield chat_result_from_ollama(chunk)
+    finally:
+        close_chat_stream(result)
 
 
 class EmptyGenerationTimeout(TimeoutError):
     """Raised when a streamed chat produces no eval tokens before the empty-gen timeout."""
 
 
-def _next_stream_chunk(iterator: Iterator[ChatResult], timeout_sec: float) -> Optional[ChatResult]:
+def _next_stream_chunk(
+    iterator: Iterator[ChatResult], timeout_sec: float, *, empty_budget_sec: Optional[float] = None
+) -> Optional[ChatResult]:
     box: Dict[str, Any] = {"item": None, "err": None, "done": False}
 
     def worker() -> None:
@@ -974,8 +1011,10 @@ def _next_stream_chunk(iterator: Iterator[ChatResult], timeout_sec: float) -> Op
     thread.start()
     thread.join(max(0.05, float(timeout_sec)))
     if not box["done"]:
+        close_chat_stream(iterator)
+        budget = empty_budget_sec if empty_budget_sec is not None else timeout_sec
         raise EmptyGenerationTimeout(
-            f"Ollama empty generation timed out after {timeout_sec:.0f}s"
+            f"Ollama empty generation timed out after {float(budget):.0f}s"
         )
     err = box["err"]
     if isinstance(err, StopIteration):
@@ -993,40 +1032,55 @@ def consume_chat_stream(
 ) -> ChatResult:
     """Fold a provider stream into one ChatResult; abort if no eval tokens arrive."""
     iterator = iter(stream)
-    empty_wait = max(1.0, float(empty_timeout_sec))
+    empty_wait = max(0.05, float(empty_timeout_sec))
     flowing_wait = max(empty_wait, float(flowing_timeout_sec))
-    wait = empty_wait
+    started = time.monotonic()
     content_parts: List[str] = []
     tool_calls: Optional[List[ProviderToolCall]] = None
     prompt_eval = 0
     eval_count = 0
     last_raw: Any = None
-    while True:
-        chunk = _next_stream_chunk(iterator, wait)
-        if chunk is None:
-            break
-        last_raw = chunk.raw if chunk.raw is not None else last_raw
-        if int(chunk.prompt_eval_count or 0) > prompt_eval:
-            prompt_eval = int(chunk.prompt_eval_count or 0)
-        if int(chunk.eval_count or 0) > eval_count:
-            eval_count = int(chunk.eval_count or 0)
-        msg = chunk.message
-        if msg and msg.content:
-            content_parts.append(str(msg.content))
-        if msg and msg.tool_calls:
-            tool_calls = list(msg.tool_calls)
-        progressed = eval_count > 0 or bool(content_parts) or bool(tool_calls)
-        wait = flowing_wait if progressed else empty_wait
-    return ChatResult(
-        message=ProviderMessage(
-            role="assistant",
-            content="".join(content_parts) or None,
-            tool_calls=tool_calls,
-        ),
-        prompt_eval_count=prompt_eval,
-        eval_count=eval_count,
-        raw=last_raw,
-    )
+    try:
+        while True:
+            progressed = eval_count > 0 or bool(content_parts) or bool(tool_calls)
+            if progressed:
+                wait = flowing_wait
+            else:
+                remaining = empty_wait - (time.monotonic() - started)
+                if remaining <= 0:
+                    close_chat_stream(iterator)
+                    raise EmptyGenerationTimeout(
+                        f"Ollama empty generation timed out after {empty_wait:.0f}s"
+                    )
+                wait = remaining
+            chunk = _next_stream_chunk(
+                iterator, wait, empty_budget_sec=empty_wait if not progressed else None
+            )
+            if chunk is None:
+                break
+            last_raw = chunk.raw if chunk.raw is not None else last_raw
+            if int(chunk.prompt_eval_count or 0) > prompt_eval:
+                prompt_eval = int(chunk.prompt_eval_count or 0)
+            if int(chunk.eval_count or 0) > eval_count:
+                eval_count = int(chunk.eval_count or 0)
+            msg = chunk.message
+            if msg and msg.content:
+                content_parts.append(str(msg.content))
+            if msg and msg.tool_calls:
+                tool_calls = list(msg.tool_calls)
+        return ChatResult(
+            message=ProviderMessage(
+                role="assistant",
+                content="".join(content_parts) or None,
+                tool_calls=tool_calls,
+            ),
+            prompt_eval_count=prompt_eval,
+            eval_count=eval_count,
+            raw=last_raw,
+        )
+    except EmptyGenerationTimeout:
+        close_chat_stream(iterator)
+        raise
 
 
 def _iter_openai_stream(response: requests.Response) -> Iterator[ChatResult]:

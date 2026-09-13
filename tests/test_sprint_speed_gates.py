@@ -302,3 +302,30 @@ def test_write_that_advances_lane_resets_stall():
     )
     assert task.get("consecutiveNoWriteStall") == 0
     assert gates.no_write_stall_should_park(task, ws) is False
+
+
+def test_empty_generation_backoff_skips_card_and_parks_after_two():
+    task: dict = {"id": "T-EG"}
+    ws = {"maxConsecutiveNoWriteStall": 2, "enableStuckCircuitBreaker": True}
+    gates.record_consecutive_bad_exit(task, "empty_generation_timeout", writes_succeeded=0)
+    assert gates.empty_gen_should_skip(task) is True
+    assert gates.needs_po_should_skip_auto(task, ws) is True
+    assert gates.no_write_stall_should_park(task, ws) is False
+    gates.record_consecutive_bad_exit(task, "empty_generation_timeout", writes_succeeded=0)
+    assert gates.no_write_stall_should_park(task, ws) is True
+    assert task.get("poAutoSkip") is True
+    assert task["consecutiveEmptyGen"] == 2
+
+
+def test_llm_call_failed_counts_as_circuit_exit():
+    task: dict = {}
+    ws = {
+        "enableStuckCircuitBreaker": True,
+        "circuitBreakerMaxBadExits": 3,
+        "circuitBreakerIdenticalPatchFails": 9,
+    }
+    for _ in range(3):
+        gates.record_consecutive_bad_exit(task, "llm_call_failed")
+    trip, reason = gates.circuit_breaker_should_trip(task, ws)
+    assert trip is True
+    assert "consecutive" in reason.lower()

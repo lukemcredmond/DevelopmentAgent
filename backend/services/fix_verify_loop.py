@@ -20,6 +20,8 @@ _HARD_STOP_MARKERS = (
     "timed out:",
     "simulation_fallback",
     "fix-verify aborted",
+    "llm_call_failed",
+    "empty generation",
 )
 
 

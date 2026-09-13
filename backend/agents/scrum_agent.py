@@ -1155,6 +1155,29 @@ class ScrumAgent:
             return "connection"
         return "other"
 
+    def _log_chat_attempt(
+        self,
+        iteration: int,
+        *,
+        attempt: int,
+        duration_ms: int,
+        error: Optional[str],
+        error_type: Optional[str],
+        phase: str = "",
+    ) -> None:
+        """Record one provider.chat try so retries are not folded into a single 90s line."""
+        from backend.services.step_diagnostics import log_ollama_call
+
+        log_ollama_call(
+            iteration,
+            duration_ms=duration_ms,
+            error=(error or "")[:200] if error else None,
+            error_type=error_type,
+            attempt=attempt,
+            phase=phase or None,
+        )
+        self._chat_attempts_logged = True
+
     def _context_overflow_message(self) -> str:
         num_ctx = self._effective_num_ctx()
         ceiling = self._num_ctx_ceiling()
@@ -1336,6 +1359,12 @@ class ScrumAgent:
         last_error: Optional[str] = None
         last_error_type: Optional[str] = None
         timeout_sec = int(self._ollama_timeout_sec())
+        self._chat_attempts_logged = False
+        empty_timeout_sec = 90
+        try:
+            empty_timeout_sec = int(get_workflow_settings().get("ollamaEmptyGenerationTimeoutSec") or 90)
+        except (TypeError, ValueError):
+            empty_timeout_sec = 90
 
         def _run_attempts(attempt_delays: List[int], *, phase: str) -> Optional[Any]:
             nonlocal last_error, last_error_type
@@ -1362,15 +1391,24 @@ class ScrumAgent:
                         return result
                     last_error = err
                     last_error_type = err_type
-                    if err_type == "timeout":
+                    self._log_chat_attempt(
+                        iteration,
+                        attempt=attempt_num,
+                        duration_ms=duration_ms,
+                        error=err,
+                        error_type=err_type,
+                        phase=phase,
+                    )
+                    if err_type in ("timeout", "empty_generation_timeout"):
+                        waited = timeout_sec if err_type == "timeout" else empty_timeout_sec
                         add_system_log(
                             self.role,
                             "warning",
-                            f"Ollama timed out after {timeout_sec}s — not retrying "
+                            f"Ollama {err_type} after {waited}s — not retrying "
                             "(model may still be generating).",
                         )
                         self._last_chat_error = err
-                        self._last_chat_error_type = "timeout"
+                        self._last_chat_error_type = err_type
                         return None
                     if err_type == "context_overflow":
                         if self._bump_num_ctx_on_overflow():
@@ -1401,7 +1439,7 @@ class ScrumAgent:
 
         ws = get_workflow_settings()
         if (
-            last_error_type not in ("context_overflow", "timeout")
+            last_error_type not in ("context_overflow", "timeout", "empty_generation_timeout")
             and ws.get("ollamaCooldownRetryEnabled", True)
         ):
             cooldown = max(0, int(ws.get("ollamaCooldownRetrySec", 15)))
@@ -2693,6 +2731,17 @@ class ScrumAgent:
 
         self.memory.embed_model = resolve_embed_model()
         tools = self.registry.get_ollama_tools()
+        if self.role == "Product Owner":
+            from backend.agents.task_context import get_task_lane as _get_po_lane
+
+            po_lane = _get_po_lane(state.ACTIVE_SPRINT_TASK_ID or "")
+            if po_lane == "Needs PO":
+                tools = [
+                    t
+                    for t in tools
+                    if isinstance(t, dict)
+                    and (t.get("function") or {}).get("name") == "update_board"
+                ]
         if not tools:
             add_system_log(
                 self.role,
@@ -3116,12 +3165,13 @@ class ScrumAgent:
                 if response is None:
                     err_type = getattr(self, "_last_chat_error_type", None) or "unavailable"
                     err_detail = str(getattr(self, "_last_chat_error", None) or err_type)
-                    log_ollama_call(
-                        iteration,
-                        duration_ms=ollama_duration_ms,
-                        error=err_detail[:200],
-                        error_type=err_type,
-                    )
+                    if not getattr(self, "_chat_attempts_logged", False):
+                        log_ollama_call(
+                            iteration,
+                            duration_ms=ollama_duration_ms,
+                            error=err_detail[:200],
+                            error_type=err_type,
+                        )
                     outcome = self._outcome_for_failed_chat(err_type, err_detail)
                     if outcome == "SIMULATION_FALLBACK":
                         self._log_step_exit("LLM provider unreachable — SIMULATION_FALLBACK", "warning")

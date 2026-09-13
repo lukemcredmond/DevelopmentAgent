@@ -171,6 +171,27 @@ def test_truncated_and_incomplete_exit_reasons():
     )
 
 
+def test_llm_call_failed_exit_reasons():
+    assert (
+        derive_exit_reason(
+            agent_result="LLM_CALL_FAILED: Ollama empty generation timed out after 90s",
+            tools_used=set(),
+            lane_before="Needs PO",
+            lane_after="Needs PO",
+        )
+        == "empty_generation_timeout"
+    )
+    assert (
+        derive_exit_reason(
+            agent_result="LLM_CALL_FAILED: connection refused",
+            tools_used=set(),
+            lane_before="In Progress",
+            lane_after="In Progress",
+        )
+        == "llm_call_failed"
+    )
+
+
 def test_prune_repeated_po_json():
     blob = '{"description": "x", "acceptanceCriteria": ["a"]}'
     assert "already recorded" in prune_repeated_po_json(blob)

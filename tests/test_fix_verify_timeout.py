@@ -124,6 +124,41 @@ def test_fix_verify_aborts_on_hard_stop_without_extra_round():
     lint_mock.assert_not_called()
 
 
+def test_fix_verify_aborts_on_empty_generation_without_second_round():
+    initialize()
+    reset_workflow_settings()
+    save_workflow_settings(
+        {
+            "enableFixVerifyLoop": True,
+            "requireCleanLint": True,
+            "maxFixVerifyRounds": 2,
+            "fixVerifyAbortOnHardStop": True,
+        }
+    )
+    task = init_new_task({"id": "T-FV-EMPTY", "title": "Empty gen", "description": "d"})
+    normalize_task(task)
+    state.SPRINT_CANCEL = False
+    agent = MagicMock()
+    agent._dev_phase_graph = None
+    agent.execute_step.return_value = (
+        "LLM_CALL_FAILED: Ollama empty generation timed out after 90s"
+    )
+    with patch(
+        "backend.services.fix_verify_loop.derive_project_lint_command",
+        return_value="flutter analyze",
+    ), patch(
+        "backend.services.fix_verify_loop.run_workspace_command",
+    ) as lint_mock, patch(
+        "backend.services.fix_verify_loop.find_task_by_id",
+        return_value=task,
+    ):
+        out = run_fix_verify_loop(agent, task, "prompt", max_iterations=6)
+
+    assert "empty generation" in out.lower()
+    assert agent.execute_step.call_count == 1
+    lint_mock.assert_not_called()
+
+
 def test_fix_verify_skips_lint_on_explore_budget_stop():
     initialize()
     reset_workflow_settings()
