@@ -3256,7 +3256,6 @@ class ScrumAgent:
                     partial = (message.content or "").strip()
                     if partial and not tool_call_names:
                         try:
-                            from backend.agents.task_context import find_task_by_id
                             from backend.services.card_ledger import (
                                 is_length_cutoff,
                                 summarize_truncated_generation,

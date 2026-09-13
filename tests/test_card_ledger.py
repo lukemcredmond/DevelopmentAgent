@@ -215,3 +215,73 @@ def test_chat_still_does_not_retry_empty_generation():
             result = agent._chat([{"role": "user", "content": "hi"}])
     assert result is None
     assert mock_provider.chat.call_count == 1
+
+
+def test_execute_step_with_active_task_does_not_unboundlocal():
+    """Regression: inner import of find_task_by_id must not shadow the module-level name."""
+    from unittest.mock import patch
+
+    from backend.agents.registry import agent_dev
+
+    initialize()
+    reset_workflow_settings()
+    task = {
+        "id": "T-UNBOUND",
+        "title": "Fix unbound",
+        "description": "desc",
+        "acceptanceCriteria": ["ok"],
+        "status": "In Progress",
+        "files": [],
+        "transcript": [],
+        "decisions": [],
+    }
+    state.SHARED_BOARD.setdefault("In Progress", []).append(task)
+    state.ACTIVE_SPRINT_TASK_ID = "T-UNBOUND"
+    state.ACTIVE_SPRINT_AGENT = "Developer"
+
+    class _Msg:
+        content = "done"
+        tool_calls = None
+
+    class _Resp:
+        message = _Msg()
+
+    with patch.object(agent_dev, "_chat", return_value=_Resp()), patch(
+        "backend.agents.registry.configure_agent_tools"
+    ), patch(
+        "backend.storage.memory_engine.resolve_embed_model", return_value="embed"
+    ), patch.object(
+        agent_dev, "_build_system_content", return_value="sys"
+    ), patch.object(
+        agent_dev, "_build_user_content", return_value="user"
+    ):
+        result = agent_dev.execute_step("implement", max_iterations=1)
+
+    assert result is not None
+    state.ACTIVE_SPRINT_TASK_ID = None
+
+
+def test_storage_connect_uses_timeout_and_wal(tmp_path):
+    import sqlite3
+
+    from backend.storage.project_storage import SQLITE_TIMEOUT_SEC, ProjectStorage
+
+    seen: dict = {}
+    real_connect = sqlite3.connect
+
+    def wrapped(path, timeout=0, **kwargs):
+        seen["timeout"] = timeout
+        return real_connect(path, timeout=timeout, **kwargs)
+
+    from unittest.mock import patch
+
+    db = tmp_path / "scrum.db"
+    with patch("backend.storage.project_storage.sqlite3.connect", side_effect=wrapped):
+        store = ProjectStorage(str(db))
+        store.set_setting("k", "v")
+        assert store.get_setting("k") == "v"
+    assert seen.get("timeout") == SQLITE_TIMEOUT_SEC
+    conn = sqlite3.connect(str(db))
+    mode = conn.execute("PRAGMA journal_mode").fetchone()[0]
+    conn.close()
+    assert str(mode).lower() == "wal"

@@ -1,6 +1,7 @@
 import json
 import logging
 import sqlite3
+import time
 import uuid
 from datetime import datetime
 from typing import Any, Dict, List, Optional
@@ -8,6 +9,8 @@ from typing import Any, Dict, List, Optional
 logger = logging.getLogger(__name__)
 
 from backend.config import DB_PATH
+
+SQLITE_TIMEOUT_SEC = 30.0
 
 
 def count_board_tasks(board_state: Any) -> int:
@@ -30,8 +33,24 @@ class ProjectStorage:
         self.db_path = db_path
         self._init_db()
 
+    def _connect(self) -> sqlite3.Connection:
+        conn = sqlite3.connect(self.db_path, timeout=SQLITE_TIMEOUT_SEC)
+        conn.execute("PRAGMA busy_timeout = 30000")
+        return conn
+
+    @staticmethod
+    def _locked_retry(fn):
+        try:
+            return fn()
+        except sqlite3.OperationalError as exc:
+            if "locked" not in str(exc).lower():
+                raise
+            time.sleep(0.05)
+            return fn()
+
     def _init_db(self) -> None:
-        with sqlite3.connect(self.db_path) as conn:
+        with self._connect() as conn:
+            conn.execute("PRAGMA journal_mode=WAL")
             conn.execute(
                 """
                 CREATE TABLE IF NOT EXISTS projects (
@@ -218,7 +237,7 @@ class ProjectStorage:
                         )
                     except Exception:
                         pass
-        with sqlite3.connect(self.db_path) as conn:
+        with self._connect() as conn:
             conn.execute(
                 """
                 INSERT INTO projects (
@@ -277,7 +296,7 @@ class ProjectStorage:
         return wrote_incoming_board
 
     def load_project(self, proj_id: str) -> Optional[Dict[str, Any]]:
-        with sqlite3.connect(self.db_path) as conn:
+        with self._connect() as conn:
             conn.row_factory = sqlite3.Row
             cursor = conn.cursor()
             cursor.execute("SELECT * FROM projects WHERE id = ?", (proj_id,))
@@ -327,7 +346,7 @@ class ProjectStorage:
         return None
 
     def delete_project(self, proj_id: str) -> bool:
-        with sqlite3.connect(self.db_path) as conn:
+        with self._connect() as conn:
             cursor = conn.cursor()
             cursor.execute("DELETE FROM chat_messages WHERE project_id = ?", (proj_id,))
             cursor.execute("DELETE FROM file_revisions WHERE project_id = ?", (proj_id,))
@@ -340,14 +359,14 @@ class ProjectStorage:
             return cursor.rowcount > 0
 
     def list_projects(self) -> List[Dict[str, Any]]:
-        with sqlite3.connect(self.db_path) as conn:
+        with self._connect() as conn:
             conn.row_factory = sqlite3.Row
             cursor = conn.cursor()
             cursor.execute("SELECT id, name, updated_at FROM projects ORDER BY updated_at DESC")
             return [{"id": r["id"], "name": r["name"], "updated_at": r["updated_at"]} for r in cursor.fetchall()]
 
     def set_active_project_id(self, proj_id: str) -> None:
-        with sqlite3.connect(self.db_path) as conn:
+        with self._connect() as conn:
             conn.execute(
                 "INSERT INTO settings (key, value) VALUES ('active_project_id', ?) "
                 "ON CONFLICT(key) DO UPDATE SET value=excluded.value",
@@ -356,27 +375,33 @@ class ProjectStorage:
             conn.commit()
 
     def get_active_project_id(self) -> Optional[str]:
-        with sqlite3.connect(self.db_path) as conn:
+        with self._connect() as conn:
             cursor = conn.cursor()
             cursor.execute("SELECT value FROM settings WHERE key = 'active_project_id'")
             row = cursor.fetchone()
             return row[0] if row else None
 
     def set_setting(self, key: str, value: str) -> None:
-        with sqlite3.connect(self.db_path) as conn:
-            conn.execute(
-                "INSERT INTO settings (key, value) VALUES (?, ?) "
-                "ON CONFLICT(key) DO UPDATE SET value=excluded.value",
-                (key, value),
-            )
-            conn.commit()
+        def _write() -> None:
+            with self._connect() as conn:
+                conn.execute(
+                    "INSERT INTO settings (key, value) VALUES (?, ?) "
+                    "ON CONFLICT(key) DO UPDATE SET value=excluded.value",
+                    (key, value),
+                )
+                conn.commit()
+
+        self._locked_retry(_write)
 
     def get_setting(self, key: str) -> Optional[str]:
-        with sqlite3.connect(self.db_path) as conn:
-            cursor = conn.cursor()
-            cursor.execute("SELECT value FROM settings WHERE key = ?", (key,))
-            row = cursor.fetchone()
-            return row[0] if row else None
+        def _read() -> Optional[str]:
+            with self._connect() as conn:
+                cursor = conn.cursor()
+                cursor.execute("SELECT value FROM settings WHERE key = ?", (key,))
+                row = cursor.fetchone()
+                return row[0] if row else None
+
+        return self._locked_retry(_read)
 
     def add_brief_changelog(
         self,
@@ -386,7 +411,7 @@ class ProjectStorage:
         snippet: str = "",
     ) -> None:
         entry_id = str(uuid.uuid4())
-        with sqlite3.connect(self.db_path) as conn:
+        with self._connect() as conn:
             conn.execute(
                 "INSERT INTO brief_changelog (id, project_id, source, summary, snippet) "
                 "VALUES (?, ?, ?, ?, ?)",
@@ -395,7 +420,7 @@ class ProjectStorage:
             conn.commit()
 
     def get_brief_changelog(self, project_id: str, limit: int = 50) -> List[Dict[str, Any]]:
-        with sqlite3.connect(self.db_path) as conn:
+        with self._connect() as conn:
             conn.row_factory = sqlite3.Row
             cursor = conn.cursor()
             cursor.execute(
@@ -417,7 +442,7 @@ class ProjectStorage:
         max_per_field: int = 40,
     ) -> str:
         entry_id = str(uuid.uuid4())
-        with sqlite3.connect(self.db_path) as conn:
+        with self._connect() as conn:
             conn.execute(
                 """
                 INSERT INTO task_field_changelog
@@ -454,7 +479,7 @@ class ProjectStorage:
         *,
         limit: int = 40,
     ) -> List[Dict[str, Any]]:
-        with sqlite3.connect(self.db_path) as conn:
+        with self._connect() as conn:
             conn.row_factory = sqlite3.Row
             cursor = conn.cursor()
             cursor.execute(
@@ -474,7 +499,7 @@ class ProjectStorage:
         project_id: str,
         entry_id: str,
     ) -> Optional[Dict[str, Any]]:
-        with sqlite3.connect(self.db_path) as conn:
+        with self._connect() as conn:
             conn.row_factory = sqlite3.Row
             cursor = conn.cursor()
             cursor.execute(
@@ -490,7 +515,7 @@ class ProjectStorage:
             return dict(row) if row else None
 
     def save_project_logs(self, proj_id: str, logs: List[Dict[str, str]]) -> None:
-        with sqlite3.connect(self.db_path) as conn:
+        with self._connect() as conn:
             conn.execute(
                 "UPDATE projects SET project_logs = ?, updated_at = CURRENT_TIMESTAMP WHERE id = ?",
                 (json.dumps(logs), proj_id),
@@ -498,7 +523,7 @@ class ProjectStorage:
             conn.commit()
 
     def load_project_logs(self, proj_id: str) -> List[Dict[str, str]]:
-        with sqlite3.connect(self.db_path) as conn:
+        with self._connect() as conn:
             conn.row_factory = sqlite3.Row
             cursor = conn.cursor()
             cursor.execute("SELECT project_logs FROM projects WHERE id = ?", (proj_id,))
@@ -519,7 +544,7 @@ class ProjectStorage:
     ) -> Dict[str, Any]:
         msg_id = str(uuid.uuid4())
         created_at = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
-        with sqlite3.connect(self.db_path) as conn:
+        with self._connect() as conn:
             conn.execute(
                 "INSERT INTO chat_messages (id, project_id, role, agent, content, created_at) VALUES (?, ?, ?, ?, ?, ?)",
                 (msg_id, project_id, role, agent, content, created_at),
@@ -535,7 +560,7 @@ class ProjectStorage:
         }
 
     def get_chat_messages(self, project_id: str, limit: int = 100) -> List[Dict[str, Any]]:
-        with sqlite3.connect(self.db_path) as conn:
+        with self._connect() as conn:
             conn.row_factory = sqlite3.Row
             cursor = conn.cursor()
             cursor.execute(
@@ -546,7 +571,7 @@ class ProjectStorage:
             return [dict(r) for r in cursor.fetchall()]
 
     def clear_chat_messages(self, project_id: str) -> int:
-        with sqlite3.connect(self.db_path) as conn:
+        with self._connect() as conn:
             cursor = conn.cursor()
             cursor.execute("DELETE FROM chat_messages WHERE project_id = ?", (project_id,))
             conn.commit()
@@ -567,7 +592,7 @@ class ProjectStorage:
         """
         drop_turns = max(1, int(drop_turns or 1))
         mode = (mode or "turns").strip().lower()
-        with sqlite3.connect(self.db_path) as conn:
+        with self._connect() as conn:
             conn.row_factory = sqlite3.Row
             cursor = conn.cursor()
             cursor.execute(
@@ -645,7 +670,7 @@ class ProjectStorage:
     ) -> Dict[str, Any]:
         rev_id = str(uuid.uuid4())
         created_at = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
-        with sqlite3.connect(self.db_path) as conn:
+        with self._connect() as conn:
             conn.execute(
                 "INSERT INTO file_revisions (id, project_id, path, content, previous_content, author, created_at) "
                 "VALUES (?, ?, ?, ?, ?, ?, ?)",
@@ -663,7 +688,7 @@ class ProjectStorage:
         }
 
     def get_file_revisions(self, project_id: str, path: str, limit: int = 20) -> List[Dict[str, Any]]:
-        with sqlite3.connect(self.db_path) as conn:
+        with self._connect() as conn:
             conn.row_factory = sqlite3.Row
             cursor = conn.cursor()
             cursor.execute(
@@ -678,7 +703,7 @@ class ProjectStorage:
         return revisions[0] if revisions else None
 
     def get_file_revision(self, revision_id: str) -> Optional[Dict[str, Any]]:
-        with sqlite3.connect(self.db_path) as conn:
+        with self._connect() as conn:
             conn.row_factory = sqlite3.Row
             cursor = conn.cursor()
             cursor.execute(
@@ -690,7 +715,7 @@ class ProjectStorage:
             return dict(row) if row else None
 
     def get_tool_aliases(self, project_id: str) -> Dict[str, Dict[str, Any]]:
-        with sqlite3.connect(self.db_path) as conn:
+        with self._connect() as conn:
             conn.row_factory = sqlite3.Row
             cursor = conn.cursor()
             cursor.execute(
@@ -710,7 +735,7 @@ class ProjectStorage:
         target_tool: str,
         default_args: Dict[str, Any],
     ) -> None:
-        with sqlite3.connect(self.db_path) as conn:
+        with self._connect() as conn:
             conn.execute(
                 """
                 INSERT INTO tool_aliases (project_id, alias, target_tool, default_args)
@@ -724,7 +749,7 @@ class ProjectStorage:
             conn.commit()
 
     def delete_tool_alias(self, project_id: str, alias: str) -> None:
-        with sqlite3.connect(self.db_path) as conn:
+        with self._connect() as conn:
             conn.execute(
                 "DELETE FROM tool_aliases WHERE project_id = ? AND alias = ?",
                 (project_id, alias),
@@ -732,7 +757,7 @@ class ProjectStorage:
             conn.commit()
 
     def save_pending_tool_request(self, request: Dict[str, Any]) -> None:
-        with sqlite3.connect(self.db_path) as conn:
+        with self._connect() as conn:
             conn.execute(
                 """
                 INSERT INTO pending_tool_requests
@@ -757,7 +782,7 @@ class ProjectStorage:
         project_id: str,
         status: str = "pending",
     ) -> List[Dict[str, Any]]:
-        with sqlite3.connect(self.db_path) as conn:
+        with self._connect() as conn:
             conn.row_factory = sqlite3.Row
             cursor = conn.cursor()
             cursor.execute(
@@ -782,7 +807,7 @@ class ProjectStorage:
             return rows
 
     def get_pending_tool_request(self, request_id: str) -> Optional[Dict[str, Any]]:
-        with sqlite3.connect(self.db_path) as conn:
+        with self._connect() as conn:
             conn.row_factory = sqlite3.Row
             cursor = conn.cursor()
             cursor.execute(
@@ -805,7 +830,7 @@ class ProjectStorage:
             }
 
     def update_pending_tool_status(self, request_id: str, status: str) -> None:
-        with sqlite3.connect(self.db_path) as conn:
+        with self._connect() as conn:
             conn.execute(
                 "UPDATE pending_tool_requests SET status = ? WHERE id = ?",
                 (status, request_id),
