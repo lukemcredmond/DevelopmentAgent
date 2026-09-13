@@ -243,7 +243,8 @@ class StepDiagnosticsTracker:
             ),
             "max_iterations": "Agent hit max LLM iterations without finishing edits.",
             "max_iterations_after_writes": (
-                "Agent wrote files then hit max LLM iterations before verify or a lane move."
+                "Agent wrote files then stopped after verify was already known "
+                "(duplicate skip) or hit the iteration cap."
             ),
             "identical_write_loop": (
                 "The same successful patch was applied repeatedly. Stop rewriting; "
@@ -680,6 +681,17 @@ def log_ollama_call(
             last_event=f"ollama:iter{iteration}",
             diagnostics_file=str(trace.file_path),
         )
+        done_l = str(done_reason or "").lower()
+        if done_l in ("length", "max_tokens"):
+            log_event(
+                "ctx_truncated",
+                f"doneReason={done_reason} num_ctx={num_ctx} eval_count={eval_tokens}",
+            )
+        if error_type == "empty_generation_timeout":
+            log_event(
+                "empty_generation_timeout",
+                f"elapsed_ms={duration_ms} eval_count={eval_tokens}",
+            )
 
 
 def log_tool(

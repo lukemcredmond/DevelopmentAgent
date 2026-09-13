@@ -157,6 +157,25 @@ def initial_ollama_num_ctx(
     return min(ceiling, max(2048, start))
 
 
+def packed_prompt_num_ctx(
+    messages: Any,
+    ceiling: int,
+    *,
+    headroom_tokens: int = 1024,
+) -> int:
+    """num_ctx sized to the packed prompt plus headroom, clamped to the ceiling."""
+    from backend.services.llm_context import estimate_messages_chars
+
+    try:
+        ceiling_i = max(2048, int(ceiling or DEFAULT_NUM_CTX))
+    except (TypeError, ValueError):
+        ceiling_i = DEFAULT_NUM_CTX
+    chars = estimate_messages_chars(messages or [])
+    needed = max(0, int(chars) // 4) + max(0, int(headroom_tokens))
+    rounded = ((needed + 1023) // 1024) * 1024
+    return min(ceiling_i, max(2048, rounded))
+
+
 def bump_ollama_num_ctx(current: int, ceiling: int, *, step: int = 8192) -> Optional[int]:
     """Next num_ctx after overflow, or None if already at ceiling."""
     if current >= ceiling:

@@ -574,6 +574,7 @@ export interface WorkflowSettings {
   ollamaNumCtxAdaptiveStep?: number
   ollamaKeepAlive?: string
   ollamaRequestTimeoutSec?: number
+  ollamaEmptyGenerationTimeoutSec?: number
   modelTestTimeoutSec?: number
   terminalTimeoutSec?: number
   enableVramAwareModelSwap?: boolean
@@ -1305,6 +1306,7 @@ export interface WorkflowSettingsPayload {
   ollamaNumCtxAdaptiveStep?: number
   ollamaKeepAlive?: string
   ollamaRequestTimeoutSec?: number
+  ollamaEmptyGenerationTimeoutSec?: number
   modelTestTimeoutSec?: number
   terminalTimeoutSec?: number
   enableVramAwareModelSwap?: boolean
@@ -1718,6 +1720,7 @@ export const DEFAULT_WORKFLOW_SETTINGS: WorkflowSettings = {
   ollamaNumCtxAdaptiveStep: 8192,
   ollamaKeepAlive: '30m',
   ollamaRequestTimeoutSec: 900,
+  ollamaEmptyGenerationTimeoutSec: 90,
   modelTestTimeoutSec: 600,
   terminalTimeoutSec: 600,
   enableVramAwareModelSwap: true,

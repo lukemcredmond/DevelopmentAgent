@@ -1936,6 +1936,23 @@ export default function WorkflowPanel({
       </p>
 
       <label className="text-[11px] text-cat-subtext block">
+        <span className="text-[10px] text-cat-overlay block">Empty-generation abort (seconds)</span>
+        <NumberSettingInput
+          value={settings.ollamaEmptyGenerationTimeoutSec ?? 90}
+          min={15}
+          max={600}
+          onCommit={(ollamaEmptyGenerationTimeoutSec) =>
+            onSettingsChange({ ollamaEmptyGenerationTimeoutSec })
+          }
+          className="w-full bg-cat-base border border-cat-surface1 rounded p-1 text-white"
+        />
+      </label>
+      <p className="text-[10px] text-cat-overlay leading-relaxed -mt-1">
+        Abort a streamed agent call if no eval tokens arrive (hung empty generate). Does not
+        shorten the HTTP timeout while tokens are flowing.
+      </p>
+
+      <label className="text-[11px] text-cat-subtext block">
         <span className="text-[10px] text-cat-overlay block">Model test timeout (seconds)</span>
         <NumberSettingInput
           value={settings.modelTestTimeoutSec ?? 600}

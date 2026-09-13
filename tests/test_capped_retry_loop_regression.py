@@ -636,3 +636,143 @@ def test_dirty_lint_does_not_auto_advance():
         moved = _maybe_advance_dev_after_lint_write("T-DIRTY", task, "In Progress")
     assert moved is False
     assert get_task_lane("T-DIRTY") == "In Progress"
+
+
+def test_verify_after_writes_advances_to_qa_even_if_lint_dirty():
+    initialize()
+    reset_workflow_settings()
+    save_workflow_settings({"requireCodeReview": False})
+    _empty_board()
+    task = init_new_task(
+        {"id": "T-VER", "title": "Verify pass", "description": "d", "status": "In Progress"}
+    )
+    task["fixVerifyLintClean"] = False
+    state.SHARED_BOARD["In Progress"] = [task]
+    state.FIX_VERIFY_LINT_CLEAN = False
+
+    class _Trace:
+        tools_log = [
+            {"toolName": "write_file", "success": True, "summary": "a.dart"},
+            {
+                "toolName": "run_command",
+                "success": True,
+                "summary": "skipped duplicate flutter test test/data/store_repository_test.dart",
+            },
+        ]
+
+    from backend.services.sprint_service import _maybe_advance_dev_after_verify
+
+    with patch(
+        "backend.services.step_diagnostics.get_active_trace",
+        return_value=_Trace(),
+    ):
+        moved = _maybe_advance_dev_after_verify("T-VER", task, "In Progress")
+    assert moved is True
+    assert get_task_lane("T-VER") == "QA"
+
+
+def test_write_dup_verify_stop_advances_without_run_command_in_tools_log(tmp_path, monkeypatch):
+    monkeypatch.setenv("ALLHANDS_HOME", str(tmp_path))
+    initialize()
+    reset_workflow_settings()
+    save_workflow_settings({"requireCodeReview": False})
+    _empty_board()
+    from backend.services.step_diagnostics import (
+        clear_active_step_trace,
+        get_active_trace,
+        log_event,
+        start_step_trace,
+    )
+
+    clear_active_step_trace()
+    state.CURRENT_PROJECT_ID = "test-proj"
+    task = init_new_task(
+        {"id": "T-DUP-ADV", "title": "Dup stop", "description": "d", "status": "In Progress"}
+    )
+    task["fixVerifyLintClean"] = False
+    state.SHARED_BOARD["In Progress"] = [task]
+    state.FIX_VERIFY_LINT_CLEAN = False
+    trace = start_step_trace("T-DUP-ADV", "Dup stop", "Developer", "In Progress")
+    trace.log_tool("write_file", True, "test/data/store_repository_test_new.dart (10 chars)")
+    log_event("verify_stop", "source=seeded_keys")
+    state.LAST_AGENT_STEP_RESULT = (
+        "Stopped: files already written this step and verify command was a duplicate skip. "
+        "Continuing to lint/lane advance."
+    )
+    from backend.services.sprint_service import (
+        _maybe_advance_dev_after_verify,
+        _outcome_why_card_stayed,
+    )
+
+    moved = _maybe_advance_dev_after_verify("T-DUP-ADV", task, "In Progress")
+    assert moved is True
+    assert get_task_lane("T-DUP-ADV") == "QA"
+    kinds = [e["kind"] for e in get_active_trace().events]
+    assert "verify_stop" in kinds
+    assert "lane_advance" in kinds
+    why = _outcome_why_card_stayed(
+        "max_iterations_after_writes",
+        title="Dup stop",
+        lane_after="In Progress",
+    )
+    assert "text-only" not in why.lower()
+    assert "duplicate skip" in why.lower()
+    clear_active_step_trace()
+
+
+def test_write_without_verify_or_dup_stop_does_not_advance(tmp_path, monkeypatch):
+    monkeypatch.setenv("ALLHANDS_HOME", str(tmp_path))
+    initialize()
+    reset_workflow_settings()
+    save_workflow_settings({"requireCodeReview": False})
+    _empty_board()
+    from backend.services.step_diagnostics import clear_active_step_trace, start_step_trace
+
+    clear_active_step_trace()
+    state.CURRENT_PROJECT_ID = "test-proj"
+    task = init_new_task(
+        {"id": "T-NO-VER", "title": "Wrote only", "description": "d", "status": "In Progress"}
+    )
+    state.SHARED_BOARD["In Progress"] = [task]
+    state.FIX_VERIFY_LINT_CLEAN = False
+    trace = start_step_trace("T-NO-VER", "Wrote only", "Developer", "In Progress")
+    trace.log_tool("write_file", True, "lib/a.dart (10 chars)")
+    state.LAST_AGENT_STEP_RESULT = "Max tool iterations reached."
+    from backend.services.sprint_service import _maybe_advance_dev_after_verify
+
+    moved = _maybe_advance_dev_after_verify("T-NO-VER", task, "In Progress")
+    assert moved is False
+    assert get_task_lane("T-NO-VER") == "In Progress"
+    kinds = [e["kind"] for e in trace.events]
+    assert "lane_advance_skipped" in kinds
+    assert any("no_verify_in_tools_log" in e["message"] for e in trace.events)
+    clear_active_step_trace()
+
+
+def test_dirty_lint_logs_lane_advance_skipped(tmp_path, monkeypatch):
+    monkeypatch.setenv("ALLHANDS_HOME", str(tmp_path))
+    initialize()
+    reset_workflow_settings()
+    save_workflow_settings({"requireCodeReview": False})
+    _empty_board()
+    from backend.services.step_diagnostics import clear_active_step_trace, start_step_trace
+
+    clear_active_step_trace()
+    state.CURRENT_PROJECT_ID = "test-proj"
+    task = init_new_task(
+        {"id": "T-LINT-SKIP", "title": "Lint dirty", "description": "d", "status": "In Progress"}
+    )
+    task["fixVerifyLintClean"] = False
+    state.SHARED_BOARD["In Progress"] = [task]
+    state.FIX_VERIFY_LINT_CLEAN = False
+    trace = start_step_trace("T-LINT-SKIP", "Lint dirty", "Developer", "In Progress")
+    trace.log_tool("write_file", True, "a.dart")
+    from backend.services.sprint_service import _maybe_advance_dev_after_lint_write
+
+    moved = _maybe_advance_dev_after_lint_write("T-LINT-SKIP", task, "In Progress")
+    assert moved is False
+    assert any(
+        e["kind"] == "lane_advance_skipped" and e["message"] == "lint_dirty"
+        for e in trace.events
+    )
+    clear_active_step_trace()

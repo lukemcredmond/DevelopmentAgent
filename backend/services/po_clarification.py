@@ -183,6 +183,45 @@ def _ensure_dev_claim_fields(task: Dict[str, Any]) -> None:
         task["userStory"] = desc
 
 
+def should_move_off_needs_po_without_llm(task: Optional[Dict[str, Any]]) -> bool:
+    """True when the card already has a spec and only needs update_board back to Dev."""
+    if not isinstance(task, dict):
+        return False
+    desc = str(task.get("description") or "").strip()
+    ac = [str(c).strip() for c in (task.get("acceptanceCriteria") or []) if str(c).strip()]
+    if not desc or not ac:
+        return False
+    if int(task.get("identicalPoClarificationCount") or 0) >= 1:
+        return True
+    from backend.services.sprint_speed_gates import last_step_exit_reason
+
+    reason = last_step_exit_reason(task)
+    return reason in (
+        "max_iterations_after_writes",
+        "completed_with_writes",
+        "completed_with_writes_no_advance",
+        "lint_after_write_stop",
+    )
+
+
+def po_llm_skip_block_reason(task: Optional[Dict[str, Any]]) -> str:
+    """Why PO skip did not fire; empty when skip is allowed."""
+    if should_move_off_needs_po_without_llm(task):
+        return ""
+    if not isinstance(task, dict):
+        return "invalid_task"
+    desc = str(task.get("description") or "").strip()
+    ac = [str(c).strip() for c in (task.get("acceptanceCriteria") or []) if str(c).strip()]
+    if not desc:
+        return "missing_description"
+    if not ac:
+        return "missing_acceptance_criteria"
+    from backend.services.sprint_speed_gates import last_step_exit_reason
+
+    reason = last_step_exit_reason(task) or "none"
+    return f"last_exit={reason}"
+
+
 def move_off_needs_po(task_id: str) -> Optional[str]:
     """Move Needs PO → In Progress (or Refinement). Returns destination lane or None."""
     lane = get_task_lane(task_id) or ""

@@ -192,6 +192,7 @@ class WorkflowSettingsPayload(BaseModel):
     maxFixVerifyRounds: Optional[int] = None
     autoExtendOnMaxIter: Optional[bool] = None
     autoExtendExtraIterations: Optional[int] = None
+    identicalSuccessWriteLimit: Optional[int] = None
     maxInCardLintFixes: Optional[int] = None
     maxLintFanoutCards: Optional[int] = None
     lintFanoutThreshold: Optional[int] = None
@@ -252,6 +253,7 @@ class WorkflowSettingsPayload(BaseModel):
     mcpConnectTimeoutSec: Optional[int] = None
     ollamaKeepAlive: Optional[str] = None
     ollamaRequestTimeoutSec: Optional[int] = None
+    ollamaEmptyGenerationTimeoutSec: Optional[int] = None
     modelTestTimeoutSec: Optional[int] = None
     terminalTimeoutSec: Optional[int] = None
     enableVramAwareModelSwap: Optional[bool] = None

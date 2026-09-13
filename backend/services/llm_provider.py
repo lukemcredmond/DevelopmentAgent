@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import json
+import threading
 from dataclasses import dataclass, field
 from typing import Any, Dict, Iterator, List, Optional, Sequence, Union
 
@@ -950,6 +951,82 @@ def chat_result_from_openai(payload: Dict[str, Any]) -> ChatResult:
 def _iter_ollama_stream(result: Any) -> Iterator[ChatResult]:
     for chunk in result:
         yield chat_result_from_ollama(chunk)
+
+
+class EmptyGenerationTimeout(TimeoutError):
+    """Raised when a streamed chat produces no eval tokens before the empty-gen timeout."""
+
+
+def _next_stream_chunk(iterator: Iterator[ChatResult], timeout_sec: float) -> Optional[ChatResult]:
+    box: Dict[str, Any] = {"item": None, "err": None, "done": False}
+
+    def worker() -> None:
+        try:
+            box["item"] = next(iterator)
+        except StopIteration as exc:
+            box["err"] = exc
+        except Exception as exc:
+            box["err"] = exc
+        finally:
+            box["done"] = True
+
+    thread = threading.Thread(target=worker, name="ollama-stream-next", daemon=True)
+    thread.start()
+    thread.join(max(0.05, float(timeout_sec)))
+    if not box["done"]:
+        raise EmptyGenerationTimeout(
+            f"Ollama empty generation timed out after {timeout_sec:.0f}s"
+        )
+    err = box["err"]
+    if isinstance(err, StopIteration):
+        return None
+    if err is not None:
+        raise err
+    return box["item"]
+
+
+def consume_chat_stream(
+    stream: Iterator[ChatResult],
+    *,
+    empty_timeout_sec: float = 90,
+    flowing_timeout_sec: float = 900,
+) -> ChatResult:
+    """Fold a provider stream into one ChatResult; abort if no eval tokens arrive."""
+    iterator = iter(stream)
+    empty_wait = max(1.0, float(empty_timeout_sec))
+    flowing_wait = max(empty_wait, float(flowing_timeout_sec))
+    wait = empty_wait
+    content_parts: List[str] = []
+    tool_calls: Optional[List[ProviderToolCall]] = None
+    prompt_eval = 0
+    eval_count = 0
+    last_raw: Any = None
+    while True:
+        chunk = _next_stream_chunk(iterator, wait)
+        if chunk is None:
+            break
+        last_raw = chunk.raw if chunk.raw is not None else last_raw
+        if int(chunk.prompt_eval_count or 0) > prompt_eval:
+            prompt_eval = int(chunk.prompt_eval_count or 0)
+        if int(chunk.eval_count or 0) > eval_count:
+            eval_count = int(chunk.eval_count or 0)
+        msg = chunk.message
+        if msg and msg.content:
+            content_parts.append(str(msg.content))
+        if msg and msg.tool_calls:
+            tool_calls = list(msg.tool_calls)
+        progressed = eval_count > 0 or bool(content_parts) or bool(tool_calls)
+        wait = flowing_wait if progressed else empty_wait
+    return ChatResult(
+        message=ProviderMessage(
+            role="assistant",
+            content="".join(content_parts) or None,
+            tool_calls=tool_calls,
+        ),
+        prompt_eval_count=prompt_eval,
+        eval_count=eval_count,
+        raw=last_raw,
+    )
 
 
 def _iter_openai_stream(response: requests.Response) -> Iterator[ChatResult]:

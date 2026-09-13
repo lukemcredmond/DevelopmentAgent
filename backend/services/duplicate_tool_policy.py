@@ -62,11 +62,91 @@ def purge_read_file_success_keys_for_path(
     successful_tool_keys[:] = keep
 
 
+_VERIFY_COMMAND_RE = re.compile(
+    r"(?:"
+    r"flutter\s+test|dart\s+test|dotnet\s+test|"
+    r"pytest|npm\s+test|pnpm\s+test|yarn\s+test|"
+    r"go\s+test|cargo\s+test|mvn\s+test|gradlew?\s+test"
+    r")",
+    re.I,
+)
+
+
 def normalize_run_command_for_duplicate(command: str) -> str:
     """Stable key for in-step duplicate detection on run_command."""
     text = str(command or "").strip()
     text = re.sub(r"\s+", " ", text)
     return text.lower()
+
+
+def is_verify_command(command: str) -> bool:
+    """True for test/verify shell commands (flutter test, pytest, …)."""
+    return bool(_VERIFY_COMMAND_RE.search(str(command or "")))
+
+
+def _command_from_tool_key(name: str, args_json: str) -> str:
+    import json
+
+    if name == "run_test":
+        return "run_test"
+    if name != "run_command":
+        return ""
+    try:
+        args = json.loads(args_json or "{}")
+    except json.JSONDecodeError:
+        args = {}
+    if isinstance(args, dict):
+        return str(args.get("command") or "")
+    return ""
+
+
+def successful_keys_include_verify(
+    successful_tool_keys: Optional[List[Tuple[str, str]]],
+) -> bool:
+    """True when a prior successful (or seeded) verify command is already known."""
+    for name, args_json in successful_tool_keys or []:
+        if name == "run_test":
+            return True
+        if name == "run_command" and is_verify_command(_command_from_tool_key(name, args_json)):
+            return True
+    return False
+
+
+def tools_log_has_verify(tools_log: Optional[List[Dict[str, Any]]]) -> bool:
+    """True when this step already ran or duplicate-skipped a verify command."""
+    for entry in tools_log or []:
+        if not isinstance(entry, dict):
+            continue
+        name = str(entry.get("toolName") or entry.get("name") or "")
+        summary = str(entry.get("summary") or "")
+        output = str(entry.get("output") or entry.get("toolOutput") or "")
+        blob = f"{summary} {output}"
+        ok = bool(entry.get("success"))
+        skipped = "skipped duplicate" in blob.lower() or bool(entry.get("duplicateSkip"))
+        if name == "run_test" and (ok or skipped):
+            return True
+        if name == "run_command" and (ok or skipped) and is_verify_command(blob):
+            return True
+    return False
+
+
+WRITE_DUP_VERIFY_STOP_SNIPPET = (
+    "files already written this step and verify command was a duplicate skip"
+)
+
+
+def agent_result_is_write_dup_verify_stop(result: Optional[str]) -> bool:
+    return WRITE_DUP_VERIFY_STOP_SNIPPET in str(result or "").lower()
+
+
+def verify_known_for_advance(
+    tools_log: Optional[List[Dict[str, Any]]],
+    agent_result: Optional[str] = None,
+) -> bool:
+    """True when this step's tools_log has verify, or the agent stopped as write+dup-verify."""
+    if tools_log_has_verify(tools_log):
+        return True
+    return agent_result_is_write_dup_verify_stop(agent_result)
 
 
 def duplicate_run_command_policy(ws: dict | None = None) -> str:

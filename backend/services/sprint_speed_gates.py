@@ -30,7 +30,7 @@ UNHEALTHY_LANE_ADVANCE_EXITS = frozenset(
     }
 )
 
-# Write-success exits that may advance after a clean lint pass.
+# Write-success exits that may advance after a clean lint pass or a passing verify.
 LINT_OK_ADVANCE_EXITS = frozenset(
     {
         "max_iterations_after_writes",
@@ -91,6 +91,7 @@ def unhealthy_exit_blocks_lane_advance(
     *,
     writes_succeeded: int = 0,
     lint_clean: bool = False,
+    verify_passed: bool = False,
 ) -> bool:
     """True when Dev must stay In Progress despite prior writes."""
     if ws is None:
@@ -105,7 +106,7 @@ def unhealthy_exit_blocks_lane_advance(
     if (
         reason in LINT_OK_ADVANCE_EXITS
         and int(writes_succeeded or 0) > 0
-        and lint_clean
+        and (lint_clean or verify_passed)
     ):
         return False
     return reason in UNHEALTHY_LANE_ADVANCE_EXITS
@@ -231,6 +232,11 @@ def no_write_stall_should_park(
     return int(task.get("consecutiveNoWriteStall") or 0) >= limit
 
 
+def identical_write_loop_should_park(task: Dict[str, Any]) -> bool:
+    """True when the last Dev step stopped on the same-file rewrite loop."""
+    return last_step_exit_reason(task) == "identical_write_loop"
+
+
 def circuit_breaker_should_trip(task: Dict[str, Any], ws: Optional[Dict[str, Any]] = None) -> tuple[bool, str]:
     """
     Return (trip, reason) when the card should stop endless In Progress retries.
@@ -289,7 +295,7 @@ _FORCE_PATCH_EXITS = frozenset(
         "identical_write_loop",
     }
 )
-IDENTICAL_SUCCESS_WRITE_LIMIT = 3
+IDENTICAL_SUCCESS_WRITE_LIMIT = 2
 
 
 def last_step_exit_reason(task: Dict[str, Any]) -> str:
@@ -377,7 +383,7 @@ def identical_write_loop_reached(
         except Exception:
             ws = {}
     try:
-        limit = max(2, int((ws or {}).get("identicalSuccessWriteLimit") or limit))
+        limit = max(2, int((ws or {}).get("identicalSuccessWriteLimit") or IDENTICAL_SUCCESS_WRITE_LIMIT))
     except (TypeError, ValueError):
         limit = IDENTICAL_SUCCESS_WRITE_LIMIT
     return int(task.get("identicalSuccessWriteCount") or 0) >= limit

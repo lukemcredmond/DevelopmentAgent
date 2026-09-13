@@ -29,6 +29,16 @@ def test_unhealthy_exit_blocks_lane_advance_by_default():
         )
         is True
     )
+    assert (
+        gates.unhealthy_exit_blocks_lane_advance(
+            "max_iterations_after_writes",
+            ws,
+            writes_succeeded=1,
+            lint_clean=False,
+            verify_passed=True,
+        )
+        is False
+    )
 
 
 def test_force_complete_overrides_unhealthy_gate():
@@ -120,19 +130,27 @@ def test_force_patch_after_write_exits():
     )
 
 
-def test_identical_success_write_trips_at_three():
+def test_identical_success_write_trips_at_two_by_default():
     task: dict = {}
     fp = gates.successful_write_fingerprint(
         "lib/store_list_screen.dart", summary="replace 645 chars"
     )
     assert gates.record_successful_write_fingerprint(task, fp) == 1
+    assert gates.identical_write_loop_reached(task, ws={"identicalSuccessWriteLimit": 2}) is False
     assert gates.record_successful_write_fingerprint(task, fp) == 2
-    assert gates.identical_write_loop_reached(task, ws={"identicalSuccessWriteLimit": 3}) is False
-    assert gates.record_successful_write_fingerprint(task, fp) == 3
-    assert gates.identical_write_loop_reached(task, ws={"identicalSuccessWriteLimit": 3}) is True
+    assert gates.identical_write_loop_reached(task, ws={"identicalSuccessWriteLimit": 2}) is True
     other = gates.successful_write_fingerprint("lib/other.dart", summary="replace 10 chars")
     assert gates.record_successful_write_fingerprint(task, other) == 1
-    assert gates.identical_write_loop_reached(task, ws={"identicalSuccessWriteLimit": 3}) is False
+    assert gates.identical_write_loop_reached(task, ws={"identicalSuccessWriteLimit": 2}) is False
+
+
+def test_identical_write_loop_should_park():
+    assert gates.identical_write_loop_should_park(
+        {"lastStepOutcome": {"exitReason": "identical_write_loop"}}
+    )
+    assert not gates.identical_write_loop_should_park(
+        {"lastStepOutcome": {"exitReason": "max_iterations_after_writes"}}
+    )
 
 
 def test_successful_write_fingerprint_uses_path_and_replace_size_not_text():

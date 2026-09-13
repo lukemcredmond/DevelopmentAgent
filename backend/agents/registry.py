@@ -311,6 +311,18 @@ def _guarded_update_board(
                         )
                 except Exception:
                     pass
+                verify_passed = False
+                try:
+                    from backend.services.duplicate_tool_policy import tools_log_has_verify
+                    from backend.services.step_diagnostics import get_active_trace
+
+                    trace = get_active_trace()
+                    if trace:
+                        verify_passed = tools_log_has_verify(
+                            getattr(trace, "tools_log", None) or []
+                        )
+                except Exception:
+                    verify_passed = False
                 if unhealthy_exit_blocks_lane_advance(
                     exit_r,
                     writes_succeeded=int(
@@ -322,6 +334,7 @@ def _guarded_update_board(
                         getattr(state, "FIX_VERIFY_LINT_CLEAN", False)
                         or (task.get("fixVerifyLintClean") if isinstance(task, dict) else False)
                     ),
+                    verify_passed=verify_passed,
                 ):
                     return (
                         f"Error: Cannot move to {target_upper} — step exit '{exit_r or 'unhealthy'}' "

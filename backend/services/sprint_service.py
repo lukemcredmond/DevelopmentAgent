@@ -322,6 +322,7 @@ def _dev_unhealthy_exit_blocks_advance(exit_reason: Optional[str]) -> bool:
     from backend.services.step_diagnostics import _write_tools_succeeded, get_active_trace
 
     writes = 0
+    trace = None
     try:
         trace = get_active_trace()
         if trace:
@@ -329,8 +330,22 @@ def _dev_unhealthy_exit_blocks_advance(exit_reason: Optional[str]) -> bool:
     except Exception:
         writes = 0
     lint_clean = bool(getattr(state, "FIX_VERIFY_LINT_CLEAN", False))
+    verify_passed = False
+    try:
+        from backend.services.duplicate_tool_policy import verify_known_for_advance
+
+        tools_log = getattr(trace, "tools_log", None) or [] if trace else []
+        verify_passed = verify_known_for_advance(
+            tools_log,
+            getattr(state, "LAST_AGENT_STEP_RESULT", None),
+        )
+    except Exception:
+        verify_passed = False
     return unhealthy_exit_blocks_lane_advance(
-        exit_reason, writes_succeeded=writes, lint_clean=lint_clean
+        exit_reason,
+        writes_succeeded=writes,
+        lint_clean=lint_clean,
+        verify_passed=verify_passed,
     )
 
 
@@ -369,7 +384,8 @@ def _outcome_why_card_stayed(
         )
     if stop_reason == "max_iterations_after_writes":
         return (
-            f"Agent wrote files on '{title}' then hit the LLM iteration limit before verify/lane move."
+            f"Agent wrote files on '{title}' then stopped because verify was already known "
+            "(duplicate skip) or the iteration cap was reached."
         )
     if stop_reason == "step_timeout":
         return (
@@ -1363,7 +1379,10 @@ def _check_stuck_and_escalate(
     # Skip auto-split for lint/tool walls (lint fanout covers "break into bits").
     # Skip the first explore-budget exhaustion so Forced Patch gets one shot.
     # After Forced Patch fails (or the card is latched), auto-split instead of parking.
-    from backend.services.sprint_speed_gates import stuck_is_explore_without_write
+    from backend.services.sprint_speed_gates import (
+        last_step_exit_reason,
+        stuck_is_explore_without_write,
+    )
 
     explore_no_write = stuck_is_explore_without_write(task)
     latched = bool(task.get("phaseCycleCapReached"))
@@ -1415,6 +1434,39 @@ def _check_stuck_and_escalate(
             "System",
             "warning",
             f"{task_id}: explore budget exhausted — not bouncing to Needs PO; next Dev step is Patch",
+        )
+        return
+
+    exit_r = last_step_exit_reason(task)
+    if exit_r == "identical_write_loop":
+        park_msg = (
+            "Identical write loop — the same file was rewritten without new progress. "
+            "Split the card or edit the file, then return to In Progress."
+        )
+        record_task_decision(
+            task_id,
+            "System",
+            "stuck_loop",
+            "Identical write loop — parking instead of Needs PO",
+            park_msg,
+        )
+        _try_move_to_needs_user(task_id, task, park_msg, kind="phase_cycle_cap")
+        return
+    if exit_r in ("max_iterations_after_writes", "completed_with_writes") and _task_has_write_files(
+        task
+    ):
+        task["forcePatchNextDevStep"] = True
+        record_task_decision(
+            task_id,
+            "System",
+            "stuck_loop",
+            "Wrote files then hit the iteration cap — staying In Progress (not Needs PO)",
+            msg,
+        )
+        add_system_log(
+            "System",
+            "warning",
+            f"{task_id}: write-stop — not bouncing to Needs PO; next Dev step is Patch",
         )
         return
     if int(task.get("poRoundTrips", 0)) >= max_po:
@@ -1502,7 +1554,22 @@ def _result_is_max_iterations(result: Optional[str]) -> bool:
     if text.startswith("Max tool iterations"):
         return True
     lower = text.lower()
-    return "max tool iterations" in lower or "max_iterations" in lower
+    return (
+        "max tool iterations" in lower
+        or "max_iterations" in lower
+        or "files already written this step" in lower
+    )
+
+
+def _step_trace_has_verify() -> bool:
+    try:
+        from backend.services.duplicate_tool_policy import tools_log_has_verify
+        from backend.services.step_diagnostics import get_active_trace
+
+        trace = get_active_trace()
+        return bool(trace and tools_log_has_verify(getattr(trace, "tools_log", None) or []))
+    except Exception:
+        return False
 
 
 def _maybe_auto_extend_dev_step(
@@ -1513,10 +1580,10 @@ def _maybe_auto_extend_dev_step(
     """
     One auto-extend on max_iterations when progress is evident (writes or tools),
     skipping loop-stop exits. Sets task.autoExtendUsed for the stuck cycle.
+    Also extends once after a write-stop when verify has not run yet (even if
+    autoExtendOnMaxIter is off).
     """
     ws = get_workflow_settings()
-    if not ws.get("autoExtendOnMaxIter", True):
-        return result
     normalize_task(task)
     if task.get("autoExtendUsed"):
         return result
@@ -1538,7 +1605,7 @@ def _maybe_auto_extend_dev_step(
     result_l = str(result).lower()
     if any(
         marker in result_l
-        for marker in ("duplicate tool", "timed out", "tool failure", "same failing")
+        for marker in ("duplicate tool", "timed out", "tool failure", "same failing", "identical write loop")
     ):
         return result
     if stop in _NO_AUTO_EXTEND_STOPS:
@@ -1548,14 +1615,22 @@ def _maybe_auto_extend_dev_step(
     tools = {str(t) for t in tools_raw} if isinstance(tools_raw, (list, set, tuple)) else set()
     has_writes = bool(tools & _WRITE_TOOLS) or _task_has_write_files(task)
     has_tools = bool(tools)
+    verify_known = _step_trace_has_verify()
+    verify_only = has_writes and not verify_known
+    if verify_known:
+        return result
+    allow_general = bool(ws.get("autoExtendOnMaxIter", True)) and (has_writes or has_tools)
+    if not (verify_only or allow_general):
+        return result
     if not (has_writes or has_tools):
         return result
 
-    extra = max(1, min(int(ws.get("autoExtendExtraIterations") or 4), 16))
+    extra = 2 if verify_only and not allow_general else max(1, min(int(ws.get("autoExtendExtraIterations") or 4), 16))
+    extra = max(1, min(int(extra), 16))
     add_system_log(
         "Developer",
         "info",
-        f"Auto-extend +{extra} iterations (progress detected)",
+        f"Auto-extend +{extra} iterations ({'verify after write' if verify_only else 'progress detected'})",
     )
     task["autoExtendUsed"] = True
     try:
@@ -2242,33 +2317,94 @@ def _maybe_advance_dev_after_lint_write(
     lane_before: str,
 ) -> bool:
     """Move In Progress → QA/CR when this step wrote and fix-verify lint is clean."""
+    return _maybe_advance_dev_after_writes(
+        task_id,
+        task,
+        lane_before,
+        require_lint_clean=True,
+        require_verify=False,
+        log_reason="lint clean after writes",
+    )
+
+
+def _maybe_advance_dev_after_verify(
+    task_id: str,
+    task: Dict[str, Any],
+    lane_before: str,
+) -> bool:
+    """Move In Progress → QA/CR when this step wrote and verify passed or was duplicate-skipped."""
+    return _maybe_advance_dev_after_writes(
+        task_id,
+        task,
+        lane_before,
+        require_lint_clean=False,
+        require_verify=True,
+        log_reason="verify passed after writes",
+    )
+
+
+def _log_lane_advance_event(kind: str, message: str) -> None:
+    try:
+        from backend.services.step_diagnostics import log_event
+
+        log_event(kind, message)
+    except Exception:
+        pass
+
+
+def _maybe_advance_dev_after_writes(
+    task_id: str,
+    task: Dict[str, Any],
+    lane_before: str,
+    *,
+    require_lint_clean: bool,
+    require_verify: bool,
+    log_reason: str,
+) -> bool:
     del lane_before
     if get_task_lane(task_id) != "In Progress":
+        _log_lane_advance_event("lane_advance_skipped", "not_in_progress")
         return False
     lint_clean = bool(
         getattr(state, "FIX_VERIFY_LINT_CLEAN", False) or task.get("fixVerifyLintClean")
     )
-    if not lint_clean:
+    if require_lint_clean and not lint_clean:
+        _log_lane_advance_event("lane_advance_skipped", "lint_dirty")
         return False
     writes = 0
+    tools_log: list = []
     try:
         from backend.services.step_diagnostics import _write_tools_succeeded, get_active_trace
 
         trace = get_active_trace()
-        if trace and _write_tools_succeeded(getattr(trace, "tools_log", None) or []):
-            writes = 1
+        if trace:
+            tools_log = getattr(trace, "tools_log", None) or []
+            if _write_tools_succeeded(tools_log):
+                writes = 1
     except Exception:
         writes = 0
     if writes <= 0:
+        _log_lane_advance_event("lane_advance_skipped", "no_writes")
         return False
+    if require_verify:
+        from backend.services.duplicate_tool_policy import verify_known_for_advance
+
+        if not verify_known_for_advance(
+            tools_log,
+            getattr(state, "LAST_AGENT_STEP_RESULT", None),
+        ):
+            _log_lane_advance_event("lane_advance_skipped", "no_verify_in_tools_log")
+            return False
     from backend.services.focus_slice import should_block_lane_advance_for_focus
     from backend.services.subtask_service import subtask_gate_blocks_advance
 
     if should_block_lane_advance_for_focus(task):
+        _log_lane_advance_event("lane_advance_skipped", "focus_slice")
         return False
     blocked, reason = subtask_gate_blocks_advance(task)
     if blocked:
         add_system_log("Developer", "warning", f"{task_id}: {reason}")
+        _log_lane_advance_event("lane_advance_skipped", f"subtasks:{reason[:80]}")
         return False
     target = _dev_complete_lane()
     clear_qa_failure(task_id)
@@ -2276,16 +2412,17 @@ def _maybe_advance_dev_after_lint_write(
     add_system_log(
         "Developer",
         "info",
-        f"{task_id}: lint clean after writes — advancing to {target} (no update_board)",
+        f"{task_id}: {log_reason} — advancing to {target} (no update_board)",
     )
     publish_activity(
         task_id,
         "lane_advanced",
-        f"Orchestrator moved card to {target} after clean lint following writes",
+        f"Orchestrator moved card to {target} after {log_reason}",
         role="system",
         agent="Developer",
         lane=target,
     )
+    _log_lane_advance_event("lane_advance", f"target={target}; {log_reason}")
     return True
 
 
@@ -3433,6 +3570,53 @@ def _run_po_clarification(active_task: Dict[str, Any], brief: str) -> None:
             pass
         add_system_log("Product Owner", "info", f"Clarifying '{active_task['title']}'…")
         task_for_prompt = find_task_by_id(task_id) or active_task
+        from backend.services.po_clarification import (
+            move_off_needs_po,
+            po_llm_skip_block_reason,
+            should_move_off_needs_po_without_llm,
+        )
+
+        if should_move_off_needs_po_without_llm(task_for_prompt):
+            dest = move_off_needs_po(task_id)
+            result = f"Moved to {dest or 'In Progress'} without a PO generate (spec already present)."
+            try:
+                from backend.services.sprint_speed_gates import last_step_exit_reason
+                from backend.services.step_diagnostics import log_event as _log_ev
+
+                _log_ev(
+                    "po_llm_skipped",
+                    f"spec present; last_exit={last_step_exit_reason(task_for_prompt) or 'none'}",
+                )
+            except Exception:
+                pass
+            add_system_log(
+                "Product Owner",
+                "info",
+                f"{task_id}: skipped PO LLM — {result}",
+            )
+            with state.STATE_LOCK:
+                task = find_task_by_id(task_id)
+                if task:
+                    record_task_decision(
+                        task_id,
+                        "Product Owner",
+                        "clarification",
+                        result,
+                        "Deterministic Needs PO → In Progress; no Ollama turn.",
+                    )
+            _record_last_step_outcome(
+                task_id, lane_before, "Product Owner", agent_result=result
+            )
+            return
+        try:
+            from backend.services.step_diagnostics import log_event as _log_ev
+
+            _log_ev(
+                "po_llm_started",
+                po_llm_skip_block_reason(task_for_prompt) or "clarification needed",
+            )
+        except Exception:
+            pass
         prompt = (
             build_task_prompt(task_for_prompt, brief)
             + _po_clarification_retry_prompt_block(task_for_prompt)
@@ -3541,8 +3725,19 @@ def _run_developer_step(active_task: Dict[str, Any], brief: str) -> None:
     step_started = _mark_sprint_step_start()
     set_active_sprint_context(task_id, "Developer")
     live_task = find_task_by_id(task_id) or active_task
-    from backend.services.sprint_speed_gates import begin_dev_step, no_write_stall_should_park
+    from backend.services.sprint_speed_gates import (
+        begin_dev_step,
+        identical_write_loop_should_park,
+        no_write_stall_should_park,
+    )
 
+    if identical_write_loop_should_park(live_task):
+        park_msg = (
+            "Identical write loop — skipping another Developer rewrite of the same file."
+        )
+        add_system_log("System", "warning", f"{task_id}: {park_msg}")
+        _try_move_to_needs_user(task_id, dict(live_task), park_msg, kind="phase_cycle_cap")
+        return
     if no_write_stall_should_park(live_task) and int(state.SPRINT_PROGRESS_MAX or 1) != 1:
         add_system_log(
             "System",
@@ -3813,6 +4008,10 @@ def _run_developer_step(active_task: Dict[str, Any], brief: str) -> None:
                 _maybe_advance_dev_after_lint_write(
                     task_id, find_task_by_id(task_id) or task, lane_before
                 )
+                if _task_in_lane(task_id, "In Progress"):
+                    _maybe_advance_dev_after_verify(
+                        task_id, find_task_by_id(task_id) or task, lane_before
+                    )
             fresh_for_lint = find_task_by_id(task_id) or task
             diags = fresh_for_lint.get("lastCommandDiagnostics") or []
             if isinstance(diags, list) and diags:

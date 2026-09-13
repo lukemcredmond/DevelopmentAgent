@@ -38,7 +38,8 @@ def build_patch_recovery_nudge(paths: Iterable[str]) -> str:
         f"{PATCH_RECOVERY_MARKER}\n"
         f"apply_patch failed on: {plist}.\n"
         "Next tool call MUST be read_file on that path (fresh this step).\n"
-        "Then apply_patch using verbatim old_text from that read_file output only.\n"
+        "Then either apply_patch using verbatim old_text from that read_file output, "
+        "or write_file with the complete corrected file.\n"
         "Do NOT retry apply_patch with the same old_text / preloaded context."
     )
 

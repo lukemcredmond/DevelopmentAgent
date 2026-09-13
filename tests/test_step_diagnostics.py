@@ -23,6 +23,7 @@ from backend.services.step_diagnostics import (
     record_po_json_applied,
     record_sampling_snapshot,
     start_step_trace,
+    log_ollama_call,
 )
 
 
@@ -456,6 +457,35 @@ def test_po_lane_after_tool_not_finalize_lane(tmp_path, monkeypatch):
     assert data["poJsonApplied"] is True
     assert data["poNumPredictBumped"] is True
     assert data["sampling"]["num_predict"] == 2048
+
+
+def test_log_ollama_call_emits_ctx_truncated_and_empty_gen(tmp_path, monkeypatch):
+    monkeypatch.setenv("ALLHANDS_HOME", str(tmp_path))
+    initialize()
+    state.CURRENT_PROJECT_ID = "test-proj"
+    clear_active_step_trace()
+    trace = start_step_trace("T-CTX", "Ctx", "Developer", "In Progress")
+    log_ollama_call(
+        1,
+        duration_ms=2500,
+        eval_tokens=2048,
+        num_ctx=5120,
+        done_reason="length",
+    )
+    log_ollama_call(
+        2,
+        duration_ms=91000,
+        eval_tokens=0,
+        error="Ollama empty generation timed out after 90s",
+        error_type="empty_generation_timeout",
+    )
+    kinds = [e["kind"] for e in trace.events]
+    assert "ctx_truncated" in kinds
+    assert "empty_generation_timeout" in kinds
+    empty = next(e for e in trace.events if e["kind"] == "empty_generation_timeout")
+    assert "elapsed_ms=91000" in empty["message"]
+    assert "eval_count=0" in empty["message"]
+    clear_active_step_trace()
 
 
 def test_classify_tool_failure_helpers():

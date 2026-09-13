@@ -36,6 +36,41 @@ def test_normalize_run_command_for_duplicate():
     assert normalize_run_command_for_duplicate("flutter clean") == "flutter clean"
 
 
+def test_is_verify_command_and_successful_keys():
+    import json
+
+    from backend.services.duplicate_tool_policy import (
+        is_verify_command,
+        successful_keys_include_verify,
+        tools_log_has_verify,
+    )
+
+    assert is_verify_command("flutter test test/data/store_repository_test.dart")
+    assert is_verify_command("dotnet test")
+    assert not is_verify_command("flutter analyze")
+    key = (
+        "run_command",
+        json.dumps({"command": "flutter test test/foo.dart"}, sort_keys=True),
+    )
+    assert successful_keys_include_verify([key]) is True
+    assert successful_keys_include_verify([("read_file", '{"path": "a.dart"}')]) is False
+    assert tools_log_has_verify(
+        [{"toolName": "run_command", "success": True, "summary": "skipped duplicate flutter test"}]
+    )
+    from backend.services.duplicate_tool_policy import (
+        agent_result_is_write_dup_verify_stop,
+        verify_known_for_advance,
+    )
+
+    stop = (
+        "Stopped: files already written this step and verify command was a duplicate skip. "
+        "Continuing to lint/lane advance."
+    )
+    assert agent_result_is_write_dup_verify_stop(stop)
+    assert verify_known_for_advance([], stop) is True
+    assert verify_known_for_advance([{"toolName": "write_file", "success": True}], None) is False
+
+
 def test_run_command_off_policy_allows_repeat_when_excluded():
     ws = {
         "duplicateToolPolicy": "strict",

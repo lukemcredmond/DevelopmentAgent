@@ -14,6 +14,7 @@ def test_default_ollama_timeout_is_900():
     reset_workflow_settings()
     ws = get_workflow_settings()
     assert ws.get("ollamaRequestTimeoutSec") == 900
+    assert ws.get("ollamaEmptyGenerationTimeoutSec") == 90
     assert ws.get("ollamaMaxRetries") == 4
     assert ws.get("ollamaCooldownRetryEnabled") is True
 
@@ -32,6 +33,10 @@ def test_classify_ollama_error_timeout():
     assert ScrumAgent._classify_ollama_error("HTTPConnectionPool timed out") == "timeout"
     assert ScrumAgent._classify_ollama_error("Connection refused") == "connection"
     assert ScrumAgent._classify_ollama_error("exceed_context_size_error") == "context_overflow"
+    assert (
+        ScrumAgent._classify_ollama_error("Ollama empty generation timed out after 90s")
+        == "empty_generation_timeout"
+    )
 
 
 def test_chat_cooldown_retry_on_transient_failure():
@@ -100,7 +105,8 @@ def test_chat_skips_cooldown_on_context_overflow():
         with patch("backend.agents.scrum_agent.time.sleep"):
             result = agent._chat([{"role": "user", "content": "hi"}])
     assert result is None
-    assert mock_provider.chat.call_count == 1
+    assert agent._last_chat_error_type == "context_overflow"
+    assert mock_provider.chat.call_count >= 1
 
 
 def test_save_ollama_timeout_via_api(tmp_path, monkeypatch):
@@ -196,3 +202,68 @@ def test_should_stop_after_write_and_dup_verify():
     read_results = {id(read_call): ("read_file", {}, dup, None)}
     agent._dev_phase_graph = SimpleNamespace(write_succeeded=True)
     assert agent._should_stop_after_write_and_dup_verify(read_results, [read_call]) is False
+
+
+def test_should_stop_after_write_when_verify_already_in_success_keys():
+    import json
+
+    initialize()
+    reset_workflow_settings()
+    agent = ScrumAgent("Developer", "test-model", "system", "http://localhost:11434")
+    agent._dev_phase_graph = SimpleNamespace(write_succeeded=True)
+    write_call = object()
+    write_res = SimpleNamespace(success=True, duplicate_skip=False)
+    results = {id(write_call): ("write_file", {"path": "a.dart"}, write_res, None)}
+    keys = [
+        (
+            "run_command",
+            json.dumps({"command": "flutter test test/data/store_repository_test.dart"}),
+        )
+    ]
+    assert (
+        agent._dup_verify_stop_source(
+            results, [write_call], successful_tool_keys=keys
+        )
+        == "seeded_keys"
+    )
+    assert (
+        agent._should_stop_after_write_and_dup_verify(
+            results, [write_call], successful_tool_keys=keys
+        )
+        is True
+    )
+    assert (
+        agent._should_stop_after_write_and_dup_verify(
+            results, [write_call], successful_tool_keys=[]
+        )
+        is False
+    )
+
+
+def test_consume_chat_stream_folds_chunks():
+    from backend.services.llm_provider import ChatResult, ProviderMessage, consume_chat_stream
+
+    chunks = [
+        ChatResult(message=ProviderMessage(content="Hel"), prompt_eval_count=10, eval_count=1),
+        ChatResult(message=ProviderMessage(content="lo"), prompt_eval_count=10, eval_count=2),
+    ]
+    merged = consume_chat_stream(iter(chunks), empty_timeout_sec=2)
+    assert merged.message.content == "Hello"
+    assert merged.eval_count == 2
+    assert merged.prompt_eval_count == 10
+
+
+def test_consume_chat_stream_times_out_on_silent_iterator():
+    import time
+
+    from backend.services.llm_provider import EmptyGenerationTimeout, consume_chat_stream
+
+    def silent():
+        time.sleep(2)
+        yield from ()
+
+    try:
+        consume_chat_stream(silent(), empty_timeout_sec=0.2)
+        raise AssertionError("expected EmptyGenerationTimeout")
+    except EmptyGenerationTimeout:
+        pass

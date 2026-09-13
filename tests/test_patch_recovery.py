@@ -30,6 +30,7 @@ def test_failed_apply_patch_paths_and_nudge():
     assert PATCH_RECOVERY_MARKER in msg
     assert "lib/foo.dart" in msg
     assert "read_file" in msg
+    assert "write_file" in msg
 
 
 def test_paths_needing_read_before_patch():

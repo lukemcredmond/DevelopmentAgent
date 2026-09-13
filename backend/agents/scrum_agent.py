@@ -1027,22 +1027,34 @@ class ScrumAgent:
 
         return resolve_ollama_num_ctx(self.role)
 
+    def _ensure_packed_num_ctx(self, messages: Sequence[ChatMessage]) -> None:
+        if self._step_num_ctx is not None:
+            return
+        from backend.services.prompt_budget import packed_prompt_num_ctx
+
+        as_dicts = []
+        for msg in messages:
+            if isinstance(msg, dict):
+                as_dicts.append(msg)
+            else:
+                as_dicts.append({"content": str(getattr(msg, "content", "") or "")})
+        self._step_num_ctx = packed_prompt_num_ctx(as_dicts, self._num_ctx_ceiling())
+
     def _effective_num_ctx(self) -> int:
         from backend.services.prompt_budget import initial_ollama_num_ctx
 
-        ws = get_workflow_settings()
-        if not ws.get("ollamaNumCtxAdaptive"):
-            return self._num_ctx_ceiling()
+        ceiling = self._num_ctx_ceiling()
         if self._step_num_ctx is None:
-            self._step_num_ctx = initial_ollama_num_ctx(self.role)
-        return min(self._num_ctx_ceiling(), self._step_num_ctx)
+            ws = get_workflow_settings()
+            if ws.get("ollamaNumCtxAdaptive"):
+                return min(ceiling, initial_ollama_num_ctx(self.role))
+            return ceiling
+        return min(ceiling, self._step_num_ctx)
 
     def _bump_num_ctx_on_overflow(self) -> bool:
         from backend.services.prompt_budget import bump_ollama_num_ctx
 
         ws = get_workflow_settings()
-        if not ws.get("ollamaNumCtxAdaptive"):
-            return False
         ceiling = self._num_ctx_ceiling()
         current = self._effective_num_ctx()
         try:
@@ -1135,6 +1147,8 @@ class ScrumAgent:
         if ScrumAgent._is_context_overflow_error(error):
             return "context_overflow"
         lower = error.lower()
+        if "empty generation" in lower:
+            return "empty_generation_timeout"
         if "timeout" in lower or "timed out" in lower:
             return "timeout"
         if any(k in lower for k in ("connection", "refused", "unreachable", "connect")):
@@ -1188,13 +1202,34 @@ class ScrumAgent:
             )
         try:
             chat_opts = self._chat_options()
-            result = provider.chat(
+            self._ensure_packed_num_ctx(messages)
+            chat_opts = self._chat_options()
+            empty_timeout = 90
+            try:
+                empty_timeout = int(get_workflow_settings().get("ollamaEmptyGenerationTimeoutSec") or 90)
+            except (TypeError, ValueError):
+                empty_timeout = 90
+            import inspect
+            from backend.services.llm_provider import ChatResult, consume_chat_stream
+
+            raw = provider.chat(
                 self.model,
                 list(messages),
                 tools=tools,
-                stream=stream,
+                stream=True,
                 options=chat_opts,
             )
+            if stream:
+                result = raw
+            elif isinstance(raw, ChatResult):
+                result = raw
+            elif inspect.isgenerator(raw):
+                result = consume_chat_stream(
+                    raw,
+                    empty_timeout_sec=max(15, empty_timeout),
+                )
+            else:
+                result = raw
             duration_ms = int((time.time() - started) * 1000)
             prompt_tokens = eval_tokens = total_tokens = 0
             tokens_reported = False
@@ -2113,35 +2148,69 @@ class ScrumAgent:
                 return tool_name, arguments, result, stop_msg
         return tool_name, arguments, result, None
 
-    def _should_stop_after_write_and_dup_verify(
+    def _step_had_successful_write(self) -> bool:
+        graph = getattr(self, "_dev_phase_graph", None)
+        wrote = bool(getattr(graph, "write_succeeded", False)) if graph is not None else False
+        if wrote:
+            return True
+        try:
+            from backend.services.step_diagnostics import _write_tools_succeeded, get_active_trace
+
+            trace = get_active_trace()
+            return bool(trace and _write_tools_succeeded(getattr(trace, "tools_log", None) or []))
+        except Exception:
+            return False
+
+    def _dup_verify_stop_source(
         self,
         results_by_id: Dict[int, Any],
         all_calls: Sequence[Any],
-    ) -> bool:
-        """True after a successful write this step plus a skipped-duplicate verify command."""
-        graph = getattr(self, "_dev_phase_graph", None)
-        wrote = bool(getattr(graph, "write_succeeded", False)) if graph is not None else False
-        if not wrote:
-            try:
-                from backend.services.step_diagnostics import _write_tools_succeeded, get_active_trace
+        successful_tool_keys: Optional[List[Tuple[str, str]]] = None,
+    ) -> Optional[str]:
+        """tools_log vs seeded_keys vs this-batch skip; None if we should not stop."""
+        from backend.services.duplicate_tool_policy import (
+            successful_keys_include_verify,
+            tools_log_has_verify,
+        )
 
-                trace = get_active_trace()
-                wrote = bool(
-                    trace and _write_tools_succeeded(getattr(trace, "tools_log", None) or [])
-                )
-            except Exception:
-                wrote = False
-        if not wrote:
-            return False
+        if not self._step_had_successful_write():
+            return None
+        batch_skip = False
         for call in all_calls:
             res = results_by_id.get(id(call))
             if not res or len(res) < 3:
                 continue
             name = str(res[0] or "")
             result = res[2]
-            if name in ("run_command", "run_test") and getattr(result, "duplicate_skip", False):
-                return True
-        return False
+            if name not in ("run_command", "run_test"):
+                continue
+            if not getattr(result, "duplicate_skip", False):
+                continue
+            batch_skip = True
+            break
+        if batch_skip:
+            try:
+                from backend.services.step_diagnostics import get_active_trace
+
+                trace = get_active_trace()
+                tools_log = getattr(trace, "tools_log", None) or [] if trace else []
+            except Exception:
+                tools_log = []
+            return "tools_log" if tools_log_has_verify(tools_log) else "this_batch_dup_skip"
+        if successful_keys_include_verify(successful_tool_keys):
+            return "seeded_keys"
+        return None
+
+    def _should_stop_after_write_and_dup_verify(
+        self,
+        results_by_id: Dict[int, Any],
+        all_calls: Sequence[Any],
+        successful_tool_keys: Optional[List[Tuple[str, str]]] = None,
+    ) -> bool:
+        """True after a successful write plus a known/skipped verify — skip another LLM turn."""
+        return self._dup_verify_stop_source(
+            results_by_id, all_calls, successful_tool_keys=successful_tool_keys
+        ) is not None
 
     def _process_tool_calls(
         self,
@@ -2588,7 +2657,10 @@ class ScrumAgent:
                 self._finish_run(status="failed", error=stop_msg)
                 return stop_msg
 
-        if self._should_stop_after_write_and_dup_verify(results_by_id, all_calls):
+        verify_source = self._dup_verify_stop_source(
+            results_by_id, all_calls, successful_tool_keys=successful_tool_keys
+        )
+        if verify_source:
             stop_msg = (
                 "Stopped: files already written this step and verify command was a duplicate skip. "
                 "Continuing to lint/lane advance."
@@ -2596,6 +2668,7 @@ class ScrumAgent:
             add_system_log(self.role, "info", stop_msg)
             from backend.services.step_diagnostics import log_event as _log_ev
 
+            _log_ev("verify_stop", f"source={verify_source}")
             _log_ev("max_iterations_after_writes", stop_msg)
             self._log_step_exit(stop_msg, "info")
             self._finish_run(status="completed")

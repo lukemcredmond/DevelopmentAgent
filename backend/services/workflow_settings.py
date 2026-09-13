@@ -28,6 +28,7 @@ DEFAULT_WORKFLOW_SETTINGS: Dict[str, Any] = {
     # Off by default — manual Extend remains; auto +4 was a hidden latency tax.
     "autoExtendOnMaxIter": False,
     "autoExtendExtraIterations": 4,
+    "identicalSuccessWriteLimit": 2,
     # Hybrid lint fan-out: keep a small in-card budget; spawn related Backlog cards for the rest.
     "maxInCardLintFixes": 5,
     "maxLintFanoutCards": 8,
@@ -144,6 +145,8 @@ DEFAULT_WORKFLOW_SETTINGS: Dict[str, Any] = {
     "ollamaNumCtxAdaptiveStep": 8192,
     "ollamaKeepAlive": "30m",
     "ollamaRequestTimeoutSec": 900,
+    # Abort a stream if prefill finished and no eval tokens arrive (hung empty gen).
+    "ollamaEmptyGenerationTimeoutSec": 90,
     # Model connectivity tests must also cover a cold load of a large model.
     "modelTestTimeoutSec": 600,
     "terminalTimeoutSec": 600,

@@ -3,6 +3,7 @@
 from backend.services.prompt_budget import (
     bump_ollama_num_ctx,
     initial_ollama_num_ctx,
+    packed_prompt_num_ctx,
 )
 
 
@@ -31,6 +32,16 @@ def test_bump_ollama_num_ctx_doubles_or_steps():
     assert bump_ollama_num_ctx(32768, 32768, step=8192) is None
 
 
+def test_packed_prompt_num_ctx_rounds_and_clamps():
+    messages = [{"role": "user", "content": "x" * 4000}]
+    # 4000 chars / 4 = 1000 tokens + 1024 headroom → 2048 after floor
+    assert packed_prompt_num_ctx(messages, 32768) == 2048
+    big = [{"role": "user", "content": "y" * 40000}]
+    # 10000 tokens + 1024 → 11024 rounded up to 11264
+    assert packed_prompt_num_ctx(big, 32768) == 11264
+    assert packed_prompt_num_ctx(big, 4096) == 4096
+
+
 def test_scrum_agent_effective_and_bump(monkeypatch):
     from backend.agents import scrum_agent
     from backend.agents.scrum_agent import ScrumAgent
@@ -51,3 +62,16 @@ def test_scrum_agent_effective_and_bump(monkeypatch):
     assert agent._bump_num_ctx_on_overflow() is True
     assert agent._effective_num_ctx() == 16384
     assert agent._bump_num_ctx_on_overflow() is False
+
+
+def test_packed_num_ctx_from_messages_ignores_32k_ceiling_when_prompt_is_small(monkeypatch):
+    from backend.agents import scrum_agent
+    from backend.agents.scrum_agent import ScrumAgent
+    from backend.services import workflow_settings as ws_mod
+
+    agent = ScrumAgent("dev", "test-model", "sys")
+    ws = {"ollamaNumCtx": 32768, "ollamaNumCtxAdaptive": False}
+    monkeypatch.setattr(scrum_agent, "get_workflow_settings", lambda: ws)
+    monkeypatch.setattr(ws_mod, "get_workflow_settings", lambda: ws)
+    agent._ensure_packed_num_ctx([{"role": "user", "content": "hello"}])
+    assert agent._effective_num_ctx() == 2048
