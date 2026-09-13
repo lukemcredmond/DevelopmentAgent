@@ -52,6 +52,7 @@ DEV_STEP_INTERRUPTED: bool = False
 ACTIVE_STEP_DIAGNOSTICS: Optional[Any] = None
 LAST_STEP_DIAGNOSTICS: Optional[Dict[str, Any]] = None
 LAST_SPRINT_CONTEXT_SOURCES: Optional[Dict[str, Any]] = None
+CURRENT_SPRINT_REPORT: Optional[Dict[str, Any]] = None
 
 REFINEMENT_MODE: bool = False
 

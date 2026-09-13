@@ -25,6 +25,7 @@ interface SidebarProps {
   onClaimReadyCards?: () => void
   claimableBacklogCount?: number
   onEscalateNeedsUserToPo?: () => void
+  onSplitVisitCapCards?: () => void
   onClearAllTasks: () => void
   onReset: () => void
   onToggleTheme: () => void
@@ -57,6 +58,7 @@ export default memo(function Sidebar({
   onClaimReadyCards,
   claimableBacklogCount = 0,
   onEscalateNeedsUserToPo,
+  onSplitVisitCapCards,
   onClearAllTasks,
   onReset,
   onToggleTheme,
@@ -70,6 +72,12 @@ export default memo(function Sidebar({
     (state.board['Needs PO']?.length ?? 0) === 0 &&
     (state.board['Needs User']?.length ?? 0) === 0 &&
     (state.board.QA?.length ?? 0) === 0
+
+  const visitCapCount = (state.board['Needs User'] ?? []).filter((task) => {
+    if (task.needsUserKind === 'phase_cycle_cap') return true
+    const blob = `${task.userQuestion || ''} ${task.needsUserReason || ''}`.toLowerCase()
+    return blob.includes('phase cycle cap') || blob.includes('visit latch')
+  }).length
 
   const notifications = state.notifications ?? {
     needsPo: 0,
@@ -324,6 +332,21 @@ export default memo(function Sidebar({
                 className="w-full bg-amber-950/30 hover:bg-amber-950/50 disabled:opacity-50 text-amber-200 text-[11px] py-1.5 px-2 rounded-lg border border-amber-500/30"
               >
                 Send {notifications.needsUser} Needs User → PO
+              </button>
+            )}
+            {visitCapCount > 0 && onSplitVisitCapCards && (
+              <button
+                type="button"
+                onClick={onSplitVisitCapCards}
+                disabled={sprintRunning}
+                title={
+                  sprintRunning
+                    ? 'Wait for the current sprint step, or the split will queue after it'
+                    : 'PO-split cards parked for Developer visit cap'
+                }
+                className="w-full bg-sky-950/30 hover:bg-sky-950/50 disabled:opacity-50 text-sky-200 text-[11px] py-1.5 px-2 rounded-lg border border-sky-500/30"
+              >
+                Split {visitCapCount} visit-cap cards
               </button>
             )}
           </div>

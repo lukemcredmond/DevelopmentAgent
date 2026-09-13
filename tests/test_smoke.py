@@ -18,6 +18,8 @@ def test_app_starts_and_serves_state():
     assert "workflowSettings" in data
     assert "briefChangelog" in data
     assert "notifications" in data
+    assert "sprintReports" in data
+    assert "currentSprintReport" in data
 
 
 def test_file_tree_endpoint():
@@ -43,6 +45,7 @@ def test_openapi_routes_registered():
     assert "/api/workflow/settings" in paths
     assert "/api/tasks/reorder" in paths
     assert "/api/tasks/{task_id}/split" in paths
+    assert "/api/tasks/split-batch" in paths
 
 
 def test_workflow_settings_defaults():
@@ -1675,6 +1678,44 @@ def test_split_task_api_queues_while_agent_run_active():
         assert live.get("pendingSplit")
     finally:
         finish_run()
+
+
+def test_split_batch_api_filters_visit_cap(monkeypatch):
+    from backend import state
+    from backend.agents.agent_run import finish_run
+    from backend.agents.registry import agent_po
+    from backend.agents.task_context import init_new_task
+
+    initialize()
+    finish_run()
+    cap = init_new_task({"id": "T-BATCH-CAP", "title": "Cap", "description": "d"})
+    cap["needsUserKind"] = "phase_cycle_cap"
+    other = init_new_task({"id": "T-BATCH-ASK", "title": "Ask", "description": "d"})
+    other["needsUserKind"] = "po_limit"
+    state.SHARED_BOARD = {
+        "Needs User": [cap, other],
+        "Backlog": [],
+        "Done": [],
+        "In Progress": [],
+        "Needs PO": [],
+        "Code Review": [],
+        "QA": [],
+    }
+
+    json_response = """[
+        {"title": "Fix file", "description": "Part A", "acceptanceCriteria": ["A ok"]},
+        {"title": "Regression test", "description": "Part B", "acceptanceCriteria": ["B ok"]}
+    ]"""
+    monkeypatch.setattr(agent_po, "execute_step", lambda prompt, max_iterations=8: json_response)
+
+    client = TestClient(app)
+    resp = client.post("/api/tasks/split-batch", json={"ollama_url": "http://localhost:11434"})
+    assert resp.status_code == 200
+    data = resp.json()
+    assert data["taskIds"] == ["T-BATCH-CAP"]
+    assert data["splitResult"]["added"] == 2
+    assert any(t["id"] == "T-BATCH-CAP" for t in state.SHARED_BOARD.get("Done", []))
+    assert any(t["id"] == "T-BATCH-ASK" for t in state.SHARED_BOARD.get("Needs User", []))
 
 
 def test_inject_sprint_context_no_tool_log_event():

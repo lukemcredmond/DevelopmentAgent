@@ -817,6 +817,29 @@ export async function reindexCodebase(
   })
 }
 
+export async function splitVisitCapBatch(
+  payload: { ollamaUrl?: string; guidance?: string; taskIds?: string[] } = {},
+): Promise<
+  AppState & {
+    queued?: boolean
+    taskIds?: string[]
+    results?: Array<{ taskId?: string; added?: number; queued?: boolean; error?: string }>
+    splitResult?: { added: number; taskIds: string[]; queued?: boolean }
+  }
+> {
+  return request(
+    '/api/tasks/split-batch',
+    {
+      method: 'POST',
+      body: JSON.stringify({
+        ollama_url: payload.ollamaUrl ?? 'http://localhost:11434',
+        guidance: payload.guidance ?? '',
+        taskIds: payload.taskIds,
+      }),
+    },
+  )
+}
+
 export async function splitTask(
   taskId: string,
   payload: { ollamaUrl?: string; guidance?: string } = {},

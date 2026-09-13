@@ -32,6 +32,7 @@ def build_state_response(*, include_files: bool = True) -> dict:
     ws = get_workflow_settings()
     from backend.services.discord_bot import get_discord_bot_status
     from backend.services.qdrant_auth import sanitize_workflow_settings_for_client
+    from backend.services.sprint_report import current_sprint_report, list_sprint_reports
 
     response: dict = {
         "projectId": state.CURRENT_PROJECT_ID,
@@ -73,6 +74,8 @@ def build_state_response(*, include_files: bool = True) -> dict:
         "activeLanes": get_active_lanes(ws),
         "briefChangelog": state.storage.get_brief_changelog(state.CURRENT_PROJECT_ID, limit=50),
         "lastSprintSummary": get_last_sprint_summary(),
+        "sprintReports": list_sprint_reports(),
+        "currentSprintReport": current_sprint_report(),
         "notifications": build_workflow_notifications(),
         "chatMessages": state.storage.get_chat_messages(state.CURRENT_PROJECT_ID, limit=100),
         "activeAgentRun": get_active_run().to_dict() if get_active_run() else None,

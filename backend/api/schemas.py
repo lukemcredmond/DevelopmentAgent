@@ -178,6 +178,12 @@ class SplitTaskPayload(BaseModel):
     guidance: str = ""
 
 
+class SplitBatchPayload(BaseModel):
+    ollama_url: str = "http://localhost:11434"
+    guidance: str = ""
+    taskIds: Optional[List[str]] = None
+
+
 class WorkflowSettingsPayload(BaseModel):
     requireBacklogApproval: Optional[bool] = None
     requireCodeReview: Optional[bool] = None

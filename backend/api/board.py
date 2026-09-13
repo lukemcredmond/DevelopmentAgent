@@ -24,6 +24,7 @@ from backend.api.schemas import (
     ReorderTasksPayload,
     RefinementAuditApplyPayload,
     ResolveUserPayload,
+    SplitBatchPayload,
     SplitTaskPayload,
     DiagnoseTaskPayload,
     UpdateTaskPayload,
@@ -45,6 +46,7 @@ from backend.services.sprint_service import (
     queue_pending_split,
     run_po_add_feature,
     run_po_split_task,
+    split_visit_cap_batch,
 )
 
 router = APIRouter()
@@ -468,6 +470,17 @@ def diagnose_task_route(task_id: str, payload: DiagnoseTaskPayload):
         if not result.get("ok"):
             raise HTTPException(status_code=400, detail=result.get("error", "Diagnosis failed"))
     return {"state": build_state_response(), "diagnosis": result.get("diagnosis")}
+
+
+@router.post("/api/tasks/split-batch")
+def split_visit_cap_tasks(payload: SplitBatchPayload):
+    """Split Needs User cards parked for Developer visit-cap (phase_cycle_cap)."""
+    result = split_visit_cap_batch(
+        payload.ollama_url,
+        payload.guidance or "",
+        payload.taskIds,
+    )
+    return {**build_state_response(), **result}
 
 
 @router.post("/api/tasks/{task_id}/split")

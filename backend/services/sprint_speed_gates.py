@@ -78,6 +78,7 @@ CIRCUIT_BREAKER_EXITS = frozenset(
         "empty_generation_timeout",
         "llm_call_failed",
         "step_timeout",
+        "interrupted",
     }
 )
 

@@ -1258,10 +1258,12 @@ def finalize_active_step_trace(
     trace = get_active_trace()
     if not trace:
         return None
-    outcome = state.LAST_STEP_OUTCOME
+    outcome = state.LAST_STEP_OUTCOME if isinstance(state.LAST_STEP_OUTCOME, dict) else None
     ok = bool(outcome.get("ok")) if outcome else True
     if state.DEV_STEP_INTERRUPTED or state.SPRINT_CANCEL:
         ok = False
+        if not outcome or str(outcome.get("exitReason") or "") != "interrupted":
+            outcome = None
     exit_reason = derive_exit_reason(
         agent_result=agent_result or state.LAST_AGENT_STEP_RESULT,
         tools_used=tools_used or trace.tools_used,

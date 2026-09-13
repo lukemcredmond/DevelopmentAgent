@@ -522,6 +522,102 @@ def test_park_failed_exhausted_card_not_selected_again():
     assert get_task_lane("T-PARK-FAIL") == "In Progress"
 
 
+def test_auto_sprint_pauses_after_repeated_zero_work_interrupts():
+    initialize()
+    reset_workflow_settings()
+    save_workflow_settings(
+        {
+            "maxSprintSteps": 10,
+            "pauseSprintOnNeedsUser": False,
+            "autoSprintSessionRefreshEnabled": False,
+            "enableZeroWorkRetryWatchdog": True,
+            "zeroWorkRetryWatchdogMax": 3,
+            "enableAutoSprintInterruptBackoff": False,
+            "enableSplitOnStuck": False,
+            "maxStuckSteps": 99,
+        }
+    )
+    _empty_board()
+    task = init_new_task(
+        {
+            "id": "T-INT-STORM",
+            "title": "Crash loop",
+            "description": "Fix the lint error",
+            "acceptanceCriteria": ["Analyzer is clean"],
+            "status": "In Progress",
+        }
+    )
+    state.SHARED_BOARD["In Progress"] = [task]
+    state.LAST_STEP_OUTCOME = {
+        "taskId": "T-INT-STORM",
+        "exitReason": "po_clarified",
+        "ok": True,
+        "agent": "Product Owner",
+    }
+    state.LAST_STEP_DIAGNOSTICS = {
+        "taskId": "T-INT-STORM",
+        "exitReason": "po_clarified",
+        "ollamaCallCount": 0,
+        "toolCallCount": 0,
+    }
+
+    from backend.services.sprint_service import run_auto_sprint
+
+    with patch(
+        "backend.services.sprint_service._run_developer_step",
+        side_effect=RuntimeError("database is locked"),
+    ):
+        with patch(
+            "backend.services.sprint_service._run_parallel_independent_dev_batch",
+            return_value=0,
+        ):
+            summary = run_auto_sprint("brief", "http://localhost:11434", max_steps=10)
+
+    assert summary.get("status") == "retry_watchdog"
+    assert int(summary.get("stepsRun") or 0) == 3
+    outcome = state.LAST_STEP_OUTCOME or {}
+    assert outcome.get("exitReason") == "interrupted"
+    assert outcome.get("ok") is False
+
+
+def test_developer_crash_records_interrupted_not_stale_po_outcome():
+    initialize()
+    reset_workflow_settings()
+    _empty_board()
+    task = init_new_task(
+        {
+            "id": "T-INT-REC",
+            "title": "Record interrupt",
+            "description": "d",
+            "acceptanceCriteria": ["a"],
+            "status": "In Progress",
+        }
+    )
+    state.SHARED_BOARD["In Progress"] = [task]
+    state.LAST_STEP_OUTCOME = {
+        "taskId": "T-INT-REC",
+        "exitReason": "po_clarified",
+        "ok": True,
+        "agent": "Product Owner",
+    }
+    state.DEV_STEP_INTERRUPTED = False
+
+    with patch(
+        "backend.services.sprint_service._run_developer_step",
+        side_effect=RuntimeError("database is locked"),
+    ):
+        with pytest.raises(RuntimeError, match="locked"):
+            run_sprint_step("brief", "http://localhost:11434")
+
+    outcome = state.LAST_STEP_OUTCOME or {}
+    assert outcome.get("exitReason") == "interrupted"
+    assert outcome.get("agent") == "Developer"
+    assert outcome.get("ok") is False
+    stored = next(t for t in state.SHARED_BOARD["In Progress"] if t["id"] == "T-INT-REC")
+    compact = stored.get("lastStepOutcome") or {}
+    assert compact.get("exitReason") == "interrupted"
+
+
 def test_auto_sprint_ui_pauses_on_retry_watchdog():
     from pathlib import Path
 

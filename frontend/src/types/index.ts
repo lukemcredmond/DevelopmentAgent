@@ -870,6 +870,32 @@ export interface SprintSummary {
   status?: 'completed' | 'idle' | 'cancelled' | 'max_steps' | 'simulation_pending' | 'session_refresh' | 'retry_watchdog'
 }
 
+export interface SprintReportMove {
+  taskId: string
+  title: string
+  fromLane: string
+  toLane: string
+  source?: string
+  splitSuperseded?: boolean
+  at?: string
+}
+
+export interface SprintReport {
+  startedAt?: string
+  endedAt?: string | null
+  status?: string
+  stepsRun?: number
+  moves?: SprintReportMove[]
+  movedCount?: number
+  byTransition?: Record<string, number>
+  unblocked?: number
+  splitParents?: number
+  needsUserIn?: number
+  needsUserOut?: number
+  laneCountsStart?: Record<string, number>
+  laneCountsEnd?: Record<string, number>
+}
+
 export interface CardWorkProgress {
   subtasksDone?: number
   subtasksTotal?: number
@@ -1134,6 +1160,8 @@ export interface AppState {
   activeLanes?: BoardLane[]
   briefChangelog?: BriefChangelogEntry[]
   lastSprintSummary?: SprintSummary
+  sprintReports?: SprintReport[]
+  currentSprintReport?: SprintReport | null
   notifications?: WorkflowNotifications
   chatMessages?: ChatMessageRecord[]
   activeAgentRun?: AgentRunState | null

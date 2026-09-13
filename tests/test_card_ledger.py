@@ -285,3 +285,27 @@ def test_storage_connect_uses_timeout_and_wal(tmp_path):
     mode = conn.execute("PRAGMA journal_mode").fetchone()[0]
     conn.close()
     assert str(mode).lower() == "wal"
+
+
+def test_storage_retries_once_on_locked(tmp_path):
+    import sqlite3
+
+    from backend.storage.project_storage import ProjectStorage
+
+    db = tmp_path / "scrum.db"
+    store = ProjectStorage(str(db))
+    calls = {"n": 0}
+    real_write = store._connect
+
+    def flaky():
+        calls["n"] += 1
+        if calls["n"] == 1:
+            raise sqlite3.OperationalError("database is locked")
+        return real_write()
+
+    from unittest.mock import patch
+
+    with patch.object(store, "_connect", side_effect=flaky):
+        store.set_setting("retry-key", "ok")
+    assert calls["n"] == 2
+    assert store.get_setting("retry-key") == "ok"

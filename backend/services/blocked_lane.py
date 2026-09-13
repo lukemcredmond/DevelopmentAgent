@@ -52,6 +52,19 @@ def _move_task_to_lane(task: Dict[str, Any], source_lane: str, target_lane: str,
         "blocked_lane",
         reason,
     )
+    try:
+        from backend.agents.task_context import coerce_task_text
+        from backend.services.sprint_report import record_lane_move
+
+        record_lane_move(
+            tid,
+            coerce_task_text(task.get("title", tid)),
+            source_lane,
+            target_lane,
+            source="blocked_lane",
+        )
+    except Exception:
+        pass
 
 
 def sync_blocked_lane(

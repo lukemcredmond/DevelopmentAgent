@@ -32,6 +32,7 @@ import {
   claimReadyBacklogCards,
   clearAllTasks,
   escalateNeedsUserToPo,
+  splitVisitCapBatch,
   resolveToolApproval,
   runInProgressStep,
   resolveUserQuestion,
@@ -52,6 +53,7 @@ import {
   reindexCodebase,
 } from './api/client'
 import ActivityPanel from './components/ActivityPanel'
+import SprintReportsPanel from './components/SprintReportsPanel'
 import AgentConsole from './components/AgentConsole'
 import BriefPanel, { readBriefOpen } from './components/BriefPanel'
 import ChatPanel, { type ChatUiMessage } from './components/ChatPanel'
@@ -114,6 +116,7 @@ import {
 type BottomTab =
   | 'console'
   | 'activity'
+  | 'reports'
   | 'tools'
   | 'evidence'
   | 'model'
@@ -955,6 +958,13 @@ export default function App() {
         badge: (state.projectToolEvidence?.length ?? 0) || undefined,
       },
       { id: 'activity', label: 'Activity', icon: 'fa-wave-square', group: 'Work', badge: activityEvents.length || undefined },
+      {
+        id: 'reports',
+        label: 'Reports',
+        icon: 'fa-chart-simple',
+        group: 'Work',
+        badge: (state.sprintReports?.length ?? 0) || (state.currentSprintReport ? 1 : undefined),
+      },
       { id: 'chat', label: 'Chat', icon: 'fa-comments', group: 'Work' },
       { id: 'editor', label: 'Editor', icon: 'fa-file-code', group: 'Code', badge: selectedFile ? 1 : undefined },
       { id: 'terminal', label: 'Terminal', icon: 'fa-square-terminal', group: 'Code' },
@@ -966,7 +976,7 @@ export default function App() {
       tabs.push({ id: 'memory', label: 'Memory', icon: 'fa-brain-circuit', group: 'Debug', badge: memoryCount > 0 ? memoryCount : undefined })
       return tabs
     },
-    [toolRunningCount, toolFailureCount, activityEvents.length, memoryCount, selectedFile, state.projectToolEvidence?.length],
+    [toolRunningCount, toolFailureCount, activityEvents.length, memoryCount, selectedFile, state.projectToolEvidence?.length, state.sprintReports?.length, state.currentSprintReport],
   )
 
   const commandPaletteItems = useMemo((): CommandPaletteItem[] => {
@@ -1089,6 +1099,17 @@ export default function App() {
     }
     void withLoading(async () => handleState(await escalateNeedsUserToPo()))
   }, [handleState])
+
+  const handleSplitVisitCapCards = useCallback(() => {
+    if (
+      !window.confirm(
+        'Split all Needs User cards parked for Developer visit cap? Each parent becomes Done and smaller cards go to Backlog.',
+      )
+    ) {
+      return
+    }
+    void withLoading(async () => handleState(await splitVisitCapBatch({ ollamaUrl })))
+  }, [handleState, ollamaUrl])
 
   const handleRefreshState = useCallback(() => {
     void refresh()
@@ -1537,6 +1558,7 @@ export default function App() {
         }
         claimableBacklogCount={claimableBacklogCount}
         onEscalateNeedsUserToPo={handleEscalateNeedsUserToPo}
+        onSplitVisitCapCards={handleSplitVisitCapCards}
         onClearAllTasks={() => {
           if (
             !window.confirm(
@@ -1962,6 +1984,15 @@ export default function App() {
                       events={activityEvents}
                       onClear={clearActivity}
                       wasCleared={activityWasCleared}
+                      onTaskClick={handleActivityTaskClick}
+                    />
+                  </div>
+                )}
+                {bottomTab === 'reports' && (
+                  <div className="absolute inset-0 flex flex-col min-h-0">
+                    <SprintReportsPanel
+                      current={state.currentSprintReport ?? null}
+                      history={state.sprintReports ?? []}
                       onTaskClick={handleActivityTaskClick}
                     />
                   </div>
@@ -2475,6 +2506,17 @@ export default function App() {
             <p className="text-xs text-cat-subtext">
               Blocked: {state.lastSprintSummary.blocked.join(', ') || 'none'}
             </p>
+            <button
+              type="button"
+              className="text-[11px] text-sky-300 hover:underline"
+              onClick={() => {
+                setShowSprintSummary(false)
+                expandBottomPanel()
+                setBottomTab('reports')
+              }}
+            >
+              Open Reports
+            </button>
           </div>
         </SlideOver>
       )}

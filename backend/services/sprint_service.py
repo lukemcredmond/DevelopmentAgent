@@ -401,6 +401,11 @@ def _outcome_why_card_stayed(
         return (
             f"Developer returned text-only on '{title}' without apply_patch/write_file. {base}"
         )
+    if stop_reason == "interrupted":
+        return (
+            f"Step was cancelled or raised an exception on '{title}' before completing. "
+            "Do not treat this as a finished Developer turn."
+        )
     if stop_reason == "identical_write_loop":
         return (
             f"The same successful patch was applied repeatedly on '{title}'. "
@@ -515,6 +520,21 @@ def _build_last_step_outcome(
             ok = True
             message = f"PO clarification applied on '{title}' ({lane_before} → {lane_after})."
 
+    if state.DEV_STEP_INTERRUPTED or state.SPRINT_CANCEL:
+        stop_reason = "interrupted"
+        ok = False
+        message = (
+            f"Step was cancelled or raised an exception on '{title}' before completing."
+        )
+        why_card_stayed = _outcome_why_card_stayed(
+            stop_reason,
+            title=title,
+            lane_after=lane_after,
+            plan_rejections=plan_rejections,
+            text_rejections=text_rejections,
+        )
+        suggested_action = _outcome_suggested_action(stop_reason, lane_after)
+
     if stop_reason == "max_iterations_after_writes":
         ok = True
         if agent_result:
@@ -611,6 +631,35 @@ def _compact_last_step_outcome_for_task(outcome: Dict[str, Any]) -> Dict[str, An
         "laneAfter": outcome.get("laneAfter"),
     }
     return {k: v for k, v in compact.items() if v not in (None, "", [], {})}
+
+
+def _interrupted_outcome_already_recorded(task_id: str) -> bool:
+    outcome = state.LAST_STEP_OUTCOME if isinstance(state.LAST_STEP_OUTCOME, dict) else {}
+    return (
+        str(outcome.get("taskId") or "") == str(task_id)
+        and str(outcome.get("exitReason") or outcome.get("stopReason") or "") == "interrupted"
+    )
+
+
+def _ensure_interrupted_step_recorded(task_id: str, lane_before: str, agent: str) -> None:
+    """Persist exitReason=interrupted so auto-sprint watchdogs see the crash, not a stale PO outcome."""
+    state.DEV_STEP_INTERRUPTED = True
+    if _interrupted_outcome_already_recorded(task_id):
+        return
+    try:
+        _record_last_step_outcome(task_id, lane_before, agent)
+    except Exception:
+        pass
+    try:
+        agent_key = {
+            "Developer": "dev",
+            "Product Owner": "po",
+            "Code Reviewer": "cr",
+            "QA Tester": "qa",
+        }.get(str(agent or ""), "dev")
+        _check_stuck_and_escalate(task_id, lane_before, agent_key=agent_key)
+    except Exception:
+        pass
 
 
 def _record_last_step_outcome(
@@ -1154,6 +1203,90 @@ def drain_pending_splits(ollama_url: str = "") -> List[Dict[str, Any]]:
     return results
 
 
+LINT_LATCH_SPLIT_GUIDANCE = (
+    "This is already a single analyzer finding — split into: (1) fix this diagnostic "
+    "in the named file, (2) a regression test. Do not ask the user."
+)
+
+
+def is_visit_cap_needs_user_card(task: Dict[str, Any]) -> bool:
+    if str(task.get("needsUserKind") or "") == "phase_cycle_cap":
+        return True
+    blob = " ".join(
+        str(task.get(k) or "")
+        for k in ("userQuestion", "needsUserReason", "needsUserAction")
+    ).lower()
+    return (
+        "phase cycle cap" in blob
+        or "visit latch" in blob
+        or "developer visit cap" in blob
+    )
+
+
+def visit_cap_needs_user_task_ids(task_ids: Optional[List[str]] = None) -> List[str]:
+    wanted = {str(tid).strip() for tid in (task_ids or []) if str(tid).strip()}
+    found: List[str] = []
+    for task in state.SHARED_BOARD.get("Needs User") or []:
+        if not isinstance(task, dict):
+            continue
+        tid = str(task.get("id") or "")
+        if not tid:
+            continue
+        if wanted and tid not in wanted:
+            continue
+        if is_visit_cap_needs_user_card(task):
+            found.append(tid)
+    return found
+
+
+def split_visit_cap_batch(
+    ollama_url: str = "",
+    guidance: str = "",
+    task_ids: Optional[List[str]] = None,
+) -> Dict[str, Any]:
+    """Split Needs User visit-cap cards now, or queue until the current step ends."""
+    from backend.agents.agent_run import get_active_run
+
+    ids = visit_cap_needs_user_task_ids(task_ids)
+    url = _split_ollama_url(ollama_url)
+    active = get_active_run() is not None
+    results: List[Dict[str, Any]] = []
+    queued_any = False
+    for tid in ids:
+        live = find_task_by_id(tid) or {}
+        split_guidance = str(guidance or "").strip() or _stuck_auto_split_guidance(live)
+        if active:
+            queue_pending_split(tid, split_guidance, requested_by="ui-batch")
+            queued_any = True
+            results.append({"taskId": tid, "queued": True, "added": 0})
+            continue
+        try:
+            split_result = run_po_split_task(tid, url, split_guidance)
+            results.append({**(split_result or {}), "queued": False})
+        except Exception as exc:
+            results.append({"taskId": tid, "queued": False, "added": 0, "error": str(exc)[:400]})
+    return {
+        "queued": queued_any,
+        "taskIds": ids,
+        "results": results,
+        "splitResult": {
+            "added": sum(int(r.get("added") or 0) for r in results),
+            "taskIds": ids,
+            "queued": queued_any,
+        },
+    }
+
+
+def _stuck_auto_split_guidance(task: Dict[str, Any]) -> str:
+    title = str(task.get("title") or "")
+    if stuck_is_tool_or_lint(task) or title.startswith("Lint:"):
+        return LINT_LATCH_SPLIT_GUIDANCE
+    return (
+        "Auto-split: agents stuck after backup model attempts — "
+        "break into 2–5 smallest cards."
+    )
+
+
 def _should_attempt_stuck_auto_split(task: Dict[str, Any], ws: Dict[str, Any]) -> bool:
     if not ws.get("enableSplitOnStuck", True):
         return False
@@ -1161,12 +1294,13 @@ def _should_attempt_stuck_auto_split(task: Dict[str, Any], ws: Dict[str, Any]) -
         return False
     if task.get("pendingSplit"):
         return False
-    if stuck_is_tool_or_lint(task):
-        return False
     from backend.services.sprint_speed_gates import last_step_exit_reason, stuck_is_explore_without_write
 
+    # Visit-cap latch: split even for lint/tool fanout (unlatched lint still skips below).
     if task.get("phaseCycleCapReached"):
         return True
+    if stuck_is_tool_or_lint(task):
+        return False
     if task.get("forcePatchAttempted"):
         return True
     exit_r = last_step_exit_reason(task)
@@ -1191,10 +1325,7 @@ def _run_stuck_auto_split(task_id: str, task: Dict[str, Any], max_stuck: int) ->
         split_result = run_po_split_task(
             task_id,
             _split_ollama_url(),
-            guidance=(
-                "Auto-split: agents stuck after backup model attempts — "
-                "break into 2–5 smallest cards."
-            ),
+            guidance=_stuck_auto_split_guidance(task),
         )
         added = int((split_result or {}).get("added") or 0)
         lane_now = get_task_lane(task_id)
@@ -1392,9 +1523,8 @@ def _check_stuck_and_escalate(
         return
 
     # Ladder: backup already armed above → try one auto-split before Needs PO.
-    # Skip auto-split for lint/tool walls (lint fanout covers "break into bits").
-    # Skip the first explore-budget exhaustion so Forced Patch gets one shot.
-    # After Forced Patch fails (or the card is latched), auto-split instead of parking.
+    # Unlatched lint/tool walls skip auto-split (fanout + Forced Patch get a shot).
+    # Latched cards auto-split even for lint. Skip first explore-budget for Forced Patch.
     from backend.services.sprint_speed_gates import (
         last_step_exit_reason,
         stuck_is_explore_without_write,
@@ -1404,6 +1534,15 @@ def _check_stuck_and_escalate(
     latched = bool(task.get("phaseCycleCapReached"))
     if _should_attempt_stuck_auto_split(task, ws):
         if _run_stuck_auto_split(task_id, task, max_stuck):
+            return
+        if latched:
+            task["poAutoSkip"] = True
+            add_system_log(
+                "System",
+                "warning",
+                f"{task_id}: latched auto-split did not supersede parent — "
+                "staying In Progress (not Needs User)",
+            )
             return
 
     max_po = int(ws.get("maxPoRoundTrips", 3))
@@ -4127,7 +4266,7 @@ def _run_developer_step(active_task: Dict[str, Any], brief: str) -> None:
             )
             _check_stuck_and_escalate(task_id, lane_before, agent_key="dev")
     except Exception:
-        state.DEV_STEP_INTERRUPTED = True
+        _ensure_interrupted_step_recorded(task_id, lane_before, "Developer")
         raise
     finally:
         _finalize_dev_step_diagnostics_if_auto_sprint(task_id, lane_before)
@@ -4802,6 +4941,11 @@ def _keep_lint_card_for_developer(task: Dict[str, Any]) -> bool:
     if task.get("phaseCycleCapReached"):
         used = int(task.get("lintUnlatchCount") or 0)
         if used >= 1:
+            ws = get_workflow_settings()
+            max_stuck = int(ws.get("maxStuckSteps", 3) or 3)
+            if _should_attempt_stuck_auto_split(task, ws):
+                if _run_stuck_auto_split(task_id, task, max_stuck):
+                    return False
             task["parkFailed"] = True
             task["poAutoSkip"] = True
             task["latchedRecoveryAttempted"] = True
@@ -4853,12 +4997,50 @@ def _recover_latched_dev_card(
         if not task:
             return
         if stuck_is_tool_or_lint(task):
-            _keep_lint_card_for_developer(task)
+            kept = _keep_lint_card_for_developer(task)
+            lane_now = get_task_lane(task_id) or ""
+            if lane_now == "Done":
+                result = "Visit-cap lint card auto-split; parent superseded."
+                if not quiet:
+                    _ensure_step_trace(task_id, title, "System", lane_before)
+                    state.LAST_AGENT_STEP_RESULT = result
+                    _record_last_step_outcome(task_id, lane_before, "System", agent_result=result)
+                    _finalize_dev_step_diagnostics_if_auto_sprint(task_id, lane_before)
+                return
             if not quiet:
                 result = (
                     "Lint/tool errors remain — staying In Progress so Developer can patch. "
                     "Not moving to Needs User."
+                    if kept
+                    else (
+                        "Lint wall after visit-cap unlatch — staying In Progress "
+                        "(not Needs User)."
+                    )
                 )
+                _ensure_step_trace(task_id, title, "System", lane_before)
+                state.LAST_AGENT_STEP_RESULT = result
+                _record_last_step_outcome(task_id, lane_before, "System", agent_result=result)
+                _finalize_dev_step_diagnostics_if_auto_sprint(task_id, lane_before)
+            return
+        ws = get_workflow_settings()
+        max_stuck = int(ws.get("maxStuckSteps", 3) or 3)
+        if _should_attempt_stuck_auto_split(task, ws):
+            if _run_stuck_auto_split(task_id, task, max_stuck):
+                result = "Visit-cap card auto-split; parent superseded."
+                if not quiet:
+                    _ensure_step_trace(task_id, title, "System", lane_before)
+                    state.LAST_AGENT_STEP_RESULT = result
+                    _record_last_step_outcome(task_id, lane_before, "System", agent_result=result)
+                    _finalize_dev_step_diagnostics_if_auto_sprint(task_id, lane_before)
+                return
+            task["latchedRecoveryAttempted"] = True
+            task["poAutoSkip"] = True
+            task["parkFailed"] = True
+            result = (
+                "Stopped: phase cycle cap reached. Auto-split did not supersede the parent; "
+                "staying In Progress (not Needs User)."
+            )
+            if not quiet:
                 _ensure_step_trace(task_id, title, "System", lane_before)
                 state.LAST_AGENT_STEP_RESULT = result
                 _record_last_step_outcome(task_id, lane_before, "System", agent_result=result)
@@ -5017,6 +5199,19 @@ def run_sprint_step(brief: str, ollama_url: str) -> None:
         elif handler == "idle":
             _log_idle_dependency_status()
             add_system_log("System", "warning", "No active features. Send brief to PO or add a feature.")
+    except Exception as exc:
+        if active_task and active_task.get("id"):
+            add_system_log(
+                "System",
+                "warning",
+                f"Sprint step interrupted: {exc}",
+            )
+            _ensure_interrupted_step_recorded(
+                str(active_task["id"]),
+                lane_before or get_task_lane(str(active_task["id"])) or "",
+                agent_name,
+            )
+        raise
     finally:
         _finish_sprint_session(handler)
         clear_active_sprint_context()
@@ -5042,11 +5237,13 @@ def run_sprint_step(brief: str, ollama_url: str) -> None:
                 publish_board_update(source="sprint_step")
         if single_step:
             if active_task and active_task.get("id") and handler not in ("idle", "needs_user", "blocked"):
-                _record_last_step_outcome(
-                    str(active_task["id"]),
-                    lane_before or get_task_lane(str(active_task["id"])) or "",
-                    agent_name,
-                )
+                tid = str(active_task["id"])
+                if not _interrupted_outcome_already_recorded(tid):
+                    _record_last_step_outcome(
+                        tid,
+                        lane_before or get_task_lane(tid) or "",
+                        agent_name,
+                    )
             _finish_single_step_progress(active_task)
         try:
             from backend.services.board_status_digest import notify_board_status_after_step
@@ -5133,7 +5330,7 @@ def run_in_progress_step(
     try:
         _run_developer_step(dict(active_task), brief)
     except Exception:
-        state.DEV_STEP_INTERRUPTED = True
+        _ensure_interrupted_step_recorded(tid, lane_before, "Developer")
         raise
     finally:
         _finish_sprint_session("dev")
@@ -5154,7 +5351,8 @@ def run_in_progress_step(
                 pass
             save_current_project_state(project_id=state.CURRENT_PROJECT_ID)
             publish_board_delta(tid, source="sprint_step")
-        _record_last_step_outcome(tid, lane_before, "Developer")
+        if not _interrupted_outcome_already_recorded(tid):
+            _record_last_step_outcome(tid, lane_before, "Developer")
         _finish_single_step_progress(active_task)
         try:
             drain_pending_splits(ollama_url)
@@ -5193,6 +5391,12 @@ def _build_sprint_summary(steps: int, status: str = "completed") -> Dict[str, An
     except Exception:
         pass
     save_sprint_summary(summary)
+    try:
+        from backend.services.sprint_report import finalize_sprint_report
+
+        finalize_sprint_report(steps, status)
+    except Exception:
+        pass
     publish_event("sprint", summary)
     try:
         from backend.services.phone_notify import notify_if_enabled
@@ -5211,7 +5415,13 @@ def _build_sprint_summary(steps: int, status: str = "completed") -> Dict[str, An
     return summary
 
 
-def run_auto_sprint(brief: str, ollama_url: str, max_steps: int | None = None) -> Dict[str, Any]:
+def run_auto_sprint(
+    brief: str,
+    ollama_url: str,
+    max_steps: int | None = None,
+    *,
+    continue_report: bool = False,
+) -> Dict[str, Any]:
     import time
 
     from backend.services.backlog_preflight import log_backlog_preflight_warnings
@@ -5221,6 +5431,12 @@ def run_auto_sprint(brief: str, ollama_url: str, max_steps: int | None = None) -
     state.SPRINT_CANCEL = False
     state.SPRINT_CANCEL_INTENT = None
     state.SPRINT_NEEDS_USER_COUNT = 0
+    try:
+        from backend.services.sprint_report import begin_sprint_report
+
+        begin_sprint_report(restart=not continue_report)
+    except Exception:
+        pass
     brief = resolve_brief_for_sprint(brief)
     log_backlog_preflight_warnings()
     ws = get_workflow_settings()
@@ -5277,15 +5493,27 @@ def run_auto_sprint(brief: str, ollama_url: str, max_steps: int | None = None) -
         if batch_ran > 0:
             steps += batch_ran
         else:
-            run_sprint_step(brief, ollama_url)
+            try:
+                run_sprint_step(brief, ollama_url)
+            except Exception as exc:
+                add_system_log(
+                    "System",
+                    "warning",
+                    f"Sprint step raised ({exc}) — treating as interrupted",
+                )
             steps += 1
         try:
             from backend.services.sprint_speed_gates import note_early_interrupt
 
             outcome = state.LAST_STEP_OUTCOME if isinstance(state.LAST_STEP_OUTCOME, dict) else {}
             diag = state.LAST_STEP_DIAGNOSTICS if isinstance(state.LAST_STEP_DIAGNOSTICS, dict) else {}
+            diag_reason = str(diag.get("exitReason") or "")
+            out_reason = str(outcome.get("exitReason") or "")
+            watch_reason = (
+                diag_reason if diag_reason == "interrupted" else (out_reason or diag_reason)
+            )
             delay = note_early_interrupt(
-                exit_reason=str(outcome.get("exitReason") or diag.get("exitReason") or ""),
+                exit_reason=watch_reason,
                 ollama_call_count=int(
                     diag.get("ollamaCallCount")
                     or len(diag.get("ollamaCalls") or [])
@@ -5294,7 +5522,7 @@ def run_auto_sprint(brief: str, ollama_url: str, max_steps: int | None = None) -
                 duration_ms=int(diag.get("durationMs") or 0),
                 tool_call_count=int(
                     diag.get("toolCallCount")
-                    or len(diag.get("toolCalls") or [])
+                    or len(diag.get("toolsLog") or diag.get("toolsUsed") or [])
                     or 0
                 ),
             )
@@ -5308,10 +5536,16 @@ def run_auto_sprint(brief: str, ollama_url: str, max_steps: int | None = None) -
             pass
         outcome = state.LAST_STEP_OUTCOME if isinstance(state.LAST_STEP_OUTCOME, dict) else {}
         diag = state.LAST_STEP_DIAGNOSTICS if isinstance(state.LAST_STEP_DIAGNOSTICS, dict) else {}
-        reason = str(outcome.get("exitReason") or diag.get("exitReason") or "")
-        task_id = str(outcome.get("taskId") or diag.get("taskId") or "")
+        diag_reason = str(diag.get("exitReason") or "")
+        out_reason = str(outcome.get("exitReason") or "")
+        reason = diag_reason if diag_reason == "interrupted" else (out_reason or diag_reason)
+        task_id = str(diag.get("taskId") or outcome.get("taskId") or "")
         ollama_calls = int(diag.get("ollamaCallCount") or len(diag.get("ollamaCalls") or []) or 0)
-        tool_calls = int(diag.get("toolCallCount") or len(diag.get("toolCalls") or []) or 0)
+        tool_calls = int(
+            diag.get("toolCallCount")
+            or len(diag.get("toolsLog") or diag.get("toolsUsed") or [])
+            or 0
+        )
         if ollama_calls > 0:
             saw_ollama = True
         from backend.services.sprint_speed_gates import note_zero_work_exit
@@ -5406,6 +5640,12 @@ def run_plan_and_run(brief: str, ollama_url: str, max_steps: int | None = None) 
     state.SPRINT_NEEDS_USER_COUNT = 0
     state.SPRINT_PROGRESS_MAX = limit
     state.SPRINT_PROGRESS_STEP = 0
+    try:
+        from backend.services.sprint_report import begin_sprint_report
+
+        begin_sprint_report()
+    except Exception:
+        pass
 
     publish_sprint_progress(
         phase="po_plan",
@@ -5436,7 +5676,7 @@ def run_plan_and_run(brief: str, ollama_url: str, max_steps: int | None = None) 
         )
         return summary
 
-    summary = run_auto_sprint(brief, ollama_url, max_steps=max_steps)
+    summary = run_auto_sprint(brief, ollama_url, max_steps=max_steps, continue_report=True)
     publish_sprint_progress(
         phase="done",
         step=int(summary.get("stepsRun", 0)),

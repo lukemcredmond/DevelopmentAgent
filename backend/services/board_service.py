@@ -192,6 +192,20 @@ def move_board_stage(
         )
         save_current_project_state()
         publish_board_update(task_id, target_lane, source="move")
+        try:
+            from backend.services.sprint_report import record_lane_move
+
+            split_parent = bool(active_task.get("splitSuperseded")) and target_lane == "Done"
+            record_lane_move(
+                str(active_task.get("id") or task_id),
+                coerce_task_text(active_task.get("title", task_id)),
+                source_lane,
+                target_lane,
+                source="split" if split_parent else "move",
+                split_superseded=split_parent,
+            )
+        except Exception:
+            pass
         moved_to_done = target_lane == "Done"
     if moved_to_done or target_lane in ("Backlog", "Refinement", "Pending Approval", "Blocked"):
         try:

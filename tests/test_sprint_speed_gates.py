@@ -180,6 +180,42 @@ def test_needs_po_skip_when_phase_cycle_cap_reached():
     assert gates.needs_po_should_skip_auto({"phaseCycleCapReached": True}) is True
 
 
+def test_circuit_breaker_counts_interrupted_exits():
+    task: dict = {}
+    ws = {
+        "enableStuckCircuitBreaker": True,
+        "circuitBreakerMaxBadExits": 3,
+        "circuitBreakerIdenticalPatchFails": 9,
+    }
+    for _ in range(3):
+        gates.record_consecutive_bad_exit(task, "interrupted")
+    trip, reason = gates.circuit_breaker_should_trip(task, ws)
+    assert trip is True
+    assert "interrupted" in reason.lower() or "consecutive" in reason.lower()
+
+
+def test_zero_work_watchdog_trips_on_interrupted():
+    watchdog = {}
+    ws = {"enableZeroWorkRetryWatchdog": True, "zeroWorkRetryWatchdogMax": 3}
+    for _ in range(2):
+        assert not gates.note_zero_work_exit(
+            watchdog,
+            task_id="T-INT",
+            exit_reason="interrupted",
+            ollama_call_count=0,
+            tool_call_count=0,
+            ws=ws,
+        )
+    assert gates.note_zero_work_exit(
+        watchdog,
+        task_id="T-INT",
+        exit_reason="interrupted",
+        ollama_call_count=0,
+        tool_call_count=0,
+        ws=ws,
+    )
+
+
 def test_early_interrupt_backoff_escalates():
     gates.reset_interrupt_backoff_state()
     ws = {
