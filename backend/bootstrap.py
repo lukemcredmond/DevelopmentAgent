@@ -118,6 +118,7 @@ def initialize() -> None:
 
     configure_agent_tools()
     configure_agent_prompts()
+    state.PENDING_SIMULATION = None
     from backend.config import diagnostics_dir
 
     add_system_log(

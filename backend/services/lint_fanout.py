@@ -5,13 +5,93 @@ from __future__ import annotations
 from collections import defaultdict
 from typing import Any, Dict, List, Optional, Set, Tuple
 
+from pathlib import Path
+
 from backend import state
 from backend.agents.task_context import find_task_by_id, record_task_decision
 from backend.services.logs import add_system_log
-from backend.services.workflow_settings import get_workflow_settings
+from backend.services.workflow_settings import get_execution_profile, get_workflow_settings
 
 _SEVERITY_RANK = {"error": 0, "warning": 1, "info": 2}
 _OPEN_LANES_SKIP = frozenset({"Done"})
+_JUNK_PATH_MARKERS = (
+    ".pub-cache",
+    "pub.dev/hosted",
+    "site-packages",
+    "node_modules",
+)
+
+
+def is_junk_lint_path(path: str) -> bool:
+    """True for analyzer hits outside the project (pub-cache, site-packages, etc.)."""
+    raw = str(path or "").strip()
+    if not raw or raw in ("(unknown)", "__overflow__"):
+        return False
+    normalized = raw.replace("\\", "/").lower()
+    if any(marker in normalized for marker in _JUNK_PATH_MARKERS):
+        return True
+    path_obj = Path(raw)
+    if not path_obj.is_absolute():
+        return False
+    workspace = str(getattr(state, "WORKSPACE_DIR", "") or "").strip()
+    if not workspace:
+        return False
+    try:
+        path_obj.resolve().relative_to(Path(workspace).resolve())
+    except (ValueError, OSError):
+        return True
+    return False
+
+
+def is_junk_lint_card(task: Dict[str, Any]) -> bool:
+    if not isinstance(task, dict):
+        return False
+    src = str(task.get("lintSourceFile") or "").strip()
+    if not src:
+        title = str(task.get("title") or "")
+        if title.startswith("Lint: "):
+            src = title[6:].strip()
+    if not src:
+        return False
+    return is_junk_lint_path(src)
+
+
+def filter_workspace_diagnostics(diagnostics: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
+    return [
+        d
+        for d in diagnostics
+        if isinstance(d, dict) and not is_junk_lint_path(str(d.get("file") or ""))
+    ]
+
+
+def retire_junk_lint_cards() -> int:
+    """Move open Lint: cards that target pub-cache / vendor paths to Done."""
+    from backend.services.board_service import move_board_stage
+
+    retired = 0
+    for lane, tasks in list((state.SHARED_BOARD or {}).items()):
+        if lane in _OPEN_LANES_SKIP:
+            continue
+        for task in list(tasks or []):
+            if not is_junk_lint_card(task):
+                continue
+            tid = str(task.get("id") or "")
+            if not tid:
+                continue
+            record_task_decision(
+                tid,
+                "System",
+                "junk_lint",
+                "Retired third-party/pub-cache lint card (not workspace code)",
+            )
+            move_board_stage(tid, "Done")
+            retired += 1
+            add_system_log(
+                "System",
+                "info",
+                f"{tid}: retired junk lint card ({task.get('title') or tid})",
+            )
+    return retired
 
 
 def _severity_rank(item: Dict[str, Any]) -> int:
@@ -210,12 +290,19 @@ def maybe_fanout_lint_diagnostics(
     ws = get_workflow_settings()
     threshold = max(1, int(ws.get("lintFanoutThreshold", 6)))
     max_keep = max(0, int(ws.get("maxInCardLintFixes", 5)))
-    max_cards = max(1, int(ws.get("maxLintFanoutCards", 8)))
+    max_cards = max(0, int(ws.get("maxLintFanoutCards", 8)))
+    if get_execution_profile(ws) == "implementer":
+        max_cards = 0
+
+    try:
+        retire_junk_lint_cards()
+    except Exception:
+        pass
 
     diags = diagnostics if diagnostics is not None else list(task.get("lastCommandDiagnostics") or [])
     if not isinstance(diags, list):
         diags = []
-    diags = [d for d in diags if isinstance(d, dict)]
+    diags = filter_workspace_diagnostics([d for d in diags if isinstance(d, dict)])
 
     marker = step_marker if step_marker is not None else (state.SPRINT_STEP_STARTED_AT or "")
     if marker and task.get("lintFanoutStepMarker") == marker:
@@ -228,6 +315,14 @@ def maybe_fanout_lint_diagnostics(
         }
 
     kept, remainder = budget_diagnostics(diags, max_keep=max_keep)
+
+    if max_cards <= 0:
+        return {
+            "kept": sort_diagnostics(diags),
+            "spawned": [],
+            "skipped": "fanout_disabled",
+            "remainder": remainder,
+        }
 
     if len(diags) < threshold:
         # Below threshold: leave diagnostics as-is; no spawn.

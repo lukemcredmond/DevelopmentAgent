@@ -1192,6 +1192,34 @@ export default function WorkflowPanel({
         {settings.maxNeedsUserPerSprint ?? 2} by default). Duplicate questions and clarification
         requests are routed to Needs PO instead.
       </p>
+      <fieldset className="pl-1 space-y-1">
+        <legend className="text-[11px] text-cat-subtext">
+          Execution profile
+          <SettingHint hint="Scrum keeps PO/Dev/QA roles. Implementer spends steps writing code like a Cursor coding agent." />
+        </legend>
+        <label className="flex items-center gap-2 text-[11px] text-cat-subtext cursor-pointer">
+          <input
+            type="radio"
+            name="executionProfile"
+            checked={(settings.executionProfile || 'scrum') !== 'implementer'}
+            onChange={() => onSettingsChange({ executionProfile: 'scrum' })}
+          />
+          Scrum (roles)
+        </label>
+        <label className="flex items-center gap-2 text-[11px] text-cat-subtext cursor-pointer">
+          <input
+            type="radio"
+            name="executionProfile"
+            checked={settings.executionProfile === 'implementer'}
+            onChange={() => onSettingsChange({ executionProfile: 'implementer' })}
+          />
+          Implementer (Cursor-like)
+        </label>
+        <p className="text-[10px] text-cat-overlay leading-relaxed pl-5">
+          Implementer skips Product Owner clarification when the spec is already present, turns
+          off lint fan-out, and keeps the Developer on the card until files change.
+        </p>
+      </fieldset>
       <p className="text-[10px] text-cat-overlay leading-relaxed pl-5 border-l-2 border-amber-500/30 ml-1">
         <span className="text-amber-300/90 font-semibold">Too many Needs User cards?</span> Enable
         autonomous mode, set max to 1, increase max stuck steps to 5, and put API keys or design

@@ -94,6 +94,8 @@ def test_identical_fingerprint_still_moves():
 
 
 def test_needs_po_no_advance_is_not_fix_verify_done():
+    state.DEV_STEP_INTERRUPTED = False
+    state.SPRINT_CANCEL = False
     assert (
         derive_exit_reason(
             agent_result='{"description": "x"}',
@@ -151,6 +153,8 @@ def test_po_turn_hit_generation_cap():
 
 
 def test_truncated_and_incomplete_exit_reasons():
+    state.DEV_STEP_INTERRUPTED = False
+    state.SPRINT_CANCEL = False
     assert (
         derive_exit_reason(
             agent_result="Stopped: PO generation truncated without clarification JSON or update_board.",
@@ -172,6 +176,8 @@ def test_truncated_and_incomplete_exit_reasons():
 
 
 def test_llm_call_failed_exit_reasons():
+    state.DEV_STEP_INTERRUPTED = False
+    state.SPRINT_CANCEL = False
     assert (
         derive_exit_reason(
             agent_result="LLM_CALL_FAILED: Ollama empty generation timed out after 90s",

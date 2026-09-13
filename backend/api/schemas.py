@@ -196,6 +196,7 @@ class WorkflowSettingsPayload(BaseModel):
     maxSubtaskSpawns: Optional[int] = None
     enableFixVerifyLoop: Optional[bool] = None
     maxFixVerifyRounds: Optional[int] = None
+    fixVerifyAbortOnHardStop: Optional[bool] = None
     autoExtendOnMaxIter: Optional[bool] = None
     autoExtendExtraIterations: Optional[int] = None
     identicalSuccessWriteLimit: Optional[int] = None
@@ -227,8 +228,15 @@ class WorkflowSettingsPayload(BaseModel):
     maxStuckSteps: Optional[int] = None
     maxAgentStepDurationSec: Optional[int] = None
     enableBlockedLane: Optional[bool] = None
+    enableAutoSprintInterruptBackoff: Optional[bool] = None
+    autoSprintInterruptBackoffSec: Optional[int] = None
+    autoSprintInterruptBackoffMaxSec: Optional[int] = None
+    interruptEarlyMaxMs: Optional[int] = None
+    enableParallelIndependentCards: Optional[bool] = None
+    maxParallelDevCards: Optional[int] = None
     autoStartSprint: Optional[bool] = None
     autonomousMode: Optional[bool] = None
+    executionProfile: Optional[str] = None
     maxNeedsUserPerSprint: Optional[int] = None
     needsUserCooldownSteps: Optional[int] = None
     enableWebSearch: Optional[bool] = None

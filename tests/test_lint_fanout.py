@@ -153,8 +153,9 @@ def test_fanout_dedupes_same_file():
 
 def test_prompt_markers_budget_language():
     root = Path(__file__).resolve().parents[1]
+    defaults = (root / "backend" / "services" / "prompt_defaults.py").read_text(encoding="utf-8")
+    assert "in-card lint budget" in defaults
     sprint = (root / "backend" / "services" / "sprint_service.py").read_text(encoding="utf-8")
-    assert "in-card lint budget" in sprint
     assert "fix each file:line listed in the Problems section" not in sprint
     fv = (root / "backend" / "services" / "fix_verify_loop.py").read_text(encoding="utf-8")
     assert "in-card budget" in fv

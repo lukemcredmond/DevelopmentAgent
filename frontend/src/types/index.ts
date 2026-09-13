@@ -552,6 +552,7 @@ export interface WorkflowSettings {
   maxToolFailuresPerStep?: number
   autoStartSprint?: boolean
   autonomousMode?: boolean
+  executionProfile?: 'scrum' | 'implementer' | string
   maxNeedsUserPerSprint?: number
   needsUserCooldownSteps?: number
   enableWebSearch?: boolean
@@ -1317,6 +1318,7 @@ export interface WorkflowSettingsPayload {
   maxToolFailuresPerStep?: number
   autoStartSprint?: boolean
   autonomousMode?: boolean
+  executionProfile?: 'scrum' | 'implementer' | string
   maxNeedsUserPerSprint?: number
   needsUserCooldownSteps?: number
   enableWebSearch?: boolean
@@ -1738,6 +1740,7 @@ export const DEFAULT_WORKFLOW_SETTINGS: WorkflowSettings = {
   maxToolFailuresPerStep: 4,
   autoStartSprint: true,
   autonomousMode: false,
+  executionProfile: 'scrum',
   maxNeedsUserPerSprint: 2,
   needsUserCooldownSteps: 3,
   enableWebSearch: false,

@@ -111,6 +111,8 @@ DEFAULT_WORKFLOW_SETTINGS: Dict[str, Any] = {
     "maxToolsPerLlmTurn": 3,
     "autoStartSprint": True,
     "autonomousMode": False,
+    # scrum = PO/Dev/CR/QA roles; implementer = Cursor-like single coding agent on cards.
+    "executionProfile": "scrum",
     "maxNeedsUserPerSprint": 2,
     "needsUserCooldownSteps": 3,
     "enableWebSearch": False,
@@ -377,6 +379,12 @@ def get_last_sprint_summary(project_id: str | None = None) -> Dict[str, Any]:
 def save_sprint_summary(summary: Dict[str, Any], project_id: str | None = None) -> None:
     pid = project_id or state.CURRENT_PROJECT_ID
     state.storage.set_setting(_summary_key(pid), json.dumps(summary))
+
+
+def get_execution_profile(settings: Dict[str, Any] | None = None) -> str:
+    ws = settings if settings is not None else get_workflow_settings()
+    raw = str(ws.get("executionProfile") or "scrum").strip().lower()
+    return "implementer" if raw == "implementer" else "scrum"
 
 
 def get_active_lanes(settings: Dict[str, Any] | None = None) -> List[str]:

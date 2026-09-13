@@ -3,7 +3,7 @@ import os
 import random
 import re
 from datetime import datetime
-from typing import Any, Dict, List, Optional
+from typing import Any, Dict, List, Optional, Tuple
 
 from backend import state
 from backend.agents.registry import agent_cr, agent_dev, agent_po, agent_qa
@@ -955,6 +955,10 @@ def _task_in_lane(task_id: str, lane: str) -> bool:
 
 def _dev_needs_po(result: str, task: Optional[Dict[str, Any]] = None) -> bool:
     """Stricter escalation detection — avoid substring false positives."""
+    from backend.services.workflow_settings import get_execution_profile
+
+    if get_execution_profile() == "implementer":
+        return False
     if task:
         normalize_task(task)
         ac = task.get("acceptanceCriteria") or []
@@ -1593,6 +1597,24 @@ def _check_stuck_and_escalate(
         return
 
     exit_r = last_step_exit_reason(task)
+    if exit_r in ("llm_call_failed", "empty_generation_timeout"):
+        from backend.services.po_clarification import task_has_ready_spec
+
+        if task_has_ready_spec(task):
+            task["forcePatchNextDevStep"] = True
+            record_task_decision(
+                task_id,
+                "System",
+                "stuck_loop",
+                "LLM call failed with a spec already present — staying In Progress (not Needs PO)",
+                msg,
+            )
+            add_system_log(
+                "System",
+                "warning",
+                f"{task_id}: {exit_r} — not bouncing to Needs PO; next Dev step is Patch",
+            )
+            return
     if exit_r == "identical_write_loop":
         park_msg = (
             "Identical write loop — the same file was rewritten without new progress. "
@@ -3779,6 +3801,10 @@ def _run_po_clarification(active_task: Dict[str, Any], brief: str) -> None:
             _record_last_step_outcome(
                 task_id, lane_before, "Product Owner", agent_result=result
             )
+            if dest == "In Progress":
+                live = find_task_by_id(task_id)
+                if live and not live.get("phaseCycleCapReached"):
+                    _run_developer_step(dict(live), brief)
             return
         try:
             from backend.services.step_diagnostics import log_event as _log_ev
@@ -4011,6 +4037,15 @@ def _run_developer_step(active_task: Dict[str, Any], brief: str) -> None:
                 "autonomous_suffix": _autonomous_instruction_suffix(),
             },
         )
+        from backend.services.workflow_settings import get_execution_profile
+
+        if get_execution_profile() == "implementer":
+            instructions = (
+                instructions
+                + "\nYou are a single implementer (Cursor-like). Do not move to Needs PO "
+                "and do not ask the user. Read the named file, apply_patch, run the project "
+                "lint/test command, and repeat until green or the step budget ends."
+            )
         # Prefer prefetched context from parallel independent-card pipeline when present.
         prompt = None
         fresh_for_cache = find_task_by_id(task_id) or active_task
@@ -5083,6 +5118,58 @@ def _side_park_latched_needs_po(brief: str, exclude_id: str = "") -> None:
         _recover_latched_dev_card(task, brief, quiet=True)
 
 
+def _select_sprint_step_handler() -> Tuple[Optional[str], Optional[Dict[str, Any]]]:
+    """Pick the next sprint handler. Prefer Dev over skippable Needs PO."""
+    from backend.services.po_clarification import (
+        should_move_off_needs_po_without_llm,
+        task_has_ready_spec,
+    )
+    from backend.services.workflow_settings import get_execution_profile
+
+    profile = get_execution_profile()
+    needs_po_task = _first_runnable_needs_po()
+    runnable = _in_progress_dev_runnable()
+    pending_recovery = _in_progress_pending_recovery()
+
+    def _idle_recovery() -> Tuple[Optional[str], Optional[Dict[str, Any]]]:
+        pending_npo = _needs_po_pending_park()
+        if pending_npo:
+            return "dev_recovery", dict(pending_npo[0])
+        exhausted = _in_progress_exhausted_latched()
+        if exhausted:
+            return "dev_recovery", dict(exhausted[0])
+        return _select_downstream_sprint_handler()
+
+    if profile == "implementer":
+        if needs_po_task and not task_has_ready_spec(needs_po_task):
+            return "po", dict(needs_po_task)
+        if runnable:
+            return "dev", dict(runnable[0])
+        if pending_recovery:
+            return "dev_recovery", dict(pending_recovery[0])
+        handler, active = _idle_recovery()
+        if handler not in (None, "idle"):
+            return handler, active
+        if needs_po_task:
+            return "po", dict(needs_po_task)
+        return handler, active
+
+    if needs_po_task:
+        skippable = should_move_off_needs_po_without_llm(needs_po_task)
+        if runnable and skippable:
+            return "dev", dict(runnable[0])
+        return "po", dict(needs_po_task)
+    if get_workflow_settings().get("pauseSprintOnNeedsUser") and state.SHARED_BOARD.get(
+        "Needs User"
+    ):
+        return "needs_user", None
+    if runnable:
+        return "dev", dict(runnable[0])
+    if pending_recovery:
+        return "dev_recovery", dict(pending_recovery[0])
+    return _idle_recovery()
+
+
 def run_sprint_step(brief: str, ollama_url: str) -> None:
     brief = resolve_brief_for_sprint(brief)
     agent_dev.ollama_url = ollama_url
@@ -5102,6 +5189,13 @@ def run_sprint_step(brief: str, ollama_url: str) -> None:
     except Exception:
         pass
 
+    try:
+        from backend.services.lint_fanout import retire_junk_lint_cards
+
+        retire_junk_lint_cards()
+    except Exception:
+        pass
+
     single_step = _prepare_single_step_progress()
     if single_step:
         from backend.services.sprint_session import set_sprint_mode
@@ -5114,36 +5208,7 @@ def run_sprint_step(brief: str, ollama_url: str) -> None:
 
     with state.STATE_LOCK:
         normalize_board_lanes(state.SHARED_BOARD)
-        needs_po_task = _first_runnable_needs_po()
-        if needs_po_task:
-            active_task = dict(needs_po_task)
-            handler = "po"
-        elif (
-            get_workflow_settings().get("pauseSprintOnNeedsUser")
-            and state.SHARED_BOARD.get("Needs User")
-        ):
-            handler = "needs_user"
-        else:
-            runnable = _in_progress_dev_runnable()
-            pending_recovery = _in_progress_pending_recovery()
-            if runnable:
-                active_task = dict(runnable[0])
-                handler = "dev"
-            elif pending_recovery:
-                active_task = dict(pending_recovery[0])
-                handler = "dev_recovery"
-            else:
-                handler, active_task = _select_downstream_sprint_handler()
-                if handler in (None, "idle"):
-                    pending_npo = _needs_po_pending_park()
-                    if pending_npo:
-                        active_task = dict(pending_npo[0])
-                        handler = "dev_recovery"
-                    else:
-                        exhausted = _in_progress_exhausted_latched()
-                        if exhausted:
-                            active_task = dict(exhausted[0])
-                            handler = "dev_recovery"
+        handler, active_task = _select_sprint_step_handler()
 
     if active_task and active_task.get("id"):
         lane_before = get_task_lane(str(active_task["id"])) or ""

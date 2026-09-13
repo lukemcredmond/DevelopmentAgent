@@ -199,13 +199,17 @@ PO_LLM_SKIP_EXITS = frozenset(
 )
 
 
-def should_move_off_needs_po_without_llm(task: Optional[Dict[str, Any]]) -> bool:
-    """True when the card already has a spec and only needs update_board back to Dev."""
+def task_has_ready_spec(task: Optional[Dict[str, Any]]) -> bool:
     if not isinstance(task, dict):
         return False
     desc = str(task.get("description") or "").strip()
     ac = [str(c).strip() for c in (task.get("acceptanceCriteria") or []) if str(c).strip()]
-    if not desc or not ac:
+    return bool(desc and ac)
+
+
+def should_move_off_needs_po_without_llm(task: Optional[Dict[str, Any]]) -> bool:
+    """True when the card already has a spec and only needs update_board back to Dev."""
+    if not task_has_ready_spec(task):
         return False
     if int(task.get("identicalPoClarificationCount") or 0) >= 1:
         return True
