@@ -756,7 +756,7 @@ def _settings() -> Dict[str, Any]:
 
 def _timeout_from_settings(ws: Optional[Dict[str, Any]] = None) -> float:
     data = ws if ws is not None else _settings()
-    return float(data.get("ollamaRequestTimeoutSec") or 300)
+    return float(data.get("ollamaRequestTimeoutSec") or 900)
 
 
 def chat_config(*, override_url: Optional[str] = None, ws: Optional[Dict[str, Any]] = None) -> Dict[str, Any]:

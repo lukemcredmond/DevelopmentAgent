@@ -429,7 +429,7 @@ class ScrumAgent:
         return current
 
     def _ollama_timeout_sec(self) -> float:
-        return float(get_workflow_settings().get("ollamaRequestTimeoutSec", 300))
+        return float(get_workflow_settings().get("ollamaRequestTimeoutSec", 900))
 
     def _ollama_max_retries(self) -> int:
         return max(1, int(get_workflow_settings().get("ollamaMaxRetries", 4)))
@@ -1327,6 +1327,16 @@ class ScrumAgent:
                         return result
                     last_error = err
                     last_error_type = err_type
+                    if err_type == "timeout":
+                        add_system_log(
+                            self.role,
+                            "warning",
+                            f"Ollama timed out after {timeout_sec}s — not retrying "
+                            "(model may still be generating).",
+                        )
+                        self._last_chat_error = err
+                        self._last_chat_error_type = "timeout"
+                        return None
                     if err_type == "context_overflow":
                         if self._bump_num_ctx_on_overflow():
                             add_system_log(
@@ -1356,7 +1366,7 @@ class ScrumAgent:
 
         ws = get_workflow_settings()
         if (
-            last_error_type != "context_overflow"
+            last_error_type not in ("context_overflow", "timeout")
             and ws.get("ollamaCooldownRetryEnabled", True)
         ):
             cooldown = max(0, int(ws.get("ollamaCooldownRetrySec", 15)))
@@ -2103,6 +2113,36 @@ class ScrumAgent:
                 return tool_name, arguments, result, stop_msg
         return tool_name, arguments, result, None
 
+    def _should_stop_after_write_and_dup_verify(
+        self,
+        results_by_id: Dict[int, Any],
+        all_calls: Sequence[Any],
+    ) -> bool:
+        """True after a successful write this step plus a skipped-duplicate verify command."""
+        graph = getattr(self, "_dev_phase_graph", None)
+        wrote = bool(getattr(graph, "write_succeeded", False)) if graph is not None else False
+        if not wrote:
+            try:
+                from backend.services.step_diagnostics import _write_tools_succeeded, get_active_trace
+
+                trace = get_active_trace()
+                wrote = bool(
+                    trace and _write_tools_succeeded(getattr(trace, "tools_log", None) or [])
+                )
+            except Exception:
+                wrote = False
+        if not wrote:
+            return False
+        for call in all_calls:
+            res = results_by_id.get(id(call))
+            if not res or len(res) < 3:
+                continue
+            name = str(res[0] or "")
+            result = res[2]
+            if name in ("run_command", "run_test") and getattr(result, "duplicate_skip", False):
+                return True
+        return False
+
     def _process_tool_calls(
         self,
         message: Message,
@@ -2548,6 +2588,19 @@ class ScrumAgent:
                 self._finish_run(status="failed", error=stop_msg)
                 return stop_msg
 
+        if self._should_stop_after_write_and_dup_verify(results_by_id, all_calls):
+            stop_msg = (
+                "Stopped: files already written this step and verify command was a duplicate skip. "
+                "Continuing to lint/lane advance."
+            )
+            add_system_log(self.role, "info", stop_msg)
+            from backend.services.step_diagnostics import log_event as _log_ev
+
+            _log_ev("max_iterations_after_writes", stop_msg)
+            self._log_step_exit(stop_msg, "info")
+            self._finish_run(status="completed")
+            return stop_msg
+
         tool_summary = ", ".join(
             call.function.name for call in all_calls if hasattr(call, "function")
         )
@@ -2666,6 +2719,7 @@ class ScrumAgent:
 
         from backend.services.step_diagnostics import (
             build_live_intent,
+            format_console_ollama_wait,
             format_ollama_wait_event,
             last_tool_name_from_active_trace,
             log_event,
@@ -2706,6 +2760,7 @@ class ScrumAgent:
                             force_patch = should_force_patch_next_dev_step(prior_task)
                             if prior_task.get("forcePatchNextDevStep"):
                                 prior_task.pop("forcePatchNextDevStep", None)
+                                prior_task["forcePatchAttempted"] = True
                         except Exception:
                             force_patch = False
                         lsp = prior_task.get("lastStepProgress") or {}
@@ -2928,14 +2983,25 @@ class ScrumAgent:
                 def _tick_ollama_wait() -> None:
                     while not ollama_wait_done.wait(15):
                         elapsed = int(time.time() - ollama_started)
+                        last_tool = last_tool_name_from_active_trace()
                         wait_msg = format_ollama_wait_event(
                             iteration=iteration,
                             max_iterations=max_iterations,
                             model=str(model_in_use or self.model or ""),
                             elapsed_sec=elapsed,
-                            last_tool=last_tool_name_from_active_trace(),
+                            last_tool=last_tool,
                         )
                         log_event("ollama_wait", wait_msg)
+                        add_system_log(
+                            self.role,
+                            "info",
+                            format_console_ollama_wait(
+                                elapsed_sec=elapsed,
+                                iteration=iteration,
+                                max_iterations=max_iterations,
+                                last_tool=last_tool,
+                            ),
+                        )
                         tick_intent = build_live_intent(
                             phase="awaiting_ollama",
                             iteration=iteration,
@@ -3160,6 +3226,8 @@ class ScrumAgent:
                             reason = "explore_budget_exhausted"
                         elif "patch tool budget" in low:
                             reason = "patch_budget_exhausted"
+                        elif "files already written this step" in low:
+                            reason = "max_iterations_after_writes"
                         pending_lesson = (reason, set(tools_used), early_stop)
                         return early_stop
                     if task_id and is_task_done(task_id) and not state.ALLOW_DONE_RETRY:

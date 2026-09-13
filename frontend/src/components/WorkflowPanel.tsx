@@ -1924,15 +1924,15 @@ export default function WorkflowPanel({
       <label className="text-[11px] text-cat-subtext block">
         <span className="text-[10px] text-cat-overlay block">Ollama request timeout (seconds)</span>
         <NumberSettingInput
-          value={settings.ollamaRequestTimeoutSec ?? 300}
+          value={settings.ollamaRequestTimeoutSec ?? 900}
           min={60}
-          max={900}
+          max={1800}
           onCommit={(ollamaRequestTimeoutSec) => onSettingsChange({ ollamaRequestTimeoutSec })}
           className="w-full bg-cat-base border border-cat-surface1 rounded p-1 text-white"
         />
       </label>
       <p className="text-[10px] text-cat-overlay leading-relaxed -mt-1">
-        Per-attempt HTTP timeout. Raise for slow models (default 300s; was 120s).
+        Per-attempt HTTP timeout. Timeouts are not retried with a new chat (default 900s).
       </p>
 
       <label className="text-[11px] text-cat-subtext block">

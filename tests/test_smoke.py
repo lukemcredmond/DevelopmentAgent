@@ -1642,6 +1642,41 @@ def test_split_task_api_adds_subtasks(monkeypatch):
     assert any(t["id"] == "T-SPLIT-API" for t in state.SHARED_BOARD.get("Done", []))
 
 
+def test_split_task_api_queues_while_agent_run_active():
+    from backend import state
+    from backend.agents.agent_run import finish_run, start_run
+    from backend.agents.task_context import init_new_task
+
+    initialize()
+    finish_run()
+    source = init_new_task({"id": "T-SPLIT-Q", "title": "Big card", "description": "Too big"})
+    state.SHARED_BOARD = {
+        "Needs User": [source],
+        "Backlog": [],
+        "Done": [],
+        "In Progress": [],
+        "Needs PO": [],
+        "Code Review": [],
+        "QA": [],
+    }
+    start_run("T-OTHER", "Developer")
+    try:
+        client = TestClient(app)
+        resp = client.post(
+            "/api/tasks/T-SPLIT-Q/split",
+            json={"ollama_url": "http://localhost:11434"},
+        )
+        assert resp.status_code == 200
+        data = resp.json()
+        assert data["queued"] is True
+        assert data["splitResult"]["queued"] is True
+        assert data["splitResult"]["added"] == 0
+        live = next(t for t in state.SHARED_BOARD["Needs User"] if t["id"] == "T-SPLIT-Q")
+        assert live.get("pendingSplit")
+    finally:
+        finish_run()
+
+
 def test_inject_sprint_context_no_tool_log_event():
     from backend import state
     from backend.agents.task_context import init_new_task

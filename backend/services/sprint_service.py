@@ -499,6 +499,11 @@ def _build_last_step_outcome(
             ok = True
             message = f"PO clarification applied on '{title}' ({lane_before} → {lane_after})."
 
+    if stop_reason == "max_iterations_after_writes":
+        ok = True
+        if agent_result:
+            message = str(agent_result)[:200]
+
     outcome: Dict[str, Any] = {
         "taskId": task_id,
         "agent": agent,
@@ -1033,6 +1038,184 @@ def _try_move_to_needs_user(
     return True
 
 
+def _split_ollama_url(explicit: str = "") -> str:
+    url = str(explicit or "").strip()
+    if url:
+        return url
+    return (
+        str(getattr(agent_dev, "ollama_url", "") or "").strip()
+        or str(getattr(agent_po, "ollama_url", "") or "").strip()
+        or "http://localhost:11434"
+    )
+
+
+def queue_pending_split(task_id: str, guidance: str = "", requested_by: str = "ui") -> Dict[str, Any]:
+    """Mark a card to be split after the current agent step finishes."""
+    task = find_task_by_id(task_id)
+    if not task:
+        raise ValueError(f"Task not found: {task_id}")
+    normalize_task(task)
+    pending = {
+        "requestedAt": datetime.now().strftime("%Y-%m-%dT%H:%M:%S"),
+        "guidance": str(guidance or ""),
+        "requestedBy": str(requested_by or "ui"),
+    }
+    task["pendingSplit"] = pending
+    record_task_decision(
+        task_id,
+        "System",
+        "split_queued",
+        "Split queued — will run after the current sprint step",
+        pending["guidance"][:400],
+    )
+    add_system_log(
+        "System",
+        "info",
+        f"{task_id}: split queued until the current sprint step finishes",
+    )
+    save_current_project_state()
+    publish_board_update(task_id, source="split_queued")
+    return pending
+
+
+def collect_pending_split_task_ids() -> List[str]:
+    ids: List[str] = []
+    board = state.SHARED_BOARD or {}
+    for lane, tasks in board.items():
+        if lane == "Done":
+            continue
+        for task in tasks or []:
+            if not isinstance(task, dict):
+                continue
+            if task.get("pendingSplit") and task.get("id"):
+                ids.append(str(task["id"]))
+    return ids
+
+
+def drain_pending_splits(ollama_url: str = "") -> List[Dict[str, Any]]:
+    """Run queued PO splits now that no agent step is in flight."""
+    results: List[Dict[str, Any]] = []
+    url = _split_ollama_url(ollama_url)
+    for task_id in collect_pending_split_task_ids():
+        task = find_task_by_id(task_id)
+        if not task:
+            continue
+        if get_task_lane(task_id) == "Done":
+            task["pendingSplit"] = None
+            continue
+        pending = task.get("pendingSplit") if isinstance(task.get("pendingSplit"), dict) else {}
+        guidance = str((pending or {}).get("guidance") or "").strip() or (
+            "Queued split after sprint step — break into 2–5 smallest cards."
+        )
+        task["pendingSplit"] = None
+        add_system_log("System", "info", f"{task_id}: draining queued split")
+        try:
+            split_result = run_po_split_task(task_id, url, guidance=guidance)
+            results.append({"taskId": task_id, "splitResult": split_result})
+        except Exception as exc:
+            add_system_log(
+                "System",
+                "warning",
+                f"{task_id}: queued split failed ({exc})",
+            )
+            results.append({"taskId": task_id, "error": str(exc)[:400]})
+    return results
+
+
+def _should_attempt_stuck_auto_split(task: Dict[str, Any], ws: Dict[str, Any]) -> bool:
+    if not ws.get("enableSplitOnStuck", True):
+        return False
+    if task.get("splitAttemptedOnStuck"):
+        return False
+    if task.get("pendingSplit"):
+        return False
+    if stuck_is_tool_or_lint(task):
+        return False
+    from backend.services.sprint_speed_gates import last_step_exit_reason, stuck_is_explore_without_write
+
+    if task.get("phaseCycleCapReached"):
+        return True
+    if task.get("forcePatchAttempted"):
+        return True
+    exit_r = last_step_exit_reason(task)
+    if exit_r in ("patch_budget_exhausted", "max_iterations", "tool_failure_stop"):
+        return True
+    if stuck_is_explore_without_write(task):
+        return False
+    return True
+
+
+def _run_stuck_auto_split(task_id: str, task: Dict[str, Any], max_stuck: int) -> bool:
+    """Attempt PO auto-split. Return True if the parent was superseded."""
+    task["splitAttemptedOnStuck"] = True
+    record_task_decision(
+        task_id,
+        "System",
+        "stuck_split",
+        "Auto-split after stuck steps (backup tried first)",
+        f"stuckLoops reached {max_stuck} — attempting PO split before Needs PO",
+    )
+    try:
+        split_result = run_po_split_task(
+            task_id,
+            _split_ollama_url(),
+            guidance=(
+                "Auto-split: agents stuck after backup model attempts — "
+                "break into 2–5 smallest cards."
+            ),
+        )
+        added = int((split_result or {}).get("added") or 0)
+        lane_now = get_task_lane(task_id)
+        split_parent = find_task_by_id(task_id)
+        split_succeeded = bool(
+            added > 0
+            and lane_now == "Done"
+            and split_parent
+            and split_parent.get("splitSuperseded")
+        )
+        if split_succeeded:
+            try:
+                from backend.services.backup_model import (
+                    clear_backup_remaining,
+                    restore_primary_model,
+                )
+
+                fresh = find_task_by_id(task_id)
+                if fresh:
+                    clear_backup_remaining(fresh)
+                restore_primary_model(agent_po, "po")
+                restore_primary_model(agent_dev, "dev")
+                restore_primary_model(agent_cr, "cr")
+                restore_primary_model(agent_qa, "qa")
+            except Exception:
+                pass
+            add_system_log(
+                "System",
+                "success",
+                f"{task_id}: stuck recovery — auto-split added {added} card(s); skipping Needs PO",
+            )
+            return True
+        add_system_log(
+            "System",
+            "warning",
+            f"{task_id}: stuck auto-split did not supersede parent — escalating to Needs PO",
+        )
+    except Exception as exc:
+        record_task_decision(
+            task_id,
+            "System",
+            "stuck_split",
+            "Auto-split failed — escalating to Needs PO",
+            str(exc)[:500],
+        )
+        add_system_log(
+            "System",
+            "warning",
+            f"{task_id}: stuck auto-split failed ({exc}) — escalating to Needs PO",
+        )
+    return False
+
+
 def _check_stuck_and_escalate(
     task_id: str,
     lane_before: str,
@@ -1178,93 +1361,15 @@ def _check_stuck_and_escalate(
 
     # Ladder: backup already armed above → try one auto-split before Needs PO.
     # Skip auto-split for lint/tool walls (lint fanout covers "break into bits").
-    # Skip for explore-budget exhaustion so the next Dev step can force a Patch turn.
-    # Skip for phase-cycle-capped cards — Auto Sprint must not call PO.
+    # Skip the first explore-budget exhaustion so Forced Patch gets one shot.
+    # After Forced Patch fails (or the card is latched), auto-split instead of parking.
     from backend.services.sprint_speed_gates import stuck_is_explore_without_write
 
     explore_no_write = stuck_is_explore_without_write(task)
     latched = bool(task.get("phaseCycleCapReached"))
-    if (
-        ws.get("enableSplitOnStuck", True)
-        and not task.get("splitAttemptedOnStuck")
-        and not stuck_is_tool_or_lint(task)
-        and not explore_no_write
-        and not latched
-    ):
-        task["splitAttemptedOnStuck"] = True
-        record_task_decision(
-            task_id,
-            "System",
-            "stuck_split",
-            "Auto-split after stuck steps (backup tried first)",
-            f"stuckLoops reached {max_stuck} — attempting PO split before Needs PO",
-        )
-        try:
-            from backend.agents.registry import agent_dev, agent_po
-
-            ollama_url = (
-                str(getattr(agent_dev, "ollama_url", "") or "").strip()
-                or str(getattr(agent_po, "ollama_url", "") or "").strip()
-                or "http://localhost:11434"
-            )
-            split_result = run_po_split_task(
-                task_id,
-                ollama_url,
-                guidance=(
-                    "Auto-split: agents stuck after backup model attempts — "
-                    "break into 2–5 smallest cards."
-                ),
-            )
-            added = int((split_result or {}).get("added") or 0)
-            lane_now = get_task_lane(task_id) or lane_after
-            split_parent = find_task_by_id(task_id)
-            split_succeeded = bool(
-                added > 0
-                and lane_now == "Done"
-                and split_parent
-                and split_parent.get("splitSuperseded")
-            )
-            if split_succeeded:
-                try:
-                    from backend.services.backup_model import (
-                        clear_backup_remaining,
-                        restore_primary_model,
-                    )
-                    from backend.agents.registry import agent_cr, agent_qa
-
-                    fresh = find_task_by_id(task_id)
-                    if fresh:
-                        clear_backup_remaining(fresh)
-                    restore_primary_model(agent_po, "po")
-                    restore_primary_model(agent_dev, "dev")
-                    restore_primary_model(agent_cr, "cr")
-                    restore_primary_model(agent_qa, "qa")
-                except Exception:
-                    pass
-                add_system_log(
-                    "System",
-                    "success",
-                    f"{task_id}: stuck recovery — auto-split added {added} card(s); skipping Needs PO",
-                )
-                return
-            add_system_log(
-                "System",
-                "warning",
-                f"{task_id}: stuck auto-split did not supersede parent — escalating to Needs PO",
-            )
-        except Exception as exc:
-            record_task_decision(
-                task_id,
-                "System",
-                "stuck_split",
-                "Auto-split failed — escalating to Needs PO",
-                str(exc)[:500],
-            )
-            add_system_log(
-                "System",
-                "warning",
-                f"{task_id}: stuck auto-split failed ({exc}) — escalating to Needs PO",
-            )
+    if _should_attempt_stuck_auto_split(task, ws):
+        if _run_stuck_auto_split(task_id, task, max_stuck):
+            return
 
     max_po = int(ws.get("maxPoRoundTrips", 3))
     msg = build_stuck_escalation_message(task, lane_after, max_stuck)
@@ -1297,7 +1402,7 @@ def _check_stuck_and_escalate(
         )
         _try_move_to_needs_user(task_id, task, park_msg, kind="phase_cycle_cap")
         return
-    if explore_no_write and not latched:
+    if explore_no_write and not latched and not task.get("forcePatchAttempted"):
         task["forcePatchNextDevStep"] = True
         record_task_decision(
             task_id,
@@ -4176,6 +4281,7 @@ def _in_progress_dev_runnable(board: Optional[Dict[str, Any]] = None) -> List[Di
         for task in board.get("In Progress") or []
         if isinstance(task, dict)
         and not task.get("phaseCycleCapReached")
+        and not task.get("pendingSplit")
         and not no_write_stall_should_park(task)
     ]
 
@@ -4553,6 +4659,11 @@ def run_sprint_step(brief: str, ollama_url: str) -> None:
     except Exception:
         pass
 
+    try:
+        drain_pending_splits(ollama_url)
+    except Exception:
+        pass
+
     single_step = _prepare_single_step_progress()
     if single_step:
         from backend.services.sprint_session import set_sprint_mode
@@ -4691,6 +4802,10 @@ def run_sprint_step(brief: str, ollama_url: str) -> None:
             )
         except Exception:
             pass
+        try:
+            drain_pending_splits(ollama_url)
+        except Exception:
+            pass
 
 
 def run_in_progress_step(
@@ -4785,6 +4900,10 @@ def run_in_progress_step(
             publish_board_delta(tid, source="sprint_step")
         _record_last_step_outcome(tid, lane_before, "Developer")
         _finish_single_step_progress(active_task)
+        try:
+            drain_pending_splits(ollama_url)
+        except Exception:
+            pass
 
 
 def _build_sprint_summary(steps: int, status: str = "completed") -> Dict[str, Any]:

@@ -448,9 +448,12 @@ export default function App() {
       try {
         const data = await splitTask(taskId, { ollamaUrl })
         handleState(data)
+        const queued = Boolean(data.queued || data.splitResult?.queued)
         const added = data.splitResult?.added ?? 0
         setSelectedTask(null)
-        if (added > 0) {
+        if (queued) {
+          setActionNotice('Queued — will split after this step finishes.')
+        } else if (added > 0) {
           setActionNotice(
             `Added ${added} subtask${added === 1 ? '' : 's'}; original card moved to Done.`,
           )

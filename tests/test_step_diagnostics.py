@@ -15,6 +15,7 @@ from backend.services.step_diagnostics import (
     clear_active_step_trace,
     derive_exit_reason,
     finalize_active_step_trace,
+    format_console_ollama_wait,
     format_ollama_wait_event,
     get_active_trace,
     log_event,
@@ -422,6 +423,21 @@ def test_identical_write_loop_exit_reason():
     )
 
 
+def test_write_dup_skip_exit_reason_is_max_iterations_after_writes():
+    assert (
+        derive_exit_reason(
+            agent_result=(
+                "Stopped: files already written this step and verify command was a duplicate skip. "
+                "Continuing to lint/lane advance."
+            ),
+            tools_used={"write_file", "run_command"},
+            lane_before="In Progress",
+            lane_after="In Progress",
+        )
+        == "max_iterations_after_writes"
+    )
+
+
 def test_po_lane_after_tool_not_finalize_lane(tmp_path, monkeypatch):
     monkeypatch.setenv("ALLHANDS_HOME", str(tmp_path))
     initialize()
@@ -476,3 +492,16 @@ def test_ollama_wait_heartbeat_includes_elapsed(tmp_path, monkeypatch):
     summary = finalize_active_step_trace(lane_after="In Progress")
     kinds = [e.get("kind") for e in (summary or {}).get("events") or []]
     assert kinds.count("ollama_wait") >= 2
+
+
+def test_format_console_ollama_wait_includes_elapsed_and_last_tool():
+    msg = format_console_ollama_wait(
+        elapsed_sec=45,
+        iteration=2,
+        max_iterations=6,
+        last_tool="write_file",
+    )
+    assert "Still waiting for Ollama" in msg
+    assert "45s" in msg
+    assert "iter 2/6" in msg
+    assert "last_tool=write_file" in msg

@@ -715,6 +715,24 @@ def format_ollama_wait_event(
     return msg
 
 
+def format_console_ollama_wait(
+    *,
+    elapsed_sec: int,
+    iteration: int,
+    max_iterations: int,
+    last_tool: Optional[str] = None,
+) -> str:
+    """Console line while an Ollama call is in flight (user-visible system log)."""
+    msg = (
+        f"Still waiting for Ollama — {int(elapsed_sec)}s, "
+        f"iter {int(iteration)}/{int(max_iterations)}"
+    )
+    tool = str(last_tool or "").strip()
+    if tool:
+        msg += f", last_tool={tool}"
+    return msg
+
+
 def last_tool_name_from_active_trace() -> str:
     trace = get_active_trace()
     log = getattr(trace, "tools_log", None) or []
@@ -1174,6 +1192,8 @@ def derive_exit_reason(
             return "tool_failure_stop"
         if "identical write loop" in lower:
             return "identical_write_loop"
+        if "files already written this step" in lower or "lint_after_write" in lower:
+            return "max_iterations_after_writes"
         return "tool_failure_stop"
     wrote = False
     trace = get_active_trace()

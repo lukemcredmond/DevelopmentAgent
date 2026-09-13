@@ -162,3 +162,130 @@ def test_defaults_and_ui_markers_split_on_stuck():
     readme = (root / "README.md").read_text(encoding="utf-8")
     assert "enableSplitOnStuck" in readme
     assert "auto-split" in readme.lower() or "Auto-split" in readme
+
+
+def test_first_explore_budget_skips_auto_split():
+    initialize()
+    reset_workflow_settings()
+    save_workflow_settings(
+        {
+            "maxStuckSteps": 2,
+            "maxPoRoundTrips": 3,
+            "enableSplitOnStuck": True,
+        }
+    )
+    task = init_new_task(
+        {"id": "T-EXPL-SKIP", "title": "Big", "description": "d", "status": "In Progress"}
+    )
+    task["stuckLoops"] = 1
+    task["lastStepOutcome"] = {"exitReason": "explore_budget_exhausted"}
+    _board_with(task)
+
+    with patch(
+        "backend.services.sprint_service.run_po_split_task",
+        return_value={"added": 2, "taskId": "T-EXPL-SKIP", "taskIds": ["A", "B"]},
+    ) as split_mock:
+        _check_stuck_and_escalate("T-EXPL-SKIP", "In Progress", agent_key="dev")
+
+    split_mock.assert_not_called()
+    assert get_task_lane("T-EXPL-SKIP") == "In Progress"
+    assert task.get("forcePatchNextDevStep") is True
+
+
+def test_auto_split_after_force_patch_attempted():
+    initialize()
+    reset_workflow_settings()
+    save_workflow_settings(
+        {
+            "maxStuckSteps": 2,
+            "maxPoRoundTrips": 3,
+            "enableSplitOnStuck": True,
+        }
+    )
+    task = init_new_task(
+        {"id": "T-FP-SPLIT", "title": "Big", "description": "d", "status": "In Progress"}
+    )
+    task["stuckLoops"] = 1
+    task["forcePatchAttempted"] = True
+    task["lastStepOutcome"] = {"exitReason": "patch_budget_exhausted"}
+    _board_with(task)
+
+    def _fake_split(task_id, ollama_url, guidance=""):
+        parent = next(t for t in state.SHARED_BOARD["In Progress"] if t["id"] == task_id)
+        state.SHARED_BOARD["In Progress"] = [
+            t for t in state.SHARED_BOARD["In Progress"] if t["id"] != task_id
+        ]
+        parent["status"] = "Done"
+        parent["splitSuperseded"] = True
+        state.SHARED_BOARD.setdefault("Done", []).append(parent)
+        return {"added": 2, "taskId": task_id, "taskIds": ["C1", "C2"]}
+
+    with patch(
+        "backend.services.sprint_service.run_po_split_task",
+        side_effect=_fake_split,
+    ) as split_mock:
+        _check_stuck_and_escalate("T-FP-SPLIT", "In Progress", agent_key="dev")
+
+    split_mock.assert_called_once()
+    assert get_task_lane("T-FP-SPLIT") == "Done"
+
+
+def test_latched_card_attempts_auto_split():
+    initialize()
+    reset_workflow_settings()
+    save_workflow_settings(
+        {
+            "maxStuckSteps": 2,
+            "maxPoRoundTrips": 3,
+            "enableSplitOnStuck": True,
+        }
+    )
+    task = init_new_task(
+        {"id": "T-LATCH-SPLIT", "title": "Big", "description": "d", "status": "In Progress"}
+    )
+    task["stuckLoops"] = 1
+    task["phaseCycleCapReached"] = True
+    task["lastStepOutcome"] = {"exitReason": "explore_budget_exhausted"}
+    _board_with(task)
+
+    def _fake_split(task_id, ollama_url, guidance=""):
+        parent = next(t for t in state.SHARED_BOARD["In Progress"] if t["id"] == task_id)
+        state.SHARED_BOARD["In Progress"] = [
+            t for t in state.SHARED_BOARD["In Progress"] if t["id"] != task_id
+        ]
+        parent["status"] = "Done"
+        parent["splitSuperseded"] = True
+        state.SHARED_BOARD.setdefault("Done", []).append(parent)
+        return {"added": 2, "taskId": task_id, "taskIds": ["L1", "L2"]}
+
+    with patch(
+        "backend.services.sprint_service.run_po_split_task",
+        side_effect=_fake_split,
+    ) as split_mock:
+        _check_stuck_and_escalate("T-LATCH-SPLIT", "In Progress", agent_key="dev")
+
+    split_mock.assert_called_once()
+    assert get_task_lane("T-LATCH-SPLIT") == "Done"
+
+
+def test_drain_pending_splits_runs_po_split():
+    initialize()
+    reset_workflow_settings()
+    task = init_new_task(
+        {"id": "T-DRAIN", "title": "Big", "description": "d", "status": "In Progress"}
+    )
+    _board_with(task)
+    from backend.services.sprint_service import drain_pending_splits, queue_pending_split
+
+    queue_pending_split("T-DRAIN", "please split", requested_by="ui")
+    assert task.get("pendingSplit")
+
+    with patch(
+        "backend.services.sprint_service.run_po_split_task",
+        return_value={"added": 2, "taskId": "T-DRAIN", "taskIds": ["A", "B"]},
+    ) as split_mock:
+        results = drain_pending_splits("http://localhost:11434")
+
+    split_mock.assert_called_once()
+    assert results and results[0]["taskId"] == "T-DRAIN"
+    assert task.get("pendingSplit") is None

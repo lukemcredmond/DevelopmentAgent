@@ -143,7 +143,7 @@ DEFAULT_WORKFLOW_SETTINGS: Dict[str, Any] = {
     "ollamaNumCtxAdaptiveStart": 8192,
     "ollamaNumCtxAdaptiveStep": 8192,
     "ollamaKeepAlive": "30m",
-    "ollamaRequestTimeoutSec": 300,
+    "ollamaRequestTimeoutSec": 900,
     # Model connectivity tests must also cover a cold load of a large model.
     "modelTestTimeoutSec": 600,
     "terminalTimeoutSec": 600,

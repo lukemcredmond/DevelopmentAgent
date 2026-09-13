@@ -2047,14 +2047,19 @@ export default function TaskDetailModal({
               <p className="text-[10px] text-cat-overlay leading-relaxed">
                 Splits this card into subtasks on the backlog (same as the PO agent{' '}
                 <span className="font-mono text-violet-300">add_backlog_tasks</span> tool).
+                {sprintRunning && !task.pendingSplit && (
+                  <> If a sprint step is running, the split is queued until it finishes.</>
+                )}
               </p>
               <button
               type="button"
-              disabled={sprintRunning || splitting}
+              disabled={splitting || Boolean(task.pendingSplit)}
               title={
-                sprintRunning
-                  ? 'Wait for the current sprint step to finish'
-                  : 'Split this card into smaller backlog tasks via the Product Owner'
+                task.pendingSplit
+                  ? 'Split queued — will run after this step finishes'
+                  : sprintRunning
+                    ? 'Queued — will split after this step finishes'
+                    : 'Split this card into smaller backlog tasks via the Product Owner'
               }
               onClick={() => {
                 setSplitting(true)
@@ -2062,7 +2067,13 @@ export default function TaskDetailModal({
               }}
               className="w-full bg-violet-950/40 hover:bg-violet-950/60 disabled:opacity-50 text-violet-200 text-xs py-2 px-3 rounded-lg border border-violet-500/30"
             >
-              {splitting ? 'Splitting…' : 'Split into subtasks'}
+              {splitting
+                ? 'Splitting…'
+                : task.pendingSplit
+                  ? 'Split queued'
+                  : sprintRunning
+                    ? 'Split after this step'
+                    : 'Split into subtasks'}
             </button>
             </div>
           )}

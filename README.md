@@ -472,8 +472,8 @@ Persisted per project. Update via sidebar **Workflow** or `POST /api/workflow/se
 | ollamaNumCtxAdaptiveStart | 8192 | First `num_ctx` per step when adaptive is on |
 | ollamaNumCtxAdaptiveStep | 8192 | Minimum increase on each overflow retry |
 | ollamaKeepAlive | 30m | Ollama model keep-alive duration (`30m`, `-1s` to pin in VRAM) |
-| ollamaRequestTimeoutSec | 300 | Per-request timeout for Ollama calls |
-| ollamaMaxRetries | 4 | Retries on transient Ollama failures |
+| ollamaRequestTimeoutSec | 900 | Per-attempt HTTP timeout for Ollama calls (not retried with a new chat) |
+| ollamaMaxRetries | 4 | Retries on connection / 5xx / idle-server failures; timeouts are not retried |
 | ollamaRetryDelaySec | [0, 2, 5, 10] | Delay schedule between retries (comma-separated list in Settings → Workflow) |
 | ollamaCooldownRetryEnabled | On | Extra cooldown retries when Ollama is busy |
 | ollamaCooldownRetrySec | 15 | Cooldown wait between busy retries |
@@ -1083,7 +1083,7 @@ What AllHands actually implements today (not a roadmap). Defaults and toggles li
 |-------|----------------|
 | **Ollama** | Sole inference backend for agent chat and tool-calling |
 | **Per-role models** | Separate primary models for PO / Dev / Code Review / QA (plus optional backup models when stuck) |
-| **Retries / timeouts** | HTTP timeouts, retry delays, cooldown retries, context-overflow handling around Ollama calls |
+| **Retries / timeouts** | Per-attempt HTTP timeout (default 900s, not retried with a new chat); connection / 5xx / idle-server retries with delay schedule; cooldown retries; context-overflow handling |
 | **VRAM-aware swap** | Optional unload/preload when arming a backup model on a full GPU |
 
 Key code: `backend/agents/scrum_agent.py`, `backend/agents/registry.py`, `backend/services/ollama_warmup.py`, `backend/api/ollama.py`.

@@ -820,8 +820,18 @@ export async function reindexCodebase(
 export async function splitTask(
   taskId: string,
   payload: { ollamaUrl?: string; guidance?: string } = {},
-): Promise<AppState & { splitResult?: { added: number; taskId: string; taskIds: string[] } }> {
-  return request<AppState & { splitResult?: { added: number; taskId: string; taskIds: string[] } }>(
+): Promise<
+  AppState & {
+    queued?: boolean
+    splitResult?: { added: number; taskId: string; taskIds: string[]; queued?: boolean }
+  }
+> {
+  return request<
+    AppState & {
+      queued?: boolean
+      splitResult?: { added: number; taskId: string; taskIds: string[]; queued?: boolean }
+    }
+  >(
     `/api/tasks/${encodeURIComponent(taskId)}/split`,
     {
       method: 'POST',

@@ -1,5 +1,6 @@
 """Tests for Ollama retry settings, cooldown burst, and service log resolution."""
 
+from types import SimpleNamespace
 from unittest.mock import MagicMock, patch
 
 from backend.agents.scrum_agent import ScrumAgent
@@ -8,11 +9,11 @@ from backend.services.ollama_service_log import LogSource, read_service_log_snap
 from backend.services.workflow_settings import get_workflow_settings, reset_workflow_settings, save_workflow_settings
 
 
-def test_default_ollama_timeout_is_300():
+def test_default_ollama_timeout_is_900():
     initialize()
     reset_workflow_settings()
     ws = get_workflow_settings()
-    assert ws.get("ollamaRequestTimeoutSec") == 300
+    assert ws.get("ollamaRequestTimeoutSec") == 900
     assert ws.get("ollamaMaxRetries") == 4
     assert ws.get("ollamaCooldownRetryEnabled") is True
 
@@ -56,6 +57,29 @@ def test_chat_cooldown_retry_on_transient_failure():
             result = agent._chat([{"role": "user", "content": "hi"}])
     assert result is success
     assert mock_provider.chat.call_count == 2
+
+
+def test_chat_does_not_retry_timeout():
+    initialize()
+    reset_workflow_settings()
+    save_workflow_settings(
+        {
+            "ollamaMaxRetries": 4,
+            "ollamaRetryDelaySec": [0, 0, 0, 0],
+            "ollamaCooldownRetryEnabled": True,
+            "ollamaCooldownRetrySec": 0,
+            "ollamaCooldownRetryAttempts": 2,
+        }
+    )
+    agent = ScrumAgent("Developer", "test-model", "system", "http://localhost:11434")
+    mock_provider = MagicMock()
+    mock_provider.chat.side_effect = Exception("HTTPConnectionPool timed out")
+    with patch.object(agent, "_get_provider", return_value=mock_provider):
+        with patch("backend.agents.scrum_agent.time.sleep"):
+            result = agent._chat([{"role": "user", "content": "hi"}])
+    assert result is None
+    assert mock_provider.chat.call_count == 1
+    assert agent._last_chat_error_type == "timeout"
 
 
 def test_chat_skips_cooldown_on_context_overflow():
@@ -151,3 +175,24 @@ def test_resolve_log_source_windows_file():
     assert source.kind == "file"
     assert source.path is not None
     assert "server.log" in source.path
+
+
+def test_should_stop_after_write_and_dup_verify():
+    initialize()
+    reset_workflow_settings()
+    agent = ScrumAgent("Developer", "test-model", "system", "http://localhost:11434")
+    agent._dev_phase_graph = SimpleNamespace(write_succeeded=True)
+    call = object()
+    dup = SimpleNamespace(duplicate_skip=True)
+    results = {id(call): ("run_command", {}, dup, None)}
+    assert agent._should_stop_after_write_and_dup_verify(results, [call]) is True
+    no_dup = SimpleNamespace(duplicate_skip=False)
+    results_no = {id(call): ("run_command", {}, no_dup, None)}
+    assert agent._should_stop_after_write_and_dup_verify(results_no, [call]) is False
+    agent._dev_phase_graph = SimpleNamespace(write_succeeded=False)
+    with patch("backend.services.step_diagnostics.get_active_trace", return_value=None):
+        assert agent._should_stop_after_write_and_dup_verify(results, [call]) is False
+    read_call = object()
+    read_results = {id(read_call): ("read_file", {}, dup, None)}
+    agent._dev_phase_graph = SimpleNamespace(write_succeeded=True)
+    assert agent._should_stop_after_write_and_dup_verify(read_results, [read_call]) is False

@@ -422,6 +422,32 @@ def test_po_incomplete_not_ok_when_card_stays_needs_po(tmp_path, monkeypatch):
     assert outcome["ok"] is False
 
 
+def test_write_dup_stop_outcome_is_ok(tmp_path, monkeypatch):
+    monkeypatch.setenv("ALLHANDS_HOME", str(tmp_path))
+    initialize()
+    task = init_new_task(
+        {"id": "T-WDUP", "title": "Write then skip", "description": "d", "status": "In Progress"}
+    )
+    state.SHARED_BOARD["In Progress"] = [task]
+    state.CURRENT_PROJECT_ID = "test-proj"
+    state.DEV_STEP_READ_ONLY_NO_EDITS = False
+    state.DEV_STEP_COMMAND_REPEAT_NO_PROGRESS = False
+
+    start_step_trace("T-WDUP", "Write then skip", "Developer", "In Progress")
+
+    outcome = _build_last_step_outcome(
+        "T-WDUP",
+        "In Progress",
+        "Developer",
+        agent_result=(
+            "Stopped: files already written this step and verify command was a duplicate skip. "
+            "Continuing to lint/lane advance."
+        ),
+    )
+    assert outcome["stopReason"] == "max_iterations_after_writes"
+    assert outcome["ok"] is True
+
+
 def test_fenced_content_read_file_recovered_and_executed():
     initialize()
     state.SHARED_BOARD.clear()

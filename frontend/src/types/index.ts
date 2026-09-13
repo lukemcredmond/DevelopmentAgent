@@ -297,6 +297,12 @@ export interface Task {
   poAutoSkip?: boolean
   lastStepProgress?: StepProgress | null
   agentWorkItems?: AgentWorkItem[]
+  pendingSplit?: {
+    requestedAt?: string
+    guidance?: string
+    requestedBy?: string
+  } | null
+  forcePatchAttempted?: boolean
   qaMarkdownPath?: string | null
   userStory?: string
   scope?: string
@@ -1711,7 +1717,7 @@ export const DEFAULT_WORKFLOW_SETTINGS: WorkflowSettings = {
   ollamaNumCtxAdaptiveStart: 8192,
   ollamaNumCtxAdaptiveStep: 8192,
   ollamaKeepAlive: '30m',
-  ollamaRequestTimeoutSec: 300,
+  ollamaRequestTimeoutSec: 900,
   modelTestTimeoutSec: 600,
   terminalTimeoutSec: 600,
   enableVramAwareModelSwap: true,

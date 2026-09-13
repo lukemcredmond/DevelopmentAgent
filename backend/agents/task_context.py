@@ -496,6 +496,16 @@ def normalize_task(task: Dict[str, Any]) -> Dict[str, Any]:
         task["requiresQa"] = bool(task["requiresQa"])
     cb = str(task.get("createdBy") or "po").lower()
     task["createdBy"] = cb if cb in ("po", "user", "split") else "po"
+    task["forcePatchAttempted"] = bool(task.get("forcePatchAttempted", False))
+    pending = task.get("pendingSplit")
+    if isinstance(pending, dict) and pending:
+        task["pendingSplit"] = {
+            "requestedAt": coerce_task_text(pending.get("requestedAt", "")),
+            "guidance": coerce_task_text(pending.get("guidance", "")),
+            "requestedBy": coerce_task_text(pending.get("requestedBy", "") or "ui"),
+        }
+    else:
+        task["pendingSplit"] = None
     if task.get("lastDiagnosis") is not None and isinstance(task["lastDiagnosis"], dict):
         ld = task["lastDiagnosis"]
         task["lastDiagnosis"] = {
