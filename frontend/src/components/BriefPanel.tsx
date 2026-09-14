@@ -1,4 +1,5 @@
 import { memo, useEffect, useState } from 'react'
+import { SettingHint } from './SettingHint'
 
 const BRIEF_OPEN_KEY = 'allhands-brief-open'
 const BRIEF_TAB_KEY = 'allhands-brief-tab'
@@ -173,9 +174,8 @@ export default memo(function BriefPanel({
           ) : (
             <>
               <p className="text-[11px] text-cat-overlay leading-relaxed">
-                Review or edit the PO plan outline. Generate Features creates Features-lane epics
-                with smallest child cards (then Backlog / Refinement → delivery). Enable
-                &quot;Require backlog refinement&quot; for clearer testable cards before In Progress.
+                Plan outline is markdown only (no cards). Generate Features turns that outline into
+                epics and child cards on the board.
               </p>
               <textarea
                 value={planOutline}
@@ -186,14 +186,17 @@ export default memo(function BriefPanel({
                 placeholder="Run Plan outline from the sidebar — markdown plan streams here…"
               />
               {onGenerateBacklog && (
-                <button
-                  type="button"
-                  disabled={generateBacklogDisabled || planOutlineStreaming || !planOutline.trim()}
-                  onClick={onGenerateBacklog}
-                  className="text-xs bg-violet-700 hover:bg-violet-600 disabled:opacity-50 text-white font-medium py-2 px-3 rounded-lg transition-colors"
-                >
-                  Generate Features from plan
-                </button>
+                <div className="flex items-center gap-1">
+                  <button
+                    type="button"
+                    disabled={generateBacklogDisabled || planOutlineStreaming || !planOutline.trim()}
+                    onClick={onGenerateBacklog}
+                    className="text-xs bg-violet-700 hover:bg-violet-600 disabled:opacity-50 text-white font-medium py-2 px-3 rounded-lg transition-colors"
+                  >
+                    Generate Features from plan
+                  </button>
+                  <SettingHint hint="Turns this outline into Features-lane epics and small child cards. Does not start coding." />
+                </div>
               )}
             </>
           )}

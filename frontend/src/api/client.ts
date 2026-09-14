@@ -258,6 +258,8 @@ export async function importSkillsFromWorkspace(payload: {
     body: JSON.stringify(payload),
   })
 }
+
+export async function assignSkills(payload: BulkSkillPayload): Promise<AppState> {
   return request<AppState>('/api/assign-skills', {
     method: 'POST',
     body: JSON.stringify(payload),

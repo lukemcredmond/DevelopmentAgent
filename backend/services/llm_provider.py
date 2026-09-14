@@ -157,7 +157,11 @@ class OllamaProvider(LlmProvider):
     def _get_client(self):
         from ollama import Client
 
-        if self._client is None or self._client_timeout != self.timeout_sec:
+        if (
+            self._client is None
+            or self._client_timeout != self.timeout_sec
+            or _http_client_closed(self._client)
+        ):
             self._client = Client(host=self.base_url, timeout=self.timeout_sec)
             self._client_timeout = self.timeout_sec
         return self._client
@@ -218,7 +222,13 @@ class OllamaProvider(LlmProvider):
             from backend.services.agent_efficiency import normalize_ollama_keep_alive
 
             kwargs["keep_alive"] = normalize_ollama_keep_alive(keep_alive)
-        result = self._get_client().chat(**kwargs)
+        try:
+            result = self._get_client().chat(**kwargs)
+        except RuntimeError as exc:
+            if "client has been closed" not in str(exc).lower():
+                raise
+            self._client = None
+            result = self._get_client().chat(**kwargs)
         if stream:
             return _iter_ollama_stream(result)
         return chat_result_from_ollama(result)
@@ -949,8 +959,28 @@ def chat_result_from_openai(payload: Dict[str, Any]) -> ChatResult:
     )
 
 
+def _http_client_closed(client: Any) -> bool:
+    inner = getattr(client, "_client", None)
+    if inner is not None and bool(getattr(inner, "is_closed", False)):
+        return True
+    return bool(getattr(client, "is_closed", False))
+
+
+def _is_shared_http_client(obj: Any) -> bool:
+    """ollama.Client / httpx.Client must stay open across chat calls."""
+    name = type(obj).__name__
+    if name not in ("Client", "AsyncClient"):
+        return False
+    module = getattr(type(obj), "__module__", "") or ""
+    return module.startswith("httpx") or module.startswith("ollama")
+
+
 def close_chat_stream(stream: Any) -> None:
-    """Best-effort close of a provider stream so Ollama can drop the job."""
+    """Best-effort close of a provider stream so Ollama can drop the job.
+
+    Do not close the shared ollama/httpx Client — that leaves the next Plan /
+    sprint call with "Cannot send a request, as the client has been closed."
+    """
     seen: set[int] = set()
     stack = [stream]
     while stack:
@@ -961,6 +991,8 @@ def close_chat_stream(stream: Any) -> None:
         if ident in seen:
             continue
         seen.add(ident)
+        if _is_shared_http_client(obj):
+            continue
         for attr in ("close", "release_conn"):
             fn = getattr(obj, attr, None)
             if callable(fn):

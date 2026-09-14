@@ -1,4 +1,4 @@
-import { useId, useState, type ReactNode } from 'react'
+import { useId, useLayoutEffect, useRef, useState, type ReactNode } from 'react'
 
 interface SettingHintProps {
   /** Plain-English explanation of the setting. */
@@ -9,9 +9,25 @@ interface SettingHintProps {
 export function SettingHint({ hint }: SettingHintProps) {
   const [open, setOpen] = useState(false)
   const tipId = useId()
+  const btnRef = useRef<HTMLButtonElement>(null)
+  const [coords, setCoords] = useState({ top: 0, left: 0 })
+
+  useLayoutEffect(() => {
+    if (!open || !btnRef.current) return
+    const r = btnRef.current.getBoundingClientRect()
+    const width = 256
+    let left = r.right + 8
+    if (left + width > window.innerWidth - 8) {
+      left = Math.max(8, r.left - width - 8)
+    }
+    const top = Math.min(r.top, window.innerHeight - 120)
+    setCoords({ top, left })
+  }, [open, hint])
+
   return (
     <span className="relative inline-flex items-center align-middle ml-1 shrink-0">
       <button
+        ref={btnRef}
         type="button"
         data-testid="setting-hint"
         aria-label={`About this setting: ${hint}`}
@@ -31,7 +47,8 @@ export function SettingHint({ hint }: SettingHintProps) {
         <span
           id={tipId}
           role="tooltip"
-          className="absolute z-20 left-0 top-full mt-1 w-56 max-w-[70vw] rounded border border-cat-surface1 bg-cat-mantle px-2 py-1.5 text-[10px] text-cat-subtext leading-snug shadow-lg"
+          className="fixed z-[80] w-64 max-w-[calc(100vw-1rem)] rounded border border-cat-surface1 bg-cat-mantle px-2 py-1.5 text-[10px] text-cat-subtext leading-snug shadow-lg"
+          style={{ top: coords.top, left: coords.left }}
         >
           {hint}
         </span>

@@ -329,3 +329,57 @@ def test_close_chat_stream_calls_close():
     box = Box()
     close_chat_stream(box)
     assert box.closed is True
+
+
+def test_close_chat_stream_does_not_close_shared_http_client():
+    from backend.services.llm_provider import close_chat_stream
+    import httpx
+    from ollama import Client
+
+    ollama_client = Client(host="http://127.0.0.1:11434", timeout=1.0)
+    http_client = httpx.Client()
+    try:
+        close_chat_stream(ollama_client)
+        close_chat_stream(http_client)
+        assert ollama_client._client.is_closed is False
+        assert http_client.is_closed is False
+    finally:
+        ollama_client.close()
+        http_client.close()
+
+
+def test_ollama_provider_recreates_closed_client(monkeypatch):
+    from backend.services.llm_provider import OllamaProvider
+
+    created = []
+
+    class FakeInner:
+        def __init__(self):
+            self.is_closed = False
+
+        def close(self):
+            self.is_closed = True
+
+    class FakeClient:
+        def __init__(self, host=None, timeout=None):
+            self.host = host
+            self.timeout = timeout
+            self._client = FakeInner()
+            created.append(self)
+
+        def close(self):
+            self._client.close()
+
+        def chat(self, **kwargs):
+            if self._client.is_closed:
+                raise RuntimeError("Cannot send a request, as the client has been closed.")
+            return {"message": {"role": "assistant", "content": "ok"}}
+
+    monkeypatch.setattr("ollama.Client", FakeClient)
+    provider = OllamaProvider("http://localhost:11434")
+    first = provider._get_client()
+    first.close()
+    second = provider._get_client()
+    assert second is not first
+    assert len(created) == 2
+    second.chat(model="x", messages=[])

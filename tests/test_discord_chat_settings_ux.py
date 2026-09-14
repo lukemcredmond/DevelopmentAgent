@@ -45,3 +45,11 @@ def test_setting_hint_markers():
     assert "SettingHint" in panel
     assert "Require AC checklist before Done" in panel
     assert panel.count("<SettingHint") >= 15
+    sidebar = (root / "frontend" / "src" / "components" / "Sidebar.tsx").read_text(
+        encoding="utf-8"
+    )
+    assert "PLAN_OUTLINE_HINT" in sidebar
+    assert "GENERATE_FEATURES_HINT" in sidebar
+    assert "PLAN_AND_RUN_HINT" in sidebar
+    assert "EXECUTE_STEP_HINT" in sidebar
+    assert sidebar.count("<SprintActionRow") >= 4

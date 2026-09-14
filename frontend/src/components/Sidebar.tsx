@@ -1,5 +1,24 @@
-import { memo, useEffect, useRef, useState } from 'react'
+import { memo, useEffect, useRef, useState, type ReactNode } from 'react'
 import type { AppState } from '../types'
+import { SettingHint } from './SettingHint'
+
+const PLAN_OUTLINE_HINT =
+  'Writes a markdown plan from the Brief (summary, approach, risks, proposed epics). Does not create Kanban cards — review it on the Plan tab first.'
+const GENERATE_FEATURES_HINT =
+  'Turns the Plan outline into Features-lane epics and small child cards on the board. Needs an outline first. Does not start coding.'
+const PLAN_AND_RUN_HINT =
+  'One-shot: Product Owner creates cards from the Brief, then the sprint runs steps until the step budget or you cancel. Skips reviewing an outline.'
+const EXECUTE_STEP_HINT =
+  'Runs a single sprint tick on the next ready card (PO, Dev, Review, or QA as the board requires). Does not plan new work.'
+
+function SprintActionRow({ hint, children }: { hint: string; children: ReactNode }) {
+  return (
+    <div className="flex items-center gap-1">
+      <div className="min-w-0 flex-1">{children}</div>
+      <SettingHint hint={hint} />
+    </div>
+  )
+}
 
 interface SidebarProps {
   state: AppState
@@ -257,52 +276,60 @@ export default memo(function Sidebar({
               </p>
             )}
           <div className="space-y-1.5">
-            <button
-              type="button"
-              onClick={onPlan}
-              disabled={sprintRunning || !brief.trim()}
-              className="w-full bg-indigo-600 hover:bg-indigo-500 disabled:opacity-50 text-white font-medium py-1.5 rounded-lg text-[11px] transition-colors flex items-center justify-center gap-1.5"
-            >
-              <i className="fa-solid fa-map" />
-              Plan outline
-            </button>
-            {onGenerateBacklog && (
+            <SprintActionRow hint={PLAN_OUTLINE_HINT}>
               <button
                 type="button"
-                onClick={onGenerateBacklog}
-                disabled={sprintRunning || !brief.trim() || !planOutlineReady}
-                className="w-full bg-violet-700 hover:bg-violet-600 disabled:opacity-50 text-white font-medium py-1.5 rounded-lg text-[11px] transition-colors flex items-center justify-center gap-1.5"
+                onClick={onPlan}
+                disabled={sprintRunning || !brief.trim()}
+                className="w-full bg-indigo-600 hover:bg-indigo-500 disabled:opacity-50 text-white font-medium py-1.5 rounded-lg text-[11px] transition-colors flex items-center justify-center gap-1.5"
               >
-                <i className="fa-solid fa-layer-group" />
-                Generate Features
+                <i className="fa-solid fa-map" />
+                Plan outline
               </button>
+            </SprintActionRow>
+            {onGenerateBacklog && (
+              <SprintActionRow hint={GENERATE_FEATURES_HINT}>
+                <button
+                  type="button"
+                  onClick={onGenerateBacklog}
+                  disabled={sprintRunning || !brief.trim() || !planOutlineReady}
+                  className="w-full bg-violet-700 hover:bg-violet-600 disabled:opacity-50 text-white font-medium py-1.5 rounded-lg text-[11px] transition-colors flex items-center justify-center gap-1.5"
+                >
+                  <i className="fa-solid fa-layer-group" />
+                  Generate Features
+                </button>
+              </SprintActionRow>
             )}
-            <button
-              type="button"
-              onClick={onPlanAndRun}
-              disabled={sprintRunning || !brief.trim()}
-              className="w-full bg-violet-600 hover:bg-violet-500 disabled:opacity-50 text-white font-medium py-1.5 rounded-lg text-[11px] transition-colors flex items-center justify-center gap-1.5"
-            >
-              {sprintRunning ? (
-                <i className="fa-solid fa-spinner animate-spin" />
-              ) : (
-                <i className="fa-solid fa-rocket" />
-              )}
-              Plan & Run
-            </button>
-            <button
-              type="button"
-              onClick={onStep}
-              disabled={sprintRunning || boardEmpty}
-              className="w-full bg-emerald-600 hover:bg-emerald-500 disabled:opacity-50 text-white font-medium py-1.5 rounded-lg text-[11px] transition-colors flex items-center justify-center gap-1.5"
-            >
-              {sprintRunning ? (
-                <i className="fa-solid fa-spinner animate-spin" />
-              ) : (
-                <i className="fa-solid fa-play" />
-              )}
-              Execute Step
-            </button>
+            <SprintActionRow hint={PLAN_AND_RUN_HINT}>
+              <button
+                type="button"
+                onClick={onPlanAndRun}
+                disabled={sprintRunning || !brief.trim()}
+                className="w-full bg-violet-600 hover:bg-violet-500 disabled:opacity-50 text-white font-medium py-1.5 rounded-lg text-[11px] transition-colors flex items-center justify-center gap-1.5"
+              >
+                {sprintRunning ? (
+                  <i className="fa-solid fa-spinner animate-spin" />
+                ) : (
+                  <i className="fa-solid fa-rocket" />
+                )}
+                Plan & Run
+              </button>
+            </SprintActionRow>
+            <SprintActionRow hint={EXECUTE_STEP_HINT}>
+              <button
+                type="button"
+                onClick={onStep}
+                disabled={sprintRunning || boardEmpty}
+                className="w-full bg-emerald-600 hover:bg-emerald-500 disabled:opacity-50 text-white font-medium py-1.5 rounded-lg text-[11px] transition-colors flex items-center justify-center gap-1.5"
+              >
+                {sprintRunning ? (
+                  <i className="fa-solid fa-spinner animate-spin" />
+                ) : (
+                  <i className="fa-solid fa-play" />
+                )}
+                Execute Step
+              </button>
+            </SprintActionRow>
             {onRunInProgress && inProgressCount > 0 && (
               <button
                 type="button"
