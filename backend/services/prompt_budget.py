@@ -2,9 +2,11 @@
 
 from __future__ import annotations
 
-from typing import Any, Dict, Optional
+import json
+from typing import Any, Dict, Optional, Sequence
 
 DEFAULT_NUM_CTX = 32768
+PACKED_NUM_CTX_FLOOR = 4096
 
 _ROLE_KEYS = frozenset({"po", "dev", "cr", "qa"})
 
@@ -157,23 +159,34 @@ def initial_ollama_num_ctx(
     return min(ceiling, max(2048, start))
 
 
+def _estimate_tools_chars(tools: Optional[Sequence[Any]]) -> int:
+    if not tools:
+        return 0
+    try:
+        return len(json.dumps(list(tools), default=str))
+    except (TypeError, ValueError):
+        return len(str(tools))
+
+
 def packed_prompt_num_ctx(
     messages: Any,
     ceiling: int,
     *,
+    tools: Optional[Sequence[Any]] = None,
     headroom_tokens: int = 1024,
 ) -> int:
     """num_ctx sized to the packed prompt plus headroom, clamped to the ceiling."""
     from backend.services.llm_context import estimate_messages_chars
 
     try:
-        ceiling_i = max(2048, int(ceiling or DEFAULT_NUM_CTX))
+        ceiling_i = max(1024, int(ceiling or DEFAULT_NUM_CTX))
     except (TypeError, ValueError):
         ceiling_i = DEFAULT_NUM_CTX
-    chars = estimate_messages_chars(messages or [])
+    chars = estimate_messages_chars(messages or []) + _estimate_tools_chars(tools)
     needed = max(0, int(chars) // 4) + max(0, int(headroom_tokens))
     rounded = ((needed + 1023) // 1024) * 1024
-    return min(ceiling_i, max(2048, rounded))
+    floor = min(ceiling_i, PACKED_NUM_CTX_FLOOR)
+    return min(ceiling_i, max(floor, rounded))
 
 
 def bump_ollama_num_ctx(current: int, ceiling: int, *, step: int = 8192) -> Optional[int]:

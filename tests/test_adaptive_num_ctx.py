@@ -34,12 +34,20 @@ def test_bump_ollama_num_ctx_doubles_or_steps():
 
 def test_packed_prompt_num_ctx_rounds_and_clamps():
     messages = [{"role": "user", "content": "x" * 4000}]
-    # 4000 chars / 4 = 1000 tokens + 1024 headroom → 2048 after floor
-    assert packed_prompt_num_ctx(messages, 32768) == 2048
+    # 4000 chars / 4 = 1000 tokens + 1024 headroom → 2048, packed floor 4096
+    assert packed_prompt_num_ctx(messages, 32768) == 4096
     big = [{"role": "user", "content": "y" * 40000}]
     # 10000 tokens + 1024 → 11024 rounded up to 11264
     assert packed_prompt_num_ctx(big, 32768) == 11264
     assert packed_prompt_num_ctx(big, 4096) == 4096
+
+
+def test_packed_prompt_num_ctx_counts_tools():
+    messages = [{"role": "user", "content": "hello"}]
+    assert packed_prompt_num_ctx(messages, 32768) == 4096
+    tools = [{"function": {"name": "x", "description": "y" * 20000, "parameters": {}}}]
+    # ~5000 tool tokens + 1024 headroom → 6144 after rounding
+    assert packed_prompt_num_ctx(messages, 32768, tools=tools) == 6144
 
 
 def test_scrum_agent_effective_and_bump(monkeypatch):
@@ -74,4 +82,18 @@ def test_packed_num_ctx_from_messages_ignores_32k_ceiling_when_prompt_is_small(m
     monkeypatch.setattr(scrum_agent, "get_workflow_settings", lambda: ws)
     monkeypatch.setattr(ws_mod, "get_workflow_settings", lambda: ws)
     agent._ensure_packed_num_ctx([{"role": "user", "content": "hello"}])
-    assert agent._effective_num_ctx() == 2048
+    assert agent._effective_num_ctx() == 4096
+
+
+def test_packed_num_ctx_from_messages_includes_tools(monkeypatch):
+    from backend.agents import scrum_agent
+    from backend.agents.scrum_agent import ScrumAgent
+    from backend.services import workflow_settings as ws_mod
+
+    agent = ScrumAgent("dev", "test-model", "sys")
+    ws = {"ollamaNumCtx": 32768, "ollamaNumCtxAdaptive": False}
+    monkeypatch.setattr(scrum_agent, "get_workflow_settings", lambda: ws)
+    monkeypatch.setattr(ws_mod, "get_workflow_settings", lambda: ws)
+    tools = [{"function": {"name": "x", "description": "y" * 20000, "parameters": {}}}]
+    agent._ensure_packed_num_ctx([{"role": "user", "content": "hello"}], tools=tools)
+    assert agent._effective_num_ctx() == 6144

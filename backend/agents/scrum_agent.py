@@ -1027,7 +1027,12 @@ class ScrumAgent:
 
         return resolve_ollama_num_ctx(self.role)
 
-    def _ensure_packed_num_ctx(self, messages: Sequence[ChatMessage]) -> None:
+    def _ensure_packed_num_ctx(
+        self,
+        messages: Sequence[ChatMessage],
+        *,
+        tools: Optional[Sequence[Dict[str, Any]]] = None,
+    ) -> None:
         if self._step_num_ctx is not None:
             return
         from backend.services.prompt_budget import packed_prompt_num_ctx
@@ -1038,7 +1043,9 @@ class ScrumAgent:
                 as_dicts.append(msg)
             else:
                 as_dicts.append({"content": str(getattr(msg, "content", "") or "")})
-        self._step_num_ctx = packed_prompt_num_ctx(as_dicts, self._num_ctx_ceiling())
+        self._step_num_ctx = packed_prompt_num_ctx(
+            as_dicts, self._num_ctx_ceiling(), tools=tools
+        )
 
     def _effective_num_ctx(self) -> int:
         from backend.services.prompt_budget import initial_ollama_num_ctx
@@ -1225,7 +1232,7 @@ class ScrumAgent:
             )
         try:
             chat_opts = self._chat_options()
-            self._ensure_packed_num_ctx(messages)
+            self._ensure_packed_num_ctx(messages, tools=tools)
             chat_opts = self._chat_options()
             empty_timeout = 90
             try:

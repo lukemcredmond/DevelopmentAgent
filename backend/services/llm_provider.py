@@ -1012,10 +1012,84 @@ def close_chat_stream(stream: Any) -> None:
                     stack.append(inner)
 
 
+def _ollama_stream_error_message(chunk: Any) -> Optional[str]:
+    """Extract an Ollama error payload from a stream chunk or exception."""
+    if chunk is None:
+        return None
+    if isinstance(chunk, BaseException):
+        nested = _ollama_stream_error_message(getattr(chunk, "error", None))
+        if nested:
+            return nested
+        text = str(chunk).strip()
+        if not text:
+            return None
+        try:
+            parsed = json.loads(text)
+        except (TypeError, ValueError):
+            parsed = None
+        if isinstance(parsed, dict):
+            nested = _ollama_stream_error_message(parsed)
+            if nested:
+                return nested
+            nested = _ollama_stream_error_message(parsed.get("error"))
+            if nested:
+                return nested
+        lower = text.lower()
+        if (
+            "exceed_context" in lower
+            or "context size" in lower
+            or '"error"' in lower
+            or "status code: 400" in lower
+        ):
+            return text
+        return None
+
+    payload: Any = chunk
+    if not isinstance(payload, dict):
+        err_attr = getattr(payload, "error", None)
+        if err_attr:
+            if isinstance(err_attr, dict):
+                return str(err_attr.get("message") or err_attr)
+            text = str(err_attr).strip()
+            return text or None
+        dumped = None
+        if hasattr(payload, "model_dump"):
+            try:
+                dumped = payload.model_dump()
+            except Exception:
+                dumped = None
+        elif hasattr(payload, "dict") and callable(getattr(payload, "dict")):
+            try:
+                dumped = payload.dict()
+            except Exception:
+                dumped = None
+        payload = dumped if isinstance(dumped, dict) else None
+
+    if not isinstance(payload, dict):
+        return None
+    err = payload.get("error")
+    if isinstance(err, dict):
+        return str(err.get("message") or err)
+    if err:
+        return str(err)
+    err_type = str(payload.get("type") or "")
+    if payload.get("code") == 400 or "exceed_context" in err_type:
+        return str(payload.get("message") or payload)
+    return None
+
+
 def _iter_ollama_stream(result: Any) -> Iterator[ChatResult]:
     try:
         for chunk in result:
+            err = _ollama_stream_error_message(chunk)
+            if err:
+                raise RuntimeError(err)
             yield chat_result_from_ollama(chunk)
+    except Exception as exc:
+        mapped = _ollama_stream_error_message(exc)
+        if mapped and mapped != str(exc):
+            raise RuntimeError(mapped) from exc
+        raise
     finally:
         close_chat_stream(result)
 

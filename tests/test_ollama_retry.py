@@ -263,6 +263,55 @@ def test_should_stop_after_write_when_verify_already_in_success_keys():
     )
 
 
+def test_iter_ollama_stream_raises_on_context_error_chunk():
+    from backend.services.llm_provider import _iter_ollama_stream
+
+    chunks = iter(
+        [
+            {
+                "error": {
+                    "code": 400,
+                    "message": (
+                        "request (2461 tokens) exceeds the available context size "
+                        "(2048 tokens), try increasing it"
+                    ),
+                    "type": "exceed_context_size_error",
+                }
+            }
+        ]
+    )
+    try:
+        list(_iter_ollama_stream(chunks))
+        raise AssertionError("expected RuntimeError")
+    except RuntimeError as exc:
+        assert ScrumAgent._classify_ollama_error(str(exc)) == "context_overflow"
+
+
+def test_consume_chat_stream_propagates_context_overflow_immediately():
+    import time
+
+    from backend.services.llm_provider import _iter_ollama_stream, consume_chat_stream
+
+    def chunks():
+        yield {
+            "error": {
+                "code": 400,
+                "message": "exceed_context_size_error",
+                "type": "exceed_context_size_error",
+            }
+        }
+        time.sleep(30)
+        yield {}
+
+    started = time.monotonic()
+    try:
+        consume_chat_stream(_iter_ollama_stream(chunks()), empty_timeout_sec=5)
+        raise AssertionError("expected context overflow")
+    except RuntimeError as exc:
+        assert ScrumAgent._classify_ollama_error(str(exc)) == "context_overflow"
+    assert time.monotonic() - started < 2
+
+
 def test_consume_chat_stream_folds_chunks():
     from backend.services.llm_provider import ChatResult, ProviderMessage, consume_chat_stream
 
