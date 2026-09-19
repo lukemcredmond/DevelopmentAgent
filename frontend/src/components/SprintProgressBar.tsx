@@ -3,6 +3,7 @@ import type { SprintProgress } from '../types'
 interface SprintProgressBarProps {
   progress: SprintProgress | null
   planRunActive: boolean
+  planBacklogActive?: boolean
   sprintRunning?: boolean
   currentTool?: string | null
   onOpenTask?: (taskId: string) => void
@@ -31,6 +32,7 @@ function phaseLabel(phase: SprintProgress['phase']): string {
 export default function SprintProgressBar({
   progress,
   planRunActive,
+  planBacklogActive = false,
   sprintRunning = false,
   currentTool,
   onOpenTask,
@@ -42,6 +44,7 @@ export default function SprintProgressBar({
 }: SprintProgressBarProps) {
   const active =
     planRunActive ||
+    planBacklogActive ||
     sprintRunning ||
     (progress != null && progress.phase !== 'done' && progress.phase !== 'cancelled') ||
     needsUserCount > 0
@@ -55,7 +58,13 @@ export default function SprintProgressBar({
   const maxSteps = progress?.maxSteps ?? 20
   const showStepCounter = (phase === 'sprint_step' || sprintRunning) && maxSteps > 0
   const progressValue = phase === 'po_plan' && step === 0 ? undefined : Math.min(step, maxSteps)
-  const title = planRunActive ? 'Plan & Run' : sprintRunning ? 'Auto sprint' : 'Sprint'
+  const title = planBacklogActive
+    ? 'Generate Features'
+    : planRunActive
+      ? 'Plan & Run'
+      : sprintRunning
+        ? 'Auto sprint'
+        : 'Sprint'
   const waitingOnYou = needsUserCount > 0
   const showControls = Boolean(onPause || onCancel || onResume)
 
@@ -142,7 +151,7 @@ export default function SprintProgressBar({
             ) : (
               <span className="text-cat-overlay font-mono text-[10px]">{progress.taskId}</span>
             ))}
-          {!progress && (planRunActive || sprintRunning) && (
+          {!progress && (planRunActive || planBacklogActive || sprintRunning) && (
             <span className="text-cat-overlay italic">
               Working… first Ollama call may take a few minutes
             </span>

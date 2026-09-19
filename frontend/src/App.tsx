@@ -227,6 +227,7 @@ export default function App() {
   } = useAppState()
 
   const [planRunActive, setPlanRunActive] = useState(false)
+  const [planBacklogActive, setPlanBacklogActive] = useState(false)
   /** Long agent HTTP (Plan / Step / Plan & Run) — progress chrome only; does not set global loading. */
   const [sprintBusy, setSprintBusy] = useState(false)
 
@@ -525,7 +526,33 @@ export default function App() {
       },
     )
 
-  const orchestratedActive = sprintRunning || planRunActive || sprintBusy
+  const orchestratedActive = sprintRunning || planRunActive || sprintBusy || planBacklogActive
+
+  const [sprintHung, setSprintHung] = useState(false)
+
+  useEffect(() => {
+    if (!orchestratedActive) {
+      setSprintHung(false)
+      return
+    }
+    const hasSignal =
+      Boolean(sprintProgress?.taskId) ||
+      Boolean(activeRun?.taskId) ||
+      Boolean(currentTool) ||
+      Boolean(state.activeStepDiagnostics?.taskId)
+    if (hasSignal) {
+      setSprintHung(false)
+      return
+    }
+    const timer = window.setTimeout(() => setSprintHung(true), 3 * 60 * 1000)
+    return () => window.clearTimeout(timer)
+  }, [
+    orchestratedActive,
+    sprintProgress?.taskId,
+    activeRun?.taskId,
+    currentTool,
+    state.activeStepDiagnostics?.taskId,
+  ])
 
   const activeTaskRunInfo = useMemo(() => {
     const taskId =
@@ -792,6 +819,37 @@ export default function App() {
       Math.max(BOTTOM_PANEL_MIN, preCollapseHeightRef.current || h || BOTTOM_PANEL_MIN),
     )
   }, [bottomPanelCollapsed])
+
+  const handleGenerateBacklog = useCallback(() => {
+    void withSprintBusy(async () => {
+      expandBottomPanel()
+      setBottomTab('console')
+      setPlanBacklogActive(true)
+      setSprintProgress(null)
+      if (bottomPanelHeight < 180) {
+        setBottomPanelHeight(220)
+      }
+      try {
+        handleState(
+          await triggerPlanBacklog({
+            brief: state.brief,
+            ollama_url: llmCallUrl,
+            outline: planOutline,
+          }),
+        )
+      } finally {
+        setPlanBacklogActive(false)
+      }
+    })
+  }, [
+    bottomPanelHeight,
+    expandBottomPanel,
+    handleState,
+    llmCallUrl,
+    planOutline,
+    setSprintProgress,
+    state.brief,
+  ])
 
   const toggleBottomPanelCollapse = useCallback(() => {
     setBottomPanelCollapsed((collapsed) => {
@@ -1364,6 +1422,24 @@ export default function App() {
         ),
       })
     }
+    if (sprintHung && orchestratedActive) {
+      items.push({
+        id: 'sprint-hung',
+        tone: 'warning',
+        summary: 'Sprint may be stuck — no progress signals for several minutes',
+        detail: (
+          <span>
+            Check that Ollama is responding, or cancel the sprint and retry. SSE{' '}
+            {sseLive ? 'connected' : 'disconnected'}.
+          </span>
+        ),
+        actions: (
+          <button type="button" onClick={() => void stopAutoSprint()} className="underline text-xs">
+            Cancel sprint
+          </button>
+        ),
+      })
+    }
     if (state.recovery?.interrupted) {
       const mode = state.recovery.sprintMode || 'single_step'
       const preferAuto = mode === 'auto'
@@ -1527,6 +1603,9 @@ export default function App() {
     handleState,
     applyStepOutcome,
     openModelTab,
+    sprintHung,
+    sseLive,
+    stopAutoSprint,
   ])
 
   return (
@@ -1567,18 +1646,9 @@ export default function App() {
             handleState(await triggerPlanOutline({ brief: state.brief, ollama_url: llmCallUrl })),
           )
         }
-        onGenerateBacklog={() =>
-          void withSprintBusy(async () =>
-            handleState(
-              await triggerPlanBacklog({
-                brief: state.brief,
-                ollama_url: llmCallUrl,
-                outline: planOutline,
-              }),
-            ),
-          )
-        }
+        onGenerateBacklog={handleGenerateBacklog}
         planOutlineReady={planOutline.trim().length > 0}
+        planBacklogActive={planBacklogActive}
         onPlanAndRun={() =>
           void withSprintBusy(async () => {
             expandBottomPanel()
@@ -1687,6 +1757,7 @@ export default function App() {
         onToggleAutoSprint={setAutoSprint}
         onCancelSprint={() => void stopAutoSprint()}
         onSessionRefreshDue={onSessionRefreshDue}
+        sprintProgress={sprintProgress}
       />
 
       <SettingsSlideOver
@@ -1783,17 +1854,11 @@ export default function App() {
           planOutline={planOutline}
           onPlanOutlineChange={handlePlanOutlineChange}
           planOutlineStreaming={planOutlineStreaming}
-          onGenerateBacklog={() =>
-            void withLoading(async () =>
-              handleState(
-                await triggerPlanBacklog({
-                  brief: state.brief,
-                  ollama_url: llmCallUrl,
-                  outline: planOutline,
-                }),
-              ),
-            )
+          planBacklogActive={planBacklogActive}
+          planTabFocusKey={
+            (state.projectPlanOutline ?? '').trim() ? state.projectId : undefined
           }
+          onGenerateBacklog={handleGenerateBacklog}
           generateBacklogDisabled={orchestratedActive || !brief.trim()}
         />
 
@@ -1814,6 +1879,7 @@ export default function App() {
               activeLanes={state.activeLanes}
               workflowSettings={state.workflowSettings}
               sprintRunning={orchestratedActive}
+              planBacklogActive={planBacklogActive}
               activeRunInfo={activeTaskRunInfo}
               onTaskClick={(task) => setSelectedTask(findTaskOnBoard(state.board, task.id) ?? task)}
               onMoveTask={(taskId, from, to) => void handleMoveTask(taskId, from, to)}
@@ -1883,6 +1949,7 @@ export default function App() {
               <SprintProgressBar
                 progress={sprintProgress}
                 planRunActive={planRunActive}
+                planBacklogActive={planBacklogActive}
                 sprintRunning={sprintRunning}
                 currentTool={currentTool}
                 onOpenTask={openTaskFromRunBar}

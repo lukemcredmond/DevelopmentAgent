@@ -22,7 +22,7 @@ DEFAULT_SAMPLING: Dict[str, float] = {
 
 # Planning benefits from a little more diversity; editing wants determinism.
 ROLE_SAMPLING_DEFAULTS: Dict[str, Dict[str, float]] = {
-    "po": {"temperature": 0.4, "top_p": 0.95, "repeat_penalty": 1.05, "num_predict": 2048},
+    "po": {"temperature": 0.4, "top_p": 0.95, "repeat_penalty": 1.05, "num_predict": 1024},
     "dev": {"temperature": 0.15, "top_p": 0.9, "repeat_penalty": 1.08},
     "cr": {"temperature": 0.2, "top_p": 0.9, "repeat_penalty": 1.05},
     "qa": {"temperature": 0.2, "top_p": 0.9, "repeat_penalty": 1.05},
@@ -84,5 +84,13 @@ def sampling_options_for_role(
             resolved["num_predict"] = int(resolved["num_predict"])
         except (TypeError, ValueError):
             resolved.pop("num_predict", None)
+    if key == "po" and "num_predict" in resolved and not bool(ws.get("poNumPredictOverride")):
+        try:
+            from backend.services.po_clarification import PO_NUM_PREDICT_DEFAULT
+
+            cap = int(PO_NUM_PREDICT_DEFAULT)
+            resolved["num_predict"] = min(int(resolved["num_predict"]), cap)
+        except (TypeError, ValueError):
+            pass
 
     return resolved

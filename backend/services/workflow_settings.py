@@ -109,8 +109,8 @@ DEFAULT_WORKFLOW_SETTINGS: Dict[str, Any] = {
     # Agent efficiency (local Ollama): lean prompts, phase model routing, per-turn tool caps.
     "agentEfficiencyMode": "high",
     "enablePhaseModelRouting": True,
-    "devExploreModel": "",
-    "devPatchModel": "",
+    "devExploreModel": "qwen2.5-coder:7b",
+    "devPatchModel": "qwen2.5-coder:14b",
     "maxToolsPerLlmTurn": 3,
     "autoStartSprint": True,
     "autonomousMode": False,
@@ -145,8 +145,8 @@ DEFAULT_WORKFLOW_SETTINGS: Dict[str, Any] = {
     # auto = collapse to one model when the host can only hold one; on/off to force.
     "singleModelMode": "auto",
     # Start each step at ollamaNumCtxAdaptiveStart; on exceed_context errors, increase and retry.
-    "ollamaNumCtxAdaptive": False,
-    "ollamaNumCtxAdaptiveStart": 8192,
+    "ollamaNumCtxAdaptive": True,
+    "ollamaNumCtxAdaptiveStart": 6144,
     "ollamaNumCtxAdaptiveStep": 8192,
     "ollamaKeepAlive": "30m",
     "ollamaRequestTimeoutSec": 900,
@@ -195,7 +195,10 @@ DEFAULT_WORKFLOW_SETTINGS: Dict[str, Any] = {
     # Budgets sized so a multi-file change is reachable; the total tool-call cap and
     # the wall-clock timeout remain the real stops.
     "enableDevPhaseGraph": True,
-    "devExploreMaxTools": 12,
+    "devExploreMaxTools": 8,
+    # When explore budget is hit, transition to Patch in the same step (block further reads).
+    "devExploreForcePatchInStep": True,
+    "poNumPredictOverride": False,
     "devPatchMaxTools": 12,
     "devVerifyMaxTools": 8,
     "enableStepLessonMemory": True,
@@ -282,13 +285,79 @@ def _summary_key(project_id: str) -> str:
     return f"sprint_summary:{project_id}"
 
 
+# Keys saved as "" should not override shipped defaults (merge would keep "").
+_PERFORMANCE_UNSET_IF_EMPTY = (
+    "devExploreModel",
+    "devPatchModel",
+)
+
+# Backfill when older projects never stored performance keys.
+_PERFORMANCE_BACKFILL_KEYS = (
+    "devExploreModel",
+    "devPatchModel",
+    "devExploreMaxTools",
+    "devExploreForcePatchInStep",
+    "ollamaNumCtxAdaptive",
+    "ollamaNumCtxAdaptiveStart",
+    "enablePhaseModelRouting",
+)
+
+
+def normalize_performance_settings(settings: Dict[str, Any]) -> Dict[str, Any]:
+    """Drop empty performance overrides and clamp stale PO decode caps."""
+    out = dict(settings or {})
+    for key in _PERFORMANCE_UNSET_IF_EMPTY:
+        if key in out and not str(out.get(key) or "").strip():
+            out.pop(key, None)
+    try:
+        from backend.services.po_clarification import PO_NUM_PREDICT_DEFAULT
+
+        cap = int(PO_NUM_PREDICT_DEFAULT)
+    except Exception:
+        cap = 1024
+    if not bool(out.get("poNumPredictOverride")):
+        by_role = out.get("samplingByRole")
+        if isinstance(by_role, dict):
+            po = by_role.get("po")
+            if isinstance(po, dict) and "num_predict" in po:
+                try:
+                    current = int(po.get("num_predict") or cap)
+                except (TypeError, ValueError):
+                    current = cap
+                if current > cap:
+                    po = dict(po)
+                    po["num_predict"] = cap
+                    by_role = dict(by_role)
+                    by_role["po"] = po
+                    out["samplingByRole"] = by_role
+    return out
+
+
+def migrate_performance_settings(settings: Dict[str, Any]) -> Dict[str, Any]:
+    """One-time backfill of performance defaults for projects saved before tuning."""
+    out = normalize_performance_settings(settings)
+    changed = False
+    for key in _PERFORMANCE_BACKFILL_KEYS:
+        if key not in settings:
+            default_val = DEFAULT_WORKFLOW_SETTINGS.get(key)
+            if default_val is not None and out.get(key) != default_val:
+                out[key] = default_val
+                changed = True
+    if changed:
+        out["performanceSettingsVersion"] = max(
+            int(out.get("performanceSettingsVersion") or 0),
+            1,
+        )
+    return out
+
+
 def get_workflow_settings(project_id: str | None = None) -> Dict[str, Any]:
     pid = project_id or state.CURRENT_PROJECT_ID
     raw = state.storage.get_setting(_settings_key(pid))
     if not raw:
         return dict(DEFAULT_WORKFLOW_SETTINGS)
     try:
-        merged = {**DEFAULT_WORKFLOW_SETTINGS, **json.loads(raw)}
+        merged = migrate_performance_settings({**DEFAULT_WORKFLOW_SETTINGS, **json.loads(raw)})
         from backend.services.llm_provider import normalize_llm_provider_settings
 
         return normalize_llm_provider_settings(merged)
@@ -350,6 +419,7 @@ def save_workflow_settings(
             str(x).strip() for x in raw_ids if str(x).strip()
         ]
     current.update(updates)
+    current = migrate_performance_settings(current)
     from backend.services.llm_provider import normalize_llm_provider_settings
 
     current = normalize_llm_provider_settings(current)

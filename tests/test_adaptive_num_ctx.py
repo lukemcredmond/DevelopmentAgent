@@ -97,3 +97,68 @@ def test_packed_num_ctx_from_messages_includes_tools(monkeypatch):
     tools = [{"function": {"name": "x", "description": "y" * 20000, "parameters": {}}}]
     agent._ensure_packed_num_ctx([{"role": "user", "content": "hello"}], tools=tools)
     assert agent._effective_num_ctx() == 6144
+
+
+def test_describe_num_ctx_clamp_at_vram_floor():
+    from backend.services.prompt_budget import describe_num_ctx_clamp
+
+    ws = {"ollamaNumCtx": 32768, "ollamaNumCtxAuto": True, "ollamaNumCtxByRole": {}}
+    info = describe_num_ctx_clamp("dev", settings=ws, effective=4096)
+    assert info["requested"] == 32768
+    assert info["effective"] == 4096
+    assert info["clamped"] is True
+    assert info["atFloor"] is True
+    assert "32768" in info["label"]
+    assert "4096" in info["label"]
+    assert "VRAM" in info["label"]
+
+
+def test_prompt_fills_ctx_window_and_tight_brief():
+    from backend.services.prompt_budget import prompt_fills_ctx_window, truncate_brief
+
+    huge = [{"role": "user", "content": "x" * 20000}]
+    assert prompt_fills_ctx_window(huge, 4096) is True
+    assert prompt_fills_ctx_window([{"role": "user", "content": "hi"}], 4096) is False
+    trimmed = truncate_brief("word " * 2000, 4096)
+    assert len(trimmed) <= 1600
+
+
+def test_po_preload_budget_tighter_at_4096():
+    from backend.services.prompt_budget import PACKED_NUM_CTX_FLOOR, sprint_preload_budgets
+
+    dev = sprint_preload_budgets(PACKED_NUM_CTX_FLOOR, local_slm=False, role="dev")
+    po = sprint_preload_budgets(PACKED_NUM_CTX_FLOOR, local_slm=False, role="po")
+    assert po["total"] < dev["total"]
+    assert po["semantic"] <= 400
+
+
+def test_should_force_patch_on_read_only_exit():
+    from backend.services.sprint_speed_gates import should_force_patch_next_dev_step
+
+    assert should_force_patch_next_dev_step(
+        {"lastStepOutcome": {"exitReason": "read_only_no_edits"}}
+    )
+
+
+def test_length_truncation_detected_even_when_adaptive_off():
+    from backend.agents.scrum_agent import ScrumAgent
+
+    agent = ScrumAgent("dev", "test-model", "sys")
+    agent._last_token_usage = {
+        "doneReason": "length",
+        "promptTokens": 4089,
+        "evalTokens": 7,
+        "numCtx": 4096,
+    }
+    assert agent._generation_was_length_truncated() is True
+    agent._length_ctx_retried = False
+    bumped = {"n": 0}
+
+    def fake_bump():
+        bumped["n"] += 1
+        return True
+
+    agent._bump_num_ctx_on_overflow = fake_bump  # type: ignore[method-assign]
+    assert agent._retry_on_length_truncation([{"role": "user", "content": "hi"}]) is True
+    assert bumped["n"] == 1
+    assert agent._retry_on_length_truncation([{"role": "user", "content": "hi"}]) is False

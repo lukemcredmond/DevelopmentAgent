@@ -34,6 +34,16 @@ FORCED_PATCH_EXPLORE_BLOCK = (
     "run_command/run_test until a successful write this step."
 )
 
+
+def explore_force_patch_in_step_enabled(ws: Optional[Dict[str, Any]] = None) -> bool:
+    if ws is None:
+        from backend.services.workflow_settings import get_workflow_settings
+
+        ws = get_workflow_settings()
+    if "devExploreForcePatchInStep" in ws:
+        return bool(ws.get("devExploreForcePatchInStep"))
+    return True
+
 DONE_STATUS = (
     "Verify budget finished for this step (not board Done). "
     "Another step may restart at Explore if the card stays In Progress."
@@ -203,6 +213,7 @@ class DevPhaseGraph:
     rewind_count: int = 0
     last_rewind_detail: str = ""
     forced_patch: bool = False
+    in_step_force_patch: bool = False
 
     def __post_init__(self) -> None:
         if not self.step_label:
@@ -258,19 +269,26 @@ class DevPhaseGraph:
         )
         return g
 
-    def start_forced_patch(self) -> None:
+    def start_forced_patch(self, *, in_step: bool = False) -> None:
         """Skip Explore after a prior explore-only step so this turn must write."""
         self.phase = "patch"
         self.forced_patch = True
+        self.in_step_force_patch = bool(in_step)
         self.explore_nudge_sent = True
         # Prompt already has a write nudge. First explore-only batch nudges again;
-        # a second explore-only batch with no write stops.
+        # a second explore-only batch with no write stops (unless in-step transition).
         self.pending_stop_after_nudge = False
         self.explore_count = 0
-        self.status_text = (
-            "Forced Patch — previous step used Explore without apply_patch. "
-            "Call apply_patch or write_file this turn."
-        )
+        if in_step:
+            self.status_text = (
+                "Explore budget reached — Patch required this step. "
+                "Call apply_patch or write_file; further read_file/list_dir calls are blocked."
+            )
+        else:
+            self.status_text = (
+                "Forced Patch — previous step used Explore without apply_patch. "
+                "Call apply_patch or write_file this turn."
+            )
 
     def should_block_explore_tool(self, tool_name: Optional[str]) -> bool:
         """Reject explore/verify tools until a successful write on a Forced Patch step."""
@@ -333,7 +351,7 @@ class DevPhaseGraph:
             self.prior_summary = self.prior_summary or "cycle_cap"
             return
         if force_patch:
-            self.start_forced_patch()
+            self.start_forced_patch(in_step=False)
 
     @staticmethod
     def applies_to(*, role: str, lane: Optional[str]) -> bool:
@@ -456,7 +474,7 @@ class DevPhaseGraph:
         elif saw_verify and self.write_succeeded:
             self.phase = "verify"
 
-        # Explore budget exhausted → nudge once; a later explore-only batch stops.
+        # Explore budget exhausted → nudge once; optionally force Patch in-step.
         nudged_this_batch = False
         if (
             self.phase == "explore"
@@ -465,9 +483,15 @@ class DevPhaseGraph:
         ):
             if not self.explore_nudge_sent:
                 self.explore_nudge_sent = True
-                self.pending_stop_after_nudge = True
-                action.nudge = EXPLORE_NUDGE
-                nudged_this_batch = True
+                if explore_force_patch_in_step_enabled():
+                    self.start_forced_patch(in_step=True)
+                    action.nudge = EXPLORE_NUDGE
+                    nudged_this_batch = True
+                    action.phase_changed = True
+                else:
+                    self.pending_stop_after_nudge = True
+                    action.nudge = EXPLORE_NUDGE
+                    nudged_this_batch = True
             else:
                 return self._stuck(
                     "explore_budget_exhausted",
@@ -493,6 +517,7 @@ class DevPhaseGraph:
         # Forced Patch: Gemma opens with read_file/run_command — nudge once, then stop.
         if (
             self.forced_patch
+            and not self.in_step_force_patch
             and not self.write_succeeded
             and explore_only
             and not self.pending_stop_after_nudge
@@ -505,6 +530,7 @@ class DevPhaseGraph:
         # After an earlier nudge, another explore-only batch without write → stop
         if (
             not nudged_this_batch
+            and not self.in_step_force_patch
             and self.pending_stop_after_nudge
             and not self.write_succeeded
             and self.explore_nudge_sent

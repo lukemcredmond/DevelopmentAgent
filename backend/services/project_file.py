@@ -45,6 +45,20 @@ def _redact_settings(settings: Dict[str, Any]) -> Dict[str, Any]:
     return out
 
 
+def plan_outline_from_sidecar_data(data: Dict[str, Any]) -> str:
+    """Read plan outline from sidecar JSON (snake_case or camelCase import alias)."""
+    return str(data.get("plan_outline") or data.get("projectPlanOutline") or "").strip()
+
+
+def merge_plan_outline(existing: str, incoming: str) -> str:
+    """Prefer non-empty sidecar plan; keep SQLite plan when sidecar is empty."""
+    existing_text = str(existing or "").strip()
+    incoming_text = str(incoming or "").strip()
+    if incoming_text:
+        return incoming_text
+    return existing_text
+
+
 def build_project_file_payload(
     *,
     project_id: str,
@@ -238,6 +252,8 @@ def restore_project_from_file(workspace_dir: str) -> str:
     files = (existing or {}).get("files") or dict(DEFAULT_VIRTUAL_FS)
     incoming_brief = str(data.get("brief") or "")
     incoming_original = str(data.get("original_brief") or "") or incoming_brief
+    existing_plan = str((existing or {}).get("plan_outline") or "")
+    merged_plan = merge_plan_outline(existing_plan, plan_outline_from_sidecar_data(data))
     state.storage.save_project(
         pid,
         str(data.get("name") or "Restored project"),
@@ -257,7 +273,7 @@ def restore_project_from_file(workspace_dir: str) -> str:
         str(data.get("dev_backup_model") or ""),
         str(data.get("cr_backup_model") or ""),
         str(data.get("qa_backup_model") or ""),
-        plan_outline=str(data.get("plan_outline") or ""),
+        plan_outline=merged_plan,
         persist_board=persist_board,
         force_board=force,
         original_brief=incoming_original,
@@ -268,7 +284,7 @@ def restore_project_from_file(workspace_dir: str) -> str:
         state.storage.set_setting("skills_dir", skills_dir)
     settings = data.get("workflow_settings")
     if isinstance(settings, dict) and settings:
-        from backend.services.workflow_settings import save_workflow_settings
+        from backend.services.workflow_settings import migrate_performance_settings, save_workflow_settings
 
-        save_workflow_settings(settings, project_id=pid, sync_sidecar=False)
+        save_workflow_settings(migrate_performance_settings(settings), project_id=pid, sync_sidecar=False)
     return pid

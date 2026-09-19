@@ -682,6 +682,7 @@ export function useAppState() {
           ),
         }
       })
+      setPlanOutlineStreaming(false)
       if (data.projectPlanOutline != null) {
         setPlanOutline(String(data.projectPlanOutline))
       }

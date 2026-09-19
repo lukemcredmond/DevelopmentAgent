@@ -67,6 +67,7 @@ def test_chat_options_includes_keep_alive():
     save_workflow_settings({"ollamaKeepAlive": "45m"})
     opts = agent_po._chat_options()
     assert opts.get("keep_alive") == "45m"
+    assert opts.get("think") is False
 
 
 def test_build_semantic_sprint_context_empty_without_index():

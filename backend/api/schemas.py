@@ -301,6 +301,8 @@ class WorkflowSettingsPayload(BaseModel):
     toolOutputEchoStopAfter: Optional[int] = None
     enableDevPhaseGraph: Optional[bool] = None
     devExploreMaxTools: Optional[int] = None
+    devExploreForcePatchInStep: Optional[bool] = None
+    poNumPredictOverride: Optional[bool] = None
     devPatchMaxTools: Optional[int] = None
     devVerifyMaxTools: Optional[int] = None
     maxDevPhaseCyclesPerCard: Optional[int] = None

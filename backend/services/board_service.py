@@ -82,6 +82,9 @@ def move_board_stage(
     *,
     honor_dev_claim_gate: bool = True,
 ) -> str:
+    requested_lane = str(target_lane)
+    claim_block_reason = ""
+    final_lane = requested_lane
     with state.STATE_LOCK:
         needle = str(task_id)
         matches: List[tuple[str, Dict[str, Any]]] = []
@@ -101,9 +104,14 @@ def move_board_stage(
             )
         if len(matches) == 1 and source_lane == target_lane:
             return f"Task {task_id} is already in '{target_lane}'."
-        if target_lane == "In Progress" and honor_dev_claim_gate:
+        if (
+            target_lane == "In Progress"
+            and honor_dev_claim_gate
+            and source_lane not in ("In Progress", "Code Review", "QA")
+        ):
             from backend.services.task_spec_validation import dev_claim_blocked
 
+            prepare_task_for_dev_claim(active_task)
             claim_block = dev_claim_blocked(active_task, get_workflow_settings())
             if claim_block:
                 criteria = list(active_task.get("acceptanceCriteria") or [])
@@ -148,6 +156,7 @@ def move_board_stage(
                             f"Task {task_id} was too large for Dev and was split by "
                             f"acceptance criteria. {split_result}"
                         )
+                claim_block_reason = claim_block
                 target_lane = "Needs PO"
                 record_task_decision(
                     str(task_id),
@@ -164,6 +173,13 @@ def move_board_stage(
 
         active_task["status"] = target_lane
         normalize_task(active_task)
+        if target_lane == "Needs User":
+            try:
+                from backend.services.needs_user_guard import ensure_needs_user_brief
+
+                ensure_needs_user_brief(active_task)
+            except Exception:
+                pass
         if target_lane == "Refinement":
             reset_refinement_fields(active_task)
         if target_lane not in state.SHARED_BOARD:
@@ -207,14 +223,20 @@ def move_board_stage(
         except Exception:
             pass
         moved_to_done = target_lane == "Done"
-    if moved_to_done or target_lane in ("Backlog", "Refinement", "Pending Approval", "Blocked"):
+        final_lane = target_lane
+    if moved_to_done or final_lane in ("Backlog", "Refinement", "Pending Approval", "Blocked"):
         try:
             from backend.services.blocked_lane import sync_blocked_lane
 
             sync_blocked_lane(persist=True)
         except Exception:
             pass
-    return f"Successfully moved task {task_id} to '{target_lane}'."
+    if claim_block_reason:
+        return (
+            f"Could not move task {task_id} to '{requested_lane}': {claim_block_reason} "
+            f"Card is in '{final_lane}'."
+        )
+    return f"Successfully moved task {task_id} to '{final_lane}'."
 
 
 def claim_ready_backlog_tasks(limit: int = 5) -> List[str]:
@@ -334,6 +356,36 @@ _OVERSIZE_VERBS = (
 )
 
 
+def prepare_task_for_dev_claim(task: Dict[str, Any]) -> None:
+    """Fill spec gaps and trim an oversized description so Dev claim can succeed.
+
+    Extra description text is kept on scope. Empty testPlan is copied from AC.
+    """
+    desc = str(task.get("description") or "").strip()
+    ac = [str(c).strip() for c in (task.get("acceptanceCriteria") or []) if str(c).strip()]
+    if desc and not str(task.get("scope") or "").strip():
+        task["scope"] = desc
+    if not str(task.get("userStory") or "").strip() and desc:
+        task["userStory"] = desc
+    if not str(task.get("testPlan") or "").strip() and ac:
+        task["testPlan"] = "; ".join(ac[:5])
+    if len(desc) <= OVERSIZE_DESC_CHARS:
+        return
+    if not ac or not str(task.get("testPlan") or "").strip():
+        return
+    keep = desc[:OVERSIZE_DESC_CHARS]
+    if " " in keep:
+        trimmed = keep.rsplit(" ", 1)[0].strip()
+        if trimmed:
+            keep = trimmed
+    overflow = desc[len(keep) :].strip()
+    task["description"] = keep
+    if overflow:
+        scope = str(task.get("scope") or "").strip()
+        if overflow not in scope:
+            task["scope"] = f"{scope}\n{overflow}".strip() if scope else overflow
+
+
 def is_oversized_implementation(
     task: Dict[str, Any],
     *,
@@ -357,8 +409,8 @@ def is_oversized_implementation(
     desc = str(task.get("description") or "")
     if len(desc) > OVERSIZE_DESC_CHARS:
         return (
-            f"Description is too long ({len(desc)} chars) for one focused pass. "
-            "Split into smaller cards."
+            f"Description is {len(desc)} chars, max {OVERSIZE_DESC_CHARS} — "
+            "shorten, do not add scope."
         )
     lower = desc.lower()
     verb_hits = sum(1 for v in _OVERSIZE_VERBS if v in lower)

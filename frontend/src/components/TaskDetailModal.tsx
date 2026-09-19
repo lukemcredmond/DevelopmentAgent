@@ -11,7 +11,7 @@ import type {
   TaskTranscriptEntry,
 } from '../types'
 import { fetchTaskFlowSummary } from '../api/client'
-import { formatAcceptanceCriteria, formatTaskText, deriveTaskFiles, sanitizeTaskForUi, formatQaPair, isGenericNeedsUserText } from '../utils/taskFormat'
+import { formatAcceptanceCriteria, formatTaskText, deriveTaskFiles, sanitizeTaskForUi, formatQaPair, isGenericNeedsUserText, needsUserEvidenceText } from '../utils/taskFormat'
 import { incompleteDevProgressLabels, taskLooksIncompleteOnDone } from '../utils/taskDoneAudit'
 import {
   formatDurationMs,
@@ -95,7 +95,11 @@ function isTranscriptFailure(entry: TaskTranscriptEntry): boolean {
 }
 
 function deriveNeedsUserReason(task: Task): string {
-  if (task.userQuestion?.trim()) return task.userQuestion.trim()
+  if (task.userQuestion?.trim() && !isGenericNeedsUserText(task.userQuestion)) {
+    return task.userQuestion.trim()
+  }
+  const evidence = needsUserEvidenceText(task)
+  if (evidence && !isGenericNeedsUserText(evidence)) return evidence
   const decisions = task.decisions ?? []
   for (let i = decisions.length - 1; i >= 0; i--) {
     const d = decisions[i]
@@ -117,7 +121,7 @@ function deriveNeedsUserReason(task: Task): string {
       return content
     }
   }
-  return 'Action required — the agent could not proceed without your input.'
+  return evidence || 'What should Developer do next on this card?'
 }
 
 function buildCommitUrl(remoteUrl: string, hash: string): string | null {
@@ -505,12 +509,15 @@ export default function TaskDetailModal({
     (safeTask.needsUserReason?.trim() && !isGenericNeedsUserText(safeTask.needsUserReason)
       ? safeTask.needsUserReason.trim()
       : '') ||
+    needsUserEvidenceText(safeTask) ||
     (safeTask.lastDiagnosis?.problem?.trim() || '') ||
-    'The agents stopped because they cannot proceed without your answer. Round-trips to Product Owner are not the question — see How to move on.'
+    'The last agent step stopped without a product question. See How to move on — usually Send to Developer, not Product Owner.'
   const needsUserAction =
     (safeTask.needsUserAction?.trim() && !isGenericNeedsUserText(safeTask.needsUserAction)
       ? safeTask.needsUserAction.trim()
       : '') ||
+    (safeTask.lastStepOutcome?.suggestedAction?.trim() || '') ||
+    (safeTask.lastStepProgress?.suggestedAction?.trim() || '') ||
     'Type a short answer below, then click Send to Developer to resume. Use Send to Product Owner only if you are rewriting the spec.'
   const suggestedTarget = safeTask.needsUserSuggestedTarget || 'dev'
   const priorUserAnswers = safeTask.userResolutions ?? []

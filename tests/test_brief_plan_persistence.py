@@ -107,3 +107,98 @@ def test_backlog_preflight_counts_planning_only(tmp_path, monkeypatch):
     pre = build_backlog_preflight()
     assert pre["implementationReady"] == 1
     assert pre["planningOnly"] == 1
+
+
+def test_load_project_hydrates_plan_from_sidecar_when_sqlite_empty(tmp_path, monkeypatch):
+    monkeypatch.setenv("ALLHANDS_HOME", str(tmp_path))
+    initialize()
+    ws = tmp_path / "sidecar-ws"
+    ws.mkdir()
+    plan = "## Summary\nSidecar-only plan\n"
+    state.CURRENT_PROJECT_ID = "sidecar-plan"
+    state.PROJECT_NAME = "Sidecar"
+    state.PROJECT_BRIEF = "Brief"
+    state.PROJECT_PLAN_OUTLINE = plan
+    state.WORKSPACE_DIR = str(ws)
+    state.SHARED_BOARD = {"Backlog": [], "In Progress": [], "Done": [], "QA": []}
+    save_current_project_state()
+
+    proj = state.storage.load_project("sidecar-plan")
+    state.storage.save_project(
+        "sidecar-plan",
+        proj["name"],
+        proj["brief"],
+        proj["workspace_dir"],
+        proj["board_state"],
+        proj["files"],
+        proj["po_skills"],
+        proj["dev_skills"],
+        proj.get("cr_skills", []),
+        proj["qa_skills"],
+        proj["po_model"],
+        proj["dev_model"],
+        proj["cr_model"],
+        proj["qa_model"],
+        proj.get("po_backup_model") or "",
+        proj.get("dev_backup_model") or "",
+        proj.get("cr_backup_model") or "",
+        proj.get("qa_backup_model") or "",
+        plan_outline="",
+        persist_board=False,
+        original_brief=proj.get("original_brief") or "",
+    )
+
+    state.PROJECT_PLAN_OUTLINE = ""
+    assert load_project_into_state("sidecar-plan")
+    assert "Sidecar-only plan" in state.PROJECT_PLAN_OUTLINE
+    reloaded = state.storage.load_project("sidecar-plan")
+    assert "Sidecar-only plan" in (reloaded.get("plan_outline") or "")
+
+
+def test_api_state_includes_plan_after_sidecar_only_drift(tmp_path, monkeypatch):
+    monkeypatch.setenv("ALLHANDS_HOME", str(tmp_path))
+    initialize()
+    ws = tmp_path / "drift-ws"
+    ws.mkdir()
+    plan = "## Summary\nDrift plan\n"
+    state.CURRENT_PROJECT_ID = "drift-plan"
+    state.PROJECT_NAME = "Drift"
+    state.PROJECT_BRIEF = "Brief"
+    state.PROJECT_PLAN_OUTLINE = plan
+    state.WORKSPACE_DIR = str(ws)
+    state.SHARED_BOARD = {"Backlog": [], "In Progress": [], "Done": [], "QA": []}
+    save_current_project_state()
+
+    proj = state.storage.load_project("drift-plan")
+    state.storage.save_project(
+        "drift-plan",
+        proj["name"],
+        proj["brief"],
+        proj["workspace_dir"],
+        proj["board_state"],
+        proj["files"],
+        proj["po_skills"],
+        proj["dev_skills"],
+        proj.get("cr_skills", []),
+        proj["qa_skills"],
+        proj["po_model"],
+        proj["dev_model"],
+        proj["cr_model"],
+        proj["qa_model"],
+        proj.get("po_backup_model") or "",
+        proj.get("dev_backup_model") or "",
+        proj.get("cr_backup_model") or "",
+        proj.get("qa_backup_model") or "",
+        plan_outline="",
+        persist_board=False,
+        original_brief=proj.get("original_brief") or "",
+    )
+
+    state.PROJECT_PLAN_OUTLINE = ""
+    load_project_into_state("drift-plan")
+
+    client = TestClient(app)
+    res = client.get("/api/state")
+    assert res.status_code == 200
+    body = res.json()
+    assert "Drift plan" in body.get("projectPlanOutline", "")

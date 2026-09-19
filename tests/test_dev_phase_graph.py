@@ -1,5 +1,7 @@
 """Unit tests for Dev Explore → Patch → Verify phase graph."""
 
+import pytest
+
 from backend.services.dev_phase_graph import (
     EXPLORE_NUDGE,
     DevPhaseGraph,
@@ -25,25 +27,62 @@ def test_explore_tools_count_toward_budget():
     assert g.phase == "explore"
 
 
-def test_explore_budget_nudges_then_stops_on_more_explore():
+def test_explore_budget_nudges_then_force_patch_in_step():
     g = DevPhaseGraph(explore_max=2)
     a1 = g.record_batch([("read_file", True), ("list_dir", True)])
     assert a1.nudge == EXPLORE_NUDGE
     assert a1.stop_reason is None
     assert g.explore_nudge_sent
+    assert g.phase == "patch"
+    assert g.forced_patch is True
+    assert g.in_step_force_patch is True
 
     a2 = g.record_batch([("grep", True)])
-    assert a2.stop_reason == "explore_budget_exhausted"
-    assert g.phase == "stuck"
+    assert a2.stop_reason is None
+    assert g.phase == "patch"
 
 
-def test_explore_nudge_then_llm_turn_without_write_stops():
+def test_explore_budget_nudges_then_stops_when_in_step_force_patch_disabled():
+    g = DevPhaseGraph(explore_max=2)
+    g.explore_nudge_sent = False
+
+    with pytest.MonkeyPatch.context() as mp:
+        mp.setattr(
+            "backend.services.dev_phase_graph.explore_force_patch_in_step_enabled",
+            lambda ws=None: False,
+        )
+        a1 = g.record_batch([("read_file", True), ("list_dir", True)])
+        assert a1.nudge == EXPLORE_NUDGE
+        assert a1.stop_reason is None
+        assert g.pending_stop_after_nudge
+
+        a2 = g.record_batch([("grep", True)])
+        assert a2.stop_reason == "explore_budget_exhausted"
+        assert g.phase == "stuck"
+
+
+def test_explore_nudge_then_llm_turn_without_write_stops_when_force_patch_off():
+    g = DevPhaseGraph(explore_max=1)
+    with pytest.MonkeyPatch.context() as mp:
+        mp.setattr(
+            "backend.services.dev_phase_graph.explore_force_patch_in_step_enabled",
+            lambda ws=None: False,
+        )
+        g.record_batch([("read_file", True)])
+        assert g.pending_stop_after_nudge
+        a = g.after_llm_turn_without_write()
+        assert a.stop_reason == "explore_budget_exhausted"
+        assert g.phase == "stuck"
+
+
+def test_explore_budget_in_step_force_patch_does_not_stop_on_llm_turn():
     g = DevPhaseGraph(explore_max=1)
     g.record_batch([("read_file", True)])
-    assert g.pending_stop_after_nudge
+    assert g.in_step_force_patch
+    assert not g.pending_stop_after_nudge
     a = g.after_llm_turn_without_write()
-    assert a.stop_reason == "explore_budget_exhausted"
-    assert g.phase == "stuck"
+    assert a.stop_reason is None
+    assert g.phase == "patch"
 
 
 def test_successful_write_moves_to_verify():
@@ -86,7 +125,7 @@ def test_verify_tools_only_count_after_write():
 def test_write_after_explore_clears_pending_nudge_stop():
     g = DevPhaseGraph(explore_max=1)
     g.record_batch([("read_file", True)])
-    assert g.pending_stop_after_nudge
+    assert g.in_step_force_patch
     g.record_batch([("apply_patch", True)])
     assert not g.pending_stop_after_nudge
     assert g.phase == "verify"
@@ -284,11 +323,16 @@ def test_compute_cycle_from_prior():
 
 def test_stuck_sets_status_text():
     g = DevPhaseGraph(explore_max=1)
-    g.record_batch([("read_file", True)])
-    a = g.record_batch([("grep", True)])
-    assert a.stop_reason == "explore_budget_exhausted"
-    assert g.phase == "stuck"
-    assert "explore tool budget" in g.status_text.lower()
+    with pytest.MonkeyPatch.context() as mp:
+        mp.setattr(
+            "backend.services.dev_phase_graph.explore_force_patch_in_step_enabled",
+            lambda ws=None: False,
+        )
+        g.record_batch([("read_file", True)])
+        a = g.record_batch([("grep", True)])
+        assert a.stop_reason == "explore_budget_exhausted"
+        assert g.phase == "stuck"
+        assert "explore tool budget" in g.status_text.lower()
 
 
 def test_record_context_rewind_stamps_snapshot():

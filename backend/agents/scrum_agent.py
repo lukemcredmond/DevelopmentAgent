@@ -31,10 +31,17 @@ from backend.services.parallel_tools import partition_tool_calls
 from backend.services.llm_tool_recovery import (
     apply_tool_call_recovery,
     assistant_message_to_chat_dict,
+    looks_like_raw_tool_markup,
     normalize_tool_arguments,
     unwrap_llm_text,
 )
 from backend.services.tool_execution_service import ToolExecutionResult, execute_tool
+from backend.services.tool_json_recovery import (
+    default_arguments_for_tool_recovery,
+    is_invalid_tool_json_error,
+    parse_tool_name_from_invalid_json_error,
+    synthetic_tool_call_chat_result,
+)
 from backend.services.workflow_settings import get_workflow_settings
 from backend.storage.memory_engine import create_memory_engine
 
@@ -285,6 +292,56 @@ _PO_CLARIFICATION_PLAN_REJECTION = (
     "Do not restate the JSON after the card has moved."
 )
 
+_PO_BACKLOG_JSON_REJECTION = (
+    "You returned a markdown plan outline. This step requires ONLY a JSON object with an "
+    "`epics` array. Do not repeat the outline — convert it to epics + children JSON."
+)
+
+
+def po_execute_step_tools(
+    registry_tools: list,
+    *,
+    role: str,
+    task_id: Optional[str],
+    json_only_split: bool = False,
+) -> tuple[list, bool]:
+    """Resolve Ollama tool schemas for a PO execute_step call.
+
+    Returns (tools, json_only_backlog) where json_only_backlog is True for
+    PLANNING_BACKLOG (outline already in prompt — no workspace exploration) or
+    PO card split (JSON array in content — avoids huge add_backlog_tasks schema).
+    """
+    from backend.services.sprint_service import PLANNING_BACKLOG_TASK_ID, is_planning_task_id
+
+    tools = list(registry_tools or [])
+    if json_only_split and role == "Product Owner":
+        return [], True
+    json_only_backlog = role == "Product Owner" and (task_id or "") == PLANNING_BACKLOG_TASK_ID
+    if json_only_backlog:
+        return [], True
+    planning_step = is_planning_task_id(task_id)
+    if role == "Product Owner" and planning_step:
+        # Qwen (and similar) will dump XML tool tags if schemas are omitted.
+        # Keep explore tools so native tool_calls work; XML in content is recovered.
+        tools = [
+            t
+            for t in tools
+            if isinstance(t, dict)
+            and (t.get("function") or {}).get("name") in _PO_READONLY_TOOLS
+        ]
+    elif role == "Product Owner":
+        from backend.agents.task_context import get_task_lane as _get_po_lane
+
+        po_lane = _get_po_lane(task_id or "")
+        if po_lane == "Needs PO":
+            tools = [
+                t
+                for t in tools
+                if isinstance(t, dict)
+                and (t.get("function") or {}).get("name") == "update_board"
+            ]
+    return tools, False
+
 
 def _looks_like_po_implementation_plan(content: str, task_id: Optional[str] = None) -> bool:
     """Dev-style step lists while acting as PO (especially Needs PO clarification)."""
@@ -302,6 +359,11 @@ def _looks_like_po_implementation_plan(content: str, task_id: Optional[str] = No
 
 
 def _po_rejection_system_message(content: str, task_id: Optional[str]) -> str:
+    from backend.services.brief_service import looks_like_usable_plan_outline
+    from backend.services.sprint_service import PLANNING_BACKLOG_TASK_ID
+
+    if (task_id or "") == PLANNING_BACKLOG_TASK_ID and looks_like_usable_plan_outline(content):
+        return _PO_BACKLOG_JSON_REJECTION
     lane = get_task_lane(task_id) if task_id else ""
     if lane == "Needs PO" and _looks_like_po_implementation_plan(content, task_id):
         return _PO_CLARIFICATION_PLAN_REJECTION
@@ -333,6 +395,19 @@ def _looks_like_po_work_product(content: str) -> bool:
     return False
 
 
+def _memory_is_noisy_for_prompt(memory: Dict[str, Any]) -> bool:
+    """Drop lessons that teach the model to repeat XML dumps or closed-client errors."""
+    content = str(memory.get("content") or "")
+    if looks_like_raw_tool_markup(content):
+        return True
+    lower = content.lower()
+    if "client has been closed" in lower:
+        return True
+    if "system message must be at the beginning" in lower:
+        return True
+    return False
+
+
 def _po_step_should_reject_text_only(
     content: str,
     tools_used: set[str],
@@ -344,6 +419,23 @@ def _po_step_should_reject_text_only(
     if not (content or "").strip():
         return False
     if _looks_like_po_work_product(content):
+        return False
+    from backend.services.brief_service import looks_like_usable_plan_outline
+    from backend.services.feature_service import looks_like_usable_plan_epics
+    from backend.services.llm_tool_recovery import looks_like_raw_tool_markup
+    from backend.services.sprint_service import (
+        PLANNING_BACKLOG_TASK_ID,
+        PLANNING_OUTLINE_TASK_ID,
+        PLANNING_TASK_ID,
+    )
+
+    if looks_like_raw_tool_markup(content):
+        return True
+    if (task_id or "") == PLANNING_OUTLINE_TASK_ID and looks_like_usable_plan_outline(content):
+        return False
+    if (task_id or "") in (PLANNING_BACKLOG_TASK_ID, PLANNING_TASK_ID) and looks_like_usable_plan_epics(
+        content
+    ):
         return False
     if task_id and get_task_lane(task_id) == "Needs PO" and _looks_like_po_implementation_plan(content, task_id):
         return True
@@ -387,6 +479,8 @@ class ScrumAgent:
         self._step_num_ctx: Optional[int] = None
         self._step_num_predict: Optional[int] = None
         self._po_num_predict_bumped: bool = False
+        self._length_ctx_retried: bool = False
+        self._logged_ctx_clamp: bool = False
 
     def register_tool(self, tool) -> None:
         self.registry.register(tool)
@@ -440,6 +534,19 @@ class ScrumAgent:
         if isinstance(raw, list) and raw:
             return [max(0, int(d)) for d in raw]
         return [0, 2, 5, 10]
+
+    def _empty_generation_timeout_sec(self) -> int:
+        ws = get_workflow_settings()
+        try:
+            base = int(ws.get("ollamaEmptyGenerationTimeoutSec") or 90)
+        except (TypeError, ValueError):
+            base = 90
+        if self.role == "Developer":
+            phase_graph = getattr(self, "_dev_phase_graph", None)
+            phase = str(getattr(phase_graph, "phase", "") or "").strip().lower()
+            if phase in ("explore", ""):
+                return min(60, max(15, base))
+        return max(15, base)
 
     def _get_provider(self):
         from backend.services.llm_provider import chat_config, get_chat_provider
@@ -614,6 +721,11 @@ class ScrumAgent:
                     content = content[: LOCAL_SLM_MEMORY_CHARS - 3] + "..."
                 trimmed.append({**m, "content": content})
             related_memories = trimmed
+        related_memories = [
+            m
+            for m in related_memories
+            if isinstance(m, dict) and not _memory_is_noisy_for_prompt(m)
+        ]
         self._last_memories_used = related_memories
         memory_context = ""
         if related_memories:
@@ -635,6 +747,12 @@ class ScrumAgent:
     ) -> None:
         ws = get_workflow_settings()
         if not ws.get("enableStepLessonMemory", True):
+            return
+        from backend.services.sprint_service import is_planning_task_id
+
+        if is_planning_task_id(state.ACTIVE_SPRINT_TASK_ID):
+            return
+        if looks_like_raw_tool_markup(str(result_snippet or "")):
             return
         try:
             project_id = state.CURRENT_PROJECT_ID or "default-proj"
@@ -1074,6 +1192,78 @@ class ScrumAgent:
         self._step_num_ctx = nxt
         return True
 
+    def _log_num_ctx_clamp_once(self) -> None:
+        if getattr(self, "_logged_ctx_clamp", False):
+            return
+        self._logged_ctx_clamp = True
+        try:
+            from backend.services.prompt_budget import describe_num_ctx_clamp
+
+            fit = describe_num_ctx_clamp(self.role, effective=self._effective_num_ctx())
+        except Exception:
+            return
+        if not fit.get("clamped"):
+            return
+        add_system_log(self.role, "info", str(fit.get("label") or ""))
+        if fit.get("atFloor"):
+            add_system_log(
+                self.role,
+                "warning",
+                "VRAM clamp is at the 4096-token floor — this context cannot hold a "
+                "tool-using agent. Use a smaller model, more VRAM, or expect truncated steps.",
+            )
+
+    def _generation_was_length_truncated(self) -> bool:
+        usage = getattr(self, "_last_token_usage", None) or {}
+        done = str(usage.get("doneReason") or "").lower()
+        if done not in ("length", "max_tokens"):
+            return False
+        try:
+            prompt_tokens = int(usage.get("promptTokens") or 0)
+            eval_tokens = int(usage.get("evalTokens") or 0)
+            num_ctx = int(usage.get("numCtx") or self._effective_num_ctx() or 0)
+        except (TypeError, ValueError):
+            return True
+        if num_ctx <= 0:
+            return True
+        return eval_tokens < 64 or prompt_tokens >= max(1, num_ctx - 256)
+
+    def _retry_on_length_truncation(self, messages: Sequence[ChatMessage]) -> bool:
+        """Bump ctx or prune when generation hit the window, even if adaptive is off."""
+        if getattr(self, "_length_ctx_retried", False):
+            return False
+        if not self._generation_was_length_truncated():
+            return False
+        self._length_ctx_retried = True
+        if self._bump_num_ctx_on_overflow():
+            add_system_log(
+                self.role,
+                "info",
+                f"Generation truncated (doneReason=length) — increasing num_ctx to "
+                f"{self._effective_num_ctx()} and retrying",
+            )
+            return True
+        try:
+            from backend.services.llm_context import prune_messages_if_needed
+
+            before = len(messages)
+            prune_messages_if_needed(messages, force_threshold_pct=35.0)  # type: ignore[arg-type]
+            if len(messages) < before:
+                add_system_log(
+                    self.role,
+                    "warning",
+                    "Generation truncated at the context ceiling — pruned the prompt and retrying",
+                )
+                return True
+        except Exception:
+            return False
+        add_system_log(
+            self.role,
+            "warning",
+            "Generation truncated at num_ctx ceiling with no room to bump or prune.",
+        )
+        return False
+
     def _chat_options(self) -> Dict[str, Any]:
         from backend.services.agent_efficiency import effective_keep_alive
         from backend.services.sampling import sampling_options_for_role
@@ -1081,10 +1271,13 @@ class ScrumAgent:
         ws = get_workflow_settings()
         opts: Dict[str, Any] = dict(sampling_options_for_role(self.role, ws=ws))
         opts["num_ctx"] = self._effective_num_ctx()
+        self._log_num_ctx_clamp_once()
         provider = self._get_provider()
         keep_alive = effective_keep_alive(ws)
         if keep_alive and provider.capabilities.keep_alive:
             opts["keep_alive"] = str(keep_alive)
+        if getattr(provider, "provider_id", None) == "ollama":
+            opts["think"] = False
         if self.role == "Product Owner":
             cap = getattr(self, "_step_num_predict", None)
             if cap is not None:
@@ -1158,8 +1351,13 @@ class ScrumAgent:
             return "empty_generation_timeout"
         if "timeout" in lower or "timed out" in lower:
             return "timeout"
-        if any(k in lower for k in ("connection", "refused", "unreachable", "connect")):
+        if any(
+            k in lower
+            for k in ("connection", "refused", "unreachable", "connect", "client has been closed")
+        ):
             return "connection"
+        if is_invalid_tool_json_error(error):
+            return "invalid_tool_json"
         return "other"
 
     def _log_chat_attempt(
@@ -1234,11 +1432,8 @@ class ScrumAgent:
             chat_opts = self._chat_options()
             self._ensure_packed_num_ctx(messages, tools=tools)
             chat_opts = self._chat_options()
-            empty_timeout = 90
-            try:
-                empty_timeout = int(get_workflow_settings().get("ollamaEmptyGenerationTimeoutSec") or 90)
-            except (TypeError, ValueError):
-                empty_timeout = 90
+            empty_timeout = self._empty_generation_timeout_sec()
+            flowing_timeout = max(empty_timeout, int(self._ollama_timeout_sec()))
             import inspect
             from backend.services.llm_provider import ChatResult, consume_chat_stream
 
@@ -1257,6 +1452,7 @@ class ScrumAgent:
                 result = consume_chat_stream(
                     raw,
                     empty_timeout_sec=max(15, empty_timeout),
+                    flowing_timeout_sec=max(15, flowing_timeout),
                 )
             else:
                 result = raw
@@ -1367,11 +1563,7 @@ class ScrumAgent:
         last_error_type: Optional[str] = None
         timeout_sec = int(self._ollama_timeout_sec())
         self._chat_attempts_logged = False
-        empty_timeout_sec = 90
-        try:
-            empty_timeout_sec = int(get_workflow_settings().get("ollamaEmptyGenerationTimeoutSec") or 90)
-        except (TypeError, ValueError):
-            empty_timeout_sec = 90
+        empty_timeout_sec = self._empty_generation_timeout_sec()
 
         def _run_attempts(attempt_delays: List[int], *, phase: str) -> Optional[Any]:
             nonlocal last_error, last_error_type
@@ -1395,9 +1587,51 @@ class ScrumAgent:
                     if result is not None:
                         self._last_chat_error = None
                         self._last_chat_error_type = None
+                        if self._retry_on_length_truncation(messages):
+                            continue
                         return result
                     last_error = err
                     last_error_type = err_type
+                    if is_invalid_tool_json_error(last_error or ""):
+                        tool_name = parse_tool_name_from_invalid_json_error(last_error or "")
+                        defaults = (
+                            default_arguments_for_tool_recovery(tool_name or "")
+                            if tool_name
+                            else None
+                        )
+                        if defaults is not None:
+                            if self._retry_on_length_truncation(messages):
+                                continue
+                            from backend.services.step_diagnostics import log_event
+
+                            log_event(
+                                "tool_json_recovered",
+                                f"{tool_name} with default args after invalid JSON",
+                            )
+                            add_system_log(
+                                self.role,
+                                "warning",
+                                f"Recovered truncated tool JSON for {tool_name} — using default args",
+                            )
+                            return synthetic_tool_call_chat_result(tool_name, defaults)
+                        self._log_chat_attempt(
+                            iteration,
+                            attempt=attempt_num,
+                            duration_ms=duration_ms,
+                            error=err,
+                            error_type=err_type,
+                            phase=phase,
+                        )
+                        add_system_log(
+                            self.role,
+                            "warning",
+                            f"Unrecoverable truncated tool JSON for {tool_name or 'unknown tool'} — not retrying",
+                        )
+                        self._last_chat_error = err
+                        self._last_chat_error_type = "invalid_tool_json"
+                        last_error = err
+                        last_error_type = "invalid_tool_json"
+                        return None
                     self._log_chat_attempt(
                         iteration,
                         attempt=attempt_num,
@@ -1446,7 +1680,8 @@ class ScrumAgent:
 
         ws = get_workflow_settings()
         if (
-            last_error_type not in ("context_overflow", "timeout", "empty_generation_timeout")
+            last_error_type
+            not in ("context_overflow", "timeout", "empty_generation_timeout", "invalid_tool_json")
             and ws.get("ollamaCooldownRetryEnabled", True)
         ):
             cooldown = max(0, int(ws.get("ollamaCooldownRetrySec", 15)))
@@ -1498,7 +1733,9 @@ class ScrumAgent:
     def _mark_force_patch_next_dev_step(self, stop_reason: Optional[str]) -> None:
         reason = str(stop_reason or "").strip().lower()
         if reason not in {
+            "read_only_no_edits",
             "explore_budget_exhausted",
+            "duplicate_tool",
             "max_iterations_after_writes",
             "completed_with_writes",
             "identical_write_loop",
@@ -1556,7 +1793,7 @@ class ScrumAgent:
 
     def _apply_phase_model_routing(self) -> str:
         """Select Explore vs Patch Ollama model; return model name in use."""
-        from backend.services.agent_efficiency import resolve_step_model
+        from backend.services.agent_efficiency import effective_role_model
         from backend.services.workflow_settings import get_workflow_settings
 
         ws = get_workflow_settings()
@@ -1567,13 +1804,16 @@ class ScrumAgent:
         # Always prefer live project primary over registry init defaults.
         primary = self.sync_role_primary_model()
         self._primary_model = str(primary or self.model or "")
-        chosen, reason = resolve_step_model(
+        chosen, reason = effective_role_model(
             role=self.role,
             phase=phase,
             primary_model=str(self._primary_model or primary),
             backup_model=self._resolve_backup_model(),
             ws=ws,
         )
+        from backend import state
+
+        state.LAST_MODEL_ROUTE_REASON = str(reason or "")
         prev = str(self.model or "")
         if chosen and chosen != prev:
             try:
@@ -2730,26 +2970,42 @@ class ScrumAgent:
         )
         return None
 
-    def execute_step(self, user_prompt: str, max_iterations: int = 8) -> str:
+    def execute_step(
+        self,
+        user_prompt: str,
+        max_iterations: int = 8,
+        *,
+        json_only_split: bool = False,
+        max_step_duration_sec: Optional[int] = None,
+    ) -> str:
         from backend.agents.registry import configure_agent_tools
 
         configure_agent_tools()
         from backend.storage.memory_engine import resolve_embed_model
 
         self.memory.embed_model = resolve_embed_model()
-        tools = self.registry.get_ollama_tools()
-        if self.role == "Product Owner":
-            from backend.agents.task_context import get_task_lane as _get_po_lane
-
-            po_lane = _get_po_lane(state.ACTIVE_SPRINT_TASK_ID or "")
-            if po_lane == "Needs PO":
-                tools = [
-                    t
-                    for t in tools
-                    if isinstance(t, dict)
-                    and (t.get("function") or {}).get("name") == "update_board"
-                ]
-        if not tools:
+        registry_tools = self.registry.get_ollama_tools()
+        task_id_for_tools = state.ACTIVE_SPRINT_TASK_ID
+        tools, json_only_backlog = po_execute_step_tools(
+            registry_tools,
+            role=self.role,
+            task_id=task_id_for_tools,
+            json_only_split=json_only_split,
+        )
+        if json_only_backlog:
+            if json_only_split:
+                add_system_log(
+                    self.role,
+                    "info",
+                    "PO split — JSON-only step, no tools.",
+                )
+            else:
+                add_system_log(
+                    self.role,
+                    "info",
+                    "Generate Features — JSON-only step, no tools.",
+                )
+        elif not tools:
             add_system_log(
                 self.role,
                 "error",
@@ -2758,6 +3014,8 @@ class ScrumAgent:
         self._last_memories_used = []
         self._decisions_in_prompt = 0
         self._step_num_ctx = None
+        self._length_ctx_retried = False
+        self._logged_ctx_clamp = False
         self._po_num_predict_bumped = False
         self._step_num_predict = None
         ws = get_workflow_settings()
@@ -2769,6 +3027,8 @@ class ScrumAgent:
             self._step_num_predict = int(po_opts.get("num_predict") or PO_NUM_PREDICT_DEFAULT)
         max_tool_failures = int(ws.get("maxToolFailuresPerStep", 5))
         max_duration_sec = int(ws.get("maxAgentStepDurationSec", 2700) or 2700)
+        if max_step_duration_sec is not None:
+            max_duration_sec = max(0, int(max_step_duration_sec))
         # Total tool calls, not LLM turns, is the meaningful work budget for a step.
         max_tool_calls = int(ws.get("maxToolCallsPerStep", 80) or 0)
         self._step_tool_call_count = 0
@@ -3385,6 +3645,8 @@ class ScrumAgent:
                             reason = "patch_budget_exhausted"
                         elif "files already written this step" in low:
                             reason = "max_iterations_after_writes"
+                        if reason in ("duplicate_tool", "explore_budget_exhausted"):
+                            self._mark_force_patch_next_dev_step(reason)
                         pending_lesson = (reason, set(tools_used), early_stop)
                         return early_stop
                     if task_id and is_task_done(task_id) and not state.ALLOW_DONE_RETRY:

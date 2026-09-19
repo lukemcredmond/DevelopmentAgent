@@ -12,6 +12,7 @@ from backend.services.project_file import (
     PROJECT_FILE_NAME,
     read_project_file,
     restore_project_from_file,
+    write_project_file,
 )
 from backend.services.project_service import save_current_project_state
 from backend.storage.project_storage import count_board_tasks
@@ -102,3 +103,46 @@ def test_open_workspace_restores_identity_without_sidecar_cards(tmp_path):
     body = again.json()
     assert body["projectId"] == "gone-id"
     assert body["projectName"] == "Gone"
+
+
+def _seed_project(tmp_path, project_id: str, *, plan_outline: str = "") -> None:
+    state.CURRENT_PROJECT_ID = project_id
+    state.PROJECT_NAME = "Plan Test"
+    state.PROJECT_BRIEF = "Brief"
+    state.PROJECT_ORIGINAL_BRIEF = "Brief"
+    state.PROJECT_PLAN_OUTLINE = plan_outline
+    state.WORKSPACE_DIR = str(tmp_path)
+    state.SHARED_BOARD = {k: [] for k in DEFAULT_BOARD}
+    save_current_project_state(force_board=True)
+
+
+def test_restore_project_file_preserves_plan_outline(tmp_path):
+    plan = "## Summary\nRestored plan\n"
+    _seed_project(tmp_path, "plan-restore", plan_outline=plan)
+    pid = restore_project_from_file(str(tmp_path))
+    loaded = state.storage.load_project(pid)
+    assert "Restored plan" in (loaded.get("plan_outline") or "")
+
+
+def test_restore_does_not_wipe_sqlite_plan_when_sidecar_empty(tmp_path):
+    plan = "## Summary\nKeep sqlite plan\n"
+    _seed_project(tmp_path, "plan-keep", plan_outline=plan)
+    sidecar = read_project_file(str(tmp_path))
+    assert sidecar is not None
+    sidecar["plan_outline"] = ""
+    write_project_file(str(tmp_path), sidecar)
+    pid = restore_project_from_file(str(tmp_path))
+    loaded = state.storage.load_project(pid)
+    assert "Keep sqlite plan" in (loaded.get("plan_outline") or "")
+
+
+def test_restore_accepts_projectPlanOutline_alias(tmp_path):
+    _seed_project(tmp_path, "plan-alias", plan_outline="")
+    sidecar = read_project_file(str(tmp_path))
+    assert sidecar is not None
+    sidecar.pop("plan_outline", None)
+    sidecar["projectPlanOutline"] = "## Summary\nAlias plan\n"
+    write_project_file(str(tmp_path), sidecar)
+    pid = restore_project_from_file(str(tmp_path))
+    loaded = state.storage.load_project(pid)
+    assert "Alias plan" in (loaded.get("plan_outline") or "")

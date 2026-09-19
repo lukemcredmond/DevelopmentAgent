@@ -665,6 +665,13 @@ def normalize_task(task: Dict[str, Any]) -> Dict[str, Any]:
             task["focusStepsRun"] = max(0, int(task["focusStepsRun"]))
         except (TypeError, ValueError):
             task["focusStepsRun"] = 0
+    if str(task.get("status") or "") == "Needs User":
+        try:
+            from backend.services.needs_user_guard import ensure_needs_user_brief
+
+            ensure_needs_user_brief(task)
+        except Exception:
+            pass
     return task
 
 
@@ -731,9 +738,18 @@ def init_new_task(task: Dict[str, Any]) -> Dict[str, Any]:
 
 def normalize_board_tasks() -> None:
     """Backfills context fields on tasks loaded from older saved projects."""
-    for lane in state.SHARED_BOARD.values():
-        for task in lane:
+    for lane, tasks in state.SHARED_BOARD.items():
+        for task in tasks:
+            if str(lane) == "Needs User" and not str(task.get("status") or "").strip():
+                task["status"] = "Needs User"
             normalize_task(task)
+            if str(lane) == "Needs User":
+                try:
+                    from backend.services.needs_user_guard import ensure_needs_user_brief
+
+                    ensure_needs_user_brief(task)
+                except Exception:
+                    pass
             sync_task_files_from_transcript(task)
 
 

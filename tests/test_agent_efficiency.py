@@ -27,6 +27,12 @@ def test_defaults_enable_efficiency_high():
     assert DEFAULT_WORKFLOW_SETTINGS.get("maxToolCallsPerStep") == 80
     assert DEFAULT_WORKFLOW_SETTINGS.get("maxToolFailuresPerStep") == 4
     assert DEFAULT_WORKFLOW_SETTINGS.get("enablePromptSectionRotation") is False
+    assert DEFAULT_WORKFLOW_SETTINGS.get("devExploreModel") == "qwen2.5-coder:7b"
+    assert DEFAULT_WORKFLOW_SETTINGS.get("devPatchModel") == "qwen2.5-coder:14b"
+    assert DEFAULT_WORKFLOW_SETTINGS.get("devExploreMaxTools") == 8
+    assert DEFAULT_WORKFLOW_SETTINGS.get("devExploreForcePatchInStep") is True
+    assert DEFAULT_WORKFLOW_SETTINGS.get("ollamaNumCtxAdaptive") is True
+    assert DEFAULT_WORKFLOW_SETTINGS.get("ollamaNumCtxAdaptiveStart") == 6144
 
 
 def test_resolve_step_model_explore_vs_patch():
@@ -64,15 +70,24 @@ def test_resolve_step_model_explore_vs_patch():
     assert verify == "qwen2.5-coder:14b"
     assert "verify" in vr
 
-    # Non-dev ignores phase routing
+    # Non-dev ignores phase routing; non-heavy primary passes through unchanged.
     po, reason = resolve_step_model(
         role="Product Owner",
         phase="explore",
-        primary_model="llama3:8b",
+        primary_model="qwen2.5-coder:14b",
         ws=ws,
     )
-    assert po == "llama3:8b"
+    assert po == "qwen2.5-coder:14b"
     assert reason == "role_primary"
+
+    heavy_po, heavy_reason = resolve_step_model(
+        role="Product Owner",
+        phase="explore",
+        primary_model="qwen/qwen3.8-27b:latest",
+        ws=ws,
+    )
+    assert heavy_po == "qwen2.5-coder:7b"
+    assert "heavy_primary" in heavy_reason
 
 
 def test_resolve_step_model_falls_back_to_backup():
@@ -117,6 +132,43 @@ def test_resolve_step_model_avoids_gemma_for_patch():
         ws=ws,
     )
     assert patch == "qwen2.5-coder:14b"
+
+
+def test_single_model_name_prefers_coder_over_qwen3_heavy():
+    from backend import state
+    from backend.services.agent_efficiency import single_model_name
+
+    state.PRIMARY_MODELS = {"dev": "qwen/qwen3.8-27b:latest"}
+    ws = {
+        "devExploreModel": "qwen2.5-coder:7b",
+        "discordModelPresetFast": "qwen2.5-coder:7b",
+    }
+    assert single_model_name(ws) == "qwen2.5-coder:7b"
+
+
+def test_resolve_step_model_routes_qwen3_primary_to_coder_patch():
+    ws = {
+        "singleModelMode": "off",
+        "enablePhaseModelRouting": True,
+        "devExploreModel": "qwen2.5-coder:7b",
+        "devPatchModel": "qwen2.5-coder:14b",
+    }
+    explore, er = resolve_step_model(
+        role="Developer",
+        phase="explore",
+        primary_model="qwen/qwen3.8-27b:latest",
+        ws=ws,
+    )
+    patch, pr = resolve_step_model(
+        role="Developer",
+        phase="patch",
+        primary_model="qwen/qwen3.8-27b:latest",
+        ws=ws,
+    )
+    assert explore == "qwen2.5-coder:7b"
+    assert er == "phase_explore"
+    assert patch == "qwen2.5-coder:14b"
+    assert pr == "phase_patch"
 
 
 def test_max_tools_per_llm_turn_by_phase():

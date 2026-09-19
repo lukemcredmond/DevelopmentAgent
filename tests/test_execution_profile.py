@@ -115,6 +115,21 @@ def test_implementer_skips_po_when_spec_present_and_dev_runnable():
     assert active and active["id"] == "T-DEV-I"
 
 
+def test_implementer_prefers_dev_over_incomplete_needs_po():
+    initialize()
+    reset_workflow_settings()
+    save_workflow_settings({"executionProfile": "implementer"})
+    npo = init_new_task(
+        {"id": "T-VAGUE-I", "title": "Vague", "description": "", "status": "Needs PO"}
+    )
+    npo["acceptanceCriteria"] = []
+    ip = _spec_task("T-DEV-I2", "Work", "In Progress")
+    state.SHARED_BOARD = _empty_board(**{"Needs PO": [npo], "In Progress": [ip]})
+    handler, active = _select_sprint_step_handler()
+    assert handler == "dev"
+    assert active and active["id"] == "T-DEV-I2"
+
+
 def test_po_skip_chains_developer():
     initialize()
     reset_workflow_settings()

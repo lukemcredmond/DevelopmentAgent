@@ -170,7 +170,7 @@ export function findTaskOnBoard(
   return null
 }
 
-const GENERIC_NEEDS_USER = /could not agree after|please clarify requirements|agents made no progress|review the task and provide a decision|agent requires your input|action required —/i
+const GENERIC_NEEDS_USER = /could not agree after|please clarify requirements|agents made no progress|review the task and provide a decision|agent requires your input|action required —|open the card —/i
 
 export function isGenericNeedsUserText(text: string | null | undefined): boolean {
   const t = (text || '').trim()
@@ -178,12 +178,32 @@ export function isGenericNeedsUserText(text: string | null | undefined): boolean
   return GENERIC_NEEDS_USER.test(t)
 }
 
+/** Last-step / diagnosis evidence when Needs User fields were never filled. */
+export function needsUserEvidenceText(task: import('../types').Task): string {
+  const outcome = task.lastStepOutcome
+  const progress = task.lastStepProgress
+  const why =
+    (outcome?.whyCardStayed || '').trim() ||
+    (progress?.whyCardStayed || '').trim() ||
+    (outcome?.message || '').trim() ||
+    (task.lastDiagnosis?.problem || '').trim()
+  if (why) return why
+  const exitReason =
+    (outcome?.stopReason || '').trim() ||
+    (task.lastStepDiagnostics?.exitReason || '').trim()
+  if (exitReason) return `Last step ended with ${exitReason}.`
+  return ''
+}
+
 /** Card preview: the actual question, never the PO-round one-liner. */
 export function needsUserCardPreview(task: import('../types').Task): string {
   const question = (task.userQuestion || '').trim()
   const action = (task.needsUserAction || '').trim()
   if (question && !isGenericNeedsUserText(question)) return question
+  const evidence = needsUserEvidenceText(task)
+  if (evidence && !isGenericNeedsUserText(evidence)) return evidence
   if (action && !isGenericNeedsUserText(action)) return action
   if (question) return question
-  return 'Open the card — answer the question to unblock this work.'
+  if (evidence) return evidence
+  return 'Developer stopped without a specific question — open the card for last-step details.'
 }

@@ -173,6 +173,28 @@ def _check_capacity(ws: Dict[str, Any]) -> Check:
     )
 
 
+def _check_num_ctx_floor(ws: Dict[str, Any]) -> Check:
+    from backend.services.prompt_budget import describe_num_ctx_clamp
+
+    info = describe_num_ctx_clamp("dev", settings=ws)
+    label = str(info.get("label") or "num_ctx")
+    if info.get("atFloor"):
+        return Check(
+            "num_ctx",
+            STATUS_WARN,
+            f"{label}. This context cannot hold a tool-using agent.",
+            "Use a smaller model, add VRAM, or turn off auto-clamp and expect CPU offload.",
+        )
+    if info.get("clamped"):
+        return Check(
+            "num_ctx",
+            STATUS_WARN,
+            label,
+            "Context was reduced to fit VRAM. Increase VRAM or shrink the model if steps truncate.",
+        )
+    return Check("num_ctx", STATUS_OK, label)
+
+
 def _check_kv_cache_hint(ws: Dict[str, Any]) -> Check:
     """We cannot read the server's env, so this is advice rather than a measurement."""
     kv = str(ws.get("ollamaKvCacheType") or "f16").lower()
@@ -297,6 +319,7 @@ def run_preflight(settings: Optional[Dict[str, Any]] = None) -> Dict[str, Any]:
         )
 
     checks.extend(safely("inference_capacity", lambda: _check_capacity(ws)))
+    checks.extend(safely("num_ctx", lambda: _check_num_ctx_floor(ws)))
     checks.extend(safely("kv_cache", lambda: _check_kv_cache_hint(ws)))
     checks.extend(safely("qdrant", lambda: _check_vector_store(ws)))
     checks.extend(safely("offline_safety", lambda: _check_outbound_features(ws)))

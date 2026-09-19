@@ -73,6 +73,25 @@ def test_explore_brief_asks_for_first_file():
     assert "send to developer" in brief["action"].lower()
 
 
+def test_read_only_no_edits_classifies_as_explore():
+    task = {
+        "id": "T-RO",
+        "title": "Implement Export to storage location — core flow",
+        "description": "Serialize meals to JSON and save/share.",
+        "acceptanceCriteria": ["Export from main menu", "Happy path test"],
+        "lastStepOutcome": {
+            "exitReason": "read_only_no_edits",
+            "whyCardStayed": "Developer read files but never called apply_patch/write_file.",
+        },
+    }
+    brief = build_needs_user_brief(task, kind="stuck_loop", raw_msg="")
+    assert brief["kind"] == "explore"
+    assert "file" in brief["question"].lower()
+    blob = f"{brief['question']} {brief['why']} {brief['action']}".lower()
+    assert "apply_patch" in blob or "read" in blob or "explore" in blob
+    assert "send to developer" in brief["action"].lower()
+
+
 def test_phase_cycle_cap_with_lint_classifies_as_lint():
     task = {
         "id": "T-CAP",
@@ -151,3 +170,65 @@ def test_try_move_to_needs_user_persists_distinct_fields():
     assert task.get("needsUserReason") != task.get("needsUserAction")
     assert "send to developer" in (task.get("needsUserAction") or "").lower()
     assert task.get("needsUserKind") == "po_limit"
+
+
+def test_move_board_stage_to_needs_user_fills_brief_from_last_step():
+    initialize()
+    from backend import state
+    from backend.agents.task_context import get_task_lane, init_new_task
+    from backend.services.board_service import move_board_stage
+
+    task = init_new_task(
+        {
+            "id": "T-NU-MOVE",
+            "title": "Implement Export to storage location — core flow",
+            "description": "Serialize meals to JSON and save/share.",
+            "status": "In Progress",
+            "acceptanceCriteria": ["Export from main menu"],
+        }
+    )
+    task["lastStepOutcome"] = {
+        "exitReason": "read_only_no_edits",
+        "whyCardStayed": "Developer read files but never called apply_patch/write_file on Export.",
+        "message": "Dev step read files but made no edits.",
+    }
+    state.SHARED_BOARD = {
+        "Backlog": [],
+        "In Progress": [task],
+        "Needs PO": [],
+        "Needs User": [],
+        "QA": [],
+        "Done": [],
+    }
+    result = move_board_stage("T-NU-MOVE", "Needs User")
+    assert result.startswith("Successfully")
+    assert get_task_lane("T-NU-MOVE") == "Needs User"
+    assert task.get("userQuestion")
+    assert "could not agree" not in (task.get("userQuestion") or "").lower()
+    assert task.get("needsUserReason")
+    assert task.get("needsUserAction")
+    assert task.get("needsUserKind") == "explore"
+
+
+def test_normalize_backfills_empty_needs_user_from_last_step():
+    from backend.agents.task_context import normalize_task
+
+    task = {
+        "id": "T-NU-LOAD",
+        "title": "Implement Export to storage location — core flow",
+        "description": "Serialize meals to JSON.",
+        "status": "Needs User",
+        "acceptanceCriteria": ["Export from main menu"],
+        "userQuestion": None,
+        "needsUserReason": None,
+        "needsUserAction": None,
+        "lastStepOutcome": {
+            "exitReason": "read_only_no_edits",
+            "whyCardStayed": "Developer read files but never called apply_patch/write_file.",
+        },
+    }
+    normalize_task(task)
+    assert task.get("userQuestion")
+    assert "file" in (task.get("userQuestion") or "").lower()
+    assert task.get("needsUserKind") == "explore"
+    assert "send to developer" in (task.get("needsUserAction") or "").lower()

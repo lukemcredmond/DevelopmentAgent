@@ -36,9 +36,17 @@ def test_po_llm_skip_block_reason_missing_ac():
                 "lastStepOutcome": {"exitReason": "read_only_no_edits"},
             }
         )
-        == "last_exit=read_only_no_edits"
+        == ""
     )
     from backend.services.po_clarification import should_move_off_needs_po_without_llm
+
+    assert should_move_off_needs_po_without_llm(
+        {
+            "description": "x",
+            "acceptanceCriteria": ["y"],
+            "lastStepOutcome": {"exitReason": "read_only_no_edits"},
+        }
+    )
 
     task = {
         "description": "Delete stores via repository",
@@ -86,7 +94,9 @@ def test_run_po_clarification_skips_llm_when_spec_present():
     task["lastStepOutcome"] = {"exitReason": "max_iterations_after_writes", "agent": "Developer"}
     state.SHARED_BOARD.setdefault("Needs PO", [])
     state.SHARED_BOARD["Needs PO"] = [task]
-    with patch("backend.services.sprint_service.agent_po.execute_step") as execute:
+    with patch("backend.services.sprint_service.agent_po.execute_step") as execute, patch(
+        "backend.services.sprint_service._run_developer_step"
+    ):
         _run_po_clarification(task, "brief")
     execute.assert_not_called()
     assert get_task_lane("T-SKIP-PO") == "In Progress"
@@ -155,3 +165,38 @@ def test_run_po_clarification_skips_llm_after_max_iterations():
         _run_po_clarification(task, "brief")
     execute.assert_not_called()
     assert get_task_lane("T-SKIP-MAXITER") == "In Progress"
+
+
+def test_run_po_skip_reapplies_force_patch_after_read_only():
+    from unittest.mock import patch
+
+    from backend.agents.task_context import get_task_lane
+    from backend.bootstrap import initialize
+    from backend.services.sprint_service import _run_po_clarification
+    from backend.services.workflow_settings import reset_workflow_settings
+
+    initialize()
+    reset_workflow_settings()
+    task = init_new_task(
+        {
+            "id": "T-SKIP-READONLY",
+            "title": "Export flow",
+            "description": "Implement export",
+            "acceptanceCriteria": ["user can export"],
+            "status": "Needs PO",
+        }
+    )
+    task["lastStepOutcome"] = {"exitReason": "read_only_no_edits", "agent": "Developer"}
+    task["identicalPoClarificationCount"] = 1
+    state.SHARED_BOARD.setdefault("Needs PO", [])
+    state.SHARED_BOARD["Needs PO"] = [task]
+    with patch("backend.services.sprint_service.agent_po.execute_step") as execute, patch(
+        "backend.services.sprint_service._run_developer_step"
+    ):
+        _run_po_clarification(task, "brief")
+    execute.assert_not_called()
+    assert get_task_lane("T-SKIP-READONLY") == "In Progress"
+    live = state.SHARED_BOARD.get("In Progress", [])
+    moved = next((t for t in live if t.get("id") == "T-SKIP-READONLY"), None)
+    assert moved is not None
+    assert moved.get("forcePatchNextDevStep") is True

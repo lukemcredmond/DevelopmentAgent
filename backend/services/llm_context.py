@@ -206,7 +206,11 @@ def _merge_episode_summary(existing: str, new_lines: List[str]) -> str:
     return f"{_EPISODE_HEADER}\n{merged}"
 
 
-def prune_messages_if_needed(messages: MutableSequence[Dict[str, Any]]) -> MutableSequence[Dict[str, Any]]:
+def prune_messages_if_needed(
+    messages: MutableSequence[Dict[str, Any]],
+    *,
+    force_threshold_pct: Optional[float] = None,
+) -> MutableSequence[Dict[str, Any]]:
     """Drop oldest tool messages when conversation exceeds context budget."""
     ws = get_workflow_settings()
     if ws.get("enableMessageHistoryPrune", True) is False:
@@ -214,10 +218,22 @@ def prune_messages_if_needed(messages: MutableSequence[Dict[str, Any]]) -> Mutab
     if len(messages) <= 2:
         return messages
 
-    from backend.services.prompt_budget import resolve_ollama_num_ctx
+    from backend.services.prompt_budget import (
+        PACKED_NUM_CTX_FLOOR,
+        prompt_fills_ctx_window,
+        resolve_ollama_num_ctx,
+    )
 
     num_ctx = resolve_ollama_num_ctx()
-    threshold = message_prune_threshold_chars(num_ctx)
+    pct = float(force_threshold_pct) if force_threshold_pct is not None else float(
+        ws.get("messagePruneThresholdPct") or 60
+    )
+    if force_threshold_pct is None and (
+        num_ctx <= PACKED_NUM_CTX_FLOOR or prompt_fills_ctx_window(messages, num_ctx)
+    ):
+        pct = min(pct, 40.0)
+    pct = max(25.0, min(90.0, pct))
+    threshold = int(num_ctx * (pct / 100.0) * 4)
     if estimate_messages_chars(messages) <= threshold:
         return messages
 

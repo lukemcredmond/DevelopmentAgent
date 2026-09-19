@@ -132,6 +132,23 @@ def resolve_brief_for_sprint(client_brief: str) -> str:
     return client_brief
 
 
+def looks_like_usable_plan_outline(text: Optional[str]) -> bool:
+    """True when text looks like a markdown plan outline (not tool markup or max-iter failure)."""
+    from backend.services.llm_tool_recovery import looks_like_raw_tool_markup
+
+    raw = str(text or "").strip()
+    if not raw or looks_like_raw_tool_markup(raw):
+        return False
+    lower = raw.lower()
+    if raw.startswith("Max tool iterations") or "max tool iterations" in lower:
+        return False
+    if raw.startswith("##") or "## summary" in lower or "## proposed epics" in lower:
+        return True
+    if "summary" in lower and ("epic" in lower or "approach" in lower):
+        return True
+    return False
+
+
 def set_project_plan_outline(outline: str, *, source: str = "user") -> None:
     state.PROJECT_PLAN_OUTLINE = outline or ""
     save_current_project_state()

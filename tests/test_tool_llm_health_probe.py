@@ -53,6 +53,25 @@ def test_llm_probe_list_dir_pass_with_tool_call():
     assert result["probeArgs"].get("path") == "."
 
 
+def test_llm_probe_recovers_xml_tool_call_from_content():
+    def chat_fn(model, messages, tools, options):
+        return SimpleNamespace(
+            message=SimpleNamespace(
+                content=(
+                    '<tool_call>{"name": "list_dir", "arguments": {"path": "."}}'
+                    "</tool_call>"
+                ),
+                tool_calls=None,
+            )
+        )
+
+    initialize()
+    result = run_llm_tool_probe("dev", "list_dir", model="test-model", chat_fn=chat_fn)
+    assert result["modelCalledTool"] is True
+    assert result["status"] == "pass"
+    assert result["probeArgs"].get("path") == "."
+
+
 def test_llm_probe_fails_when_model_returns_text_only():
     initialize()
     result = run_llm_tool_probe("dev", "list_dir", model="test-model", chat_fn=_chat_text_only)

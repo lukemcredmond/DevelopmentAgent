@@ -649,6 +649,8 @@ export interface WorkflowSettings {
   enableFocusMicroSteps?: boolean
   enableDevPhaseGraph?: boolean
   devExploreMaxTools?: number
+    devExploreForcePatchInStep?: boolean
+    poNumPredictOverride?: boolean
   devPatchMaxTools?: number
   devVerifyMaxTools?: number
   maxDevPhaseCyclesPerCard?: number
@@ -910,6 +912,15 @@ export interface CardWorkProgress {
   agentWorkItems?: AgentWorkItem[]
 }
 
+export interface NumCtxFit {
+  requested?: number
+  effective?: number
+  clamped?: boolean
+  atFloor?: boolean
+  reason?: string
+  label?: string
+}
+
 export interface SprintProgress {
   phase: 'po_plan' | 'sprint_step' | 'done' | 'cancelled'
   step: number
@@ -921,6 +932,8 @@ export interface SprintProgress {
   status?: string
   intent?: string
   cardProgress?: CardWorkProgress
+  numCtxFit?: NumCtxFit
+  numCtxLabel?: string
 }
 
 export interface StepProgress {
@@ -961,6 +974,8 @@ export interface LastStepOutcome {
   toolsUsed?: string[]
   agentResultSnippet?: string
   stepProgress?: StepProgress
+  numCtxFit?: NumCtxFit
+  numCtxLabel?: string
 }
 
 export interface LastStepDiagnostics {
@@ -1178,6 +1193,7 @@ export interface AppState {
   recovery?: RecoveryContext | null
   pendingSimulation?: PendingSimulation | null
   sprintPausedForSimulation?: boolean
+  numCtxFit?: NumCtxFit | null
 }
 
 export interface ConfigPayload {
@@ -1419,6 +1435,8 @@ export interface WorkflowSettingsPayload {
   enableFocusMicroSteps?: boolean
   enableDevPhaseGraph?: boolean
   devExploreMaxTools?: number
+    devExploreForcePatchInStep?: boolean
+    poNumPredictOverride?: boolean
   devPatchMaxTools?: number
   devVerifyMaxTools?: number
   maxDevPhaseCyclesPerCard?: number
@@ -1759,8 +1777,8 @@ export const DEFAULT_WORKFLOW_SETTINGS: WorkflowSettings = {
   ollamaNumCtx: 32768,
   ollamaNumCtxByRole: {},
   ollamaNumCtxAuto: true,
-  ollamaNumCtxAdaptive: false,
-  ollamaNumCtxAdaptiveStart: 8192,
+  ollamaNumCtxAdaptive: true,
+  ollamaNumCtxAdaptiveStart: 6144,
   ollamaNumCtxAdaptiveStep: 8192,
   ollamaKeepAlive: '30m',
   ollamaRequestTimeoutSec: 900,
@@ -1831,11 +1849,13 @@ export const DEFAULT_WORKFLOW_SETTINGS: WorkflowSettings = {
   enableDevPhaseGraph: true,
   agentEfficiencyMode: 'high',
   enablePhaseModelRouting: true,
-  devExploreModel: '',
-  devPatchModel: '',
+  devExploreModel: 'qwen2.5-coder:7b',
+  devPatchModel: 'qwen2.5-coder:14b',
   maxToolsPerLlmTurn: 3,
-  devExploreMaxTools: 3,
-  devPatchMaxTools: 4,
+  devExploreMaxTools: 8,
+  devExploreForcePatchInStep: true,
+  poNumPredictOverride: false,
+  devPatchMaxTools: 12,
   devVerifyMaxTools: 2,
   maxDevPhaseCyclesPerCard: 12,
   maxDevStepsPerCard: 12,

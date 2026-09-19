@@ -27,6 +27,7 @@ export interface TaskRunInfo {
   suggestedAction?: string | null
   devPhase?: string | null
   devPhaseGraph?: DevPhaseGraphSnapshot | null
+  numCtxLabel?: string | null
 }
 
 function formatCardProgressLine(cp: CardWorkProgress | null | undefined): string | null {
@@ -89,6 +90,7 @@ export function buildTaskRunInfo(args: {
     suggestedAction: lastProgress?.suggestedAction ?? null,
     devPhase: activeRun?.devPhase ?? lastProgress?.devPhase ?? null,
     devPhaseGraph: activeRun?.devPhaseGraph ?? lastProgress?.devPhaseGraph ?? null,
+    numCtxLabel: sprintProgress?.numCtxLabel || sprintProgress?.numCtxFit?.label || null,
   }
 }
 

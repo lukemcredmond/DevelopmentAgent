@@ -9,7 +9,7 @@ from typing import Any, Dict, List, Optional
 from backend.services.tool_probe import build_model_hints, should_skip_probe
 
 
-from backend.services.llm_tool_recovery import normalize_tool_arguments
+from backend.services.llm_tool_recovery import apply_tool_call_recovery, normalize_tool_arguments
 
 
 def _resolve_agent_model(agent_id: str, model: Optional[str] = None) -> tuple[Any, str]:
@@ -163,6 +163,8 @@ def run_llm_tool_probe(
             llm_content = str(message.get("content") or "")[:2000]
         else:
             llm_content = str(getattr(message, "content", None) or "")[:2000]
+        allowed = {tool_name}
+        _, message = apply_tool_call_recovery(message, allowed)
         called_name, called_args = _extract_first_tool_call(message)
     except Exception as exc:
         duration_ms = int((time.time() - started) * 1000)
@@ -186,7 +188,10 @@ def run_llm_tool_probe(
     if not called_name:
         output = "Model did not call a tool." + (f" Content: {llm_content}" if llm_content else "")
         hints = build_model_hints(tool_name, parameters, status="fail", output=output)
-        hints.append("The model must emit a native tool call for this tool (not JSON in text).")
+        hints.append(
+            "The model must emit a native tool call or recognizable tool markup "
+            "(XML/JSON) for this tool."
+        )
         return {
             "toolName": tool_name,
             "status": "fail",

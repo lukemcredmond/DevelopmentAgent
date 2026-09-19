@@ -20,6 +20,9 @@ class Tool:
         self.func = func
 
     def execute(self, **kwargs) -> Any:
+        props = (self.parameters or {}).get("properties")
+        if isinstance(props, dict) and props:
+            kwargs = {key: value for key, value in kwargs.items() if key in props}
         return self.func(**kwargs)
 
 

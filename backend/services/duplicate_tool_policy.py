@@ -218,7 +218,12 @@ def _suggested_next_after_duplicate(tool_name: str, arguments: Dict[str, Any]) -
         )
     if tool_name == "read_file":
         path = str((arguments or {}).get("path") or "")
-        return f"Use the file content above — call apply_patch on '{path}' or move on; do not read again."
+        if path:
+            return (
+                f"Use the file content above — call apply_patch on '{path}' or move on; "
+                "do not read again."
+            )
+        return "Use prior file content — call apply_patch/write_file or move on; do not read again."
     if tool_name in ("grep", "glob_file_search", "search_code", "semantic_search", "list_dir"):
         return (
             "Use the listing/matches above to edit files (apply_patch/write_file), "

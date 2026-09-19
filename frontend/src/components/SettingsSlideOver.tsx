@@ -931,6 +931,7 @@ export default function SettingsSlideOver({
               onOpenMemoryTab={onOpenMemoryTab}
               onOpenCustomTools={onOpenCustomTools}
               discordBotStatus={state.discordBotStatus ?? null}
+              numCtxFit={state.numCtxFit ?? null}
             />
             </>
           )}

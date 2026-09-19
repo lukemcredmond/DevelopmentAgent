@@ -356,9 +356,21 @@ def _spec_gap_lines(task: Dict[str, Any]) -> List[str]:
 def _exit_reason(task: Dict[str, Any]) -> str:
     outcome = task.get("lastStepOutcome") or {}
     if isinstance(outcome, dict):
-        return str(
+        reason = str(
             outcome.get("exitReason") or outcome.get("stopReason") or ""
         ).strip().lower()
+        if reason:
+            return reason
+    diag = task.get("lastStepDiagnostics") if isinstance(task.get("lastStepDiagnostics"), dict) else {}
+    if diag:
+        reason = str(diag.get("exitReason") or "").strip().lower()
+        if reason:
+            return reason
+    progress = task.get("lastStepProgress") if isinstance(task.get("lastStepProgress"), dict) else {}
+    if progress:
+        reason = str(progress.get("exitReason") or "").strip().lower()
+        if reason:
+            return reason
     return str(task.get("lastCircuitExitReason") or "").strip().lower()
 
 
@@ -372,7 +384,9 @@ def _resolve_needs_user_kind(task: Dict[str, Any], kind: str, raw_msg: str) -> s
     if kind == "phase_cycle_cap" or task.get("phaseCycleCapReached"):
         return "phase_cycle_cap"
     exit_r = _exit_reason(task)
-    if exit_r == "explore_budget_exhausted" or task.get("forcePatchNextDevStep"):
+    if exit_r in ("explore_budget_exhausted", "read_only_no_edits") or task.get(
+        "forcePatchNextDevStep"
+    ):
         return "explore"
     if exit_r == "patch_budget_exhausted":
         return "patch"
@@ -574,6 +588,45 @@ def apply_needs_user_brief(task: Dict[str, Any], brief: Dict[str, str]) -> None:
     if target not in ("dev", "po", "refinement"):
         target = "dev"
     task["needsUserSuggestedTarget"] = target
+
+
+def needs_user_fields_empty(task: Dict[str, Any]) -> bool:
+    question = str((task or {}).get("userQuestion") or "").strip()
+    return not question or looks_generic_needs_user_text(question)
+
+
+def _raw_msg_from_task_evidence(task: Dict[str, Any]) -> str:
+    outcome = task.get("lastStepOutcome") if isinstance(task.get("lastStepOutcome"), dict) else {}
+    progress = (
+        task.get("lastStepProgress") if isinstance(task.get("lastStepProgress"), dict) else {}
+    )
+    return (
+        str((outcome or {}).get("whyCardStayed") or "").strip()
+        or str((progress or {}).get("whyCardStayed") or "").strip()
+        or str((outcome or {}).get("message") or "").strip()
+        or str(task.get("needsUserReason") or "").strip()
+    )
+
+
+def ensure_needs_user_brief(
+    task: Dict[str, Any],
+    *,
+    kind: str = "",
+    raw_msg: str = "",
+) -> bool:
+    """Fill Question / Why / How when a Needs User card has no real question.
+
+    Returns True when fields were written.
+    """
+    if not isinstance(task, dict) or not needs_user_fields_empty(task):
+        return False
+    brief = build_needs_user_brief(
+        task,
+        kind=kind or "stuck_loop",
+        raw_msg=raw_msg or _raw_msg_from_task_evidence(task),
+    )
+    apply_needs_user_brief(task, brief)
+    return True
 
 
 def build_stuck_escalation_message(task: Dict[str, Any], lane: str, max_stuck: int) -> str:

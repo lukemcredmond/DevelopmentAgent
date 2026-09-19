@@ -823,7 +823,8 @@ def read_workspace_file(
     if content is None:
         base = (
             f"File '{safe_path}' not found. "
-            "Use list_dir('.') or glob_file_search — do not retry this path."
+            "Use list_dir('.') or glob_file_search — do not retry this path. "
+            "If the card requires this file, call write_file/apply_patch to create it."
         )
         return _path_tool_failure_message("read_file", safe_path, f"Error: {base}")
 

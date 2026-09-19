@@ -10,6 +10,7 @@ from backend.services.feature_service import (
     apply_plan_epics_from_po_output,
     build_feature_rollup,
     list_features,
+    looks_like_usable_plan_epics,
     rollup_child_to_feature,
 )
 from backend.services.sprint_service import _append_po_backlog_from_output
@@ -34,6 +35,16 @@ def _clear_board():
 
 def _clear_logs():
     state.SYSTEM_LOGS.clear()
+
+
+def test_looks_like_usable_plan_epics_prose_wrapped():
+    payload = (
+        "Here is the backlog JSON:\n"
+        '{"epics":[{"title":"Auth","description":"d","children":'
+        '[{"title":"Login","description":"d","acceptanceCriteria":["ok"]}]}]}'
+    )
+    assert looks_like_usable_plan_epics(payload)
+    assert not looks_like_usable_plan_epics("## Summary\nPlan only\n")
 
 
 def test_apply_plan_epics_json_creates_features_and_children():

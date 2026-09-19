@@ -47,6 +47,7 @@ from backend.services.brief_service import (
     append_feature_to_brief,
     append_brief_text,
     existing_backlog_titles,
+    looks_like_usable_plan_outline,
     record_brief_changelog,
     resolve_brief_for_sprint,
     set_project_plan_outline,
@@ -99,7 +100,16 @@ CONTEXT_INJECT_NOTE = (
 )
 
 PLANNING_TASK_ID = "PLANNING"
+PLANNING_OUTLINE_TASK_ID = "PLANNING_OUTLINE"
+PLANNING_BACKLOG_TASK_ID = "PLANNING_BACKLOG"
+_PLANNING_TASK_IDS = frozenset(
+    {PLANNING_TASK_ID, PLANNING_OUTLINE_TASK_ID, PLANNING_BACKLOG_TASK_ID}
+)
 LLM_CALL_FAILED_PREFIX = "LLM_CALL_FAILED:"
+
+
+def is_planning_task_id(task_id: Optional[str]) -> bool:
+    return str(task_id or "") in _PLANNING_TASK_IDS
 
 
 def _is_llm_call_failed(output: str) -> bool:
@@ -166,6 +176,16 @@ def publish_sprint_progress(
         payload["focusSubtaskId"] = focus_subtask_id
     if prompt_section:
         payload["promptSection"] = prompt_section
+    try:
+        from backend.services.prompt_budget import describe_num_ctx_clamp
+
+        fit = describe_num_ctx_clamp(agent)
+        if fit:
+            payload["numCtxFit"] = fit
+            if fit.get("label"):
+                payload["numCtxLabel"] = fit["label"]
+    except Exception:
+        pass
     publish_event("sprint_progress", payload)
 
 
@@ -224,7 +244,13 @@ def _step_transcript_tools_since(
             continue
         if entry.get("toolSuccess") is False:
             continue
-        if name == "read_file":
+        if name in (
+            "read_file",
+            "list_dir",
+            "glob_file_search",
+            "grep",
+            "search_code",
+        ):
             has_read = True
         elif name in ("write_file", "apply_patch"):
             has_write = True
@@ -277,6 +303,24 @@ def _dev_step_read_only_no_edits(
         return False
     has_read, has_write = _step_transcript_tools_since(task, step_started)
     return has_read and not has_write
+
+
+def apply_read_only_no_edits_outcome(task: Dict[str, Any]) -> None:
+    """Keep the card In Progress and force a Patch turn after a read-only Dev step."""
+    task["forcePatchNextDevStep"] = True
+
+
+def reapply_force_patch_if_dev_stalled(task: Dict[str, Any]) -> bool:
+    """Re-arm Forced Patch when the last Dev exit was explore/read-only stall."""
+    from backend.services.sprint_speed_gates import (
+        DEV_STALL_FORCE_PATCH_EXITS,
+        last_step_exit_reason,
+    )
+
+    if last_step_exit_reason(task) in DEV_STALL_FORCE_PATCH_EXITS:
+        apply_read_only_no_edits_outcome(task)
+        return True
+    return bool(task.get("forcePatchNextDevStep"))
 
 
 def _outcome_stop_reason(
@@ -426,6 +470,16 @@ def _outcome_suggested_action(stop_reason: str, lane_after: str) -> str:
         return ""
     if stop_reason == "identical_write_loop":
         return "Do not rewrite the same file. Verify, split the card, or edit manually."
+    if stop_reason == "read_only_no_edits":
+        return (
+            "Next Developer step is Forced Patch — call apply_patch/write_file "
+            "(scaffold first if the workspace has no source files)."
+        )
+    if stop_reason in ("explore_budget_exhausted", "duplicate_tool"):
+        return (
+            "Next Developer step is Forced Patch — call apply_patch/write_file "
+            "(do not re-read docs/tasks; scaffold or patch lib/ now)."
+        )
     return "Run In Progress again or edit the workspace files manually, then move the card to QA."
 
 
@@ -446,8 +500,10 @@ def _build_last_step_outcome(
     plan_rejections = trace.plan_rejections if trace else 0
     text_rejections = trace.text_rejections if trace else 0
     tools_used = sorted(trace.tools_used) if trace else []
-    agent_snippet = (agent_result or "")[:200]
-    if trace and not agent_snippet and trace.events:
+    agent_snippet = (agent_result or "")[:200] if agent_result is not None else ""
+    if not agent_snippet and agent_result is None:
+        agent_snippet = (state.LAST_AGENT_STEP_RESULT or "")[:200]
+    if trace and not agent_snippet and agent_result is None and trace.events:
         for event in reversed(trace.events):
             if event.get("kind") in ("plan_rejected", "text_rejected"):
                 agent_snippet = str(event.get("message", ""))[:200]
@@ -519,6 +575,11 @@ def _build_last_step_outcome(
         if stop_reason == "po_clarified" and left_needs_po:
             ok = True
             message = f"PO clarification applied on '{title}' ({lane_before} → {lane_after})."
+            if task and task.get("forcePatchNextDevStep"):
+                suggested_action = (
+                    "Next Developer step is Forced Patch — call apply_patch/write_file "
+                    "(scaffold first if the workspace has no source files)."
+                )
 
     if state.DEV_STEP_INTERRUPTED or state.SPRINT_CANCEL:
         stop_reason = "interrupted"
@@ -562,20 +623,44 @@ def _build_last_step_outcome(
         outcome["agentResultSnippet"] = agent_snippet
     if model_response_type:
         outcome["modelResponseType"] = model_response_type
-    progress = state.LAST_STEP_PROGRESS
-    if isinstance(progress, dict) and str(progress.get("taskId") or "") != str(task_id):
-        progress = None
-    if not progress and task and isinstance(task.get("lastStepProgress"), dict):
-        progress = task["lastStepProgress"]
-    if not progress and stop_reason == "max_iterations":
-        from backend.services.step_diagnostics import build_step_progress
+    if task and task.get("forcePatchNextDevStep"):
+        outcome["forcePatchNextDevStep"] = True
+    route_reason = str(getattr(state, "LAST_MODEL_ROUTE_REASON", "") or "").strip()
+    if route_reason:
+        outcome["modelRouteReason"] = route_reason
+    try:
+        from backend.services.prompt_budget import describe_num_ctx_clamp
 
-        progress = build_step_progress(
-            task_id=task_id,
-            iterations_used=(trace.llm_iterations_used if trace else 0),
-            iterations_max=(trace.llm_iterations_max if trace else 0),
-            tools_used=set(tools_used) if tools_used else None,
-        )
+        fit = describe_num_ctx_clamp(agent)
+        if fit:
+            outcome["numCtxFit"] = fit
+            if fit.get("label"):
+                outcome["numCtxLabel"] = fit["label"]
+    except Exception:
+        pass
+    progress: Optional[Dict[str, Any]] = None
+    if agent == "Product Owner":
+        if suggested_action or why_card_stayed:
+            progress = {"taskId": task_id}
+            if why_card_stayed:
+                progress["whyCardStayed"] = why_card_stayed
+            if suggested_action:
+                progress["suggestedAction"] = suggested_action
+    else:
+        progress = state.LAST_STEP_PROGRESS if isinstance(state.LAST_STEP_PROGRESS, dict) else None
+        if isinstance(progress, dict) and str(progress.get("taskId") or "") != str(task_id):
+            progress = None
+        if not progress and task and isinstance(task.get("lastStepProgress"), dict):
+            progress = task["lastStepProgress"]
+        if not progress and stop_reason == "max_iterations":
+            from backend.services.step_diagnostics import build_step_progress
+
+            progress = build_step_progress(
+                task_id=task_id,
+                iterations_used=(trace.llm_iterations_used if trace else 0),
+                iterations_max=(trace.llm_iterations_max if trace else 0),
+                tools_used=set(tools_used) if tools_used else None,
+            )
     if progress:
         from backend.services.step_diagnostics import (
             prefer_richer_phase_graph,
@@ -630,6 +715,8 @@ def _compact_last_step_outcome_for_task(outcome: Dict[str, Any]) -> Dict[str, An
         "laneBefore": outcome.get("laneBefore"),
         "laneAfter": outcome.get("laneAfter"),
     }
+    if outcome.get("modelRouteReason"):
+        compact["modelRouteReason"] = outcome.get("modelRouteReason")
     return {k: v for k, v in compact.items() if v not in (None, "", [], {})}
 
 
@@ -1884,6 +1971,27 @@ def _task_has_write_files(task: Dict[str, Any]) -> bool:
     return False
 
 
+FORCE_PATCH_INSTRUCTION = (
+    "FORCED PATCH: Call write_file or apply_patch this turn — do not only explore. "
+    "If the workspace has no source files, scaffold first (flutter create . / write_file stubs) "
+    "then implement the card."
+)
+
+
+def _force_patch_dev_instruction(task: Optional[Dict[str, Any]], agent_role: str) -> str:
+    if agent_role != "Developer" or not isinstance(task, dict):
+        return ""
+    try:
+        from backend.services.sprint_speed_gates import should_force_patch_next_dev_step
+
+        if should_force_patch_next_dev_step(task):
+            return FORCE_PATCH_INSTRUCTION
+    except Exception:
+        if task.get("forcePatchNextDevStep"):
+            return FORCE_PATCH_INSTRUCTION
+    return ""
+
+
 def _inject_sprint_context(
     active_task: Dict[str, Any],
     brief: str,
@@ -1923,7 +2031,7 @@ def _inject_sprint_context(
     context_block = ""
     graph_used = False
     if preload:
-        budgets = sprint_preload_budgets(num_ctx, local_slm=local_slm)
+        budgets = sprint_preload_budgets(num_ctx, local_slm=local_slm, role=agent_role)
         top_k_override = None
         if local_slm:
             top_k_override = min(max(1, int(ws.get("semanticSprintTopK") or 5)), 2)
@@ -2159,6 +2267,18 @@ def _inject_sprint_context(
             structure_audit = ""
     if structure_audit:
         parts.append(structure_audit)
+    if agent_role == "Developer" and not local_slm:
+        try:
+            from backend.services.workspace_structure_audit import greenfield_wander_nudge
+
+            wander = greenfield_wander_nudge(brief=brief, task=active_task)
+            if wander:
+                parts.append(wander)
+        except Exception:
+            pass
+    force_patch_note = _force_patch_dev_instruction(active_task, agent_role)
+    if force_patch_note:
+        parts.append(force_patch_note)
 
     if use_focus_compose and state.SPRINT_PROMPT_ROTATION_ENABLED:
         state.SPRINT_PROMPT_FIXED_PREFIX = "\n\n".join(parts)
@@ -2759,6 +2879,14 @@ def _simulate_qa(active_task: Dict[str, Any]) -> None:
         record_task_decision(active_task["id"], "QA Tester", "qa_fail", "Offline QA FAILED")
 
 
+def _po_backlog_output_is_markdown_outline(po_output: str) -> bool:
+    from backend.services.feature_service import looks_like_usable_plan_epics
+
+    if not po_output or not str(po_output).strip():
+        return False
+    return looks_like_usable_plan_outline(po_output) and not looks_like_usable_plan_epics(po_output)
+
+
 def _append_po_backlog_from_output(po_output: str, existing: set[str]) -> int:
     """Parse PO epic-grouped (or legacy flat) output and create Features + children."""
     del existing  # titles checked via same-request reuse on spawn
@@ -2779,6 +2907,44 @@ def _append_po_backlog_from_output(po_output: str, existing: set[str]) -> int:
     return child_n
 
 
+def _try_fallback_epics_from_outline(outline_text: str, existing_set: set[str]) -> int:
+    from backend.services.feature_service import build_epics_json_from_plan_outline
+
+    fallback_json = build_epics_json_from_plan_outline(outline_text)
+    if not fallback_json:
+        return 0
+    add_system_log(
+        "Product Owner",
+        "warning",
+        "Created cards from outline — LLM did not return valid epics JSON.",
+    )
+    return _append_po_backlog_from_output(fallback_json, existing_set)
+
+
+def _finish_po_plan_backlog(po_output: str, outline_text: str, existing_set: set[str]) -> int:
+    from backend.services.feature_service import looks_like_usable_plan_epics
+
+    if po_output and looks_like_usable_plan_epics(po_output):
+        return _append_po_backlog_from_output(po_output, existing_set)
+
+    if po_output and _po_backlog_output_is_markdown_outline(po_output):
+        add_system_log(
+            "Product Owner",
+            "error",
+            "Generate Features failed — model returned a markdown outline instead of JSON epics. "
+            "Retry Generate Features.",
+        )
+        return 0
+
+    count = _try_fallback_epics_from_outline(outline_text, existing_set)
+    if count > 0:
+        return count
+
+    if po_output:
+        return _append_po_backlog_from_output(po_output, existing_set)
+    return 0
+
+
 def run_po_plan_outline(brief: str, ollama_url: str) -> str:
     """Generate a markdown plan outline (phase 1) without creating backlog cards."""
     from backend.services.events import publish_event
@@ -2795,9 +2961,11 @@ def run_po_plan_outline(brief: str, ollama_url: str) -> str:
 
     outline = ""
     try:
-        set_active_sprint_context(PLANNING_TASK_ID, "Product Owner")
+        set_active_sprint_context(PLANNING_OUTLINE_TASK_ID, "Product Owner")
         outline = agent_po.execute_step(
-            "Produce a concise markdown project plan ONLY — no JSON, no code.\n"
+            "Produce a concise markdown project plan ONLY — no JSON, no code, no XML tool tags.\n"
+            "If you need to inspect the workspace, use native tool calls (list_dir, glob_file_search, read_file), "
+            "then reply with the markdown plan.\n"
             "Sections: ## Summary, ## Approach, ## Risks, ## Open questions, ## Proposed epics.\n"
             f"{po_planning_guidance_block()}"
             + (
@@ -2808,13 +2976,13 @@ def run_po_plan_outline(brief: str, ollama_url: str) -> str:
                 "Do not collapse the brief into a few audit/meta mega-epics.\n"
             )
             + f"{build_dod_block()}\nProject brief:\n{brief_text}",
-            max_iterations=1,
+            max_iterations=max(4, _llm_iterations()),
         )
     finally:
         clear_active_sprint_context()
 
-    if _is_llm_call_failed(outline):
-        _log_llm_call_failed(outline, "Plan outline failed —")
+    if _is_llm_call_failed(outline) or _result_is_max_iterations(outline):
+        _log_llm_call_failed(outline or "Max tool iterations reached.", "Plan outline failed —")
         publish_event("plan_chunk", {"phase": "done", "outline": ""})
         return ""
 
@@ -2851,6 +3019,11 @@ def run_po_plan_outline(brief: str, ollama_url: str) -> str:
                 "- Export or sharing — take work out of the app (list, print, or share)\n"
             )
 
+    if outline and not looks_like_usable_plan_outline(outline):
+        _log_llm_call_failed(outline[:400], "Plan outline failed — model returned tool markup instead of markdown.")
+        publish_event("plan_chunk", {"phase": "done", "outline": ""})
+        return ""
+
     if outline:
         set_project_plan_outline(outline, source="po_plan_outline")
         for block in outline.split("\n\n"):
@@ -2876,10 +3049,22 @@ def run_po_plan_backlog(brief: str, ollama_url: str, outline: Optional[str] = No
         return 0
 
     add_system_log("Product Owner", "info", "Generating Features (epics) + child cards from approved plan…")
+    publish_sprint_progress(
+        phase="po_plan",
+        step=0,
+        max_steps=1,
+        agent="Product Owner",
+        task_id=PLANNING_BACKLOG_TASK_ID,
+        task_title="Generating Features from plan…",
+        lane="Features",
+    )
     po_output = ""
+    backlog_iterations = min(6, max(4, _llm_iterations()))
     try:
-        set_active_sprint_context(PLANNING_TASK_ID, "Product Owner")
+        set_active_sprint_context(PLANNING_BACKLOG_TASK_ID, "Product Owner")
         po_output = agent_po.execute_step(
+            "Do NOT call any tools (no list_dir, read_file, grep, or search). "
+            "The full approved plan outline is included below — convert it directly to JSON.\n"
             f"{po_planning_guidance_block()}"
             "Convert the approved plan outline into Features (epics) with smallest developer-ready child cards.\n"
             "Reply with ONLY a JSON object of this shape:\n"
@@ -2896,13 +3081,34 @@ def run_po_plan_backlog(brief: str, ollama_url: str, outline: Optional[str] = No
             f"Existing titles (do NOT duplicate): {existing_hint}\n"
             f"{build_dod_block()}\nApproved plan outline:\n{outline_text}\n\n"
             f"Project brief (context):\n{brief}",
-            max_iterations=1,
+            max_iterations=backlog_iterations,
         )
     finally:
         clear_active_sprint_context()
 
-    if _is_llm_call_failed(po_output):
-        _log_llm_call_failed(po_output, "Plan backlog failed —")
+    if _is_llm_call_failed(po_output) or _result_is_max_iterations(po_output):
+        count = _try_fallback_epics_from_outline(outline_text, existing_set)
+        if count > 0:
+            publish_sprint_progress(
+                phase="done",
+                step=1,
+                max_steps=1,
+                agent="Product Owner",
+                task_id=PLANNING_BACKLOG_TASK_ID,
+                task_title="Features generated from outline",
+                lane="Features",
+            )
+            return count
+        _log_llm_call_failed(po_output or "Max tool iterations reached.", "Plan backlog failed —")
+        publish_sprint_progress(
+            phase="cancelled",
+            step=0,
+            max_steps=1,
+            agent="Product Owner",
+            task_id=PLANNING_BACKLOG_TASK_ID,
+            task_title="Generate Features failed",
+            lane="Features",
+        )
         return 0
 
     if po_output == "SIMULATION_FALLBACK":
@@ -2923,9 +3129,40 @@ def run_po_plan_backlog(brief: str, ollama_url: str, outline: Optional[str] = No
             last_chat_error=_po_last_chat_error(),
         )
         if try_defer_simulation(prop):
+            publish_sprint_progress(
+                phase="cancelled",
+                step=0,
+                max_steps=1,
+                agent="Product Owner",
+                task_id=PLANNING_BACKLOG_TASK_ID,
+                task_title="Awaiting simulation approval",
+                lane="Features",
+            )
             return 0
 
-    return _append_po_backlog_from_output(po_output, existing_set)
+    count = _finish_po_plan_backlog(po_output, outline_text, existing_set)
+    if count <= 0:
+        publish_sprint_progress(
+            phase="cancelled",
+            step=0,
+            max_steps=1,
+            agent="Product Owner",
+            task_id=PLANNING_BACKLOG_TASK_ID,
+            task_title="Generate Features failed",
+            lane="Features",
+        )
+        return 0
+
+    publish_sprint_progress(
+        phase="done",
+        step=1,
+        max_steps=1,
+        agent="Product Owner",
+        task_id=PLANNING_BACKLOG_TASK_ID,
+        task_title="Features generated",
+        lane="Features",
+    )
+    return count
 
 
 def run_po_plan(brief: str, ollama_url: str) -> bool:
@@ -3002,8 +3239,8 @@ def run_po_plan(brief: str, ollama_url: str) -> bool:
         )
         return False
 
-    if _is_llm_call_failed(po_output):
-        _log_llm_call_failed(po_output, "Plan & Run failed —")
+    if _is_llm_call_failed(po_output) or _result_is_max_iterations(po_output):
+        _log_llm_call_failed(po_output or "Max tool iterations reached.", "Plan & Run failed —")
         publish_sprint_progress(
             phase="po_plan",
             step=0,
@@ -3045,6 +3282,14 @@ def run_po_plan(brief: str, ollama_url: str) -> bool:
             return False
 
     if po_output:
+        if _po_backlog_output_is_markdown_outline(po_output):
+            add_system_log(
+                "Product Owner",
+                "error",
+                "Plan failed — model returned a markdown outline instead of JSON epics. "
+                "Use Plan outline then Generate Features, or retry.",
+            )
+            return False
         _append_po_backlog_from_output(po_output, set(existing))
 
     publish_sprint_progress(
@@ -3243,6 +3488,100 @@ def run_po_add_feature(
     save_current_project_state(project_id=state.CURRENT_PROJECT_ID)
 
 
+PO_SPLIT_MAX_ITERATIONS = 5
+PO_SPLIT_MAX_STEP_DURATION_SEC = 120
+
+
+def _deterministic_po_split_stub(task: Dict[str, Any]) -> str:
+    """Two-slice backlog JSON when PO split LLM/tool path fails."""
+    ac = task.get("acceptanceCriteria") or []
+    ac1 = ac[0] if ac else "Deliver first slice of the feature"
+    ac2 = ac[1] if len(ac) > 1 else "Deliver remaining scope"
+    if not isinstance(ac1, str):
+        ac1 = str(ac1)
+    if not isinstance(ac2, str):
+        ac2 = str(ac2)
+    desc = str(task.get("description") or "")[:500]
+    title = str(task.get("title") or "Subtask")
+    return json.dumps(
+        [
+            {
+                "title": f"{title} (part 1)",
+                "description": desc or title,
+                "acceptanceCriteria": [ac1],
+            },
+            {
+                "title": f"{title} (part 2)",
+                "description": desc or title,
+                "acceptanceCriteria": [ac2],
+            },
+        ]
+    )
+
+
+def _po_split_llm_failed(po_output: Optional[str]) -> bool:
+    return not po_output or str(po_output).startswith("LLM_CALL_FAILED:")
+
+
+def _po_split_invalid_add_backlog_tool_json(task_id: str) -> bool:
+    from backend.agents.task_context import find_task_by_id
+    from backend.services.tool_json_recovery import is_invalid_tool_json_error
+
+    task = find_task_by_id(task_id)
+    if not task:
+        return False
+    for entry in reversed(task.get("transcript") or []):
+        if not isinstance(entry, dict):
+            continue
+        if entry.get("toolName") != "add_backlog_tasks":
+            continue
+        if entry.get("toolSuccess") is not False:
+            continue
+        err = str(entry.get("error") or entry.get("toolError") or "")
+        if is_invalid_tool_json_error(err):
+            return True
+    return False
+
+
+def _new_backlog_ids_since(backlog_before_ids: set) -> List[str]:
+    return [t["id"] for t in state.SHARED_BOARD.get("Backlog", []) if t["id"] not in backlog_before_ids]
+
+
+def _collect_po_split_added(
+    task_id: str,
+    po_output: Optional[str],
+    backlog_before_ids: set,
+) -> tuple[int, List[str]]:
+    if _po_chat_used_add_backlog_tool(task_id):
+        new_task_ids = _new_backlog_ids_since(backlog_before_ids)
+        return len(new_task_ids), new_task_ids
+    if po_output and po_output != "SIMULATION_FALLBACK" and not _po_split_llm_failed(po_output):
+        added = apply_backlog_from_po_response(po_output, task_id)
+        new_task_ids = _new_backlog_ids_since(backlog_before_ids)
+        return added, new_task_ids
+    return 0, []
+
+
+def _apply_po_split_deterministic_fallback(
+    task_id: str,
+    task: Dict[str, Any],
+    backlog_before_ids: set,
+) -> tuple[int, List[str]]:
+    try:
+        from backend.services.step_diagnostics import log_event
+
+        log_event(
+            "po_split_deterministic_fallback",
+            f"PO split LLM failed — using 2-slice stub for {task_id}",
+        )
+    except Exception:
+        pass
+    stub = _deterministic_po_split_stub(task)
+    added = apply_backlog_from_po_response(stub, task_id)
+    new_task_ids = _new_backlog_ids_since(backlog_before_ids)
+    return added, new_task_ids
+
+
 def run_po_split_task(task_id: str, ollama_url: str, guidance: str = "") -> Dict[str, Any]:
     """Split a card into subtasks via PO tool call or JSON fallback."""
     task = find_task_by_id(task_id)
@@ -3258,44 +3597,27 @@ def run_po_split_task(task_id: str, ollama_url: str, guidance: str = "") -> Dict
         backlog_before_ids = {t["id"] for t in state.SHARED_BOARD.get("Backlog", [])}
         prompt = build_task_prompt(task, state.PROJECT_BRIEF)
         extra = f"\nAdditional guidance: {guidance.strip()}" if guidance.strip() else ""
-        po_output = agent_po.execute_step(
+        split_prompt = (
             f"{po_planning_guidance_block()}{prompt}\n\n"
             "Split this card into 2–5 smaller developer-ready backlog tasks."
             f"{extra}\n"
-            f"You MUST call add_backlog_tasks with split_from_task_id={task_id!r}.\n"
-            "Invoke the tool yourself — never tell the user to call add_backlog_tasks.\n"
-            "If you cannot use tools, reply with ONLY a JSON array "
-            "(title, description, acceptanceCriteria, scope, testPlan).",
-            max_iterations=_llm_iterations(),
+            "Reply with ONLY a JSON array (no markdown prose). Each item needs "
+            "title, description, acceptanceCriteria (≥2 for implementation), scope, testPlan.\n"
+            f"Parent task id for relatedTaskIds: {task_id!r}."
+        )
+        po_output = agent_po.execute_step(
+            split_prompt,
+            max_iterations=PO_SPLIT_MAX_ITERATIONS,
+            json_only_split=True,
+            max_step_duration_sec=PO_SPLIT_MAX_STEP_DURATION_SEC,
         )
 
         added = 0
         new_task_ids: List[str] = []
-        if _po_chat_used_add_backlog_tool(task_id):
-            backlog_after = state.SHARED_BOARD.get("Backlog", [])
-            new_task_ids = [t["id"] for t in backlog_after if t["id"] not in backlog_before_ids]
-            added = len(new_task_ids)
-        elif po_output and po_output != "SIMULATION_FALLBACK":
-            added = apply_backlog_from_po_response(po_output, task_id)
-            backlog_after = state.SHARED_BOARD.get("Backlog", [])
-            new_task_ids = [t["id"] for t in backlog_after if t["id"] not in backlog_before_ids]
-        elif po_output == "SIMULATION_FALLBACK":
+        if po_output == "SIMULATION_FALLBACK":
             from backend.services.simulation_gate import build_proposal, try_defer_simulation
 
-            split_stub = json.dumps(
-                [
-                    {
-                        "title": f"{task.get('title', 'Subtask')} (part 1)",
-                        "description": task.get("description", "")[:500],
-                        "acceptanceCriteria": ["Deliver first slice of the feature"],
-                    },
-                    {
-                        "title": f"{task.get('title', 'Subtask')} (part 2)",
-                        "description": task.get("description", "")[:500],
-                        "acceptanceCriteria": ["Deliver remaining scope"],
-                    },
-                ]
-            )
+            split_stub = _deterministic_po_split_stub(task)
             prop = build_proposal(
                 kind="po_split",
                 task_id=task_id,
@@ -3309,11 +3631,18 @@ def run_po_split_task(task_id: str, ollama_url: str, guidance: str = "") -> Dict
             if try_defer_simulation(prop):
                 added = 0
             else:
-                added = apply_backlog_from_po_response(split_stub, task_id)
-                backlog_after = state.SHARED_BOARD.get("Backlog", [])
-                new_task_ids = [t["id"] for t in backlog_after if t["id"] not in backlog_before_ids]
+                added, new_task_ids = _apply_po_split_deterministic_fallback(
+                    task_id, task, backlog_before_ids
+                )
         else:
-            added = 0
+            added, new_task_ids = _collect_po_split_added(task_id, po_output, backlog_before_ids)
+            if added == 0 and (
+                _po_split_llm_failed(po_output)
+                or _po_split_invalid_add_backlog_tool_json(task_id)
+            ):
+                added, new_task_ids = _apply_po_split_deterministic_fallback(
+                    task_id, task, backlog_before_ids
+                )
 
         parent = find_task_by_id(task_id)
         split_valid = bool(
@@ -3748,6 +4077,25 @@ def _run_refinement_po_update(active_task: Dict[str, Any], brief: str) -> None:
         _check_stuck_and_escalate(task_id, lane_before, agent_key="po")
 
 
+def _po_step_was_truncated(agent: Any) -> bool:
+    usage = getattr(agent, "_last_token_usage", None) or {}
+    if str(usage.get("doneReason") or "").lower() == "length":
+        return True
+    try:
+        from backend.services.step_diagnostics import get_active_trace
+
+        trace = get_active_trace()
+        if trace:
+            for call in reversed(trace.ollama_calls or []):
+                if not isinstance(call, dict):
+                    continue
+                if call.get("truncated") or str(call.get("doneReason") or "").lower() == "length":
+                    return True
+    except Exception:
+        pass
+    return False
+
+
 def _run_po_clarification(active_task: Dict[str, Any], brief: str) -> None:
     task_id = active_task["id"]
     lane_before = get_task_lane(task_id) or "Needs PO"
@@ -3771,15 +4119,22 @@ def _run_po_clarification(active_task: Dict[str, Any], brief: str) -> None:
         )
 
         if should_move_off_needs_po_without_llm(task_for_prompt):
+            with state.STATE_LOCK:
+                locked = find_task_by_id(task_id)
+                if locked:
+                    reapply_force_patch_if_dev_stalled(locked)
             dest = move_off_needs_po(task_id)
             result = f"Moved to {dest or 'In Progress'} without a PO generate (spec already present)."
             try:
                 from backend.services.sprint_speed_gates import last_step_exit_reason
                 from backend.services.step_diagnostics import log_event as _log_ev
 
+                last_exit = last_step_exit_reason(task_for_prompt) or "none"
+                live = find_task_by_id(task_id) or task_for_prompt
+                force_patch = bool((live or {}).get("forcePatchNextDevStep"))
                 _log_ev(
                     "po_llm_skipped",
-                    f"spec present; last_exit={last_step_exit_reason(task_for_prompt) or 'none'}",
+                    f"spec present; last_exit={last_exit}; forcePatch={force_patch}",
                 )
             except Exception:
                 pass
@@ -3887,13 +4242,36 @@ def _run_po_clarification(active_task: Dict[str, Any], brief: str) -> None:
                         lane=dest,
                     )
                 elif not clarified and _task_in_lane(task_id, "Needs PO"):
-                    add_system_log(
-                        "Product Owner",
-                        "warning",
-                        f"Clarification incomplete for '{task['title']}' — {note}",
-                    )
+                    live = find_task_by_id(task_id)
+                    from backend.services.po_clarification import task_has_ready_spec
+
+                    if (
+                        live
+                        and task_has_ready_spec(live)
+                        and _po_step_was_truncated(agent_po)
+                    ):
+                        from backend.services.board_service import prepare_task_for_dev_claim
+
+                        prepare_task_for_dev_claim(live)
+                        reapply_force_patch_if_dev_stalled(live)
+                        from backend.services.po_clarification import move_off_needs_po
+
+                        dest = move_off_needs_po(task_id)
+                        if dest and dest != "Needs PO":
+                            clarified = True
+                            add_system_log(
+                                "Product Owner",
+                                "info",
+                                f"PO turn truncated with ready spec — moved {task_id} to {dest}",
+                            )
+                    if not clarified:
+                        add_system_log(
+                            "Product Owner",
+                            "warning",
+                            f"Clarification incomplete for '{task['title']}' — {note}",
+                        )
             _record_last_step_outcome(
-                task_id, lane_before, "Product Owner", agent_result=result or None
+                task_id, lane_before, "Product Owner", agent_result=result or ""
             )
             _check_stuck_and_escalate(task_id, lane_before, agent_key="po")
     finally:
@@ -3946,6 +4324,12 @@ def _run_developer_step(active_task: Dict[str, Any], brief: str) -> None:
         _try_move_to_needs_user(task_id, dict(live_task), park_msg, kind="phase_cycle_cap")
         return
     if empty_gen_should_skip(live_task):
+        try:
+            from backend.services.step_diagnostics import log_event
+
+            log_event("empty_gen_skip", "GPU cool-off after empty generation")
+        except Exception:
+            pass
         add_system_log(
             "System",
             "warning",
@@ -3996,9 +4380,30 @@ def _run_developer_step(active_task: Dict[str, Any], brief: str) -> None:
     except Exception:
         model_in_use = str(getattr(agent_dev, "model", "") or "")
     try:
-        from backend.services.workspace_scaffold import maybe_auto_scaffold
+        from backend.services.workspace_scaffold import (
+            maybe_auto_scaffold,
+            scaffold_sdk_missing_question,
+        )
 
-        maybe_auto_scaffold(find_task_by_id(task_id) or active_task)
+        scaffold_result = maybe_auto_scaffold(find_task_by_id(task_id) or active_task)
+        sdk_question = scaffold_sdk_missing_question(scaffold_result)
+        if sdk_question:
+            live = find_task_by_id(task_id) or active_task
+            if isinstance(live, dict):
+                live.pop("structureScaffoldAttempted", None)
+            parked = _try_move_to_needs_user(
+                task_id, live, sdk_question, kind="stuck_loop"
+            )
+            if parked or (get_task_lane(task_id) or "") == "Needs User":
+                result = sdk_question
+                _ensure_dev_step_trace(task_id, title, lane_before)
+                state.LAST_AGENT_STEP_RESULT = result
+                with state.STATE_LOCK:
+                    _record_last_step_outcome(
+                        task_id, lane_before, "Developer", agent_result=result
+                    )
+                _finalize_dev_step_diagnostics_if_auto_sprint(task_id, lane_before)
+                return
     except Exception:
         pass
     _ensure_dev_step_trace(task_id, title, lane_before)
@@ -4086,10 +4491,12 @@ def _run_developer_step(active_task: Dict[str, Any], brief: str) -> None:
                 return
             if _dev_step_read_only_no_edits(task, lane_before, step_started):
                 state.DEV_STEP_READ_ONLY_NO_EDITS = True
+                apply_read_only_no_edits_outcome(task)
                 add_system_log(
                     "Developer",
                     "warning",
-                    f"'{task.get('title', task_id)}': dev step read files but made no edits — staying In Progress",
+                    f"'{task.get('title', task_id)}': dev step read files but made no edits — "
+                    "staying In Progress for a Forced Patch turn",
                 )
             if _dev_step_repeated_command_no_progress(task, lane_before, step_started):
                 state.DEV_STEP_COMMAND_REPEAT_NO_PROGRESS = True
@@ -4260,6 +4667,20 @@ def _run_developer_step(active_task: Dict[str, Any], brief: str) -> None:
                 _record_last_step_outcome(
                     task_id, lane_before, "Developer", agent_result=result
                 )
+            except Exception:
+                pass
+            try:
+                from backend.services.sprint_speed_gates import last_step_exit_reason
+
+                fresh = find_task_by_id(task_id)
+                if fresh and last_step_exit_reason(fresh) == "duplicate_tool":
+                    apply_read_only_no_edits_outcome(fresh)
+                    add_system_log(
+                        "Developer",
+                        "warning",
+                        f"'{fresh.get('title', task_id)}': duplicate tool loop — "
+                        "staying In Progress for a Forced Patch turn",
+                    )
             except Exception:
                 pass
             try:
@@ -4520,25 +4941,33 @@ def _escalate_dependency_deadlock(task: Dict[str, Any], issues: Dict[str, Any]) 
         return
     if issues.get("cycle"):
         path = " → ".join(str(p) for p in (issues.get("cyclePath") or []))
-        reason = f"Circular dependency detected ({path or tid}). Untangle blockedBy links."
+        reason = (
+            f"Which blockedBy link should we remove to break the cycle"
+            f" ({path or tid})?"
+        )
     else:
         missing = issues.get("missing") or []
         reason = (
-            f"Blocked by missing cards: {', '.join(missing)}. "
-            "Remove invalid blockedBy ids or create the dependency cards."
+            f"These blockedBy ids are missing: {', '.join(missing) or tid}. "
+            "Remove the invalid links, or create those cards?"
         )
-    task["userQuestion"] = reason[:500]
-    move_board_stage(tid, "Needs User")
+    moved = _try_move_to_needs_user(tid, task, reason, kind="stuck_loop")
+    if not moved:
+        from backend.services.needs_user_guard import apply_needs_user_brief, build_needs_user_brief
+
+        apply_needs_user_brief(task, build_needs_user_brief(task, kind="stuck_loop", raw_msg=reason))
+        move_board_stage(tid, "Needs User")
     record_task_decision(tid, "System", "escalation", reason[:300])
     add_system_log("System", "warning", f"{tid}: {reason}")
-    publish_activity(
-        tid,
-        "dependency_deadlock",
-        reason,
-        role="system",
-        agent="System",
-        lane="Needs User",
-    )
+    if not moved:
+        publish_activity(
+            tid,
+            "dependency_deadlock",
+            reason,
+            role="system",
+            agent="System",
+            lane="Needs User",
+        )
 
 
 def _try_claim_dependency_unblocker() -> tuple[Optional[str], Optional[Dict[str, Any]]]:
@@ -5142,7 +5571,11 @@ def _select_sprint_step_handler() -> Tuple[Optional[str], Optional[Dict[str, Any
 
     if profile == "implementer":
         if needs_po_task and not task_has_ready_spec(needs_po_task):
+            if runnable:
+                return "dev", dict(runnable[0])
             return "po", dict(needs_po_task)
+        if runnable and needs_po_task and task_has_ready_spec(needs_po_task):
+            return "dev", dict(runnable[0])
         if runnable:
             return "dev", dict(runnable[0])
         if pending_recovery:

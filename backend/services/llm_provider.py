@@ -55,6 +55,7 @@ class ProviderMessage:
     role: str = "assistant"
     content: Optional[str] = None
     tool_calls: Optional[List[ProviderToolCall]] = None
+    thinking: Optional[str] = None
 
 
 @dataclass
@@ -211,9 +212,10 @@ class OllamaProvider(LlmProvider):
     ) -> Union[ChatResult, Iterator[ChatResult]]:
         opts = dict(options or {})
         keep_alive = opts.pop("keep_alive", None)
+        think = opts.pop("think", None)
         kwargs: Dict[str, Any] = {
             "model": model,
-            "messages": list(messages),
+            "messages": sanitize_ollama_chat_messages(messages),
             "tools": tools,
             "stream": stream,
             "options": opts,
@@ -222,6 +224,8 @@ class OllamaProvider(LlmProvider):
             from backend.services.agent_efficiency import normalize_ollama_keep_alive
 
             kwargs["keep_alive"] = normalize_ollama_keep_alive(keep_alive)
+        if think is not None:
+            kwargs["think"] = think
         try:
             result = self._get_client().chat(**kwargs)
         except RuntimeError as exc:
@@ -852,6 +856,37 @@ def message_as_dict(message: Any) -> Dict[str, Any]:
     return assistant_message_to_chat_dict(message)
 
 
+def sanitize_ollama_chat_messages(messages: Sequence[Any]) -> List[Dict[str, Any]]:
+    """Qwen (and some other) chat templates allow a system message only at the start.
+
+    Later system nudges (=== OBSERVATION ===, rejections) become user messages so
+    /api/chat does not 400 with "System message must be at the beginning."
+    """
+    converted = [message_as_dict(item) for item in messages]
+    if not converted:
+        return []
+    leading: List[str] = []
+    first_non_system = 0
+    for index, item in enumerate(converted):
+        if str(item.get("role") or "") != "system":
+            first_non_system = index
+            break
+        text = str(item.get("content") or "").strip()
+        if text:
+            leading.append(text)
+        first_non_system = index + 1
+    out: List[Dict[str, Any]] = []
+    if leading:
+        out.append({"role": "system", "content": "\n\n".join(leading)})
+    for item in converted[first_non_system:]:
+        if str(item.get("role") or "") == "system":
+            text = str(item.get("content") or "")
+            out.append({"role": "user", "content": text})
+        else:
+            out.append(item)
+    return out
+
+
 def to_openai_messages(messages: Sequence[Any]) -> List[Dict[str, Any]]:
     out: List[Dict[str, Any]] = []
     for raw in messages:
@@ -898,23 +933,32 @@ def to_openai_messages(messages: Sequence[Any]) -> List[Dict[str, Any]]:
 
 def chat_result_from_ollama(result: Any) -> ChatResult:
     from backend.services.agent_usage import extract_ollama_token_counts
+    from backend.services.tool_call_normalizer.native import (
+        canonical_to_provider_tool_calls,
+        normalize_ollama_message,
+    )
 
     prompt, eval_tokens, _total, _reported = extract_ollama_token_counts(result)
-    msg = getattr(result, "message", None)
-    tool_calls: List[ProviderToolCall] = []
-    raw_calls = getattr(msg, "tool_calls", None) if msg is not None else None
-    for index, tc in enumerate(raw_calls or []):
-        fn = getattr(tc, "function", None)
-        name = getattr(fn, "name", None) if fn is not None else None
-        args = getattr(fn, "arguments", None) if fn is not None else {}
-        call_id = str(getattr(tc, "id", None) or f"call_{index}")
-        if name:
-            tool_calls.append(ProviderToolCall(id=call_id, function=ToolFunction(name=str(name), arguments=args or {})))
+    if isinstance(result, dict):
+        msg = result.get("message")
+    else:
+        msg = getattr(result, "message", None)
+    if isinstance(msg, dict):
+        role = msg.get("role") or "assistant"
+        content = msg.get("content")
+        thinking = msg.get("thinking")
+    else:
+        role = getattr(msg, "role", None) if msg is not None else None
+        content = getattr(msg, "content", None) if msg is not None else None
+        thinking = getattr(msg, "thinking", None) if msg is not None else None
+    canonical = normalize_ollama_message(msg)
+    tool_calls = canonical_to_provider_tool_calls(canonical) if canonical else []
     return ChatResult(
         message=ProviderMessage(
-            role=str(getattr(msg, "role", None) or "assistant"),
-            content=getattr(msg, "content", None) if msg is not None else None,
+            role=str(role or "assistant"),
+            content=content,
             tool_calls=tool_calls or None,
+            thinking=str(thinking) if thinking else None,
         ),
         prompt_eval_count=prompt,
         eval_count=eval_tokens,
@@ -923,34 +967,25 @@ def chat_result_from_ollama(result: Any) -> ChatResult:
 
 
 def chat_result_from_openai(payload: Dict[str, Any]) -> ChatResult:
+    from backend.services.tool_call_normalizer.native import (
+        canonical_to_provider_tool_calls,
+        normalize_anthropic_message,
+        normalize_openai_message,
+    )
+
     choice = (payload.get("choices") or [{}])[0]
     message = choice.get("message") or {}
     usage = payload.get("usage") or {}
     prompt = int(usage.get("prompt_tokens") or 0)
     completion = int(usage.get("completion_tokens") or 0)
-    tool_calls: List[ProviderToolCall] = []
-    for index, tc in enumerate(message.get("tool_calls") or []):
-        if not isinstance(tc, dict):
-            continue
-        fn = tc.get("function") or {}
-        args = fn.get("arguments")
-        try:
-            parsed = json.loads(args) if isinstance(args, str) else args
-        except json.JSONDecodeError:
-            parsed = args
-        name = fn.get("name")
-        if not name:
-            continue
-        tool_calls.append(
-            ProviderToolCall(
-                id=str(tc.get("id") or f"call_{index}"),
-                function=ToolFunction(name=str(name), arguments=parsed if parsed is not None else {}),
-            )
-        )
+    canonical = normalize_openai_message(message)
+    if not canonical and isinstance(message.get("content"), list):
+        canonical = normalize_anthropic_message(message)
+    tool_calls = canonical_to_provider_tool_calls(canonical) if canonical else []
     return ChatResult(
         message=ProviderMessage(
             role=str(message.get("role") or "assistant"),
-            content=message.get("content"),
+            content=message.get("content") if not isinstance(message.get("content"), list) else None,
             tool_calls=tool_calls or None,
         ),
         prompt_eval_count=prompt,
@@ -1136,23 +1171,34 @@ def consume_chat_stream(
     empty_timeout_sec: float = 90,
     flowing_timeout_sec: float = 900,
 ) -> ChatResult:
-    """Fold a provider stream into one ChatResult; abort if no eval tokens arrive."""
+    """Fold a provider stream into one ChatResult; abort if generation stays silent.
+
+    Load/prefill (no chunks yet) waits up to flowing_timeout_sec. After the first
+    event, empty_timeout_sec applies until thinking, content, tool calls, or eval
+    tokens arrive. Heartbeats do not extend that empty window.
+    """
     iterator = iter(stream)
     empty_wait = max(0.05, float(empty_timeout_sec))
     flowing_wait = max(empty_wait, float(flowing_timeout_sec))
-    started = time.monotonic()
+    first_event_at: Optional[float] = None
     content_parts: List[str] = []
+    thinking_parts: List[str] = []
     tool_calls: Optional[List[ProviderToolCall]] = None
     prompt_eval = 0
     eval_count = 0
     last_raw: Any = None
     try:
         while True:
-            progressed = eval_count > 0 or bool(content_parts) or bool(tool_calls)
-            if progressed:
+            progressed = (
+                eval_count > 0
+                or bool(content_parts)
+                or bool(tool_calls)
+                or bool(thinking_parts)
+            )
+            if progressed or first_event_at is None:
                 wait = flowing_wait
             else:
-                remaining = empty_wait - (time.monotonic() - started)
+                remaining = empty_wait - (time.monotonic() - first_event_at)
                 if remaining <= 0:
                     close_chat_stream(iterator)
                     raise EmptyGenerationTimeout(
@@ -1160,10 +1206,12 @@ def consume_chat_stream(
                     )
                 wait = remaining
             chunk = _next_stream_chunk(
-                iterator, wait, empty_budget_sec=empty_wait if not progressed else None
+                iterator, wait, empty_budget_sec=empty_wait if progressed else flowing_wait
             )
             if chunk is None:
                 break
+            if first_event_at is None:
+                first_event_at = time.monotonic()
             last_raw = chunk.raw if chunk.raw is not None else last_raw
             if int(chunk.prompt_eval_count or 0) > prompt_eval:
                 prompt_eval = int(chunk.prompt_eval_count or 0)
@@ -1172,6 +1220,8 @@ def consume_chat_stream(
             msg = chunk.message
             if msg and msg.content:
                 content_parts.append(str(msg.content))
+            if msg and getattr(msg, "thinking", None):
+                thinking_parts.append(str(msg.thinking))
             if msg and msg.tool_calls:
                 tool_calls = list(msg.tool_calls)
         return ChatResult(
@@ -1179,6 +1229,7 @@ def consume_chat_stream(
                 role="assistant",
                 content="".join(content_parts) or None,
                 tool_calls=tool_calls,
+                thinking="".join(thinking_parts) or None,
             ),
             prompt_eval_count=prompt_eval,
             eval_count=eval_count,
@@ -1190,6 +1241,8 @@ def consume_chat_stream(
 
 
 def _iter_openai_stream(response: requests.Response) -> Iterator[ChatResult]:
+    """Stream OpenAI-compat deltas; accumulate tool_calls fragments by index."""
+    tool_fragments: Dict[int, Dict[str, Any]] = {}
     for raw_line in response.iter_lines(decode_unicode=True):
         if not raw_line:
             continue
@@ -1207,3 +1260,40 @@ def _iter_openai_stream(response: requests.Response) -> Iterator[ChatResult]:
         content = delta.get("content")
         if content:
             yield ChatResult(message=ProviderMessage(content=content), raw=payload)
+        for tc_delta in delta.get("tool_calls") or []:
+            if not isinstance(tc_delta, dict):
+                continue
+            idx = int(tc_delta.get("index") or 0)
+            slot = tool_fragments.setdefault(idx, {"id": "", "name": "", "arguments": ""})
+            if tc_delta.get("id"):
+                slot["id"] = str(tc_delta["id"])
+            fn = tc_delta.get("function") or {}
+            if fn.get("name"):
+                slot["name"] = str(fn["name"])
+            if fn.get("arguments"):
+                slot["arguments"] += str(fn["arguments"])
+    if tool_fragments:
+        assembled: List[ProviderToolCall] = []
+        for index in sorted(tool_fragments.keys()):
+            slot = tool_fragments[index]
+            if not slot.get("name"):
+                continue
+            args_raw = slot.get("arguments") or "{}"
+            try:
+                parsed = json.loads(args_raw) if isinstance(args_raw, str) else args_raw
+            except json.JSONDecodeError:
+                parsed = {}
+            assembled.append(
+                ProviderToolCall(
+                    id=str(slot.get("id") or f"call_{index}"),
+                    function=ToolFunction(
+                        name=str(slot["name"]),
+                        arguments=parsed if isinstance(parsed, dict) else {},
+                    ),
+                )
+            )
+        if assembled:
+            yield ChatResult(
+                message=ProviderMessage(role="assistant", tool_calls=assembled),
+                raw=None,
+            )

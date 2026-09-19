@@ -30,6 +30,7 @@ from backend.services.llm_provider import (
     get_embed_provider,
     infer_provider_from_url,
     normalize_llm_provider_settings,
+    sanitize_ollama_chat_messages,
     to_openai_messages,
 )
 from backend.services.workflow_settings import reset_workflow_settings, save_workflow_settings
@@ -83,6 +84,52 @@ def test_config_save_persists_lmstudio_provider(tmp_path, monkeypatch):
     assert "1234" in ws["llmBaseUrl"]
 
 
+def test_sanitize_ollama_chat_messages_moves_later_system_to_user():
+    messages = [
+        {"role": "system", "content": "You are the Product Owner."},
+        {"role": "user", "content": "Plan the app"},
+        {
+            "role": "assistant",
+            "content": "",
+            "tool_calls": [{"function": {"name": "list_dir", "arguments": {"path": "."}}}],
+        },
+        {"role": "tool", "content": "dir skills", "tool_name": "list_dir"},
+        {"role": "system", "content": "=== OBSERVATION ===\n- list_dir: ok"},
+    ]
+    out = sanitize_ollama_chat_messages(messages)
+    assert out[0] == {"role": "system", "content": "You are the Product Owner."}
+    assert out[1]["role"] == "user"
+    assert out[2]["role"] == "assistant"
+    assert out[3]["role"] == "tool"
+    assert out[4] == {"role": "user", "content": "=== OBSERVATION ===\n- list_dir: ok"}
+    assert all(m.get("role") != "system" for m in out[1:])
+
+
+def test_ollama_chat_sanitizes_mid_conversation_system(monkeypatch):
+    initialize()
+    reset_workflow_settings()
+    from backend.services.llm_provider import OllamaProvider
+
+    provider = OllamaProvider("http://localhost:11434")
+    client = MagicMock()
+    client.chat.return_value = MagicMock(
+        message=MagicMock(content="## Summary", tool_calls=None, thinking=None),
+        prompt_eval_count=1,
+        eval_count=1,
+    )
+    messages = [
+        {"role": "system", "content": "sys"},
+        {"role": "user", "content": "hi"},
+        {"role": "system", "content": "=== OBSERVATION ==="},
+    ]
+    with patch.object(provider, "_get_client", return_value=client):
+        provider.chat("qwen", messages, options={"num_ctx": 4096})
+    sent = client.chat.call_args.kwargs["messages"]
+    assert sent[0]["role"] == "system"
+    assert sent[-1]["role"] == "user"
+    assert "OBSERVATION" in sent[-1]["content"]
+
+
 def test_to_openai_messages_maps_tool_call_id():
     messages = [
         {"role": "user", "content": "hi"},
@@ -130,6 +177,27 @@ def test_chat_result_from_openai_usage_and_tools():
     assert result.message.tool_calls[0].function.name == "list_files"
 
 
+def test_chat_result_from_openai_legacy_function_call():
+    payload = {
+        "choices": [
+            {
+                "message": {
+                    "role": "assistant",
+                    "content": None,
+                    "function_call": {
+                        "name": "read_file",
+                        "arguments": '{"path": "main.py"}',
+                    },
+                }
+            }
+        ],
+        "usage": {"prompt_tokens": 5, "completion_tokens": 2},
+    }
+    result = chat_result_from_openai(payload)
+    assert result.message.tool_calls[0].function.name == "read_file"
+    assert result.message.tool_calls[0].function.arguments["path"] == "main.py"
+
+
 def test_openai_compat_list_models_from_v1():
     provider = OpenAICompatProvider("http://localhost:1234/v1")
     response = MagicMock()
@@ -161,6 +229,30 @@ def test_ollama_chat_sends_num_ctx_and_keep_alive():
     kwargs = client.chat.call_args.kwargs
     assert kwargs["options"]["num_ctx"] == 8192
     assert kwargs["keep_alive"] == "30m"
+    assert "think" not in kwargs["options"]
+
+
+def test_ollama_chat_sends_think_as_top_level():
+    initialize()
+    reset_workflow_settings()
+    from backend.services.llm_provider import OllamaProvider
+
+    provider = OllamaProvider("http://localhost:11434")
+    client = MagicMock()
+    client.chat.return_value = MagicMock(
+        message=MagicMock(content="ok", tool_calls=None, thinking=None),
+        prompt_eval_count=1,
+        eval_count=1,
+    )
+    with patch.object(provider, "_get_client", return_value=client):
+        provider.chat(
+            "qwen",
+            [{"role": "user", "content": "hi"}],
+            options={"temperature": 0.1, "num_ctx": 8192, "think": False},
+        )
+    kwargs = client.chat.call_args.kwargs
+    assert kwargs["think"] is False
+    assert "think" not in kwargs["options"]
 
 
 def _openai_chat_response(content: str = "hi"):

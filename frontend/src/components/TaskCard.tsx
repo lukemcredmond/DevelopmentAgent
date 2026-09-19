@@ -114,6 +114,11 @@ export default function TaskCard({
               LLM iteration {runInfo.iteration}/{runInfo.maxIterations}
             </p>
           )}
+          {runInfo.numCtxLabel && (
+            <p className="text-[9px] text-amber-200/90 font-mono truncate" title={runInfo.numCtxLabel}>
+              {runInfo.numCtxLabel}
+            </p>
+          )}
           {fixVerifyHint && (
             <p className="text-[9px] text-emerald-200/90 font-mono truncate" title={fixVerifyHint}>
               {fixVerifyHint}
@@ -153,11 +158,6 @@ export default function TaskCard({
             </p>
           )}
         </div>
-      )}
-      {needsUser && (
-        <p className="mb-1.5 text-[9px] text-amber-200/90" data-testid="card-needs-user-hint">
-          Needs your answer — open card to resolve
-        </p>
       )}
       {!isActiveRun &&
         runInfo == null &&
@@ -362,8 +362,26 @@ export default function TaskCard({
           </div>
         )
       })()}
+      {(() => {
+        const hint =
+          !runInfo &&
+          (lane === 'In Progress' || lane === 'Needs PO') &&
+          (task.lastStepOutcome?.suggestedAction || task.lastStepOutcome?.whyCardStayed)
+        if (!hint) return null
+        return (
+          <p
+            className="text-[9px] text-amber-200/80 line-clamp-2 mb-1"
+            data-testid="card-step-hint"
+          >
+            {task.lastStepOutcome?.suggestedAction || task.lastStepOutcome?.whyCardStayed}
+          </p>
+        )
+      })()}
       {needsUser && (
-        <p className="text-[10px] text-amber-200/90 line-clamp-2 mb-1">
+        <p
+          className="text-[10px] text-amber-200/90 line-clamp-2 mb-1"
+          data-testid="card-needs-user-hint"
+        >
           {needsUserCardPreview(task)}
         </p>
       )}

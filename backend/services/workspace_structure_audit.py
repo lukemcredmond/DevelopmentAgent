@@ -351,6 +351,84 @@ def detect_unity_quest(ws: str) -> Optional[Dict[str, Any]]:
     }
 
 
+_GREENFIELD_IGNORE = {
+    "allhands.project.json",
+    "docs",
+    "skills",
+    "readme",
+    "readme.md",
+    "license",
+    "license.md",
+    ".git",
+    ".allhands",
+    ".gitignore",
+}
+
+
+def workspace_is_greenfield(ws: str) -> bool:
+    """True when the workspace has no app source — only project metadata / docs / skills."""
+    if not ws or not os.path.isdir(ws):
+        return True
+    try:
+        names = os.listdir(ws)
+    except OSError:
+        return True
+    for name in names:
+        if name.startswith("."):
+            continue
+        if name.lower() in _GREENFIELD_IGNORE:
+            continue
+        return False
+    return True
+
+
+def infer_stack_from_brief(
+    brief: Optional[str] = None,
+    *,
+    project_name: Optional[str] = None,
+    task: Optional[Dict[str, Any]] = None,
+) -> Optional[str]:
+    """Infer a stack id from brief/name when the workspace has no markers.
+
+    Flutter is the only greenfield inference in this pass (empty repo + dart/flutter keywords).
+    """
+    parts = [
+        str(brief if brief is not None else (getattr(state, "PROJECT_BRIEF", None) or "")),
+        str(project_name if project_name is not None else (getattr(state, "PROJECT_NAME", None) or "")),
+    ]
+    if isinstance(task, dict):
+        parts.append(str(task.get("title") or ""))
+        parts.append(str(task.get("description") or ""))
+    blob = " ".join(parts).strip()
+    if not blob:
+        return None
+    try:
+        from backend.services.skill_suggestions import extract_brief_categories
+
+        cats = set(extract_brief_categories(blob))
+    except Exception:
+        cats = set()
+        lower = blob.lower()
+        if "flutter" in lower or "dart" in lower:
+            cats.add("flutter")
+    if "flutter" in cats:
+        return "flutter"
+    return None
+
+
+def inferred_flutter_audit() -> Dict[str, Any]:
+    return {
+        "stack": "flutter",
+        "present": [],
+        "missing": ["pubspec.yaml", "lib/main.dart"],
+        "warnings": [
+            "Inferred Flutter from the project brief — workspace has no pubspec.yaml yet."
+        ],
+        "critical": True,
+        "inferredFromBrief": True,
+    }
+
+
 def detect_unknown(ws: str) -> Optional[Dict[str, Any]]:
     return {
         "stack": "unknown",
@@ -370,7 +448,12 @@ _DETECTORS: Tuple[Detector, ...] = (
 )
 
 
-def audit_workspace_structure(workspace_dir: Optional[str] = None) -> Dict[str, Any]:
+def audit_workspace_structure(
+    workspace_dir: Optional[str] = None,
+    *,
+    brief: Optional[str] = None,
+    task: Optional[Dict[str, Any]] = None,
+) -> Dict[str, Any]:
     """Return structure audit for the first matching known stack (or unknown)."""
     ws = workspace_dir or state.WORKSPACE_DIR
     if not ws or not os.path.isdir(ws):
@@ -385,6 +468,8 @@ def audit_workspace_structure(workspace_dir: Optional[str] = None) -> Dict[str, 
         result = detector(ws)
         if result:
             return result
+    if workspace_is_greenfield(ws) and infer_stack_from_brief(brief, task=task) == "flutter":
+        return inferred_flutter_audit()
     return detect_unknown(ws) or {
         "stack": "unknown",
         "present": [],
@@ -400,6 +485,29 @@ def structure_ok(workspace_dir: Optional[str] = None) -> bool:
     if audit.get("stack") == "unknown":
         return True
     return not bool(audit.get("critical"))
+
+
+def greenfield_wander_nudge(
+    *,
+    brief: Optional[str] = None,
+    task: Optional[Dict[str, Any]] = None,
+    workspace_dir: Optional[str] = None,
+) -> str:
+    """One-line Dev instruction when a greenfield Flutter repo has no Dart sources yet."""
+    ws = workspace_dir or state.WORKSPACE_DIR
+    if not workspace_is_greenfield(ws):
+        return ""
+    if infer_stack_from_brief(brief, task=task) != "flutter":
+        return ""
+    import glob
+
+    if glob.glob(os.path.join(ws, "**", "*.dart"), recursive=True):
+        return ""
+    return (
+        "=== GREENFIELD DEV NOTE ===\n"
+        "Do not re-list docs/ or docs/tasks/ — scaffold or patch lib/ now "
+        "(apply_patch/write_file)."
+    )
 
 
 def format_structure_audit(audit: Optional[Dict[str, Any]] = None) -> str:

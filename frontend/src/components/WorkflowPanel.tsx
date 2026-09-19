@@ -15,6 +15,7 @@ import { SettingHint } from './SettingHint'
 import type {
   BriefChangelogEntry,
   IndexProgress,
+  NumCtxFit,
   WorkflowNotifications,
   WorkflowSettings,
 } from '../types'
@@ -34,6 +35,7 @@ interface WorkflowPanelProps {
     readyAt?: string
     running?: boolean
   } | null
+  numCtxFit?: NumCtxFit | null
 }
 
 export default function WorkflowPanel({
@@ -46,6 +48,7 @@ export default function WorkflowPanel({
   onOpenMemoryTab,
   onOpenCustomTools,
   discordBotStatus = null,
+  numCtxFit = null,
 }: WorkflowPanelProps) {
   const [dodInput, setDodInput] = useState('')
   const [showChangelog, setShowChangelog] = useState(false)
@@ -222,8 +225,9 @@ export default function WorkflowPanel({
                 maxLlmIterationsPerStep: 6,
                 maxToolFailuresPerStep: 4,
                 duplicateToolPolicy: 'strict',
-                devExploreMaxTools: 3,
-                devPatchMaxTools: 4,
+                devExploreMaxTools: 8,
+                devExploreForcePatchInStep: true,
+                devPatchMaxTools: 12,
                 devVerifyMaxTools: 2,
                 promptProfile: 'local_slm',
                 localSlmSprintPreload: true,
@@ -374,7 +378,7 @@ export default function WorkflowPanel({
             <label>
               <span className="text-[10px] text-cat-overlay">Explore max</span>
               <NumberSettingInput
-                value={settings.devExploreMaxTools ?? 3}
+                value={settings.devExploreMaxTools ?? 8}
                 min={1}
                 max={20}
                 onCommit={(devExploreMaxTools) => onSettingsChange({ devExploreMaxTools })}
@@ -403,6 +407,15 @@ export default function WorkflowPanel({
             </label>
           </div>
         )}
+        <label className="flex items-center gap-2 text-[11px] text-cat-subtext cursor-pointer">
+          <input
+            type="checkbox"
+            checked={settings.devExploreForcePatchInStep !== false}
+            onChange={(e) => onSettingsChange({ devExploreForcePatchInStep: e.target.checked })}
+          />
+          Force Patch in same step when explore budget hits
+          <SettingHint hint="When explore tools are exhausted, block further read_file/list_dir in the same Developer step and require apply_patch/write_file." />
+        </label>
         <label className="flex items-center gap-2 text-[11px] text-cat-subtext cursor-pointer">
           <input
             type="checkbox"
@@ -1950,8 +1963,23 @@ export default function WorkflowPanel({
           checked={settings.ollamaNumCtxAuto ?? false}
           onChange={(e) => onSettingsChange({ ollamaNumCtxAuto: e.target.checked })}
         />
-        Auto-clamp Dev num_ctx on low/minimal VRAM (halve)
+        Auto-clamp Dev num_ctx to fit VRAM
       </label>
+      {numCtxFit?.clamped && (
+        <p className="text-[10px] text-amber-300 leading-relaxed -mt-1">
+          {numCtxFit.label ||
+            `num_ctx ${numCtxFit.requested} → ${numCtxFit.effective} (VRAM)`}
+          {numCtxFit.atFloor
+            ? '. This context cannot hold a tool-using agent — use a smaller model or more VRAM.'
+            : ''}
+        </p>
+      )}
+      {(settings.ollamaNumCtxAuto ?? false) && !numCtxFit?.clamped && (
+        <p className="text-[10px] text-cat-overlay leading-relaxed -mt-1">
+          When the model does not fit VRAM, num_ctx is reduced as far as 4096. That floor cannot
+          hold a tool-using agent.
+        </p>
+      )}
       <label className="flex items-center gap-2 text-[11px] text-cat-subtext cursor-pointer">
         <input
           type="checkbox"
@@ -1966,7 +1994,7 @@ export default function WorkflowPanel({
           <label>
             <span className="text-[10px] text-cat-overlay block">Adaptive start num_ctx</span>
             <NumberSettingInput
-              value={settings.ollamaNumCtxAdaptiveStart ?? 8192}
+              value={settings.ollamaNumCtxAdaptiveStart ?? 6144}
               min={2048}
               max={131072}
               onCommit={(ollamaNumCtxAdaptiveStart) => onSettingsChange({ ollamaNumCtxAdaptiveStart })}

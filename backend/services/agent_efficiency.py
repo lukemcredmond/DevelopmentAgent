@@ -117,11 +117,66 @@ def single_model_name(ws: Optional[Dict[str, Any]] = None, *, fallback: str = ""
     """The one model every role uses in single-model mode (the Developer primary)."""
     from backend import state
 
+    if ws is None:
+        from backend.services.workflow_settings import get_workflow_settings
+
+        ws = get_workflow_settings()
     try:
         dev = str((getattr(state, "PRIMARY_MODELS", None) or {}).get("dev") or "").strip()
     except Exception:
         dev = ""
-    return dev or str(fallback or "").strip()
+    primary = dev or str(fallback or "").strip()
+    if _is_heavy_general_model(primary):
+        return _fast_coder_preset(ws)
+    return primary
+
+
+def _fast_coder_preset(ws: Optional[Dict[str, Any]] = None) -> str:
+    if ws is None:
+        from backend.services.workflow_settings import get_workflow_settings
+
+        ws = get_workflow_settings()
+    explore = str(ws.get("devExploreModel") or "").strip()
+    fast = str(ws.get("discordModelPresetFast") or "").strip() or "qwen2.5-coder:7b"
+    if explore and _is_coder_model(explore) and not _is_heavy_general_model(explore):
+        return explore
+    return fast
+
+
+def _heavy_primary_fast_model(
+    *,
+    role: str,
+    primary: str,
+    ws: Optional[Dict[str, Any]] = None,
+) -> Optional[str]:
+    """When the configured primary is a slow general model, prefer a small coder."""
+    if not _is_heavy_general_model(primary):
+        return None
+    from backend.services.prompt_budget import normalize_role_key
+
+    fast = _fast_coder_preset(ws)
+    role_key = normalize_role_key(role) or ""
+    if role_key in ("po", "dev", "cr", "qa"):
+        return fast
+    return None
+
+
+def effective_role_model(
+    *,
+    role: str,
+    primary_model: str,
+    phase: Optional[str] = None,
+    backup_model: Optional[str] = None,
+    ws: Optional[Dict[str, Any]] = None,
+) -> Tuple[str, str]:
+    """Resolve the model name used for this agent step/turn."""
+    return resolve_step_model(
+        role=role,
+        phase=phase,
+        primary_model=primary_model,
+        backup_model=backup_model,
+        ws=ws,
+    )
 
 
 def resolve_step_model(
@@ -147,9 +202,21 @@ def resolve_step_model(
 
     if single_model_mode_active(ws):
         # One model for every role and phase: a lane change must never cost a reload.
-        return single_model_name(ws, fallback=primary), "single_model"
+        chosen = single_model_name(ws, fallback=primary)
+        if chosen != primary:
+            return chosen, "single_model"
+        fast = _heavy_primary_fast_model(role=role, primary=primary, ws=ws)
+        if fast:
+            return fast, "single_model_heavy_primary_fast"
+        return chosen, "single_model"
 
-    if role != "Developer" or not phase_model_routing_enabled(ws):
+    if role != "Developer" or not phase_model_routing_enabled(ws) or not str(phase or "").strip():
+        fast = _heavy_primary_fast_model(role=role, primary=primary, ws=ws)
+        if fast:
+            from backend.services.prompt_budget import normalize_role_key
+
+            rk = normalize_role_key(role) or "role"
+            return fast, f"{rk}_heavy_primary_fast"
         return primary, "role_primary"
 
     fast = str(ws.get("discordModelPresetFast") or "").strip() or "qwen2.5-coder:7b"
@@ -196,7 +263,19 @@ def _is_heavy_general_model(model: str) -> bool:
     m = (model or "").strip().lower()
     if not m or _is_coder_model(m):
         return False
-    return any(tok in m for tok in ("gemma", "llama3", "llama-3", "mistral", "phi4", "phi-4", "command-r"))
+    return any(
+        tok in m
+        for tok in (
+            "gemma",
+            "llama3",
+            "llama-3",
+            "mistral",
+            "phi4",
+            "phi-4",
+            "command-r",
+            "qwen3",
+        )
+    )
 
 
 def max_tools_per_llm_turn(*, phase: Optional[str] = None, ws: Optional[Dict[str, Any]] = None) -> int:

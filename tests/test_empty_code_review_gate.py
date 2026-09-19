@@ -121,3 +121,39 @@ def test_read_only_no_edits_when_files_are_reads_only():
     ]
     state.SHARED_BOARD = _board(**{"In Progress": [task]})
     assert _dev_step_read_only_no_edits(task, "In Progress", step_started) is True
+
+
+def test_force_patch_instruction_when_flag_set():
+    from backend.services.sprint_service import FORCE_PATCH_INSTRUCTION, _force_patch_dev_instruction
+
+    assert "write_file" in FORCE_PATCH_INSTRUCTION
+    assert _force_patch_dev_instruction({"forcePatchNextDevStep": True}, "Developer")
+    assert not _force_patch_dev_instruction({"forcePatchNextDevStep": True}, "Product Owner")
+    assert not _force_patch_dev_instruction({}, "Developer")
+
+
+def test_read_only_no_edits_arms_forced_patch_and_stays_in_progress():
+    from backend import state
+    from backend.services.sprint_service import (
+        _dev_step_read_only_no_edits,
+        apply_read_only_no_edits_outcome,
+    )
+
+    initialize()
+    task = init_new_task({"id": "T-RO-FP", "title": "Export", "description": "d"})
+    task["files"] = [{"path": "docs/plan.md", "action": "read"}]
+    step_started = "2026-01-01 00:00:00"
+    task["transcript"] = [
+        {
+            "role": "tool",
+            "toolName": "list_dir",
+            "toolSuccess": True,
+            "timestamp": "2026-01-01 00:00:01",
+            "content": "list_dir → docs ✓",
+        }
+    ]
+    state.SHARED_BOARD = _board(**{"In Progress": [task]})
+    assert _dev_step_read_only_no_edits(task, "In Progress", step_started) is True
+    apply_read_only_no_edits_outcome(task)
+    assert get_task_lane("T-RO-FP") == "In Progress"
+    assert task.get("forcePatchNextDevStep") is True

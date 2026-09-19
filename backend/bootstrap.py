@@ -37,6 +37,18 @@ def load_project_into_state(project_id: str) -> bool:
             original = state.PROJECT_BRIEF
     state.PROJECT_ORIGINAL_BRIEF = original
     state.PROJECT_PLAN_OUTLINE = proj.get("plan_outline") or ""
+    hydrated_plan_from_sidecar = False
+    if not str(state.PROJECT_PLAN_OUTLINE or "").strip():
+        from backend.services.project_file import plan_outline_from_sidecar_data, read_project_file
+
+        workspace = str(proj.get("workspace_dir") or "").strip()
+        if workspace:
+            sidecar = read_project_file(workspace)
+            if sidecar:
+                sidecar_plan = plan_outline_from_sidecar_data(sidecar)
+                if sidecar_plan:
+                    state.PROJECT_PLAN_OUTLINE = sidecar_plan
+                    hydrated_plan_from_sidecar = True
     state.WORKSPACE_DIR = proj["workspace_dir"]
     state.SHARED_BOARD = normalize_board_lanes(proj["board_state"])
     normalize_board_tasks()
@@ -96,6 +108,11 @@ def load_project_into_state(project_id: str) -> bool:
     from backend.services.sprint_session import detect_recovery_on_startup
 
     detect_recovery_on_startup(project_id)
+    if hydrated_plan_from_sidecar:
+        try:
+            save_current_project_state(project_id=project_id, persist_board=False)
+        except Exception:
+            pass
     return True
 
 

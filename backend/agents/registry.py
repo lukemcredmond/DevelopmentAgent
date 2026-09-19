@@ -369,6 +369,19 @@ def _guarded_update_board(
 
             dest = move_off_needs_po(task_id)
             if dest:
+                if dest == "Needs PO":
+                    live = find_task_by_id(task_id)
+                    from backend.services.task_spec_validation import dev_claim_blocked
+                    from backend.services.workflow_settings import get_workflow_settings
+
+                    reason = (
+                        dev_claim_blocked(live, get_workflow_settings()) if live else None
+                    )
+                    if reason:
+                        return (
+                            f"Clarification saved but the card stayed in Needs PO: {reason}"
+                        )
+                    return f"Task {task_id} stayed in 'Needs PO'."
                 return f"Task {task_id} moved to '{dest}'."
     return move_board_stage(task_id, target_lane)
 

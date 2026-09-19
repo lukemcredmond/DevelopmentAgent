@@ -7,6 +7,7 @@ from typing import Any, Dict, Optional, Sequence
 
 DEFAULT_NUM_CTX = 32768
 PACKED_NUM_CTX_FLOOR = 4096
+GENERATION_RESERVE_TOKENS = 256
 
 _ROLE_KEYS = frozenset({"po", "dev", "cr", "qa"})
 
@@ -137,6 +138,71 @@ def resolve_ollama_num_ctx(
     return ctx
 
 
+def requested_ollama_num_ctx(
+    role: Optional[str] = None,
+    *,
+    settings: Optional[Dict[str, Any]] = None,
+) -> int:
+    """Configured num_ctx before VRAM auto-clamp."""
+    ws = dict(settings or {})
+    if not ws:
+        try:
+            from backend.services.workflow_settings import get_workflow_settings
+
+            ws = dict(get_workflow_settings())
+        except Exception:
+            ws = {}
+    ws["ollamaNumCtxAuto"] = False
+    return resolve_ollama_num_ctx(role, settings=ws)
+
+
+def describe_num_ctx_clamp(
+    role: Optional[str] = None,
+    *,
+    settings: Optional[Dict[str, Any]] = None,
+    effective: Optional[int] = None,
+) -> Dict[str, Any]:
+    """Explain requested vs effective num_ctx for sprint status / Workflow warnings."""
+    try:
+        from backend.services.workflow_settings import get_workflow_settings
+
+        ws = settings if settings is not None else get_workflow_settings()
+    except Exception:
+        ws = settings or {}
+    if not isinstance(ws, dict):
+        ws = {}
+    requested = requested_ollama_num_ctx(role, settings=ws)
+    if effective is None:
+        effective = resolve_ollama_num_ctx(role, settings=ws)
+    try:
+        effective_i = max(1024, int(effective or requested))
+    except (TypeError, ValueError):
+        effective_i = requested
+    clamped = bool(ws.get("ollamaNumCtxAuto") and effective_i < requested)
+    at_floor = clamped and effective_i <= PACKED_NUM_CTX_FLOOR
+    reason = "VRAM" if clamped else ""
+    label = (
+        f"num_ctx {requested} → {effective_i} (VRAM)"
+        if clamped
+        else f"num_ctx {effective_i}"
+    )
+    info = {
+        "requested": requested,
+        "effective": effective_i,
+        "clamped": clamped,
+        "atFloor": at_floor,
+        "reason": reason,
+        "label": label,
+    }
+    try:
+        from backend import state as _state
+
+        _state.LAST_NUM_CTX_FIT = info
+    except Exception:
+        pass
+    return info
+
+
 def initial_ollama_num_ctx(
     role: Optional[str] = None,
     *,
@@ -189,6 +255,24 @@ def packed_prompt_num_ctx(
     return min(ceiling_i, max(floor, rounded))
 
 
+def prompt_fills_ctx_window(
+    messages: Any,
+    num_ctx: int,
+    *,
+    tools: Optional[Sequence[Any]] = None,
+    reserve_tokens: int = GENERATION_RESERVE_TOKENS,
+) -> bool:
+    """True when estimated prompt tokens leave almost no room to generate."""
+    from backend.services.llm_context import estimate_messages_chars
+
+    try:
+        ctx = max(1, int(num_ctx or 0))
+    except (TypeError, ValueError):
+        ctx = PACKED_NUM_CTX_FLOOR
+    chars = estimate_messages_chars(messages or []) + _estimate_tools_chars(tools)
+    return (chars // 4) >= max(1, ctx - max(0, int(reserve_tokens)))
+
+
 def bump_ollama_num_ctx(current: int, ceiling: int, *, step: int = 8192) -> Optional[int]:
     """Next num_ctx after overflow, or None if already at ceiling."""
     if current >= ceiling:
@@ -204,6 +288,8 @@ def bump_ollama_num_ctx(current: int, ceiling: int, *, step: int = 8192) -> Opti
 
 def sprint_file_context_max_chars(num_ctx: int) -> int:
     """Max chars for pre-loaded sprint file context (~60% of token budget as chars)."""
+    if num_ctx <= PACKED_NUM_CTX_FLOOR:
+        return min(1500, max(800, (num_ctx // 4) * 2))
     return min(12000, max(2000, (num_ctx // 4) * 3))
 
 
@@ -211,6 +297,8 @@ def truncate_brief(brief: str, num_ctx: int, max_chars: int = 6000) -> str:
     """Truncate project brief to fit context budget."""
     from backend.services.prompt_profile import is_local_slm_profile
 
+    if num_ctx <= PACKED_NUM_CTX_FLOOR:
+        max_chars = min(max_chars, 1500)
     if is_local_slm_profile():
         max_chars = min(max_chars, max(1500, num_ctx))
     budget = min(max_chars, num_ctx * 2)
@@ -224,6 +312,8 @@ def skills_context_max_chars(num_ctx: int) -> int:
 
     if is_local_slm_profile():
         return 0
+    if num_ctx <= PACKED_NUM_CTX_FLOOR:
+        return 1200
     return min(8000, max(2000, num_ctx))
 
 
@@ -243,27 +333,47 @@ LOCAL_SLM_PACKER_CAP = 6000
 LOCAL_SLM_MEMORY_CHARS = 400
 
 
-def sprint_preload_budgets(num_ctx: int, *, local_slm: bool) -> Dict[str, int]:
+PO_PACKED_PRELOAD_CAPS: Dict[str, int] = {
+    "total": 800,
+    "semantic": 400,
+    "graph": 200,
+    "packer": 600,
+}
+
+
+def sprint_preload_budgets(
+    num_ctx: int,
+    *,
+    local_slm: bool,
+    role: Optional[str] = None,
+) -> Dict[str, int]:
     """Char budgets for semantic / graph / file sprint inject."""
     total_full = sprint_file_context_max_chars(num_ctx)
     semantic_full = semantic_sprint_context_max_chars(num_ctx)
     if not local_slm:
         graph_max = min(2500, semantic_full // 2)
-        return {
+        budgets = {
             "total": total_full,
             "semantic": semantic_full,
             "graph": graph_max,
             "packer": 14000,
         }
-    total = min(LOCAL_SLM_TOTAL_PRELOAD_CAP, max(1500, total_full // 2))
-    semantic = min(LOCAL_SLM_SEMANTIC_CAP, max(800, semantic_full // 2))
-    graph = min(LOCAL_SLM_GRAPH_CAP, semantic // 2)
-    return {
-        "total": total,
-        "semantic": semantic,
-        "graph": graph,
-        "packer": LOCAL_SLM_PACKER_CAP,
-    }
+    else:
+        total = min(LOCAL_SLM_TOTAL_PRELOAD_CAP, max(1500, total_full // 2))
+        semantic = min(LOCAL_SLM_SEMANTIC_CAP, max(800, semantic_full // 2))
+        graph = min(LOCAL_SLM_GRAPH_CAP, semantic // 2)
+        budgets = {
+            "total": total,
+            "semantic": semantic,
+            "graph": graph,
+            "packer": LOCAL_SLM_PACKER_CAP,
+        }
+    if normalize_role_key(role) == "po" and num_ctx <= PACKED_NUM_CTX_FLOOR:
+        return {
+            key: min(budgets[key], PO_PACKED_PRELOAD_CAPS.get(key, budgets[key]))
+            for key in budgets
+        }
+    return budgets
 
 
 def codebase_pack_max_chars_for_prompt(*, local_slm: bool, settings: Optional[Dict[str, Any]] = None) -> int:

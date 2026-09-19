@@ -269,7 +269,7 @@ def no_write_stall_should_park(
         from backend.services.workflow_settings import get_workflow_settings
 
         ws = get_workflow_settings()
-    limit = max(1, int(ws.get("maxConsecutiveNoWriteStall") or 2))
+    limit = max(2, int(ws.get("maxConsecutiveNoWriteStall") or 2))
     return int(task.get("consecutiveNoWriteStall") or 0) >= limit
 
 
@@ -339,9 +339,17 @@ def needs_po_should_skip_auto(
     return trip
 
 
+DEV_STALL_FORCE_PATCH_EXITS = frozenset(
+    {
+        "read_only_no_edits",
+        "explore_budget_exhausted",
+        "duplicate_tool",
+    }
+)
+
 _FORCE_PATCH_EXITS = frozenset(
     {
-        "explore_budget_exhausted",
+        *DEV_STALL_FORCE_PATCH_EXITS,
         "max_iterations_after_writes",
         "completed_with_writes",
         "identical_write_loop",

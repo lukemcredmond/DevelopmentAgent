@@ -519,6 +519,87 @@ def _looks_like_dependency_only_child(child: Dict[str, Any]) -> bool:
     return any(k in blob for k in keywords)
 
 
+def looks_like_usable_plan_epics(text: Optional[str]) -> bool:
+    """True when text contains a parseable JSON object with a non-empty epics array."""
+    from backend.services.po_clarification import extract_json_object_from_text
+
+    obj = extract_json_object_from_text(str(text or ""))
+    if not obj:
+        return False
+    epics = obj.get("epics")
+    return isinstance(epics, list) and any(isinstance(e, dict) for e in epics)
+
+
+def _parse_proposed_epic_bullets(outline: str) -> List[str]:
+    """Extract bullet lines from the ## Proposed epics section of a plan outline."""
+    import re
+
+    text = str(outline or "").strip()
+    if not text:
+        return []
+    match = re.search(r"(?im)^##\s*proposed\s+epics\s*$", text)
+    if not match:
+        return []
+    section = text[match.end() :]
+    next_header = re.search(r"(?m)^##\s+", section)
+    if next_header:
+        section = section[: next_header.start()]
+    bullets: List[str] = []
+    for line in section.splitlines():
+        stripped = line.strip()
+        if not stripped:
+            continue
+        bullet_match = re.match(r"^[-*]\s+(.+)$", stripped) or re.match(
+            r"^\d+[.)]\s+(.+)$",
+            stripped,
+        )
+        if bullet_match:
+            bullets.append(bullet_match.group(1).strip())
+    return bullets
+
+
+def build_epics_json_from_plan_outline(outline: str) -> str:
+    """Build epics JSON from Proposed epics bullets when LLM output is unusable."""
+    import json
+    import re
+
+    bullets = _parse_proposed_epic_bullets(outline)
+    if not bullets:
+        return ""
+
+    epics: List[Dict[str, Any]] = []
+    for bullet in bullets:
+        parts = re.split(r"\s*[—–-]\s*|\s*:\s*", bullet, maxsplit=1)
+        title = (parts[0] or "Untitled epic").strip()
+        description = parts[1].strip() if len(parts) > 1 else bullet
+        children = [
+            {
+                "title": f"Implement {title} — core flow",
+                "description": f"Deliver the primary user-facing capability for {title}.",
+                "acceptanceCriteria": [
+                    f"User can access {title} end-to-end",
+                    "Happy path covered by tests or manual check",
+                ],
+                "workType": "implementation",
+                "requiresDev": True,
+                "requiresQa": True,
+            },
+            {
+                "title": f"Implement {title} — edge cases and polish",
+                "description": f"Handle validation, empty states, and errors for {title}.",
+                "acceptanceCriteria": [
+                    "Invalid input shows clear feedback",
+                    "Empty state is usable",
+                ],
+                "workType": "implementation",
+                "requiresDev": True,
+                "requiresQa": True,
+            },
+        ]
+        epics.append({"title": title, "description": description, "children": children})
+    return json.dumps({"epics": epics})
+
+
 def _warn_under_decomposition(epics_raw: List[Dict[str, Any]]) -> None:
     """Soft warnings when plan looks under-decomposed — still create cards."""
     epic_count = len(epics_raw)
@@ -603,54 +684,39 @@ def apply_plan_epics_from_po_output(po_output: str) -> Dict[str, Any]:
             },
         ]
     else:
-        # Prefer object with epics[]
+        from backend.services.po_clarification import extract_json_object_from_text
+
         obj = None
-        bt = "```"
-        for block in re.findall(rf"{bt}json\s*(.*?)\s*{bt}", po_output, re.DOTALL):
-            try:
-                parsed = json.loads(block.strip())
-                if isinstance(parsed, dict):
-                    obj = parsed
-                    break
-            except json.JSONDecodeError:
-                continue
-        if obj is None:
-            try:
-                parsed = json.loads(po_output.strip())
-                if isinstance(parsed, dict):
-                    obj = parsed
-                elif isinstance(parsed, list):
-                    epics_raw = [
-                        {
-                            "title": "Project backlog",
-                            "description": "Stories from plan (legacy flat array).",
-                            "children": [t for t in parsed if isinstance(t, dict)],
-                        }
-                    ]
-            except json.JSONDecodeError:
-                match = re.search(r"\{.*\}", po_output, re.DOTALL)
-                if match:
+        stripped = po_output.strip()
+        try:
+            parsed = json.loads(stripped)
+            if isinstance(parsed, list):
+                epics_raw = [
+                    {
+                        "title": "Project backlog",
+                        "description": "Stories from plan (legacy flat array).",
+                        "children": [t for t in parsed if isinstance(t, dict)],
+                    }
+                ]
+            elif isinstance(parsed, dict):
+                obj = parsed
+        except json.JSONDecodeError:
+            obj = extract_json_object_from_text(po_output)
+            if obj is None:
+                match_arr = re.search(r"\[.*\]", po_output, re.DOTALL)
+                if match_arr:
                     try:
-                        parsed = json.loads(match.group())
-                        if isinstance(parsed, dict):
-                            obj = parsed
+                        parsed = json.loads(match_arr.group())
+                        if isinstance(parsed, list):
+                            epics_raw = [
+                                {
+                                    "title": "Project backlog",
+                                    "description": "Stories from plan (legacy flat array).",
+                                    "children": [t for t in parsed if isinstance(t, dict)],
+                                }
+                            ]
                     except json.JSONDecodeError:
                         pass
-                if not epics_raw and obj is None:
-                    match_arr = re.search(r"\[.*\]", po_output, re.DOTALL)
-                    if match_arr:
-                        try:
-                            parsed = json.loads(match_arr.group())
-                            if isinstance(parsed, list):
-                                epics_raw = [
-                                    {
-                                        "title": "Project backlog",
-                                        "description": "Stories from plan (legacy flat array).",
-                                        "children": [t for t in parsed if isinstance(t, dict)],
-                                    }
-                                ]
-                        except json.JSONDecodeError:
-                            pass
 
         if obj is not None and not epics_raw:
             raw_list = obj.get("epics")

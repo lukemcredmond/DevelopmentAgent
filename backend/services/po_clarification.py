@@ -18,9 +18,9 @@ from backend.services.logs import add_system_log
 
 _PO_ADVANCE_LANES = frozenset({"In Progress", "Refinement"})
 
-# Default PO decode cap; bump once when Gemma hits the wall with no tool/JSON.
-PO_NUM_PREDICT_DEFAULT = 2048
-PO_NUM_PREDICT_BUMP = 4096
+# Default PO decode cap; bump once when generation hits the wall with no tool/JSON.
+PO_NUM_PREDICT_DEFAULT = 1024
+PO_NUM_PREDICT_BUMP = 2048
 PO_TRUNCATED_RETRY_MESSAGE = (
     "Your previous reply was cut off at the token cap before any update_board call "
     "or clarification JSON. Reply now with a short JSON object "
@@ -173,14 +173,9 @@ def apply_clarification_from_board_args(task_id: str, arguments: Optional[Dict[s
 
 def _ensure_dev_claim_fields(task: Dict[str, Any]) -> None:
     """Fill spec gaps so Needs PO → In Progress is not bounced by the Dev claim gate."""
-    desc = str(task.get("description") or "").strip()
-    ac = [str(c).strip() for c in (task.get("acceptanceCriteria") or []) if str(c).strip()]
-    if desc and not str(task.get("scope") or "").strip():
-        task["scope"] = desc
-    if not str(task.get("testPlan") or "").strip() and ac:
-        task["testPlan"] = "; ".join(ac[:5])
-    if not str(task.get("userStory") or "").strip() and desc:
-        task["userStory"] = desc
+    from backend.services.board_service import prepare_task_for_dev_claim
+
+    prepare_task_for_dev_claim(task)
 
 
 PO_LLM_SKIP_EXITS = frozenset(
@@ -213,9 +208,14 @@ def should_move_off_needs_po_without_llm(task: Optional[Dict[str, Any]]) -> bool
         return False
     if int(task.get("identicalPoClarificationCount") or 0) >= 1:
         return True
-    from backend.services.sprint_speed_gates import last_step_exit_reason
+    from backend.services.sprint_speed_gates import (
+        DEV_STALL_FORCE_PATCH_EXITS,
+        last_step_exit_reason,
+    )
 
     reason = last_step_exit_reason(task)
+    if reason in DEV_STALL_FORCE_PATCH_EXITS:
+        return True
     return reason in PO_LLM_SKIP_EXITS
 
 
@@ -259,7 +259,8 @@ def move_off_needs_po(task_id: str) -> Optional[str]:
     else:
         dest = "In Progress"
     move_board_stage(task_id, dest)
-    return dest
+    actual = get_task_lane(task_id) or dest
+    return actual
 
 
 def complete_needs_po_clarification(
@@ -292,6 +293,13 @@ def complete_needs_po_clarification(
             f"PO clarification applied — moved {task_id} to {dest}",
         )
         return True, f"PO clarification applied and task moved to '{dest}'."
+    live = find_task_by_id(task_id)
+    from backend.services.task_spec_validation import dev_claim_blocked
+    from backend.services.workflow_settings import get_workflow_settings
+
+    reason = dev_claim_blocked(live, get_workflow_settings()) if live else None
+    if reason:
+        return applied, f"Clarification applied but card stayed in Needs PO: {reason}"
     return applied, "Clarification applied but card stayed in Needs PO."
 
 

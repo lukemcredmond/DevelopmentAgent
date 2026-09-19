@@ -110,6 +110,19 @@ def test_chat_does_not_retry_empty_generation_timeout():
     assert agent._last_chat_error_type == "empty_generation_timeout"
 
 
+def test_empty_generation_timeout_shorter_in_dev_explore():
+    initialize()
+    reset_workflow_settings()
+    save_workflow_settings({"ollamaEmptyGenerationTimeoutSec": 90})
+    agent = ScrumAgent("Developer", "test-model", "system", "http://localhost:11434")
+    agent._dev_phase_graph = SimpleNamespace(phase="explore")
+    assert agent._empty_generation_timeout_sec() == 60
+    agent._dev_phase_graph = SimpleNamespace(phase="patch")
+    assert agent._empty_generation_timeout_sec() == 90
+    po = ScrumAgent("Product Owner", "test-model", "system", "http://localhost:11434")
+    assert po._empty_generation_timeout_sec() == 90
+
+
 def test_chat_skips_cooldown_on_context_overflow():
     initialize()
     reset_workflow_settings()
@@ -335,10 +348,29 @@ def test_consume_chat_stream_times_out_on_silent_iterator():
         yield from ()
 
     try:
-        consume_chat_stream(silent(), empty_timeout_sec=0.2)
+        consume_chat_stream(silent(), empty_timeout_sec=0.2, flowing_timeout_sec=0.2)
         raise AssertionError("expected EmptyGenerationTimeout")
     except EmptyGenerationTimeout:
         pass
+
+
+def test_consume_chat_stream_treats_thinking_as_progress():
+    import time
+
+    from backend.services.llm_provider import ChatResult, ProviderMessage, consume_chat_stream
+
+    def thinking_then_content():
+        time.sleep(0.15)
+        yield ChatResult(message=ProviderMessage(thinking="reason"), prompt_eval_count=10, eval_count=0)
+        time.sleep(0.15)
+        yield ChatResult(message=ProviderMessage(content="ok"), prompt_eval_count=10, eval_count=2)
+
+    merged = consume_chat_stream(
+        thinking_then_content(), empty_timeout_sec=0.2, flowing_timeout_sec=2
+    )
+    assert merged.message.content == "ok"
+    assert merged.message.thinking == "reason"
+    assert merged.eval_count == 2
 
 
 def test_consume_chat_stream_wall_clock_ignores_empty_heartbeats():

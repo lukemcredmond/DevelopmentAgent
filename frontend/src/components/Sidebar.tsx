@@ -1,5 +1,5 @@
 import { memo, useEffect, useRef, useState, type ReactNode } from 'react'
-import type { AppState } from '../types'
+import type { AppState, SprintProgress } from '../types'
 import { SettingHint } from './SettingHint'
 
 const PLAN_OUTLINE_HINT =
@@ -37,6 +37,7 @@ interface SidebarProps {
   onPlan: () => void
   onGenerateBacklog?: () => void
   planOutlineReady?: boolean
+  planBacklogActive?: boolean
   onPlanAndRun: () => void
   onStep: () => void
   onRunInProgress?: () => void
@@ -55,6 +56,23 @@ interface SidebarProps {
   unsavedChanges?: boolean
   saveBusy?: boolean
   onOpenWorkspace?: () => void
+  sprintProgress?: SprintProgress | null
+}
+
+function formatSprintStatus(progress: SprintProgress | null | undefined): string | null {
+  if (!progress) return null
+  const parts: string[] = []
+  if (progress.step > 0 && progress.maxSteps > 0) {
+    parts.push(`Step ${progress.step}/${progress.maxSteps}`)
+  }
+  if (progress.agent?.trim()) {
+    parts.push(progress.agent.trim())
+  }
+  const taskId = progress.taskId?.trim()
+  if (taskId && taskId !== 'PLANNING') {
+    parts.push(taskId.length > 16 ? `${taskId.slice(0, 16)}…` : taskId)
+  }
+  return parts.length > 0 ? parts.join(' · ') : null
 }
 
 export default memo(function Sidebar({
@@ -74,6 +92,7 @@ export default memo(function Sidebar({
   onPlan,
   onGenerateBacklog,
   planOutlineReady = false,
+  planBacklogActive = false,
   onPlanAndRun,
   onStep,
   onRunInProgress,
@@ -92,6 +111,7 @@ export default memo(function Sidebar({
   unsavedChanges = false,
   saveBusy = false,
   onOpenWorkspace,
+  sprintProgress = null,
 }: SidebarProps) {
   const boardEmpty =
     (state.board.Backlog?.length ?? 0) === 0 &&
@@ -292,11 +312,15 @@ export default memo(function Sidebar({
                 <button
                   type="button"
                   onClick={onGenerateBacklog}
-                  disabled={sprintRunning || !brief.trim() || !planOutlineReady}
+                  disabled={sprintRunning || !brief.trim() || !planOutlineReady || planBacklogActive}
                   className="w-full bg-violet-700 hover:bg-violet-600 disabled:opacity-50 text-white font-medium py-1.5 rounded-lg text-[11px] transition-colors flex items-center justify-center gap-1.5"
                 >
-                  <i className="fa-solid fa-layer-group" />
-                  Generate Features
+                  {planBacklogActive ? (
+                    <i className="fa-solid fa-spinner animate-spin" />
+                  ) : (
+                    <i className="fa-solid fa-layer-group" />
+                  )}
+                  {planBacklogActive ? 'Generating Features…' : 'Generate Features'}
                 </button>
               </SprintActionRow>
             )}
@@ -373,7 +397,9 @@ export default memo(function Sidebar({
               )}
             </div>
             {sprintRunning && (
-              <p className="text-[9px] text-violet-300/90 italic">Sprint active</p>
+              <p className="text-[9px] text-violet-300/90 italic">
+                {formatSprintStatus(sprintProgress) ?? 'Sprint active'}
+              </p>
             )}
             {autoSprint && autoSprintSessionStartedAt && refreshCountdown && (
               <p className="text-[9px] text-cat-overlay font-mono">

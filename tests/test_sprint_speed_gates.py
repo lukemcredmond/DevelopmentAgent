@@ -125,9 +125,23 @@ def test_force_patch_after_write_exits():
     assert gates.should_force_patch_next_dev_step(
         {"lastStepOutcome": {"exitReason": "identical_write_loop"}}
     )
+    assert gates.should_force_patch_next_dev_step(
+        {"lastStepOutcome": {"exitReason": "read_only_no_edits"}}
+    )
+    assert gates.should_force_patch_next_dev_step(
+        {"lastStepOutcome": {"exitReason": "duplicate_tool"}}
+    )
     assert not gates.should_force_patch_next_dev_step(
         {"lastStepOutcome": {"exitReason": "max_iterations"}}
     )
+
+
+def test_reapply_force_patch_on_duplicate_tool():
+    from backend.services.sprint_service import reapply_force_patch_if_dev_stalled
+
+    task: dict = {"lastStepOutcome": {"exitReason": "duplicate_tool"}}
+    assert reapply_force_patch_if_dev_stalled(task) is True
+    assert task.get("forcePatchNextDevStep") is True
 
 
 def test_identical_success_write_trips_at_two_by_default():
@@ -277,6 +291,15 @@ def test_three_identical_zero_work_exits_trip_watchdog():
         tool_call_count=0,
         ws=ws,
     )
+
+
+def test_no_write_stall_never_parks_on_first_stall():
+    task: dict = {}
+    ws = {"maxConsecutiveNoWriteStall": 1}
+    gates.record_consecutive_bad_exit(task, "explore_budget_exhausted", writes_succeeded=0)
+    assert gates.no_write_stall_should_park(task, ws) is False
+    gates.record_consecutive_bad_exit(task, "explore_budget_exhausted", writes_succeeded=0)
+    assert gates.no_write_stall_should_park(task, ws) is True
 
 
 def test_no_write_stall_parks_after_two_explore_exhausts():

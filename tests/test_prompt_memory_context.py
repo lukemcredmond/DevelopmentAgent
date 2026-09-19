@@ -70,3 +70,44 @@ def test_build_user_content_includes_memory_block(mock_memory_prop):
     assert "RELEVANT HISTORICAL MEMORIES" in content
     assert "fix_pattern" in content
     assert "auth.js" in content
+
+
+def test_build_user_content_drops_noisy_xml_and_closed_client_memories():
+    initialize()
+    from backend.agents.registry import agent_po
+
+    agent_po.memory.search = lambda role, query, limit=3, project_id=None, **kwargs: [
+        {
+            "category": "fix_pattern",
+            "content": "Step stop=llm_call_failed; LLM_CALL_FAILED: Cannot send a request, as the client has been closed.",
+        },
+        {
+            "category": "fix_pattern",
+            "content": "Step stop=completed_text_only; <tool_call><function=list_dir>",
+        },
+        {"category": "fix_pattern", "content": "Prefer small epics with testable AC."},
+    ]
+    with patch("backend.services.prompt_profile.is_local_slm_profile", return_value=False):
+        content = agent_po._build_user_content("Produce a markdown plan")
+    assert "client has been closed" not in content
+    assert "<tool_call>" not in content
+    assert "Prefer small epics" in content
+
+
+def test_save_step_lesson_skips_planning_task(monkeypatch):
+    initialize()
+    from backend import state
+    from backend.agents.registry import agent_po
+
+    saved = []
+    monkeypatch.setattr(
+        agent_po.memory,
+        "save_step_lesson",
+        lambda *args, **kwargs: saved.append(kwargs or args),
+    )
+    state.ACTIVE_SPRINT_TASK_ID = "PLANNING"
+    try:
+        agent_po._save_step_lesson("completed_text_only", set(), "<tool_call>")
+    finally:
+        state.ACTIVE_SPRINT_TASK_ID = None
+    assert saved == []

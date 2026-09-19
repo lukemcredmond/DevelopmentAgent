@@ -44,6 +44,8 @@ interface BriefPanelProps {
   planOutline?: string
   onPlanOutlineChange?: (value: string) => void
   planOutlineStreaming?: boolean
+  planBacklogActive?: boolean
+  planTabFocusKey?: string
   onGenerateBacklog?: () => void
   generateBacklogDisabled?: boolean
   /** Controlled open state (optional). */
@@ -60,6 +62,8 @@ export default memo(function BriefPanel({
   planOutline = '',
   onPlanOutlineChange,
   planOutlineStreaming = false,
+  planBacklogActive = false,
+  planTabFocusKey,
   onGenerateBacklog,
   generateBacklogDisabled = false,
   open: openProp,
@@ -86,10 +90,21 @@ export default memo(function BriefPanel({
     }
   }, [tab])
 
-  const preview =
+  useEffect(() => {
+    if (!planTabFocusKey || !planOutline.trim()) return
+    setTab('plan')
+  }, [planTabFocusKey, planOutline])
+
+  const briefPreview =
     brief.trim().length > 0
       ? brief.trim().replace(/\s+/g, ' ').slice(0, 120) + (brief.trim().length > 120 ? '…' : '')
       : 'No brief yet — describe your project goals and features.'
+
+  const planPreview = planOutline.trim()
+    ? planOutline.trim().replace(/\s+/g, ' ').slice(0, 120) + (planOutline.trim().length > 120 ? '…' : '')
+    : ''
+
+  const collapsedPreview = planPreview || briefPreview
 
   return (
     <div className="mx-4 mt-2 shrink-0 bg-cat-surface0 border border-cat-surface1 rounded-xl overflow-hidden">
@@ -105,9 +120,7 @@ export default memo(function BriefPanel({
           </span>
           {!open && (
             <span className="text-[11px] text-cat-overlay truncate font-normal normal-case">
-              {tab === 'plan' && planOutline.trim()
-                ? planOutline.trim().replace(/\s+/g, ' ').slice(0, 120) + '…'
-                : preview}
+              {planPreview ? `[Plan] ${planPreview}` : collapsedPreview}
             </span>
           )}
         </button>
@@ -189,11 +202,16 @@ export default memo(function BriefPanel({
                 <div className="flex items-center gap-1">
                   <button
                     type="button"
-                    disabled={generateBacklogDisabled || planOutlineStreaming || !planOutline.trim()}
+                    disabled={generateBacklogDisabled || planOutlineStreaming || planBacklogActive || !planOutline.trim()}
                     onClick={onGenerateBacklog}
-                    className="text-xs bg-violet-700 hover:bg-violet-600 disabled:opacity-50 text-white font-medium py-2 px-3 rounded-lg transition-colors"
+                    className="text-xs bg-violet-700 hover:bg-violet-600 disabled:opacity-50 text-white font-medium py-2 px-3 rounded-lg transition-colors flex items-center gap-1.5"
                   >
-                    Generate Features from plan
+                    {planBacklogActive ? (
+                      <i className="fa-solid fa-spinner animate-spin" />
+                    ) : (
+                      <i className="fa-solid fa-layer-group" />
+                    )}
+                    {planBacklogActive ? 'Generating Features…' : 'Generate Features from plan'}
                   </button>
                   <SettingHint hint="Turns this outline into Features-lane epics and small child cards. Does not start coding." />
                 </div>

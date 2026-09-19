@@ -17,6 +17,103 @@ from backend.services.workspace_structure_audit import (
 )
 from backend.workspace.files import sync_virtual_filesystem_from_disk
 
+_REFERENCED_DART_PATH_RE = re.compile(r"\b(?:lib|test)/[\w./-]+\.dart\b", re.I)
+_REFERENCED_PY_PATH_RE = re.compile(r"\b(?:src|tests?)/[\w./-]+\.py\b", re.I)
+
+
+def _task_text_blob(task: Optional[Dict[str, Any]]) -> str:
+    if not isinstance(task, dict):
+        return ""
+    parts = [
+        str(task.get("title") or ""),
+        str(task.get("description") or ""),
+        str(task.get("spec") or ""),
+    ]
+    ac = task.get("acceptanceCriteria") or task.get("acceptance_criteria")
+    if isinstance(ac, list):
+        parts.extend(str(c) for c in ac)
+    elif isinstance(ac, str):
+        parts.append(ac)
+    return "\n".join(parts)
+
+
+def _referenced_workspace_paths(task: Optional[Dict[str, Any]]) -> list[str]:
+    blob = _task_text_blob(task)
+    if not blob.strip():
+        return []
+    paths = set(_REFERENCED_DART_PATH_RE.findall(blob))
+    paths.update(_REFERENCED_PY_PATH_RE.findall(blob))
+    cleaned: list[str] = []
+    for raw in sorted(paths):
+        rel = str(raw or "").strip().replace("\\", "/").lstrip("/")
+        if not rel or ".." in rel.split("/"):
+            continue
+        cleaned.append(rel)
+    return cleaned
+
+
+def _stub_content_for_path(rel_path: str) -> str:
+    rel = rel_path.replace("\\", "/")
+    if rel.endswith(".dart"):
+        base = os.path.basename(rel).replace(".dart", "")
+        if base == "models":
+            return (
+                "// Auto-scaffolded stub — implement domain models referenced by this card.\n"
+                "class PlaceholderModel {\n"
+                "  const PlaceholderModel();\n"
+                "}\n"
+            )
+        return f"// Auto-scaffolded stub for {rel}\nvoid {base}Stub() {{}}\n"
+    if rel.endswith(".py"):
+        return f'"""Auto-scaffolded stub for {rel}."""\n\n\n'
+    return f"// Auto-scaffolded stub for {rel}\n"
+
+
+def scaffold_task_referenced_stubs(task: Optional[Dict[str, Any]] = None) -> Dict[str, Any]:
+    """Create minimal stubs for task-referenced paths that are missing from the workspace."""
+    ws_dir = state.WORKSPACE_DIR
+    if not ws_dir or not os.path.isdir(ws_dir):
+        return {"ok": False, "skipped": "no_workspace"}
+
+    audit = audit_workspace_structure(task=task if isinstance(task, dict) else None)
+    stack = str(audit.get("stack") or "")
+    if stack not in ("flutter", "python", "dotnet", "react_vite", "react_next"):
+        return {"ok": False, "skipped": f"stack:{stack or 'unknown'}"}
+
+    paths = _referenced_workspace_paths(task)
+    if not paths:
+        return {"ok": False, "skipped": "no_referenced_paths"}
+
+    created: list[str] = []
+    for rel in paths:
+        abs_path = os.path.join(ws_dir, rel.replace("/", os.sep))
+        if os.path.isfile(abs_path):
+            continue
+        if os.path.dirname(rel):
+            os.makedirs(os.path.dirname(abs_path), exist_ok=True)
+        _write_text(rel, _stub_content_for_path(rel))
+        created.append(rel)
+
+    if not created:
+        return {"ok": False, "skipped": "already_present", "paths": paths}
+
+    sync_virtual_filesystem_from_disk()
+    task_id = str((task or {}).get("id") or "")
+    if task_id:
+        record_task_decision(
+            task_id,
+            "System",
+            "structure_scaffold",
+            f"Stub scaffold created {len(created)} file(s): {', '.join(created[:5])}",
+            detail=", ".join(created),
+        )
+    add_system_log(
+        "Developer",
+        "info",
+        f"Auto-scaffold stubs for referenced paths: {', '.join(created[:6])}",
+    )
+    return {"ok": True, "method": "referenced_stubs", "created": created}
+
 
 def _safe_project_slug(name: Optional[str] = None) -> str:
     raw = (name or getattr(state, "PROJECT_NAME", None) or "App").strip()
@@ -118,13 +215,20 @@ def maybe_auto_scaffold(
     if target.get("structureScaffoldAttempted") and not force:
         return {"ok": False, "skipped": "already_attempted"}
 
-    audit = audit_workspace_structure()
+    audit = audit_workspace_structure(task=target if isinstance(target, dict) else None)
     if audit.get("stack") == "unity_quest":
         # No Unity Editor create — leave guidance in audit warnings only
         return {"ok": False, "skipped": "unity_no_cli", "audit": audit}
 
     if not audit.get("critical") or not workspace_looks_empty_for_stack(audit):
-        return {"ok": False, "skipped": "not_eligible", "audit": audit}
+        stub_result = scaffold_task_referenced_stubs(board_task or task)
+        if stub_result.get("ok"):
+            sync_virtual_filesystem_from_disk()
+            after = audit_workspace_structure()
+            stub_result["audit_after"] = after
+            stub_result["structure_ok_after"] = not bool(after.get("critical"))
+            return stub_result
+        return {"ok": False, "skipped": "not_eligible", "audit": audit, "stub": stub_result}
 
     if board_task is not None:
         board_task["structureScaffoldAttempted"] = True
@@ -174,3 +278,27 @@ def maybe_auto_scaffold(
         f"structure_ok={result.get('structure_ok_after')}",
     )
     return result
+
+
+def scaffold_sdk_missing_question(result: Optional[Dict[str, Any]]) -> Optional[str]:
+    """Needs User question when auto-scaffold failed because the SDK is not on PATH."""
+    if not isinstance(result, dict) or result.get("ok") or result.get("skipped"):
+        return None
+    cmd = str(result.get("command") or "")
+    blob = " ".join(
+        str(result.get(k) or "") for k in ("summary", "output", "command")
+    ).lower()
+    flutter_cmd = "flutter" in cmd.lower()
+    missing = (
+        "not found" in blob
+        or "no such file" in blob
+        or "not on path" in blob
+        or "is not recognized" in blob
+        or "not in path" in blob
+        or result.get("exit_code") == 127
+    )
+    if flutter_cmd and missing:
+        return (
+            "Flutter SDK is not on PATH. Install it, or tell Dev to skip mobile scaffold?"
+        )
+    return None

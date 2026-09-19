@@ -6,6 +6,7 @@ from typing import Any, Dict, Optional
 
 from backend import state
 from backend.agents.task_context import normalize_task, record_task_decision
+from backend.services.agent_efficiency import effective_role_model
 from backend.services.logs import add_system_log
 from backend.services.needs_user_guard import stuck_is_tool_or_lint
 from backend.services.workflow_settings import get_workflow_settings
@@ -254,10 +255,23 @@ def apply_model_for_step(agent, agent_key: str, task: Optional[Dict[str, Any]]) 
     """
     agent_key = str(agent_key or "").lower()
     primary = primary_model(agent_key)
+    ws = get_workflow_settings()
+    role_label = _ROLE_LABEL.get(agent_key, agent_key)
+    # Phase routing runs inside the dev loop (_apply_phase_model_routing); step entry
+    # uses the configured primary (plus heavy-primary fast path for PO/CR/QA).
+    dev_phase = None
     if not task or agent_key not in AGENT_KEYS:
-        if primary:
-            agent.model = primary
-        return str(getattr(agent, "model", "") or primary)
+        chosen, reason = effective_role_model(
+            role=role_label,
+            primary_model=primary,
+            phase=dev_phase,
+            backup_model=backup_model(agent_key),
+            ws=ws,
+        )
+        if chosen:
+            agent.model = chosen
+        _record_model_route_reason(reason)
+        return str(getattr(agent, "model", "") or chosen or primary)
 
     rem = _remaining_map(task)
     left = rem.get(agent_key, 0)
@@ -279,7 +293,24 @@ def apply_model_for_step(agent, agent_key: str, task: Optional[Dict[str, Any]]) 
             "info",
             f"Using backup model {backup} for {label} ({rem[agent_key]} left after this step)",
         )
+        _record_model_route_reason("backup_model")
         return backup
 
+    chosen, reason = effective_role_model(
+        role=role_label,
+        primary_model=primary,
+        phase=dev_phase,
+        backup_model=backup,
+        ws=ws,
+    )
     restore_primary_model(agent, agent_key)
-    return str(getattr(agent, "model", "") or primary)
+    if chosen:
+        agent.model = chosen
+    _record_model_route_reason(reason)
+    return str(getattr(agent, "model", "") or chosen or primary)
+
+
+def _record_model_route_reason(reason: str) -> None:
+    from backend import state
+
+    state.LAST_MODEL_ROUTE_REASON = str(reason or "").strip()

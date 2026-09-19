@@ -50,6 +50,7 @@ interface KanbanBoardProps {
   activeLanes?: BoardLane[]
   workflowSettings?: WorkflowSettings
   sprintRunning?: boolean
+  planBacklogActive?: boolean
   activeRunInfo?: TaskRunInfo | null
   onTaskClick: (task: Task) => void
   onMoveTask: (taskId: string, fromLane: BoardLane, toLane: BoardLane) => void
@@ -74,6 +75,7 @@ export default memo(function KanbanBoard({
   activeLanes,
   workflowSettings,
   sprintRunning = false,
+  planBacklogActive = false,
   activeRunInfo = null,
   onTaskClick,
   onMoveTask,
@@ -262,7 +264,9 @@ export default memo(function KanbanBoard({
 
       {sprintRunning && (
         <div className="mb-2 text-[10px] text-amber-300 bg-amber-950/30 border border-amber-500/30 rounded px-2 py-1 shrink-0">
-          Sprint step in progress — wait for it to finish before moving or deleting cards
+          {planBacklogActive
+            ? 'Generating Features from plan… — wait for it to finish before moving or deleting cards'
+            : 'Sprint step in progress — wait for it to finish before moving or deleting cards'}
         </div>
       )}
 

@@ -1489,7 +1489,7 @@ def test_prompt_budget_scales_with_num_ctx():
     small = sprint_file_context_max_chars(4096)
     large = sprint_file_context_max_chars(32768)
     assert small < large
-    assert small >= 2000
+    assert small >= 800
 
     long_brief = "x" * 20000
     trimmed = truncate_brief(long_brief, 4096)

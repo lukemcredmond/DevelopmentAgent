@@ -117,4 +117,10 @@ def build_state_response(*, include_files: bool = True) -> dict:
     from backend.services.backlog_preflight import build_backlog_preflight
 
     response["backlogPreflight"] = build_backlog_preflight()
+    try:
+        from backend.services.prompt_budget import describe_num_ctx_clamp
+
+        response["numCtxFit"] = describe_num_ctx_clamp("dev")
+    except Exception:
+        pass
     return response
