@@ -75,6 +75,46 @@ def _write_tools_succeeded(tools_log: Optional[List[Dict[str, Any]]] = None) -> 
     return False
 
 
+def _is_lint_recovery_message(agent_result: Optional[str]) -> bool:
+    if not agent_result:
+        return False
+    lower = str(agent_result).lower()
+    return (
+        "staying in progress" in lower
+        and ("lint/tool" in lower or "not moving to needs user" in lower)
+    )
+
+
+def _is_dev_precheck_skip_message(agent_result: Optional[str]) -> bool:
+    if not agent_result:
+        return False
+    lower = str(agent_result).lower()
+    return (
+        "parking instead of another generate" in lower
+        or "forced patch retry queued" in lower
+        or "skipping another developer rewrite" in lower
+        or "lint stall" in lower
+    )
+
+
+def _apply_patch_failed_after_write(tools_log: Optional[List[Dict[str, Any]]] = None) -> bool:
+    entries = tools_log
+    if entries is None:
+        trace = get_active_trace()
+        entries = trace.tools_log if trace else []
+    wrote = False
+    patch_failed = False
+    for entry in entries or []:
+        if not isinstance(entry, dict):
+            continue
+        name = str(entry.get("toolName") or "")
+        if name in _WRITE_TOOLS and entry.get("success"):
+            wrote = True
+        if name == "apply_patch" and not entry.get("success"):
+            patch_failed = True
+    return wrote and patch_failed
+
+
 class StepDiagnosticsTracker:
     """Accumulates events for one sprint dev step and writes checkpoint JSON."""
 
@@ -101,6 +141,9 @@ class StepDiagnosticsTracker:
         self.tools_used: Set[str] = set()
         self.plan_rejections = 0
         self.text_rejections = 0
+        self.identical_text_reject_count = 0
+        self.forced_tool_mode = False
+        self.runaway_generation_aborted = False
         self.llm_iterations_used = 0
         self.llm_iterations_max = 0
         self.tool_failures = 0
@@ -224,6 +267,12 @@ class StepDiagnosticsTracker:
             self.plan_rejections += 1
         elif kind == "text_rejected":
             self.text_rejections += 1
+        elif kind == "identical_text_reject":
+            self.identical_text_reject_count += 1
+        elif kind == "forced_tool_mode":
+            self.forced_tool_mode = True
+        elif kind == "runaway_generation_aborted":
+            self.runaway_generation_aborted = True
         elif kind == "po_num_predict_bump":
             self.po_num_predict_bumped = True
         self.last_event = f"{kind}:{message[:80]}"
@@ -324,6 +373,9 @@ class StepDiagnosticsTracker:
             "toolFailures": self.tool_failures,
             "planRejections": self.plan_rejections,
             "textRejections": self.text_rejections,
+            "identicalTextRejectCount": self.identical_text_reject_count,
+            "forcedToolMode": self.forced_tool_mode,
+            "runawayGenerationAborted": self.runaway_generation_aborted,
             "llmIterations": {
                 "used": self.llm_iterations_used,
                 "max": self.llm_iterations_max,
@@ -359,6 +411,11 @@ class StepDiagnosticsTracker:
         if (
             isinstance(state.LAST_STEP_PROGRESS, dict)
             and str(state.LAST_STEP_PROGRESS.get("taskId") or "") == self.task_id
+            and (
+                self.llm_iterations_used > 0
+                or len(self.tools_log) > 0
+                or len(self.ollama_calls) > 0
+            )
         ):
             payload["stepProgress"] = state.LAST_STEP_PROGRESS
         payload["currentStepActivity"] = {
@@ -453,6 +510,13 @@ class StepDiagnosticsTracker:
                     "hint": self._build_hint(exit_reason or ""),
                 }
             )
+            if isinstance(last_step_outcome, dict):
+                if last_step_outcome.get("parkAttempted"):
+                    payload["parkAttempted"] = True
+                    payload["parkSucceeded"] = bool(last_step_outcome.get("parkSucceeded"))
+                kind = str(last_step_outcome.get("needsUserKind") or "").strip()
+                if kind:
+                    payload["needsUserKind"] = kind
         return payload
 
     def _flush_checkpoint(self) -> None:
@@ -1199,8 +1263,14 @@ def derive_exit_reason(
         return "llm_call_failed"
     if agent_result and agent_result.startswith("Timed out:"):
         return "step_timeout"
+    if agent_result and _is_lint_recovery_message(agent_result):
+        return "lint_stay_in_progress"
+    if agent_result and _is_dev_precheck_skip_message(agent_result):
+        return "dev_precheck_skip"
     if agent_result and agent_result.startswith("Stopped:"):
         lower = agent_result.lower()
+        if "text rejection loop" in lower:
+            return "text_rejection_loop"
         if "phase cycle cap" in lower or "developer visit budget" in lower:
             return "phase_cycle_cap"
         if "generation truncated" in lower:
@@ -1236,6 +1306,16 @@ def derive_exit_reason(
         return "command_repeat_no_progress"
     if trace and trace.plan_rejections >= 2 and not wrote:
         return "plan_exhausted"
+    if trace and _apply_patch_failed_after_write(trace.tools_log):
+        try:
+            from backend.agents.task_context import find_task_by_id
+            from backend.services.needs_user_guard import stuck_is_tool_or_lint
+
+            task = find_task_by_id(trace.task_id)
+            if task and stuck_is_tool_or_lint(task):
+                return "tool_failure_stop"
+        except Exception:
+            pass
     if wrote or (not trace and tools & _WRITE_TOOLS):
         return "completed_with_writes"
     if lane_before == "Needs PO":
@@ -1243,6 +1323,10 @@ def derive_exit_reason(
             return "po_clarified"
         return "po_clarification_incomplete"
     if lane_before == lane_after == "In Progress" and agent_result:
+        if trace and str(getattr(trace, "agent", "") or "") == "System":
+            if _is_lint_recovery_message(agent_result):
+                return "lint_stay_in_progress"
+            return "lint_stay_in_progress"
         return "completed_text_only"
     if lane_before != lane_after:
         return "lane_advanced"

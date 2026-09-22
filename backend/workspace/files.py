@@ -500,6 +500,24 @@ def write_workspace_file(path: str, content: str, author: Optional[str] = None) 
         msg = f"Successfully saved file physically at: '{phys_path}'"
         if format_note:
             msg += f"\n{format_note}"
+        try:
+            from backend.services.file_completeness import (
+                format_write_warning,
+                record_task_completeness_warnings,
+                scan_file_content,
+            )
+
+            findings = scan_file_content(safe_path, content)
+            if findings:
+                warn = format_write_warning(findings)
+                if warn:
+                    msg += f"\n{warn}"
+                if state.ACTIVE_SPRINT_TASK_ID:
+                    record_task_completeness_warnings(
+                        state.ACTIVE_SPRINT_TASK_ID, safe_path, findings
+                    )
+        except Exception:
+            pass
         return _append_canonical_note(msg, path, safe_path)
     except Exception as e:
         msg = f"Error: physical write failed for '{safe_path}': {e}"
@@ -531,6 +549,23 @@ def maybe_auto_format_after_edit(safe_path: str) -> Optional[str]:
         return f"Auto-format skipped ({result.outcome}): {safe_path}"
     except Exception as exc:
         return f"Auto-format skipped: {exc}"
+
+
+def seed_focus_preloaded_reads(task: Dict[str, Any], *, max_files: int = 2) -> List[str]:
+    """Seed STEP_FILE_READS for up to max_files task paths (implementer fast-path)."""
+    seeded: List[str] = []
+    paths: List[str] = []
+    for f in task.get("files") or []:
+        if isinstance(f, str) and f.strip():
+            paths.append(f.strip())
+        elif isinstance(f, dict) and f.get("path"):
+            paths.append(str(f["path"]))
+    for raw_path in paths[:max_files]:
+        content = read_workspace_file(raw_path)
+        if content and not content.startswith("Error:"):
+            record_step_file_read(raw_path, content)
+            seeded.append(raw_path)
+    return seeded
 
 
 def record_step_file_read(path: str, content: str) -> None:
@@ -740,6 +775,13 @@ def apply_workspace_patch(path: str, old_text: str, new_text: str) -> str:
         return (
             f"Error: apply_patch requires read_file on '{path}' in this step first. "
             f"Call read_file, then retry with old_text copied exactly from that output."
+        )
+
+    prior_fails = state.STEP_PATCH_FAILURES.get(safe_path, 0)
+    if prior_fails >= 2:
+        return (
+            f"Error: apply_patch blocked on '{path}' after {prior_fails} failures this step. "
+            "Call read_file for the full file, then write_file with the complete corrected content."
         )
 
     current = read_workspace_file(path)

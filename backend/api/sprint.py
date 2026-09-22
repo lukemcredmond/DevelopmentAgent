@@ -107,8 +107,21 @@ def trigger_auto_sprint(payload: SprintRunPayload):
 
 @router.post("/api/sprint/plan-and-run")
 def trigger_plan_and_run(payload: SprintRunPayload):
-    run_plan_and_run(payload.brief, _chat_url(payload.ollama_url), max_steps=payload.max_steps)
+    run_plan_and_run(
+        payload.brief,
+        _chat_url(payload.ollama_url),
+        max_steps=payload.max_steps,
+        execution_profile=payload.execution_profile,
+        skip_preflight=payload.skip_preflight,
+    )
     return build_state_response()
+
+
+@router.get("/api/sprint/plan-run-preflight")
+def get_plan_run_preflight(brief: str = ""):
+    from backend.services.plan_run_preflight import validate_plan_run_preflight
+
+    return validate_plan_run_preflight(brief)
 
 
 @router.post("/api/sprint/cancel")

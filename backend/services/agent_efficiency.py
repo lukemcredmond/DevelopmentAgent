@@ -100,6 +100,13 @@ def effective_keep_alive(ws: Optional[Dict[str, Any]] = None) -> str:
 
         ws = get_workflow_settings()
     configured = normalize_ollama_keep_alive(ws.get("ollamaKeepAlive"), default="30m")
+    try:
+        from backend.services.workflow_settings import get_execution_profile
+
+        if get_execution_profile(ws) == "implementer":
+            return configured
+    except Exception:
+        pass
     if single_model_mode_active(ws):
         return "-1s"
     try:
@@ -111,6 +118,30 @@ def effective_keep_alive(ws: Optional[Dict[str, Any]] = None) -> str:
     if capacity.known and capacity.vram_mb is not None and capacity.vram_mb < 16000:
         return "5m"
     return configured
+
+
+def dev_num_predict_default(ws: Optional[Dict[str, Any]] = None) -> int:
+    if ws is None:
+        from backend.services.workflow_settings import get_workflow_settings
+
+        ws = get_workflow_settings()
+    return max(256, int(ws.get("devNumPredictDefault") or 2048))
+
+
+def dev_eval_timeout_sec(ws: Optional[Dict[str, Any]] = None) -> float:
+    if ws is None:
+        from backend.services.workflow_settings import get_workflow_settings
+
+        ws = get_workflow_settings()
+    return max(15.0, float(ws.get("devEvalTimeoutSec") or 60))
+
+
+def forced_tool_num_predict(ws: Optional[Dict[str, Any]] = None) -> int:
+    if ws is None:
+        from backend.services.workflow_settings import get_workflow_settings
+
+        ws = get_workflow_settings()
+    return max(64, int(ws.get("forcedToolNumPredict") or 256))
 
 
 def single_model_name(ws: Optional[Dict[str, Any]] = None, *, fallback: str = "") -> str:

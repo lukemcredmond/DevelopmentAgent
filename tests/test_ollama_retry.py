@@ -354,6 +354,27 @@ def test_consume_chat_stream_times_out_on_silent_iterator():
         pass
 
 
+def test_consume_chat_stream_honours_cancel_check():
+    import time
+
+    from backend.services.llm_provider import EmptyGenerationTimeout, consume_chat_stream
+
+    def silent():
+        time.sleep(2)
+        yield from ()
+
+    try:
+        consume_chat_stream(
+            silent(),
+            empty_timeout_sec=5,
+            flowing_timeout_sec=5,
+            cancel_check=lambda: True,
+        )
+        raise AssertionError("expected EmptyGenerationTimeout on cancel")
+    except EmptyGenerationTimeout as exc:
+        assert "cancelled" in str(exc).lower()
+
+
 def test_consume_chat_stream_treats_thinking_as_progress():
     import time
 

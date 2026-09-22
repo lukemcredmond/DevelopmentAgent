@@ -143,8 +143,10 @@ class EscapeSubtaskPayload(BaseModel):
 
 
 class ResolveUserPayload(BaseModel):
-    answer: str
+    answer: str = ""
     target: str = "dev"  # dev | refinement | po
+    optionId: Optional[str] = None
+    customAnswer: Optional[str] = None
 
 
 class ReindexPayload(BaseModel):
@@ -200,6 +202,7 @@ class WorkflowSettingsPayload(BaseModel):
     maxSubtaskDepth: Optional[int] = None
     maxSubtaskSpawns: Optional[int] = None
     enableFixVerifyLoop: Optional[bool] = None
+    enableSystemAutoVerify: Optional[bool] = None
     maxFixVerifyRounds: Optional[int] = None
     fixVerifyAbortOnHardStop: Optional[bool] = None
     autoExtendOnMaxIter: Optional[bool] = None
@@ -213,6 +216,9 @@ class WorkflowSettingsPayload(BaseModel):
     enableSplitOnStuck: Optional[bool] = None
     requireWorkspaceStructure: Optional[bool] = None
     autoScaffoldOnStructureGap: Optional[bool] = None
+    requireFileCompleteness: Optional[bool] = None
+    allowStubDelegation: Optional[bool] = None
+    placeholderAllowlist: Optional[List[str]] = None
     requireToolApproval: Optional[bool] = None
     toolApprovalTools: Optional[List[str]] = None
     nonBlockingToolApproval: Optional[bool] = None
@@ -233,6 +239,9 @@ class WorkflowSettingsPayload(BaseModel):
     maxStuckSteps: Optional[int] = None
     maxAgentStepDurationSec: Optional[int] = None
     enableBlockedLane: Optional[bool] = None
+    enableFileBlockerOrchestration: Optional[bool] = None
+    fileBlockerMinDependents: Optional[int] = None
+    fileBlockerAutoCreateFixCard: Optional[bool] = None
     enableAutoSprintInterruptBackoff: Optional[bool] = None
     autoSprintInterruptBackoffSec: Optional[int] = None
     autoSprintInterruptBackoffMaxSec: Optional[int] = None
@@ -242,6 +251,21 @@ class WorkflowSettingsPayload(BaseModel):
     autoStartSprint: Optional[bool] = None
     autonomousMode: Optional[bool] = None
     executionProfile: Optional[str] = None
+    planRunExecutionProfile: Optional[str] = None
+    planRunSkipPoWhenActionable: Optional[bool] = None
+    enableCloudDevProvider: Optional[bool] = None
+    cloudDevBaseUrl: Optional[str] = None
+    cloudDevApiKey: Optional[str] = None
+    cloudDevModel: Optional[str] = None
+    cloudDevUseFor: Optional[str] = None
+    cloudDevStuckSteps: Optional[int] = None
+    cloudDevRequestTimeoutSec: Optional[int] = None
+    enableCardSessionContinuity: Optional[bool] = None
+    enableCardSessionSummarize: Optional[bool] = None
+    enableWorkspaceRulesInject: Optional[bool] = None
+    workspaceRulesMaxChars: Optional[int] = None
+    implementerRelaxGatesOnAutoSprint: Optional[bool] = None
+    implementerRelaxGatesAlways: Optional[bool] = None
     maxNeedsUserPerSprint: Optional[int] = None
     needsUserCooldownSteps: Optional[int] = None
     enableWebSearch: Optional[bool] = None
@@ -271,6 +295,10 @@ class WorkflowSettingsPayload(BaseModel):
     mcpTimeoutSec: Optional[int] = None
     mcpConnectTimeoutSec: Optional[int] = None
     ollamaKeepAlive: Optional[str] = None
+    warmModelOnSprintStart: Optional[bool] = None
+    devNumPredictDefault: Optional[int] = None
+    devEvalTimeoutSec: Optional[int] = None
+    forcedToolNumPredict: Optional[int] = None
     ollamaRequestTimeoutSec: Optional[int] = None
     ollamaEmptyGenerationTimeoutSec: Optional[int] = None
     modelTestTimeoutSec: Optional[int] = None
@@ -314,6 +342,7 @@ class WorkflowSettingsPayload(BaseModel):
     maxConsecutiveNoWriteStall: Optional[int] = None
     enableZeroWorkRetryWatchdog: Optional[bool] = None
     zeroWorkRetryWatchdogMax: Optional[int] = None
+    maxZeroWorkRecoveryAttempts: Optional[int] = None
     agentEfficiencyMode: Optional[str] = None
     enablePhaseModelRouting: Optional[bool] = None
     devExploreModel: Optional[str] = None
@@ -429,3 +458,5 @@ class SprintRunPayload(BaseModel):
     brief: str = ""
     ollama_url: str = "http://localhost:11434"
     max_steps: int = 20
+    execution_profile: Optional[str] = None
+    skip_preflight: bool = False

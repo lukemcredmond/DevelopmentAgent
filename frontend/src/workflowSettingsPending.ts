@@ -1,6 +1,7 @@
 import type { WorkflowSettings } from './types'
 
 const LLM_KEYS = ['llmProvider', 'llmProviderPreset', 'llmBaseUrl'] as const
+const COMMITTED_KEYS = [...LLM_KEYS, 'executionProfile'] as const
 
 /** Unsaved workflow partials (debounced POST in App). Merged over SSE/refresh snapshots. */
 let pendingPatch: Partial<WorkflowSettings> = {}
@@ -8,8 +9,8 @@ let saveTimerActive = false
 /** Snapshot sent with in-flight POST — kept until save succeeds so SSE cannot stomp edits. */
 let inFlightPatch: Partial<WorkflowSettings> | null = null
 let workflowSaveInFlight = false
-/** Last LLM fields we successfully saved (or the user selected). Survives stale SSE. */
-let lastSavedLlm: Partial<WorkflowSettings> = {}
+/** Last committed fields we successfully saved (or the user selected). Survives stale SSE. */
+let lastSavedCommitted: Partial<WorkflowSettings> = {}
 
 function pickLlm(partial: Partial<WorkflowSettings> | undefined): Partial<WorkflowSettings> {
   if (!partial) return {}
@@ -19,6 +20,16 @@ function pickLlm(partial: Partial<WorkflowSettings> | undefined): Partial<Workfl
     if (value != null && String(value).trim() !== '') {
       out[key] = value as never
     }
+  }
+  return out
+}
+
+function pickCommitted(partial: Partial<WorkflowSettings> | undefined): Partial<WorkflowSettings> {
+  if (!partial) return {}
+  const out = pickLlm(partial)
+  const profile = partial.executionProfile
+  if (profile === 'implementer' || profile === 'scrum') {
+    out.executionProfile = profile
   }
   return out
 }
@@ -59,7 +70,7 @@ export function mergePendingWorkflowSettings(
   incoming: WorkflowSettings | undefined,
 ): WorkflowSettings | undefined {
   const overlay = {
-    ...lastSavedLlm,
+    ...lastSavedCommitted,
     ...(inFlightPatch ?? {}),
     ...pendingPatch,
   }
@@ -75,14 +86,34 @@ export function mergePendingWorkflowSettings(
 
 export function queuePendingWorkflowSettings(partial: Partial<WorkflowSettings>): void {
   pendingPatch = { ...pendingPatch, ...partial }
-  const llm = pickLlm(partial)
-  if (Object.keys(llm).length) {
-    lastSavedLlm = { ...lastSavedLlm, ...llm }
+  const committed = pickCommitted(partial)
+  if (Object.keys(committed).length) {
+    lastSavedCommitted = { ...lastSavedCommitted, ...committed }
   }
 }
 
 export function peekPendingWorkflowSettings(): Partial<WorkflowSettings> {
-  return { ...lastSavedLlm, ...(inFlightPatch ?? {}), ...pendingPatch }
+  return { ...lastSavedCommitted, ...(inFlightPatch ?? {}), ...pendingPatch }
+}
+
+/** Begin an immediate POST for committed keys (e.g. executionProfile). */
+export function beginImmediateWorkflowSave(
+  partial: Partial<WorkflowSettings>,
+): Partial<WorkflowSettings> {
+  const payload = pickCommitted(partial)
+  if (Object.keys(payload).length === 0) {
+    return {}
+  }
+  inFlightPatch = { ...(inFlightPatch ?? {}), ...payload }
+  workflowSaveInFlight = true
+  const nextPending = { ...pendingPatch }
+  for (const key of COMMITTED_KEYS) {
+    if (key in payload) {
+      delete nextPending[key]
+    }
+  }
+  pendingPatch = nextPending
+  return payload
 }
 
 /** Copy payload for POST; pending stays until markWorkflowSaveSucceeded / Failed. */
@@ -98,9 +129,13 @@ export function markWorkflowSaveSucceeded(
   savedFromServer?: WorkflowSettings,
   sentPayload?: Partial<WorkflowSettings>,
 ): void {
-  const sentLlm = pickLlm(sentPayload)
-  if (Object.keys(sentLlm).length) {
-    lastSavedLlm = { ...lastSavedLlm, ...pickLlm(savedFromServer), ...sentLlm }
+  const sentCommitted = pickCommitted(sentPayload)
+  if (Object.keys(sentCommitted).length) {
+    lastSavedCommitted = {
+      ...lastSavedCommitted,
+      ...pickCommitted(savedFromServer),
+      ...sentCommitted,
+    }
   }
   inFlightPatch = null
   workflowSaveInFlight = false
@@ -113,7 +148,7 @@ export function markWorkflowSaveFailed(payload: Partial<WorkflowSettings>): void
 }
 
 export function clearCommittedLlmSettings(): void {
-  lastSavedLlm = {}
+  lastSavedCommitted = {}
 }
 
 /** @deprecated use snapshotPendingWorkflowPayloadForSave */
@@ -130,7 +165,6 @@ export function requeuePendingWorkflowPayload(payload: Partial<WorkflowSettings>
 export function queuedWorkflowPatchPending(): boolean {
   return Object.keys(pendingPatch).length > 0
 }
-
 
 export function hasPendingWorkflowSettings(): boolean {
   return (

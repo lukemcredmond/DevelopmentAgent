@@ -250,16 +250,27 @@ def latest_loop_stop_exit_reason() -> Optional[str]:
 
 def apply_model_for_step(agent, agent_key: str, task: Optional[Dict[str, Any]]) -> str:
     """
-    Apply backup model for this step if remaining > 0; otherwise restore primary.
-    Decrements remaining when backup is used. Returns the model name in use.
+    Apply cloud or backup model for this step if armed; otherwise restore primary.
+    Decrements remaining when backup/cloud is used. Returns the model name in use.
     """
     agent_key = str(agent_key or "").lower()
     primary = primary_model(agent_key)
     ws = get_workflow_settings()
     role_label = _ROLE_LABEL.get(agent_key, agent_key)
-    # Phase routing runs inside the dev loop (_apply_phase_model_routing); step entry
-    # uses the configured primary (plus heavy-primary fast path for PO/CR/QA).
     dev_phase = None
+
+    # Cloud Dev (frontier API) — policy or armed recovery steps.
+    if agent_key == "dev":
+        try:
+            from backend.services.cloud_dev_provider import apply_cloud_dev_for_step
+
+            using_cloud, cloud_model = apply_cloud_dev_for_step(agent, agent_key, task)
+            if using_cloud and cloud_model:
+                _record_model_route_reason("cloud_dev")
+                return cloud_model
+        except Exception:
+            pass
+
     if not task or agent_key not in AGENT_KEYS:
         chosen, reason = effective_role_model(
             role=role_label,

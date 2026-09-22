@@ -5,6 +5,7 @@ import {
   MAX_TERMINAL_OUTPUT_CHARS,
   appendTerminalOutput,
   capLogs,
+  mergeLogsPreservingLive,
 } from './streamBuffers'
 
 function log(text: string, timestamp = '0'): SystemLog {
@@ -26,6 +27,13 @@ describe('capLogs', () => {
     }
     expect(logs.length).toBe(MAX_CLIENT_LOG_ENTRIES)
     expect(logs[0]?.text).toBe(`entry-${100}`)
+  })
+})
+
+describe('mergeLogsPreservingLive', () => {
+  it('does not wipe logs on empty incoming snapshot', () => {
+    const prev = [log('keep-me', '1')]
+    expect(mergeLogsPreservingLive(prev, [])).toBe(prev)
   })
 })
 

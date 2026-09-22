@@ -13,7 +13,7 @@ __pycache__/
 *.py[cod]
 .pytest_cache/
 
-
+allhands.project.json
 SampleDiagnostics_extracted/
 venv/
 scrum_memory.db
@@ -4635,3 +4635,5 @@ venv/lib/python3.12/site-packages/qdrant_client-1.18.0.dist-info/REQUESTED
 venv/lib/python3.12/site-packages/qdrant_client-1.18.0.dist-info/WHEEL
 venv/lib/python3.12/site-packages/qdrant_client-1.18.0.dist-info/licenses/LICENSE
 scrum_memory.db
+allhands.project.json
+allhands.project.json

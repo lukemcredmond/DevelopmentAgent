@@ -54,3 +54,41 @@ def test_post_simulation_settings_persist():
     assert ws.get("simulationAutoUseExistingFile") is False
     stored = get_workflow_settings()
     assert stored.get("simulationAutoUseExistingFile") is False
+
+
+def test_post_execution_profile_persists(tmp_path):
+    from backend import state
+    from backend.config import DEFAULT_BOARD
+    from backend.services.project_file import PROJECT_FILE_NAME, read_project_file
+    from backend.services.project_service import save_current_project_state
+
+    workspace = tmp_path / "exec-profile"
+    workspace.mkdir()
+    state.CURRENT_PROJECT_ID = "exec-profile-api"
+    state.PROJECT_NAME = "Exec Profile API"
+    state.WORKSPACE_DIR = str(workspace)
+    state.SHARED_BOARD = {k: [] for k in DEFAULT_BOARD}
+    save_current_project_state(persist_board=False)
+
+    initialize()
+    reset_workflow_settings()
+    client = TestClient(app)
+    r = client.post("/api/workflow/settings", json={"executionProfile": "implementer"})
+    assert r.status_code == 200
+    assert r.json()["workflowSettings"]["executionProfile"] == "implementer"
+    assert get_workflow_settings().get("executionProfile") == "implementer"
+
+    sidecar = read_project_file(str(workspace))
+    assert sidecar is not None
+    assert sidecar["workflow_settings"]["executionProfile"] == "implementer"
+    assert (workspace / PROJECT_FILE_NAME).exists()
+
+
+def test_post_execution_profile_normalizes_invalid_value():
+    initialize()
+    reset_workflow_settings()
+    client = TestClient(app)
+    r = client.post("/api/workflow/settings", json={"executionProfile": "cursor-like"})
+    assert r.status_code == 200
+    assert r.json()["workflowSettings"]["executionProfile"] == "scrum"
+    assert get_workflow_settings().get("executionProfile") == "scrum"

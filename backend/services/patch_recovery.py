@@ -119,6 +119,29 @@ def failed_patch_fingerprint(path: str, old_text: str = "", new_text: str = "") 
     return patch_fingerprint(path, old_text=old_text or "", summary=(new_text or "")[:200])
 
 
+def build_patch_fail_excerpt_nudge(path: str, file_content: str, old_text: str) -> str:
+    """Inject a file excerpt around the failed old_text to avoid an extra read round-trip."""
+    path_norm = normalize_recovery_path(path)
+    lines = str(file_content or "").splitlines()
+    old_lines = [ln for ln in str(old_text or "").splitlines() if ln.strip()]
+    anchor = old_lines[0].strip() if old_lines else ""
+    center = 0
+    if anchor:
+        for i, line in enumerate(lines):
+            if anchor in line:
+                center = i
+                break
+    start = max(0, center - 20)
+    end = min(len(lines), center + 20)
+    excerpt = "\n".join(f"  {i + 1}| {lines[i]}" for i in range(start, end))
+    return (
+        f"{PATCH_RECOVERY_MARKER}\n"
+        f"apply_patch failed on `{path_norm}`. Current file excerpt (lines {start + 1}-{end}):\n"
+        f"{excerpt}\n"
+        "Copy old_text verbatim from this excerpt or call read_file, then apply_patch."
+    )
+
+
 def build_write_file_escalation_nudge(paths: Iterable[str]) -> str:
     plist = ", ".join(f"`{normalize_recovery_path(p)}`" for p in paths if normalize_recovery_path(p))
     if not plist:

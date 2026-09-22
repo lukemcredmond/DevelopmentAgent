@@ -100,6 +100,9 @@ class StepEconomics:
     tool_recovery_events: int = 0
     plan_rejections: int = 0
     text_rejections: int = 0
+    identical_text_reject_count: int = 0
+    runaway_generation_aborted: bool = False
+    wasted_ms_estimate: int = 0
 
     @property
     def tokens_per_sec(self) -> Optional[float]:
@@ -244,7 +247,27 @@ def economics_from_diagnostics(payload: Dict[str, Any]) -> StepEconomics:
         tool_recovery_events=recovery,
         plan_rejections=int(payload.get("planRejections") or 0),
         text_rejections=int(payload.get("textRejections") or 0),
+        identical_text_reject_count=int(payload.get("identicalTextRejectCount") or 0),
+        runaway_generation_aborted=bool(payload.get("runawayGenerationAborted")),
+        wasted_ms_estimate=_estimate_wasted_ms(payload),
     )
+
+
+def _estimate_wasted_ms(payload: Dict[str, Any]) -> int:
+    """Rough waste from text-rejection loops (ollama time on text-only iterations)."""
+    text_rej = int(payload.get("textRejections") or 0)
+    if text_rej <= 0:
+        return 0
+    calls = payload.get("ollamaCalls") or []
+    wasted = 0
+    for call in calls:
+        if not isinstance(call, dict):
+            continue
+        if call.get("toolCalls"):
+            continue
+        if int(call.get("textChars") or 0) > 0:
+            wasted += int(call.get("durationMs") or 0)
+    return wasted
 
 
 def _build_card(task: EvalTask) -> Dict[str, Any]:

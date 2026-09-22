@@ -169,7 +169,12 @@ interface TaskDetailModalProps {
   onReindexCodebase?: () => void
   onClearTranscript?: (taskId: string) => void
   onApprove?: (taskId: string) => void
-  onResolveUser?: (taskId: string, answer: string, target: 'dev' | 'refinement' | 'po') => void
+  onResolveUser?: (
+    taskId: string,
+    answer: string,
+    target: 'dev' | 'refinement' | 'po',
+    options?: { optionId?: string; customAnswer?: string },
+  ) => void
   onDiscussWithAgent?: (task: Task, lane: BoardLane | null) => void
   /** Open PO chat pinned to this card with a seeded rewrite prompt for the description. */
   onClarifyWithPo?: (task: Task) => void
@@ -385,6 +390,7 @@ export default function TaskDetailModal({
   const [actualSummary, setActualSummary] = useState('')
   const [editing, setEditing] = useState(false)
   const [userAnswer, setUserAnswer] = useState('')
+  const [selectedNeedsUserOptionId, setSelectedNeedsUserOptionId] = useState('')
   const [injectCommand, setInjectCommand] = useState(defaultInjectCommand)
   const [injectOutput, setInjectOutput] = useState('')
   const [injectNote, setInjectNote] = useState('')
@@ -426,6 +432,7 @@ export default function TaskDetailModal({
     } catch {
       setUserAnswer('')
     }
+    setSelectedNeedsUserOptionId('')
   }, [task?.id, defaultInjectCommand])
 
   // Counts-only flow view so each Agent progress row can show LLM/tool effort.
@@ -520,6 +527,10 @@ export default function TaskDetailModal({
     (safeTask.lastStepProgress?.suggestedAction?.trim() || '') ||
     'Type a short answer below, then click Send to Developer to resume. Use Send to Product Owner only if you are rewriting the spec.'
   const suggestedTarget = safeTask.needsUserSuggestedTarget || 'dev'
+  const needsUserOptions = (safeTask.needsUserOptions ?? []).filter(
+    (opt) => opt?.id && opt?.label,
+  )
+  const optionLetters = ['A', 'B', 'C', 'D', 'E', 'F']
   const priorUserAnswers = safeTask.userResolutions ?? []
   const isDuplicateQuestion = safeTask.needsUserDuplicate === true
   const workLabel = isFeatureEpic
@@ -685,12 +696,91 @@ export default function TaskDetailModal({
                   </ul>
                 </div>
               )}
+              {needsUserOptions.length > 0 && (
+                <fieldset className="space-y-2">
+                  <legend className="text-[10px] text-amber-200 font-semibold">Choose one</legend>
+                  {needsUserOptions.map((opt, index) => {
+                    const letter = optionLetters[index] ?? String(index + 1)
+                    const selected = selectedNeedsUserOptionId === opt.id
+                    return (
+                      <label
+                        key={opt.id}
+                        className={`flex items-start gap-2 text-[11px] rounded-lg border p-2 cursor-pointer ${
+                          selected
+                            ? 'border-amber-400/60 bg-amber-950/40'
+                            : 'border-amber-500/20 bg-amber-950/10'
+                        }`}
+                      >
+                        <input
+                          type="radio"
+                          name={`needs-user-option-${task.id}`}
+                          checked={selected}
+                          onChange={() => {
+                            setSelectedNeedsUserOptionId(opt.id)
+                            if (opt.id === 'other') {
+                              setUserAnswer('')
+                            } else {
+                              setUserAnswer((opt.answer || opt.label || '').trim())
+                            }
+                          }}
+                          className="mt-0.5"
+                        />
+                        <span className="text-white">
+                          <span className="font-bold text-amber-100 mr-1">{letter}.</span>
+                          {opt.label}
+                        </span>
+                      </label>
+                    )
+                  })}
+                </fieldset>
+              )}
               <textarea
                 value={userAnswer}
                 onChange={(e) => setUserAnswer(e.target.value)}
-                placeholder={needsUserQuestion.slice(0, 180) || 'Your answer…'}
-                className="w-full text-xs bg-cat-base border border-cat-surface1 rounded p-2 min-h-[60px]"
+                placeholder={
+                  selectedNeedsUserOptionId === 'other' || needsUserOptions.length === 0
+                    ? needsUserQuestion.slice(0, 180) || 'Your answer…'
+                    : 'Optional detail (or pick Other to type your answer)…'
+                }
+                disabled={
+                  needsUserOptions.length > 0 &&
+                  selectedNeedsUserOptionId !== '' &&
+                  selectedNeedsUserOptionId !== 'other'
+                }
+                className="w-full text-xs bg-cat-base border border-cat-surface1 rounded p-2 min-h-[60px] disabled:opacity-60"
               />
+              {needsUserOptions.length > 0 && (
+                <button
+                  type="button"
+                  disabled={
+                    !selectedNeedsUserOptionId ||
+                    (selectedNeedsUserOptionId === 'other' && !userAnswer.trim())
+                  }
+                  onClick={() => {
+                    const opt = needsUserOptions.find((o) => o.id === selectedNeedsUserOptionId)
+                    const target = (opt?.target || suggestedTarget) as 'dev' | 'refinement' | 'po'
+                    const answer =
+                      selectedNeedsUserOptionId === 'other'
+                        ? userAnswer.trim()
+                        : (opt?.answer || userAnswer || opt?.label || '').trim()
+                    try {
+                      sessionStorage.removeItem(`needs-user-draft-${task.id}`)
+                    } catch {
+                      /* ignore */
+                    }
+                    onResolveUser(task.id, answer, target, {
+                      optionId: selectedNeedsUserOptionId,
+                      customAnswer:
+                        selectedNeedsUserOptionId === 'other' ? userAnswer.trim() : undefined,
+                    })
+                    setUserAnswer('')
+                    setSelectedNeedsUserOptionId('')
+                  }}
+                  className="w-full bg-amber-600 hover:bg-amber-500 disabled:opacity-50 text-white text-xs py-2 px-3 rounded-lg font-semibold"
+                >
+                  Submit answer
+                </button>
+              )}
               <div className="flex flex-wrap gap-2 pt-1">
                 {(
                   [
@@ -718,7 +808,11 @@ export default function TaskDetailModal({
                   <button
                     key={target}
                     type="button"
-                    disabled={!userAnswer.trim()}
+                    disabled={
+                      needsUserOptions.length > 0
+                        ? !userAnswer.trim() && selectedNeedsUserOptionId !== 'other'
+                        : !userAnswer.trim()
+                    }
                     title={recommended ? 'Recommended for this card' : undefined}
                     onClick={() => {
                       try {

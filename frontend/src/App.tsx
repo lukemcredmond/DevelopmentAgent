@@ -33,6 +33,7 @@ import {
   clearAllTasks,
   escalateNeedsUserToPo,
   splitVisitCapBatch,
+  reconcileFileBlockers,
   resolveToolApproval,
   runInProgressStep,
   resolveUserQuestion,
@@ -99,7 +100,7 @@ import EditorPanel from './components/EditorPanel'
 import { useAppState, useAutoSprint } from './hooks/useAppState'
 import { useTheme } from './hooks/useTheme'
 import type { AgentId, AppState, BoardLane, BriefCategory, ChatMessageRecord, PendingToolApproval, PendingToolRequest, SkillSuggestion, Task, WorkflowSettings } from './types'
-import { countClaimableBacklogTasks, getDisplayLanes } from './types'
+import { countClaimableBacklogTasks, getDisplayLanes, hasSprintWork } from './types'
 import { findTaskOnBoard } from './utils/taskFormat'
 import { buildTaskRunInfo } from './utils/taskRunInfo'
 import { chatAgentForLane } from './utils/chatAgentForLane'
@@ -111,6 +112,8 @@ import {
   clearCommittedLlmSettings,
   hasPendingWorkflowSettings,
   queuedWorkflowPatchPending,
+  beginImmediateWorkflowSave,
+  isWorkflowSaveInFlight,
 } from './workflowSettingsPending'
 
 type BottomTab =
@@ -224,6 +227,7 @@ export default function App() {
     planOutline,
     setPlanOutline,
     planOutlineStreaming,
+    appendLog,
   } = useAppState()
 
   const [planRunActive, setPlanRunActive] = useState(false)
@@ -511,7 +515,7 @@ export default function App() {
     [applyState, workspaceOpen, selectedFile],
   )
 
-  const { autoSprint, setAutoSprint, autoSprintPaused, sprintRunning, stopAutoSprint, startAutoSprint, autoSprintSessionStartedAt, onSessionRefreshDue } =
+  const { autoSprint, setAutoSprint, autoSprintPaused, sprintRunning, stopAutoSprint, startAutoSprint, autoSprintSessionStartedAt, lastAutoSprintStatus, onSessionRefreshDue } =
     useAutoSprint(
       state.brief,
       llmCallUrl,
@@ -523,6 +527,10 @@ export default function App() {
         clearToolEvents()
         clearActivity()
         await refresh({ includeFiles: false })
+      },
+      {
+        onSprintError: setActionError,
+        appendLog,
       },
     )
 
@@ -820,6 +828,12 @@ export default function App() {
     )
   }, [bottomPanelCollapsed])
 
+  useEffect(() => {
+    if (!orchestratedActive) return
+    expandBottomPanel()
+    setBottomTab('console')
+  }, [orchestratedActive, expandBottomPanel])
+
   const handleGenerateBacklog = useCallback(() => {
     void withSprintBusy(async () => {
       expandBottomPanel()
@@ -1082,6 +1096,8 @@ export default function App() {
   const [workflowSettingsSaveError, setWorkflowSettingsSaveError] = useState<string | null>(null)
   const [workflowSettingsSaving, setWorkflowSettingsSaving] = useState(false)
 
+  const persistExecutionProfileRef = useRef<string | null>(null)
+
   const handleWorkflowSettingsChange = useCallback(
     (partial: Partial<WorkflowSettings>) => {
       setWorkflowSettingsSaveError(null)
@@ -1093,6 +1109,40 @@ export default function App() {
         } as WorkflowSettings,
       }))
       queuePendingWorkflowSettings(partial)
+
+      const profile = partial.executionProfile
+      if (profile !== 'scrum' && profile !== 'implementer') {
+        return
+      }
+      if (isWorkflowSaveInFlight() && persistExecutionProfileRef.current === profile) {
+        return
+      }
+      persistExecutionProfileRef.current = profile
+      const payload = beginImmediateWorkflowSave({ executionProfile: profile })
+      if (Object.keys(payload).length === 0) {
+        return
+      }
+      void (async () => {
+        try {
+          const data = await updateWorkflowSettings(payload)
+          markWorkflowSaveSucceeded(data.workflowSettings, payload)
+          setState((prev) => ({
+            ...prev,
+            workflowSettings: {
+              ...(prev.workflowSettings ?? {}),
+              executionProfile: data.workflowSettings?.executionProfile ?? profile,
+            } as WorkflowSettings,
+          }))
+        } catch {
+          markWorkflowSaveFailed(payload)
+          setWorkflowSettingsSaveError('Could not save execution profile.')
+          setActionError('Could not save execution profile.')
+        } finally {
+          if (persistExecutionProfileRef.current === profile) {
+            persistExecutionProfileRef.current = null
+          }
+        }
+      })()
     },
     [setState],
   )
@@ -1262,6 +1312,17 @@ export default function App() {
     }
     void withLoading(async () => handleState(await splitVisitCapBatch({ ollamaUrl })))
   }, [handleState, ollamaUrl])
+
+  const handleReconcileFileBlockers = useCallback(() => {
+    if (
+      !window.confirm(
+        'Consolidate duplicate lint cards? One fix card per broken file will be created and dependents moved to Blocked.',
+      )
+    ) {
+      return
+    }
+    void withLoading(async () => handleState(await reconcileFileBlockers()))
+  }, [handleState])
 
   const handleRefreshState = useCallback(() => {
     void refresh()
@@ -1616,6 +1677,8 @@ export default function App() {
         ollamaOk={ollamaOk}
         autoSprint={autoSprint}
         autoSprintPaused={autoSprintPaused}
+        autoSprintPauseStatus={lastAutoSprintStatus ?? state.lastSprintSummary?.status}
+        hasSprintWork={hasSprintWork(state.board, state.workflowSettings)}
         sprintRunning={orchestratedActive}
         autoSprintSessionStartedAt={autoSprintSessionStartedAt}
         autoSprintSessionRefreshMinutes={
@@ -1733,6 +1796,7 @@ export default function App() {
         claimableBacklogCount={claimableBacklogCount}
         onEscalateNeedsUserToPo={handleEscalateNeedsUserToPo}
         onSplitVisitCapCards={handleSplitVisitCapCards}
+        onReconcileFileBlockers={handleReconcileFileBlockers}
         onClearAllTasks={() => {
           if (
             !window.confirm(
@@ -1944,8 +2008,6 @@ export default function App() {
                 bottomPanelCollapsed ? 'h-auto' : ''
               }`}
             >
-              {!bottomPanelCollapsed && (
-                <>
               <SprintProgressBar
                 progress={sprintProgress}
                 planRunActive={planRunActive}
@@ -1961,6 +2023,8 @@ export default function App() {
                   void startAutoSprint()
                 }}
               />
+              {!bottomPanelCollapsed && (
+                <>
               <AgentRunBar
                 activeRun={activeRun}
                 currentTool={currentTool}
@@ -2356,9 +2420,9 @@ export default function App() {
             setSelectedTask(null)
           })
         }
-        onResolveUser={(taskId, answer, target) =>
+        onResolveUser={(taskId, answer, target, options) =>
           void withLoading(async () => {
-            handleState(await resolveUserQuestion(taskId, answer, target))
+            handleState(await resolveUserQuestion(taskId, answer, target, options))
             setSelectedTask(null)
           })
         }

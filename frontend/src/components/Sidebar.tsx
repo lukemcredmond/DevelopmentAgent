@@ -26,6 +26,8 @@ interface SidebarProps {
   ollamaOk: boolean | null
   autoSprint: boolean
   autoSprintPaused?: boolean
+  autoSprintPauseStatus?: string
+  hasSprintWork?: boolean
   sprintRunning: boolean
   autoSprintSessionStartedAt?: number | null
   autoSprintSessionRefreshMinutes?: number
@@ -46,6 +48,7 @@ interface SidebarProps {
   claimableBacklogCount?: number
   onEscalateNeedsUserToPo?: () => void
   onSplitVisitCapCards?: () => void
+  onReconcileFileBlockers?: () => void
   onClearAllTasks: () => void
   onReset: () => void
   onToggleTheme: () => void
@@ -75,12 +78,33 @@ function formatSprintStatus(progress: SprintProgress | null | undefined): string
   return parts.length > 0 ? parts.join(' · ') : null
 }
 
+function formatAutoSprintPauseMessage(
+  paused: boolean,
+  sprintRunning: boolean,
+  status: string | undefined,
+  hasWork: boolean,
+): string | null {
+  if (!paused || sprintRunning) return null
+  if (status === 'retry_watchdog' && hasWork) {
+    return 'Recovering from zero-work stall — retrying…'
+  }
+  if (status === 'retry_watchdog') {
+    return 'Paused — zero-work limit reached'
+  }
+  if (!hasWork) {
+    return 'Paused — no actionable cards'
+  }
+  return 'Paused — waiting for backlog'
+}
+
 export default memo(function Sidebar({
   state,
   brief,
   ollamaOk,
   autoSprint,
   autoSprintPaused = false,
+  autoSprintPauseStatus,
+  hasSprintWork: boardHasSprintWork = true,
   sprintRunning,
   autoSprintSessionStartedAt = null,
   autoSprintSessionRefreshMinutes = 60,
@@ -101,6 +125,7 @@ export default memo(function Sidebar({
   claimableBacklogCount = 0,
   onEscalateNeedsUserToPo,
   onSplitVisitCapCards,
+  onReconcileFileBlockers,
   onClearAllTasks,
   onReset,
   onToggleTheme,
@@ -125,6 +150,27 @@ export default memo(function Sidebar({
     const blob = `${task.userQuestion || ''} ${task.needsUserReason || ''}`.toLowerCase()
     return blob.includes('phase cycle cap') || blob.includes('visit latch')
   }).length
+
+  const lintPileCount = (() => {
+    const paths = new Map<string, number>()
+    for (const lane of ['Needs User', 'In Progress', 'Backlog'] as const) {
+      for (const task of state.board[lane] ?? []) {
+        const title = task.title || ''
+        const src =
+          (task as { lintSourceFile?: string }).lintSourceFile ||
+          (title.startsWith('Lint: ') ? title.slice(6).trim() : '')
+        const path = src.trim()
+        if (!path || path.startsWith('overflow')) continue
+        const hasLint =
+          title.startsWith('Lint: ') ||
+          Boolean((task as { lintSourceFile?: string }).lintSourceFile) ||
+          (task.lastCommandDiagnostics?.length ?? 0) > 0
+        if (!hasLint) continue
+        paths.set(path, (paths.get(path) ?? 0) + 1)
+      }
+    }
+    return [...paths.values()].filter((n) => n >= 2).reduce((sum, n) => sum + n, 0)
+  })()
 
   const notifications = state.notifications ?? {
     needsPo: 0,
@@ -409,7 +455,14 @@ export default memo(function Sidebar({
               </p>
             )}
             {autoSprint && autoSprintPaused && !sprintRunning && (
-              <p className="text-[9px] text-amber-400/90 italic">Paused — waiting for backlog</p>
+              <p className="text-[9px] text-amber-400/90 italic">
+                {formatAutoSprintPauseMessage(
+                  autoSprintPaused,
+                  sprintRunning,
+                  autoSprintPauseStatus,
+                  boardHasSprintWork,
+                ) ?? 'Paused'}
+              </p>
             )}
             {(notifications.needsUser ?? 0) > 0 && onEscalateNeedsUserToPo && (
               <button
@@ -434,6 +487,21 @@ export default memo(function Sidebar({
                 className="w-full bg-sky-950/30 hover:bg-sky-950/50 disabled:opacity-50 text-sky-200 text-[11px] py-1.5 px-2 rounded-lg border border-sky-500/30"
               >
                 Split {visitCapCount} visit-cap cards
+              </button>
+            )}
+            {lintPileCount > 0 && onReconcileFileBlockers && (
+              <button
+                type="button"
+                onClick={onReconcileFileBlockers}
+                disabled={sprintRunning}
+                title={
+                  sprintRunning
+                    ? 'Wait for the current sprint step to finish'
+                    : 'Create one fix card per broken file and move duplicate lint cards to Blocked'
+                }
+                className="w-full bg-emerald-950/30 hover:bg-emerald-950/50 disabled:opacity-50 text-emerald-200 text-[11px] py-1.5 px-2 rounded-lg border border-emerald-500/30"
+              >
+                Unblock lint pile ({lintPileCount} cards)
               </button>
             )}
           </div>

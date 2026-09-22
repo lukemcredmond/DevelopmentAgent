@@ -197,6 +197,11 @@ export function needsUserEvidenceText(task: import('../types').Task): string {
 
 /** Card preview: the actual question, never the PO-round one-liner. */
 export function needsUserCardPreview(task: import('../types').Task): string {
+  const options = task.needsUserOptions ?? []
+  if (options.length > 0) {
+    const first = options.find((o) => o.id !== 'other') ?? options[0]
+    if (first?.label) return `Pick A–D: ${first.label}`
+  }
   const question = (task.userQuestion || '').trim()
   const action = (task.needsUserAction || '').trim()
   if (question && !isGenericNeedsUserText(question)) return question

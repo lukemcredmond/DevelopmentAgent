@@ -491,6 +491,8 @@ def record_next_work_visit(
 def same_next_task_should_park(
     task: Dict[str, Any], ws: Optional[Dict[str, Any]] = None
 ) -> bool:
+    if should_bypass_same_next_task_park(task):
+        return False
     if not same_next_task_stop_enabled(ws) or not isinstance(task, dict):
         return False
     key = next_work_key(task)
@@ -498,6 +500,13 @@ def same_next_task_should_park(
     if not key or not prev or key != prev:
         return False
     return bool(task.get("lastNextWorkNoWrite"))
+
+
+def should_bypass_same_next_task_park(task: Dict[str, Any]) -> bool:
+    """Allow Forced Patch retries past the same-next-task gate (lint and feature cards)."""
+    if not isinstance(task, dict):
+        return False
+    return bool(task.get("forcePatchNextDevStep"))
 
 
 def run_dev_ideation(agent: Any, task: Dict[str, Any]) -> str:

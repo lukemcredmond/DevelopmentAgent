@@ -57,6 +57,7 @@ def test_settings_round_trip_via_project_file(tmp_path):
             "toolApprovalTools": ["write_file", "run_command"],
             "commandAllowlist": ["pytest", "ruff check"],
             "discordBotAllowedUserIds": ["111", "222"],
+            "executionProfile": "implementer",
             "mcpServers": [
                 {
                     "name": "filesystem",
@@ -92,6 +93,7 @@ def test_settings_round_trip_via_project_file(tmp_path):
     assert ws_file["mcpServers"][0]["name"] == "filesystem"
     assert ws_file["agentPrompts"]["Developer"]["system"] == "You are the project Developer."
     assert ws_file["agentTools"]["Developer"] == ["read_file", "write_file"]
+    assert ws_file["executionProfile"] == "implementer"
     assert ws_file.get("llmApiKey") in ("", None)
     raw = (workspace / PROJECT_FILE_NAME).read_text(encoding="utf-8")
     assert "secret-must-not-land-on-disk" not in raw
@@ -130,6 +132,7 @@ def test_settings_round_trip_via_project_file(tmp_path):
     assert ws["mcpServers"][0]["name"] == "filesystem"
     assert ws["agentPrompts"]["Developer"]["system"] == "You are the project Developer."
     assert ws["agentTools"]["Developer"] == ["read_file", "write_file"]
+    assert ws["executionProfile"] == "implementer"
 
 
 def test_workflow_settings_api_updates_sidecar(tmp_path):

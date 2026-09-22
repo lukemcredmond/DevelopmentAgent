@@ -414,6 +414,7 @@ def maybe_fanout_lint_diagnostics(
             f"{parent_id}: lint fan-out — kept {len(kept)}, spawned {len(spawned_ids)} "
             f"(skipped {skipped_dup} duplicate file card(s))",
         )
+        _orchestrate_file_blockers_after_fanout(parent_id, remainder, spawned_ids)
     else:
         record_task_decision(
             parent_id,
@@ -430,3 +431,38 @@ def maybe_fanout_lint_diagnostics(
         "remainder": remainder,
         "skippedDuplicates": skipped_dup,
     }
+
+
+def _orchestrate_file_blockers_after_fanout(
+    parent_id: str,
+    remainder: List[Dict[str, Any]],
+    spawned_ids: List[str],
+) -> None:
+    """Consolidate duplicate lint cards via shared-file blocker orchestration."""
+    from backend.services.file_blocker import orchestrate_file_blocker
+
+    paths: Set[str] = set()
+    for d in remainder or []:
+        if isinstance(d, dict):
+            path = str(d.get("file") or "").strip().replace("\\", "/")
+            if path and not is_junk_lint_path(path):
+                paths.add(path)
+    for sid in spawned_ids:
+        task = find_task_by_id(sid)
+        if task:
+            path = str(task.get("lintSourceFile") or "").strip().replace("\\", "/")
+            if path:
+                paths.add(path)
+    for path in sorted(paths):
+        file_diags = [
+            d
+            for d in (remainder or [])
+            if isinstance(d, dict)
+            and str(d.get("file") or "").strip().replace("\\", "/") == path
+        ]
+        orchestrate_file_blocker(
+            file_path=path,
+            diagnostics=file_diags or None,
+            source_task_id=parent_id,
+            reason="lint fanout",
+        )

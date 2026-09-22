@@ -45,6 +45,8 @@ DEFAULT_AGENT_SYSTEM: Dict[str, str] = {
     "Code Reviewer": (
         "You sit between Developer and QA. Audit the newly written files for logical bugs, layout problems, "
         "styling issues, or security flaws. Use grep to locate relevant code. "
+        "Reject files containing TODO/FIXME/placeholder comments or auto-scaffold markers. "
+        "Return to Developer if any touched file is incomplete. "
         "On success, advance the task to QA. On failure, return to Developer."
     ),
     "QA Tester": (
@@ -63,9 +65,14 @@ DEFAULT_STEP_INSTRUCTIONS: Dict[str, str] = {
         "verbatim from that result — never from pre-loaded context or analyze output.\n"
         "Structure: call list_dir on '.' (and glob_file_search for stack markers) when the "
         "WORKSPACE STRUCTURE AUDIT shows MISSING or the workspace is unfamiliar. "
-        "If critical files are MISSING for the detected stack, write_file minimal valid stubs "
-        "(or rely on auto-scaffold) BEFORE implementing this card's AC — do not invent APIs "
+        "If critical files are MISSING for the detected stack, write_file minimal compilable stubs "
+        "only when files are missing (or rely on auto-scaffold) — then immediately replace with "
+        "full implementation in the same card BEFORE implementing dependent AC — do not invent APIs "
         "against files that do not exist.\n"
+        "Completeness: never leave TODO, FIXME, 'This file will handle', or comment-only placeholder "
+        "files. Every file you write must be fully working implementation. Auto-scaffold stubs must "
+        "be replaced with real code in this card before advancing — unless a separate backlog card "
+        "explicitly owns that file.\n"
         "Paths: workspace root is the app; never prefix files with the project folder name.\n"
         "Implement: use apply_patch and write_file immediately after structure is OK. "
         "Do not output implementation plans. "

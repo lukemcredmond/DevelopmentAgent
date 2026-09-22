@@ -57,6 +57,15 @@ def audit_single_done_task(task: Dict[str, Any]) -> Optional[Dict[str, Any]]:
     if unchecked_ac:
         ac_total = len([c for c in (task.get("acceptanceCriteria") or []) if str(c).strip()])
         reasons.append(f"Acceptance criteria unchecked ({unchecked_ac}/{ac_total})")
+    if get_workflow_settings().get("requireFileCompleteness", True):
+        try:
+            from backend.services.file_completeness import scan_task_files
+
+            report = scan_task_files(task)
+            if report.has_blocking:
+                reasons.append(f"Incomplete files: {report.summary()}")
+        except Exception:
+            pass
 
     if not reasons:
         return None

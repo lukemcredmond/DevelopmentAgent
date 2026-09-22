@@ -100,6 +100,18 @@ def scaffold_task_referenced_stubs(task: Optional[Dict[str, Any]] = None) -> Dic
     sync_virtual_filesystem_from_disk()
     task_id = str((task or {}).get("id") or "")
     if task_id:
+        from backend.agents.task_context import find_task_by_id, normalize_task
+
+        live = find_task_by_id(task_id) or (task if isinstance(task, dict) else None)
+        if isinstance(live, dict):
+            normalize_task(live)
+            existing = [
+                str(p).replace("\\", "/")
+                for p in (live.get("scaffoldedFiles") or [])
+                if str(p).strip()
+            ]
+            merged = list(dict.fromkeys([*existing, *created]))
+            live["scaffoldedFiles"] = merged
         record_task_decision(
             task_id,
             "System",

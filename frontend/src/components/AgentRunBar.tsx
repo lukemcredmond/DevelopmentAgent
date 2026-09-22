@@ -275,6 +275,14 @@ export default function AgentRunBar({
           {intent}
         </p>
       )}
+      {activeRun?.streamingText && isRunning && (
+        <p
+          className="mx-4 mb-1 text-[10px] text-indigo-100/90 max-h-16 overflow-y-auto whitespace-pre-wrap break-words"
+          data-testid="llm-stream-preview"
+        >
+          {activeRun.streamingText}
+        </p>
+      )}
       {cardLine && (isRunning || showIdleWhy || showMaxIterPanel) && (
         <p className="mx-4 mb-1 text-[10px] text-sky-200/90 truncate" title={cardLine}>
           {cardLine}

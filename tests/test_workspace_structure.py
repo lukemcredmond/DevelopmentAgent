@@ -345,3 +345,4 @@ def test_scaffold_task_referenced_stubs_creates_missing_dart_file(tmp_path, monk
     assert result.get("ok") is True
     assert "lib/models.dart" in (result.get("created") or [])
     assert os.path.isfile(os.path.join(ws, "lib", "models.dart"))
+    assert "lib/models.dart" in (task.get("scaffoldedFiles") or [])

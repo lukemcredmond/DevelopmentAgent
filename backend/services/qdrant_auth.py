@@ -32,4 +32,7 @@ def sanitize_workflow_settings_for_client(settings: Dict[str, Any]) -> Dict[str,
     bot_token = str(out.get("discordBotToken") or "").strip()
     out["discordBotTokenConfigured"] = bool(bot_token)
     out.pop("discordBotToken", None)
+    cloud_key = str(out.get("cloudDevApiKey") or "").strip()
+    out["cloudDevApiKeyConfigured"] = bool(cloud_key)
+    out.pop("cloudDevApiKey", None)
     return out

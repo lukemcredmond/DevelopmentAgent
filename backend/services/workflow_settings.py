@@ -22,9 +22,11 @@ DEFAULT_WORKFLOW_SETTINGS: Dict[str, Any] = {
     "maxSubtaskSpawns": 8,
     # Self-correcting against real lint/test output is most of what makes an agent feel
     # like it delivers; affordable now that the iteration budget is not the bottleneck.
-    "enableFixVerifyLoop": True,
-    # Keep fix-verify cheap: 2 rounds max by default (was 3).
-    "maxFixVerifyRounds": 2,
+    "enableFixVerifyLoop": False,
+    # Keep fix-verify cheap: 1 round when enabled (system auto-verify covers lint).
+    "maxFixVerifyRounds": 1,
+    # Run project lint after Dev writes without requiring model-initiated analyze.
+    "enableSystemAutoVerify": True,
     # Abort further fix-verify rounds on hard agent stops (tool_failure, plan_exhausted, …).
     "fixVerifyAbortOnHardStop": True,
     # Auto-extend one more chunk of iterations on max_iterations when progress is evident.
@@ -56,6 +58,7 @@ DEFAULT_WORKFLOW_SETTINGS: Dict[str, Any] = {
     # Pause an auto sprint before a fourth identical task/reason zero-work retry.
     "enableZeroWorkRetryWatchdog": True,
     "zeroWorkRetryWatchdogMax": 3,
+    "maxZeroWorkRecoveryAttempts": 2,
     # Cap Explore→Patch→Verify cycles per card before forcing stuck / split.
     "maxDevPhaseCyclesPerCard": 12,
     "maxDevStepsPerCard": 12,
@@ -64,6 +67,12 @@ DEFAULT_WORKFLOW_SETTINGS: Dict[str, Any] = {
     "maxParallelDevCards": 2,
     "requireWorkspaceStructure": True,
     "autoScaffoldOnStructureGap": True,
+    # Block lane advance when written files contain TODO/stub/placeholder content.
+    "requireFileCompleteness": True,
+    # When on, scaffolder may advance if another card explicitly owns the stubbed file.
+    "allowStubDelegation": False,
+    # Optional regex allowlist for placeholder patterns (advanced).
+    "placeholderAllowlist": [],
     "toolApprovalTools": ["write_file", "run_command", "delete_file"],
     "nonBlockingToolApproval": True,
     "commandAutoRunMode": "off",
@@ -96,7 +105,7 @@ DEFAULT_WORKFLOW_SETTINGS: Dict[str, Any] = {
     "autoSprintHardReload": True,
     # A real change needs inventory + several reads + edits + a lint round. At 6 the
     # loop ran out of turns before it could finish and reported that as a failure.
-    "maxLlmIterationsPerStep": 30,
+    "maxLlmIterationsPerStep": 12,
     # The true safety net is total tool calls plus the wall-clock cap, not LLM turns.
     "maxToolCallsPerStep": 80,
     "maxPoRoundTrips": 3,
@@ -105,6 +114,10 @@ DEFAULT_WORKFLOW_SETTINGS: Dict[str, Any] = {
     "maxAgentStepDurationSec": 2700,
     # Auto-move cards with unmet blockedBy into the Blocked lane (healthy wait).
     "enableBlockedLane": True,
+    # When multiple cards fail on the same file, create one fix card and block dependents.
+    "enableFileBlockerOrchestration": True,
+    "fileBlockerMinDependents": 2,
+    "fileBlockerAutoCreateFixCard": True,
     "maxToolFailuresPerStep": 4,
     # Agent efficiency (local Ollama): lean prompts, phase model routing, per-turn tool caps.
     "agentEfficiencyMode": "high",
@@ -115,7 +128,27 @@ DEFAULT_WORKFLOW_SETTINGS: Dict[str, Any] = {
     "autoStartSprint": True,
     "autonomousMode": False,
     # scrum = PO/Dev/CR/QA roles; implementer = Cursor-like single coding agent on cards.
-    "executionProfile": "scrum",
+    "executionProfile": "implementer",
+    # Plan & Run defaults to implementer unless set to scrum or inherit.
+    "planRunExecutionProfile": "implementer",
+    "planRunSkipPoWhenActionable": True,
+    # Optional frontier cloud model for Developer (OpenAI-compatible API).
+    "enableCloudDevProvider": False,
+    "cloudDevBaseUrl": "",
+    "cloudDevApiKey": "",
+    "cloudDevModel": "",
+    "cloudDevUseFor": "implementer_autonomous",
+    "cloudDevStuckSteps": 1,
+    "cloudDevRequestTimeoutSec": 900,
+    # Per-card LLM thread continuity across sprint steps on the same card.
+    "enableCardSessionContinuity": True,
+    "enableCardSessionSummarize": True,
+    # Auto-load AGENTS.md / .cursor/rules into system prompt.
+    "enableWorkspaceRulesInject": True,
+    "workspaceRulesMaxChars": 12000,
+    # Soften completeness/CR/QA gates during implementer auto-sprint.
+    "implementerRelaxGatesOnAutoSprint": True,
+    "implementerRelaxGatesAlways": True,
     "maxNeedsUserPerSprint": 2,
     "needsUserCooldownSteps": 3,
     "enableWebSearch": False,
@@ -143,12 +176,16 @@ DEFAULT_WORKFLOW_SETTINGS: Dict[str, Any] = {
     # cannot probe another host, and probing this one would measure the wrong GPU.
     "llmHostVramMb": 0,
     # auto = collapse to one model when the host can only hold one; on/off to force.
-    "singleModelMode": "auto",
+    "singleModelMode": "on",
     # Start each step at ollamaNumCtxAdaptiveStart; on exceed_context errors, increase and retry.
     "ollamaNumCtxAdaptive": True,
     "ollamaNumCtxAdaptiveStart": 6144,
     "ollamaNumCtxAdaptiveStep": 8192,
     "ollamaKeepAlive": "30m",
+    "warmModelOnSprintStart": True,
+    "devNumPredictDefault": 2048,
+    "devEvalTimeoutSec": 60,
+    "forcedToolNumPredict": 256,
     "ollamaRequestTimeoutSec": 900,
     # Abort a stream if prefill finished and no eval tokens arrive (hung empty gen).
     "ollamaEmptyGenerationTimeoutSec": 90,
@@ -195,7 +232,7 @@ DEFAULT_WORKFLOW_SETTINGS: Dict[str, Any] = {
     # Budgets sized so a multi-file change is reachable; the total tool-call cap and
     # the wall-clock timeout remain the real stops.
     "enableDevPhaseGraph": True,
-    "devExploreMaxTools": 8,
+    "devExploreMaxTools": 1,
     # When explore budget is hit, transition to Patch in the same step (block further reads).
     "devExploreForcePatchInStep": True,
     "poNumPredictOverride": False,
@@ -418,6 +455,11 @@ def save_workflow_settings(
         updates["discordBotAllowedUserIds"] = [
             str(x).strip() for x in raw_ids if str(x).strip()
         ]
+    if "executionProfile" in updates:
+        raw_profile = str(updates.get("executionProfile") or "scrum").strip().lower()
+        updates["executionProfile"] = (
+            "implementer" if raw_profile == "implementer" else "scrum"
+        )
     current.update(updates)
     current = migrate_performance_settings(current)
     from backend.services.llm_provider import normalize_llm_provider_settings

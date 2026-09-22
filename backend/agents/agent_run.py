@@ -42,6 +42,7 @@ class AgentRunState:
     focus_subtask_id: Optional[str] = None
     dev_phase: Optional[str] = None
     dev_phase_graph: Optional[Dict[str, Any]] = None
+    streaming_text: Optional[str] = None
 
     def to_dict(self) -> Dict[str, Any]:
         data = asdict(self)
@@ -54,6 +55,7 @@ class AgentRunState:
         data["focusSubtaskId"] = data.pop("focus_subtask_id", None)
         data["devPhase"] = data.pop("dev_phase", None)
         data["devPhaseGraph"] = data.pop("dev_phase_graph", None)
+        data["streamingText"] = data.pop("streaming_text", None)
         return data
 
 
@@ -104,6 +106,8 @@ def update_run(
     focus_subtask_id: Optional[str] = None,
     dev_phase: Optional[str] = None,
     dev_phase_graph: Optional[Dict[str, Any]] = None,
+    streaming_text: Optional[str] = None,
+    clear_streaming_text: bool = False,
 ) -> None:
     run = state.ACTIVE_AGENT_RUN
     if not run:
@@ -139,6 +143,19 @@ def update_run(
         run.dev_phase = dev_phase
     if dev_phase_graph is not None:
         run.dev_phase_graph = dev_phase_graph
+    if clear_streaming_text:
+        run.streaming_text = None
+    elif streaming_text is not None:
+        run.streaming_text = streaming_text
+    _publish_run(run)
+
+
+def append_streaming_text(chunk: str) -> None:
+    run = state.ACTIVE_AGENT_RUN
+    if not run or not chunk:
+        return
+    prior = str(run.streaming_text or "")
+    run.streaming_text = (prior + chunk)[-8000:]
     _publish_run(run)
 
 

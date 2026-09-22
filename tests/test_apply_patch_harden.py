@@ -46,6 +46,7 @@ def test_apply_patch_rejects_old_text_not_in_last_read():
     initialize()
     state.ACTIVE_SPRINT_TASK_ID = "T-VAL"
     state.STEP_FILE_READS.clear()
+    state.STEP_PATCH_FAILURES.clear()
     write_workspace_file("val_patch.txt", "real content here\n")
     record_step_file_read("val_patch.txt", "real content here\n")
     result = apply_workspace_patch(
@@ -54,3 +55,17 @@ def test_apply_patch_rejects_old_text_not_in_last_read():
         "replacement",
     )
     assert "not in last read_file" in result
+
+
+def test_apply_patch_blocked_after_two_failures_on_same_path():
+    initialize()
+    state.ACTIVE_SPRINT_TASK_ID = "T-CAP"
+    state.STEP_FILE_READS.clear()
+    state.STEP_PATCH_FAILURES.clear()
+    write_workspace_file("cap_patch.txt", "alpha\nbeta\n")
+    record_step_file_read("cap_patch.txt", "alpha\nbeta\n")
+    apply_workspace_patch("cap_patch.txt", "missing one", "new")
+    apply_workspace_patch("cap_patch.txt", "missing two", "new")
+    result = apply_workspace_patch("cap_patch.txt", "missing three", "new")
+    assert "apply_patch blocked" in result
+    assert "write_file" in result

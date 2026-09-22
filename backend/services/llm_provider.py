@@ -1133,6 +1133,10 @@ class EmptyGenerationTimeout(TimeoutError):
     """Raised when a streamed chat produces no eval tokens before the empty-gen timeout."""
 
 
+class RunawayGenerationAborted(TimeoutError):
+    """Raised when text generation exceeds eval_timeout without tool calls."""
+
+
 def _next_stream_chunk(
     iterator: Iterator[ChatResult], timeout_sec: float, *, empty_budget_sec: Optional[float] = None
 ) -> Optional[ChatResult]:
@@ -1170,6 +1174,9 @@ def consume_chat_stream(
     *,
     empty_timeout_sec: float = 90,
     flowing_timeout_sec: float = 900,
+    eval_timeout_sec: Optional[float] = None,
+    cancel_check: Optional[Any] = None,
+    on_token: Optional[Any] = None,
 ) -> ChatResult:
     """Fold a provider stream into one ChatResult; abort if generation stays silent.
 
@@ -1187,8 +1194,23 @@ def consume_chat_stream(
     prompt_eval = 0
     eval_count = 0
     last_raw: Any = None
+    eval_started_at: Optional[float] = None
+    eval_cap = float(eval_timeout_sec) if eval_timeout_sec is not None else None
     try:
         while True:
+            if cancel_check is not None and callable(cancel_check) and cancel_check():
+                close_chat_stream(iterator)
+                raise EmptyGenerationTimeout("Ollama chat cancelled")
+            if (
+                eval_cap
+                and eval_started_at is not None
+                and not tool_calls
+                and (time.monotonic() - eval_started_at) > eval_cap
+            ):
+                close_chat_stream(iterator)
+                raise RunawayGenerationAborted(
+                    f"Ollama generation aborted after {eval_cap:.0f}s without tool calls"
+                )
             progressed = (
                 eval_count > 0
                 or bool(content_parts)
@@ -1219,11 +1241,17 @@ def consume_chat_stream(
                 eval_count = int(chunk.eval_count or 0)
             msg = chunk.message
             if msg and msg.content:
-                content_parts.append(str(msg.content))
+                piece = str(msg.content)
+                content_parts.append(piece)
+                if eval_started_at is None and piece:
+                    eval_started_at = time.monotonic()
+                if on_token is not None and callable(on_token):
+                    on_token(piece)
             if msg and getattr(msg, "thinking", None):
                 thinking_parts.append(str(msg.thinking))
             if msg and msg.tool_calls:
                 tool_calls = list(msg.tool_calls)
+                eval_started_at = None
         return ChatResult(
             message=ProviderMessage(
                 role="assistant",
@@ -1235,7 +1263,7 @@ def consume_chat_stream(
             eval_count=eval_count,
             raw=last_raw,
         )
-    except EmptyGenerationTimeout:
+    except (EmptyGenerationTimeout, RunawayGenerationAborted):
         close_chat_stream(iterator)
         raise
 

@@ -535,3 +535,246 @@ def test_format_console_ollama_wait_includes_elapsed_and_last_tool():
     assert "45s" in msg
     assert "iter 2/6" in msg
     assert "last_tool=write_file" in msg
+
+
+def test_derive_exit_reason_lint_recovery_message():
+    msg = "Lint/tool errors remain — staying In Progress so Developer can patch. Not moving to Needs User."
+    assert derive_exit_reason(
+        agent_result=msg,
+        tools_used=set(),
+        lane_before="In Progress",
+        lane_after="In Progress",
+    ) == "lint_stay_in_progress"
+
+
+def test_derive_exit_reason_patch_fail_on_lint_card(tmp_path, monkeypatch):
+    monkeypatch.setenv("ALLHANDS_HOME", str(tmp_path))
+    initialize()
+    task = init_new_task(
+        {
+            "id": "T-PATCH-FAIL",
+            "title": "Lint: lib/main.dart",
+            "description": "d",
+            "status": "In Progress",
+            "lintSourceFile": "lib/main.dart",
+            "lastCommandDiagnostics": [
+                {"file": "lib/main.dart", "line": 10, "message": "override error", "severity": "warning"}
+            ],
+        }
+    )
+    state.SHARED_BOARD["In Progress"] = [task]
+    trace = start_step_trace("T-PATCH-FAIL", "Lint: lib/main.dart", "Developer", "In Progress")
+    trace.log_tool("write_file", True, "lib/main.dart (349 chars)")
+    trace.log_tool("apply_patch", False, "lib/main.dart (replace 37 chars)")
+    reason = derive_exit_reason(
+        agent_result="done",
+        tools_used={"write_file", "apply_patch"},
+        lane_before="In Progress",
+        lane_after="In Progress",
+    )
+    assert reason == "tool_failure_stop"
+    clear_active_step_trace()
+
+
+def test_lint_recovery_does_not_overwrite_dev_outcome():
+    from backend import state
+    from backend.agents.task_context import init_new_task
+    from backend.bootstrap import initialize
+    from backend.services.sprint_service import (
+        _outcome_suggested_action,
+        _outcome_why_card_stayed,
+        _recover_latched_dev_card,
+    )
+
+    initialize()
+    state.SHARED_BOARD.clear()
+    for lane in ("In Progress", "Blocked", "Done"):
+        state.SHARED_BOARD[lane] = []
+    task = init_new_task(
+        {
+            "id": "T-KEEP-OUT",
+            "title": "Lint: lib/main.dart",
+            "description": "d",
+            "status": "In Progress",
+            "lintSourceFile": "lib/main.dart",
+            "forcePatchNextDevStep": True,
+            "lastCommandDiagnostics": [
+                {"file": "lib/main.dart", "line": 1, "message": "err", "severity": "error"}
+            ],
+            "lastStepOutcome": {
+                "agent": "Developer",
+                "exitReason": "tool_failure_stop",
+                "whyCardStayed": "apply_patch failed",
+                "suggestedAction": "retry",
+            },
+        }
+    )
+    state.SHARED_BOARD["In Progress"] = [task]
+    _recover_latched_dev_card(dict(task), "", quiet=False)
+    live = state.SHARED_BOARD["In Progress"][0]
+    assert live["lastStepOutcome"]["agent"] == "Developer"
+    assert live["lastStepOutcome"]["exitReason"] == "tool_failure_stop"
+
+
+def test_lint_outcome_copy_mentions_forced_patch_retry():
+    from backend.services.sprint_service import _outcome_suggested_action, _outcome_why_card_stayed
+
+    task = {
+        "lintSourceFile": "lib/main.dart",
+        "lastCommandDiagnostics": [{"file": "lib/main.dart", "line": 1, "message": "x"}],
+    }
+    why = _outcome_why_card_stayed(
+        "lint_stay_in_progress",
+        title="Lint: lib/main.dart",
+        lane_after="In Progress",
+        task=task,
+    )
+    action = _outcome_suggested_action(
+        "tool_failure_stop",
+        "In Progress",
+        task={**task, "forcePatchNextDevStep": True},
+    )
+    assert "text-only" not in why.lower()
+    assert "forced patch" in why.lower()
+    assert "retry" in action.lower()
+    assert "manual" not in action.lower()
+
+
+def test_force_patch_instruction_includes_last_patch_error():
+    from backend.services.sprint_service import _force_patch_dev_instruction
+
+    task = {
+        "title": "Fix main",
+        "forcePatchNextDevStep": True,
+        "identicalPatchFailCount": 2,
+        "transcript": [
+            {
+                "toolName": "apply_patch",
+                "toolSuccess": False,
+                "content": "Error: old_text not found on lib/main.dart",
+            }
+        ],
+    }
+    instr = _force_patch_dev_instruction(task, "Developer")
+    assert "FORCED PATCH" in instr
+    assert "old_text not found" in instr
+    assert "write_file" in instr.lower()
+
+
+def test_force_patch_instruction_includes_lint_diagnostic():
+    from backend.services.sprint_service import _force_patch_dev_instruction
+
+    task = {
+        "title": "Lint: lib/main.dart",
+        "lintSourceFile": "lib/main.dart",
+        "forcePatchNextDevStep": True,
+        "lastCommandDiagnostics": [
+            {
+                "file": "lib/main.dart",
+                "line": 42,
+                "message": "The method doesn't override an inherited method",
+                "severity": "warning",
+            }
+        ],
+    }
+    instr = _force_patch_dev_instruction(task, "Developer")
+    assert "FORCED PATCH" in instr
+    assert "lib/main.dart" in instr
+    assert "override" in instr.lower()
+
+
+def test_record_dev_precheck_skip_writes_diagnostics(tmp_path, monkeypatch):
+    monkeypatch.setenv("ALLHANDS_HOME", str(tmp_path))
+    initialize()
+    state.CURRENT_PROJECT_ID = "test-proj"
+    state.SPRINT_PROGRESS_MAX = 20
+    state.LAST_STEP_DIAGNOSTICS = None
+    clear_active_step_trace()
+
+    park_msg = (
+        "Same next task reissued with no writes or better oracle — parking instead of another generate."
+    )
+    from backend.services.sprint_service import _record_dev_precheck_skip
+
+    _record_dev_precheck_skip(
+        "T-PRECHECK",
+        "Lint: lib/main.dart",
+        "In Progress",
+        reason=park_msg,
+    )
+
+    assert state.LAST_STEP_DIAGNOSTICS is not None
+    path = Path(state.LAST_STEP_DIAGNOSTICS["filePath"])
+    assert path.is_file()
+    data = json.loads(path.read_text(encoding="utf-8"))
+    assert data["taskId"] == "T-PRECHECK"
+    assert data["status"] == "complete"
+    assert data["exitReason"] == "dev_precheck_skip"
+    assert park_msg[:40] in data["agentResultSnippet"]
+    assert get_active_trace() is None
+
+
+def test_record_dev_precheck_skip_when_sprint_max_one(tmp_path, monkeypatch):
+    monkeypatch.setenv("ALLHANDS_HOME", str(tmp_path))
+    initialize()
+    state.CURRENT_PROJECT_ID = "test-proj"
+    state.SPRINT_PROGRESS_MAX = 1
+    clear_active_step_trace()
+
+    from backend.services.sprint_service import _record_dev_precheck_skip
+
+    _record_dev_precheck_skip(
+        "T-PRECHECK-1",
+        "Lint: lib/main.dart",
+        "In Progress",
+        reason="Lint stall — Forced Patch retry queued",
+    )
+
+    assert state.LAST_STEP_DIAGNOSTICS is not None
+    assert Path(state.LAST_STEP_DIAGNOSTICS["filePath"]).is_file()
+    assert get_active_trace() is None
+
+
+def test_empty_trace_does_not_embed_stale_step_progress(tmp_path, monkeypatch):
+    monkeypatch.setenv("ALLHANDS_HOME", str(tmp_path))
+    initialize()
+    state.CURRENT_PROJECT_ID = "test-proj"
+    state.LAST_STEP_PROGRESS = {
+        "taskId": "T-STALE",
+        "intent": "Waiting for model (Ollama) — iter 6/30 · 915s — LLM call in flight",
+    }
+    trace = start_step_trace("T-STALE", "Feature work", "Developer", "In Progress")
+    summary = finalize_active_step_trace(
+        lane_after="In Progress",
+        agent_result="Same next task reissued with no writes or better oracle — parking instead of another generate.",
+    )
+    assert summary is not None
+    data = json.loads(trace.file_path.read_text(encoding="utf-8"))
+    assert data["exitReason"] == "dev_precheck_skip"
+    assert "stepProgress" not in data
+
+
+def test_record_dev_precheck_skip_includes_park_fields(tmp_path, monkeypatch):
+    monkeypatch.setenv("ALLHANDS_HOME", str(tmp_path))
+    initialize()
+    state.CURRENT_PROJECT_ID = "test-proj"
+    state.SPRINT_PROGRESS_MAX = 20
+    clear_active_step_trace()
+
+    from backend.services.sprint_service import _record_dev_precheck_skip
+
+    _record_dev_precheck_skip(
+        "T-PARK-FIELDS",
+        "Import card",
+        "In Progress",
+        reason="Same next task reissued with no writes or better oracle — parking instead of another generate.",
+        park_attempted=True,
+        park_succeeded=False,
+        needs_user_kind="phase_cycle_cap",
+    )
+
+    data = json.loads(Path(state.LAST_STEP_DIAGNOSTICS["filePath"]).read_text(encoding="utf-8"))
+    assert data["parkAttempted"] is True
+    assert data["parkSucceeded"] is False
+    assert data["needsUserKind"] == "phase_cycle_cap"
+

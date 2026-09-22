@@ -9,6 +9,17 @@ export function capLogs(prev: SystemLog[], log: SystemLog): SystemLog[] {
   return [...prev, log].slice(-MAX_CLIENT_LOG_ENTRIES)
 }
 
+/** SSE state snapshots must not shrink live append-only logs during a sprint. */
+export function mergeLogsPreservingLive(
+  prev: SystemLog[],
+  incoming?: SystemLog[],
+): SystemLog[] {
+  if (!incoming?.length || incoming.length < prev.length) {
+    return prev
+  }
+  return incoming.slice(-MAX_CLIENT_LOG_ENTRIES)
+}
+
 export function appendTerminalOutput(
   prev: string,
   chunk: string,

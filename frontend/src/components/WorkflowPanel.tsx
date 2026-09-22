@@ -3,6 +3,7 @@ import {
   checkQdrantHealth,
   exportTrainingJsonl,
   fetchIndexStatus,
+  fetchSystemCapacity,
   probeMcpServers,
   reindexCodebase,
   reloadMcpServers,
@@ -25,6 +26,8 @@ interface WorkflowPanelProps {
   changelog: BriefChangelogEntry[]
   notifications: WorkflowNotifications
   onSettingsChange: (partial: Partial<WorkflowSettings>) => void
+  /** When a quality preset sets all role primaries to one model. */
+  onApplyAllRoleModels?: (model: string) => void
   ollamaUrl?: string
   indexProgress?: IndexProgress | null
   onOpenMemoryTab?: () => void
@@ -43,6 +46,7 @@ export default function WorkflowPanel({
   changelog,
   notifications,
   onSettingsChange,
+  onApplyAllRoleModels,
   ollamaUrl = 'http://localhost:11434',
   indexProgress = null,
   onOpenMemoryTab,
@@ -58,11 +62,16 @@ export default function WorkflowPanel({
     available?: boolean
     chunks?: number
   } | null>(null)
-  const [reindexing, setReindexing] = useState(false)
+  const [presetNotice, setPresetNotice] = useState<string | null>(null)
+  const [systemCapacity, setSystemCapacity] = useState<{
+    vramMb?: number | null
+    gpuAvailable?: boolean
+  } | null>(null)
   const [indexError, setIndexError] = useState<string | null>(null)
   const [qdrantApiKeyInput, setQdrantApiKeyInput] = useState('')
   const [qdrantTestStatus, setQdrantTestStatus] = useState<string | null>(null)
   const [qdrantTesting, setQdrantTesting] = useState(false)
+  const [reindexing, setReindexing] = useState(false)
   const [reindexResult, setReindexResult] = useState<string | null>(null)
   const [mcpServersJson, setMcpServersJson] = useState(() =>
     JSON.stringify(settings.mcpServers ?? [], null, 2),
@@ -113,6 +122,152 @@ export default function WorkflowPanel({
   useEffect(() => {
     setDiscordAllowedUsersText((settings.discordBotAllowedUserIds ?? []).join('\n'))
   }, [settings.discordBotAllowedUserIds])
+
+  useEffect(() => {
+    let cancelled = false
+    void fetchSystemCapacity()
+      .then((data) => {
+        if (!cancelled) {
+          setSystemCapacity({
+            vramMb: data.vramMb,
+            gpuAvailable: data.gpuAvailable,
+          })
+        }
+      })
+      .catch(() => {
+        if (!cancelled) setSystemCapacity(null)
+      })
+    return () => {
+      cancelled = true
+    }
+  }, [])
+
+  const effectiveVramMb =
+    (settings.llmHostVramMb ?? 0) > 0
+      ? settings.llmHostVramMb
+      : typeof systemCapacity?.vramMb === 'number'
+        ? systemCapacity.vramMb
+        : null
+  const showSingleModelVramHint =
+    typeof effectiveVramMb === 'number' && effectiveVramMb > 0 && effectiveVramMb <= 16000
+
+  const workflowPresets = [
+    {
+      id: 'quality-single',
+      label: 'Quality single model',
+      roleModel: 'qwen2.5-coder:14b',
+      notice: null as string | null,
+      patch: {
+        enablePhaseModelRouting: false,
+        singleModelMode: 'on' as const,
+        llmHostVramMb: 12288,
+        devExploreModel: 'qwen2.5-coder:14b',
+        devPatchModel: 'qwen2.5-coder:14b',
+        promptProfile: 'full' as const,
+        maxLlmIterationsPerStep: 30,
+        ollamaNumCtxAdaptiveStart: 8192,
+        devExploreForcePatchInStep: false,
+        enableDevPhaseGraph: true,
+        agentEfficiencyMode: 'high' as const,
+        devExploreMaxTools: 8,
+      },
+    },
+    {
+      id: 'quality-27b',
+      label: 'Quality max (27B exp)',
+      roleModel: 'qwen/qwen3.8-27b:latest',
+      notice:
+        '12GB GPU — expect slow generation and possible CPU offload. Use for hard cards only; compare against Quality single model (14B).',
+      patch: {
+        enablePhaseModelRouting: false,
+        singleModelMode: 'on' as const,
+        llmHostVramMb: 12288,
+        devExploreModel: 'qwen/qwen3.8-27b:latest',
+        devPatchModel: 'qwen/qwen3.8-27b:latest',
+        promptProfile: 'full' as const,
+        maxLlmIterationsPerStep: 30,
+        ollamaNumCtxAdaptiveStart: 6144,
+        devExploreForcePatchInStep: false,
+        enableDevPhaseGraph: true,
+        agentEfficiencyMode: 'high' as const,
+      },
+    },
+    {
+      id: 'fast-dev',
+      label: 'Fast first code',
+      roleModel: null as string | null,
+      notice: null as string | null,
+      patch: {
+        prioritizeImplementationOverRefinement: true,
+        requireBacklogRefinement: false,
+        enableFocusMicroSteps: false,
+        enableDevPhaseGraph: true,
+        agentEfficiencyMode: 'high' as const,
+        enablePhaseModelRouting: true,
+        enableDevCoreMemoryBlock: true,
+        enablePromptSectionRotation: false,
+        maxToolsPerLlmTurn: 3,
+        maxLlmIterationsPerStep: 6,
+        maxToolFailuresPerStep: 4,
+        duplicateToolPolicy: 'strict' as const,
+        devExploreMaxTools: 8,
+        devExploreForcePatchInStep: true,
+        devPatchMaxTools: 12,
+        devVerifyMaxTools: 2,
+        promptProfile: 'local_slm' as const,
+        localSlmSprintPreload: true,
+        toolOutputEchoStopAfter: 2,
+        enableLlmDecisionTrace: true,
+      },
+    },
+    {
+      id: 'solo',
+      label: 'Solo',
+      roleModel: null,
+      notice: null,
+      patch: {
+        requireToolApproval: false,
+        requireCodeReview: false,
+        requireCleanLint: false,
+        requireBacklogApproval: false,
+        autonomousMode: false,
+      },
+    },
+    {
+      id: 'gated',
+      label: 'Gated',
+      roleModel: null,
+      notice: null,
+      patch: {
+        requireToolApproval: true,
+        requireCodeReview: true,
+        requireCleanLint: true,
+        requireDevVerification: true,
+        requireFileCompleteness: true,
+        autonomousMode: false,
+      },
+    },
+    {
+      id: 'autonomous',
+      label: 'Autonomous',
+      roleModel: null,
+      notice: null,
+      patch: {
+        autonomousMode: true,
+        requireToolApproval: false,
+        maxNeedsUserPerSprint: 8,
+        pauseSprintOnNeedsUser: false,
+      },
+    },
+  ] as const
+
+  const applyWorkflowPreset = (preset: (typeof workflowPresets)[number]) => {
+    onSettingsChange({ ...preset.patch })
+    if (preset.roleModel && onApplyAllRoleModels) {
+      onApplyAllRoleModels(preset.roleModel)
+    }
+    setPresetNotice(preset.notice)
+  }
 
   const refreshIndexStatus = useCallback(async () => {
     try {
@@ -207,72 +362,11 @@ export default function WorkflowPanel({
         data-testid="workflow-presets"
       >
         <span className="text-[10px] text-cat-overlay mr-1">Presets:</span>
-        {(
-          [
-            {
-              id: 'fast-dev',
-              label: 'Fast first code',
-              patch: {
-                prioritizeImplementationOverRefinement: true,
-                requireBacklogRefinement: false,
-                enableFocusMicroSteps: false,
-                enableDevPhaseGraph: true,
-                agentEfficiencyMode: 'high',
-                enablePhaseModelRouting: true,
-                enableDevCoreMemoryBlock: true,
-                enablePromptSectionRotation: false,
-                maxToolsPerLlmTurn: 3,
-                maxLlmIterationsPerStep: 6,
-                maxToolFailuresPerStep: 4,
-                duplicateToolPolicy: 'strict',
-                devExploreMaxTools: 8,
-                devExploreForcePatchInStep: true,
-                devPatchMaxTools: 12,
-                devVerifyMaxTools: 2,
-                promptProfile: 'local_slm',
-                localSlmSprintPreload: true,
-                toolOutputEchoStopAfter: 2,
-                enableLlmDecisionTrace: true,
-              },
-            },
-            {
-              id: 'solo',
-              label: 'Solo',
-              patch: {
-                requireToolApproval: false,
-                requireCodeReview: false,
-                requireCleanLint: false,
-                requireBacklogApproval: false,
-                autonomousMode: false,
-              },
-            },
-            {
-              id: 'gated',
-              label: 'Gated',
-              patch: {
-                requireToolApproval: true,
-                requireCodeReview: true,
-                requireCleanLint: true,
-                requireDevVerification: true,
-                autonomousMode: false,
-              },
-            },
-            {
-              id: 'autonomous',
-              label: 'Autonomous',
-              patch: {
-                autonomousMode: true,
-                requireToolApproval: false,
-                maxNeedsUserPerSprint: 8,
-                pauseSprintOnNeedsUser: false,
-              },
-            },
-          ] as const
-        ).map((p) => (
+        {workflowPresets.map((p) => (
           <button
             key={p.id}
             type="button"
-            onClick={() => onSettingsChange({ ...p.patch })}
+            onClick={() => applyWorkflowPreset(p)}
             className="text-[10px] px-2 py-0.5 rounded border border-cat-surface1 text-cat-subtext hover:bg-cat-base hover:text-white"
           >
             {p.label}
@@ -282,6 +376,11 @@ export default function WorkflowPanel({
           (never clears Discord/phone secrets)
         </span>
       </div>
+      {presetNotice && (
+        <p className="text-[10px] text-amber-300 leading-relaxed border border-amber-500/30 bg-amber-950/30 rounded px-2 py-1.5">
+          {presetNotice}
+        </p>
+      )}
 
       <div className="flex flex-wrap gap-1" data-testid="workflow-tabs">
         {(
@@ -436,6 +535,13 @@ export default function WorkflowPanel({
           Phase model routing (Explore small → Patch strong)
           <SettingHint hint="Dev Explore uses a smaller/faster Ollama model; Patch/Verify use the primary coder. Empty Explore model falls back to Dev backup or 7B preset." />
         </label>
+        {showSingleModelVramHint && (
+          <p className="text-[10px] text-amber-300 leading-relaxed pl-5 -mt-1">
+            {typeof effectiveVramMb === 'number' && effectiveVramMb <= 12288
+              ? '12GB VRAM detected — single-model qwen2.5-coder:14b recommended. Explore 7B + Patch 14B causes reloads and weak explore quality.'
+              : '≤16GB VRAM — prefer single-model mode and disable phase routing to avoid reload thrash.'}
+          </p>
+        )}
         {(settings.enablePhaseModelRouting !== false) && (
           <div className="grid grid-cols-2 gap-2 text-[11px]">
             <label>
@@ -521,6 +627,31 @@ export default function WorkflowPanel({
         Auto Blocked lane (move cards waiting on deps)
         <SettingHint hint="Automatically parks cards that are waiting on other cards into a Blocked lane." />
       </label>
+      <label className="flex items-center gap-2 text-[11px] text-cat-subtext cursor-pointer">
+        <input
+          type="checkbox"
+          checked={settings.enableFileBlockerOrchestration !== false}
+          onChange={(e) =>
+            onSettingsChange({ enableFileBlockerOrchestration: e.target.checked })
+          }
+        />
+        Shared-file lint blocker (one fix card, block dependents)
+        <SettingHint hint="When multiple cards fail on the same file, create one fix card and move dependents to Blocked instead of Needs User." />
+      </label>
+      {(settings.enableFileBlockerOrchestration !== false) && (
+        <label className="flex items-center gap-2 text-[11px] text-cat-subtext pl-5">
+          <span className="text-cat-overlay shrink-0 inline-flex items-center">
+            Min cards per file
+            <SettingHint hint="Block dependents when this many open cards share the same broken file." />
+          </span>
+          <NumberSettingInput
+            value={settings.fileBlockerMinDependents ?? 2}
+            min={2}
+            max={20}
+            onChange={(n) => onSettingsChange({ fileBlockerMinDependents: n })}
+          />
+        </label>
+      )}
       {(settings.requireBacklogRefinement ?? false) && (
         <label className="flex items-center gap-2 text-[11px] text-cat-subtext pl-5 cursor-pointer">
           <input
@@ -638,6 +769,24 @@ export default function WorkflowPanel({
         />
         Auto-scaffold when structure critically incomplete
         <SettingHint hint="If key project files are missing, the agent may create a basic scaffold automatically." />
+      </label>
+      <label className="flex items-center gap-2 text-[11px] text-cat-subtext cursor-pointer">
+        <input
+          type="checkbox"
+          checked={settings.requireFileCompleteness ?? true}
+          onChange={(e) => onSettingsChange({ requireFileCompleteness: e.target.checked })}
+        />
+        Require complete file output (no TODO/stub placeholders)
+        <SettingHint hint="Blocks dev/QA advance when written files contain TODO comments, auto-scaffold stubs, or comment-only placeholders." />
+      </label>
+      <label className="flex items-center gap-2 text-[11px] text-cat-subtext cursor-pointer pl-5">
+        <input
+          type="checkbox"
+          checked={settings.allowStubDelegation ?? false}
+          onChange={(e) => onSettingsChange({ allowStubDelegation: e.target.checked })}
+        />
+        Allow stub delegation to another card
+        <SettingHint hint="When on, a card that scaffolds stubs may advance if another backlog card explicitly owns that file path." />
       </label>
       <label className="flex items-center gap-2 text-[11px] text-cat-subtext cursor-pointer">
         <input
@@ -1232,6 +1381,100 @@ export default function WorkflowPanel({
           Implementer skips Product Owner clarification when the spec is already present, turns
           off lint fan-out, and keeps the Developer on the card until files change.
         </p>
+        <p className="text-[10px] text-cat-overlay/80 leading-relaxed pl-5">
+          Saved to project file when you change profile.
+        </p>
+      </fieldset>
+      <fieldset className="pl-1 space-y-1 border-t border-cat-surface0/40 pt-2">
+        <legend className="text-[11px] text-cat-subtext">
+          Plan &amp; Run (Cursor-like)
+          <SettingHint hint="Plan & Run defaults to implementer profile and can skip PO planning when the brief is already actionable." />
+        </legend>
+        <label className="flex items-center gap-2 text-[11px] text-cat-subtext">
+          <span className="shrink-0 w-28">Plan &amp; Run profile</span>
+          <select
+            className="flex-1 bg-cat-mantle border border-cat-surface0 rounded px-1 py-0.5 text-[11px]"
+            value={settings.planRunExecutionProfile || 'implementer'}
+            onChange={(e) => onSettingsChange({ planRunExecutionProfile: e.target.value })}
+          >
+            <option value="implementer">Implementer (default)</option>
+            <option value="scrum">Scrum</option>
+            <option value="inherit">Inherit current profile</option>
+          </select>
+        </label>
+        <label className="flex items-center gap-2 text-[11px] text-cat-subtext cursor-pointer">
+          <input
+            type="checkbox"
+            checked={settings.planRunSkipPoWhenActionable !== false}
+            onChange={(e) => onSettingsChange({ planRunSkipPoWhenActionable: e.target.checked })}
+          />
+          Skip PO plan when brief is actionable
+        </label>
+        <label className="flex items-center gap-2 text-[11px] text-cat-subtext cursor-pointer">
+          <input
+            type="checkbox"
+            checked={settings.implementerRelaxGatesOnAutoSprint !== false}
+            onChange={(e) =>
+              onSettingsChange({ implementerRelaxGatesOnAutoSprint: e.target.checked })
+            }
+          />
+          Relax gates during implementer auto-sprint
+        </label>
+        <label className="flex items-center gap-2 text-[11px] text-cat-subtext cursor-pointer">
+          <input
+            type="checkbox"
+            checked={settings.enableCardSessionContinuity !== false}
+            onChange={(e) => onSettingsChange({ enableCardSessionContinuity: e.target.checked })}
+          />
+          Card session continuity (same-card LLM thread)
+        </label>
+        <label className="flex items-center gap-2 text-[11px] text-cat-subtext cursor-pointer">
+          <input
+            type="checkbox"
+            checked={settings.enableWorkspaceRulesInject !== false}
+            onChange={(e) => onSettingsChange({ enableWorkspaceRulesInject: e.target.checked })}
+          />
+          Inject AGENTS.md / .cursor/rules into system prompt
+        </label>
+        <label className="flex items-center gap-2 text-[11px] text-cat-subtext cursor-pointer">
+          <input
+            type="checkbox"
+            checked={settings.enableCloudDevProvider === true}
+            onChange={(e) => onSettingsChange({ enableCloudDevProvider: e.target.checked })}
+          />
+          Cloud Dev model (OpenAI-compatible API)
+        </label>
+        {settings.enableCloudDevProvider ? (
+          <div className="pl-5 space-y-1">
+            <label className="flex items-center gap-2 text-[11px] text-cat-subtext">
+              <span className="shrink-0 w-20">Base URL</span>
+              <input
+                className="flex-1 bg-cat-mantle border border-cat-surface0 rounded px-1 py-0.5"
+                value={settings.cloudDevBaseUrl || ''}
+                onChange={(e) => onSettingsChange({ cloudDevBaseUrl: e.target.value })}
+                placeholder="https://api.openai.com/v1"
+              />
+            </label>
+            <label className="flex items-center gap-2 text-[11px] text-cat-subtext">
+              <span className="shrink-0 w-20">Model</span>
+              <input
+                className="flex-1 bg-cat-mantle border border-cat-surface0 rounded px-1 py-0.5"
+                value={settings.cloudDevModel || ''}
+                onChange={(e) => onSettingsChange({ cloudDevModel: e.target.value })}
+                placeholder="gpt-4o"
+              />
+            </label>
+            <label className="flex items-center gap-2 text-[11px] text-cat-subtext">
+              <span className="shrink-0 w-20">API key</span>
+              <input
+                type="password"
+                className="flex-1 bg-cat-mantle border border-cat-surface0 rounded px-1 py-0.5"
+                placeholder={settings.cloudDevApiKeyConfigured ? '(configured)' : 'sk-…'}
+                onChange={(e) => onSettingsChange({ cloudDevApiKey: e.target.value })}
+              />
+            </label>
+          </div>
+        ) : null}
       </fieldset>
       <p className="text-[10px] text-cat-overlay leading-relaxed pl-5 border-l-2 border-amber-500/30 ml-1">
         <span className="text-amber-300/90 font-semibold">Too many Needs User cards?</span> Enable

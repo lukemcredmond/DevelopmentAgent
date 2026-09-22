@@ -667,9 +667,21 @@ def normalize_task(task: Dict[str, Any]) -> Dict[str, Any]:
             task["focusStepsRun"] = 0
     if str(task.get("status") or "") == "Needs User":
         try:
-            from backend.services.needs_user_guard import ensure_needs_user_brief
+            from backend.services.needs_user_guard import (
+                apply_needs_user_brief,
+                build_needs_user_brief,
+                needs_user_fields_empty,
+                reconcile_needs_user_task_to_dev,
+                should_park_in_needs_user,
+                should_reconcile_needs_user_task,
+            )
 
-            ensure_needs_user_brief(task)
+            if should_reconcile_needs_user_task(task):
+                reconcile_needs_user_task_to_dev(task, source="normalize")
+            elif needs_user_fields_empty(task):
+                brief = build_needs_user_brief(task, kind="stuck_loop")
+                if should_park_in_needs_user(task, brief)[0]:
+                    apply_needs_user_brief(task, brief)
         except Exception:
             pass
     return task
@@ -745,9 +757,21 @@ def normalize_board_tasks() -> None:
             normalize_task(task)
             if str(lane) == "Needs User":
                 try:
-                    from backend.services.needs_user_guard import ensure_needs_user_brief
+                    from backend.services.needs_user_guard import (
+                        apply_needs_user_brief,
+                        build_needs_user_brief,
+                        needs_user_fields_empty,
+                        reconcile_needs_user_task_to_dev,
+                        should_park_in_needs_user,
+                        should_reconcile_needs_user_task,
+                    )
 
-                    ensure_needs_user_brief(task)
+                    if should_reconcile_needs_user_task(task):
+                        reconcile_needs_user_task_to_dev(task, source="board_load")
+                    elif needs_user_fields_empty(task):
+                        brief = build_needs_user_brief(task, kind="stuck_loop")
+                        if should_park_in_needs_user(task, brief)[0]:
+                            apply_needs_user_brief(task, brief)
                 except Exception:
                     pass
             sync_task_files_from_transcript(task)

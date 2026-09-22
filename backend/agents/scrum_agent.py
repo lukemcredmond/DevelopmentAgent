@@ -1,3 +1,4 @@
+import hashlib
 import json
 import os
 import re
@@ -10,6 +11,7 @@ from ollama._types import Message
 
 from backend import state
 from backend.agents.agent_run import (
+    append_streaming_text,
     finish_run,
     get_active_run,
     start_run,
@@ -549,7 +551,18 @@ class ScrumAgent:
         return max(15, base)
 
     def _get_provider(self):
-        from backend.services.llm_provider import chat_config, get_chat_provider
+        from backend.services.llm_provider import build_provider, chat_config, get_chat_provider
+
+        if getattr(self, "_use_cloud_provider", False):
+            cfg = getattr(self, "_cloud_provider_config", None) or {}
+            if cfg:
+                timeout = self._ollama_timeout_sec()
+                provider = build_provider(cfg)
+                provider.timeout_sec = timeout
+                self._provider = provider
+                self._provider_host = str(cfg.get("baseUrl") or "")
+                self._provider_timeout = timeout
+                return self._provider
 
         timeout = self._ollama_timeout_sec()
         cfg = chat_config(override_url=self.ollama_url)
@@ -647,7 +660,16 @@ class ScrumAgent:
         return skills_context
 
     def _build_system_content(self) -> str:
-        return self.system_prompt + self._get_skills_context()
+        base = self.system_prompt + self._get_skills_context()
+        try:
+            from backend.services.workspace_rules import load_workspace_rules_context
+
+            rules = load_workspace_rules_context()
+            if rules:
+                base += rules
+        except Exception:
+            pass
+        return base
 
     def _build_user_content(self, user_prompt: str) -> str:
         from backend import state
@@ -1286,6 +1308,14 @@ class ScrumAgent:
                 from backend.services.po_clarification import PO_NUM_PREDICT_DEFAULT
 
                 opts["num_predict"] = int(PO_NUM_PREDICT_DEFAULT)
+        elif self.role == "Developer":
+            cap = getattr(self, "_step_num_predict", None)
+            if cap is not None:
+                opts["num_predict"] = int(cap)
+            elif "num_predict" not in opts:
+                from backend.services.agent_efficiency import dev_num_predict_default
+
+                opts["num_predict"] = dev_num_predict_default(ws)
         self._record_sampling_snapshot(opts, provider)
         return opts
 
@@ -1347,8 +1377,12 @@ class ScrumAgent:
         if ScrumAgent._is_context_overflow_error(error):
             return "context_overflow"
         lower = error.lower()
+        if "cancelled" in lower:
+            return "cancelled"
         if "empty generation" in lower:
             return "empty_generation_timeout"
+        if "generation aborted" in lower or "without tool calls" in lower:
+            return "runaway_generation"
         if "timeout" in lower or "timed out" in lower:
             return "timeout"
         if any(
@@ -1449,11 +1483,43 @@ class ScrumAgent:
             elif isinstance(raw, ChatResult):
                 result = raw
             elif inspect.isgenerator(raw):
-                result = consume_chat_stream(
-                    raw,
-                    empty_timeout_sec=max(15, empty_timeout),
-                    flowing_timeout_sec=max(15, flowing_timeout),
+                from backend import state as _state
+                from backend.services.agent_efficiency import dev_eval_timeout_sec
+
+                eval_timeout = (
+                    dev_eval_timeout_sec() if self.role == "Developer" else None
                 )
+                update_run(clear_streaming_text=True)
+
+                def _on_token(piece: str) -> None:
+                    append_streaming_text(piece)
+
+                try:
+                    result = consume_chat_stream(
+                        raw,
+                        empty_timeout_sec=max(15, empty_timeout),
+                        flowing_timeout_sec=max(15, flowing_timeout),
+                        eval_timeout_sec=eval_timeout,
+                        cancel_check=lambda: bool(
+                            getattr(_state, "SPRINT_CANCEL", False)
+                            or getattr(_state, "DEV_STEP_INTERRUPTED", False)
+                        ),
+                        on_token=_on_token if self.role == "Developer" else None,
+                    )
+                except Exception as stream_exc:
+                    from backend.services.llm_provider import RunawayGenerationAborted
+
+                    if isinstance(stream_exc, RunawayGenerationAborted):
+                        try:
+                            from backend.services.step_diagnostics import log_event
+
+                            log_event(
+                                "runaway_generation_aborted",
+                                str(stream_exc)[:200],
+                            )
+                        except Exception:
+                            pass
+                    raise
             else:
                 result = raw
             duration_ms = int((time.time() - started) * 1000)
@@ -1571,6 +1637,14 @@ class ScrumAgent:
             for idx, delay in enumerate(attempt_delays):
                 if delay:
                     time.sleep(delay)
+                from backend import state as _state
+
+                if getattr(_state, "SPRINT_CANCEL", False) or getattr(
+                    _state, "DEV_STEP_INTERRUPTED", False
+                ):
+                    self._last_chat_error = "Sprint step cancelled"
+                    self._last_chat_error_type = "cancelled"
+                    return None
                 attempt_num = idx + 1
                 while True:
                     result, err, err_type, duration_ms = self._single_chat_attempt(
@@ -1864,6 +1938,8 @@ class ScrumAgent:
         publish_activity_event: bool = False,
         prompt_section: Optional[str] = None,
         dev_phase: Optional[str] = None,
+        ollama_wait_sec: Optional[int] = None,
+        ollama_wait_max_sec: Optional[int] = None,
     ) -> None:
         """Emit intent + cardProgress on agent_run and sprint_progress."""
         from backend.services.step_diagnostics import build_card_work_snapshot
@@ -1935,6 +2011,9 @@ class ScrumAgent:
                 focus_ac_index=focus_ac,
                 focus_subtask_id=focus_sub,
                 prompt_section=prompt_section,
+                ollama_wait_sec=ollama_wait_sec,
+                ollama_wait_max_sec=ollama_wait_max_sec,
+                phase_cycle_cap_reached=bool(active.get("phaseCycleCapReached")),
             )
         if publish_activity_event and task_id and intent:
             from backend.agents.task_context import publish_activity
@@ -2109,6 +2188,52 @@ class ScrumAgent:
                 cmd_hint = ""
                 if tool_name == "run_command" and isinstance(arguments, dict):
                     cmd_hint = str(arguments.get("command") or "")[:80]
+                    from backend.services.duplicate_tool_policy import is_verify_command
+
+                    if is_verify_command(cmd_hint):
+                        replay_pair = _resolve_in_step_duplicate_replay(
+                            tool_name, arguments, live_task, same_success
+                        )
+                        if replay_pair:
+                            tool_output, _ok = replay_pair
+                            skip_intent = f"Skipped duplicate verify: {cmd_hint}"
+                            self._publish_work_progress(
+                                task_id=task_id,
+                                intent=skip_intent,
+                                status=skip_intent,
+                                run_status="thinking",
+                                clear_tool=True,
+                            )
+                            add_system_log(self.role, "info", skip_intent)
+                            with _FAILURE_LOCK:
+                                successful_tool_keys.append(dup_key)
+                            _track_fingerprint()
+                            _log_duplicate_skip(
+                                agent=self.role,
+                                tool_name=tool_name,
+                                arguments=arguments,
+                                tool_output=tool_output,
+                                task_id=task_id,
+                                run_id=run_id,
+                                success=True,
+                            )
+                            safe_args = sanitize_tool_args_for_log(tool_name, arguments)
+                            result = ToolExecutionResult(
+                                tool_name=tool_name,
+                                arguments=arguments,
+                                safe_args=safe_args,
+                                tool_output=tool_output,
+                                success=True,
+                                duration_ms=0,
+                                timestamp="",
+                                agent=self.role,
+                                agent_id=agent_id,
+                                task_id=task_id,
+                                source="agent",
+                                run_id=run_id,
+                            )
+                            setattr(result, "duplicate_skip", True)
+                            return tool_name, arguments, result, None
                 stop_msg = _duplicate_loop_stop_message(tool_name, arguments, same_success)
                 self._log_step_exit(stop_msg, "warning")
                 self._publish_work_progress(
@@ -2328,6 +2453,109 @@ class ScrumAgent:
                 f"No prior output for duplicate '{tool_name}' — executing tool",
             )
 
+        if tool_name == "write_file" and self.role == "Developer":
+            path_arg = str((arguments or {}).get("path") or "")
+            if path_arg:
+                try:
+                    from backend.workspace.files import resolve_workspace_path
+
+                    safe = resolve_workspace_path(path_arg)
+                    phys = os.path.join(state.WORKSPACE_DIR, safe)
+                    if os.path.isfile(phys):
+                        tool_output = (
+                            f"Error: write_file blocked — '{path_arg}' already exists. "
+                            "Use apply_patch for edits; write_file is for new files only."
+                        )
+                        add_system_log(self.role, "warning", tool_output[:200])
+                        safe_args = sanitize_tool_args_for_log(tool_name, arguments)
+                        blocked = ToolExecutionResult(
+                            tool_name=tool_name,
+                            arguments=arguments if isinstance(arguments, dict) else {},
+                            safe_args=safe_args,
+                            tool_output=tool_output,
+                            success=False,
+                            duration_ms=0,
+                            timestamp="",
+                            agent=self.role,
+                            agent_id=agent_id,
+                            task_id=task_id,
+                            source="agent",
+                            run_id=run_id,
+                        )
+                        return tool_name, arguments, blocked, None
+                except ValueError:
+                    pass
+
+        if tool_name == "apply_patch" and self.role == "Developer":
+            path_arg = str((arguments or {}).get("path") or "")
+            if path_arg:
+                from backend.services.patch_recovery import failed_patch_fingerprint
+
+                fp = failed_patch_fingerprint(
+                    path_arg,
+                    old_text=str((arguments or {}).get("old_text") or ""),
+                    new_text=str((arguments or {}).get("new_text") or ""),
+                )
+                prior = int((getattr(self, "_identical_patch_fail_counts", None) or {}).get(fp) or 0)
+                if prior >= 1:
+                    tool_output = (
+                        f"Error: identical apply_patch blocked for '{path_arg}' — "
+                        "read_file then use different old_text or write_file."
+                    )
+                    add_system_log(self.role, "warning", tool_output[:200])
+                    safe_args = sanitize_tool_args_for_log(tool_name, arguments)
+                    blocked = ToolExecutionResult(
+                        tool_name=tool_name,
+                        arguments=arguments if isinstance(arguments, dict) else {},
+                        safe_args=safe_args,
+                        tool_output=tool_output,
+                        success=False,
+                        duration_ms=0,
+                        timestamp="",
+                        agent=self.role,
+                        agent_id=agent_id,
+                        task_id=task_id,
+                        source="agent",
+                        run_id=run_id,
+                    )
+                    return tool_name, arguments, blocked, None
+
+        if tool_name == "read_file":
+            path_arg = str((arguments or {}).get("path") or "")
+            if path_arg:
+                from backend.services.step_read_cache import get_step_read_cache
+
+                cached_out = get_step_read_cache(self).get(path_arg)
+                if cached_out:
+                    skip_intent = f"Cached read_file: {path_arg}"
+                    self._publish_work_progress(
+                        task_id=task_id,
+                        intent=skip_intent,
+                        status=skip_intent,
+                        run_status="thinking",
+                        clear_tool=True,
+                    )
+                    add_system_log(self.role, "info", skip_intent)
+                    safe_args = sanitize_tool_args_for_log(tool_name, arguments)
+                    cached = ToolExecutionResult(
+                        tool_name=tool_name,
+                        arguments=arguments if isinstance(arguments, dict) else {},
+                        safe_args=safe_args,
+                        tool_output=cached_out,
+                        success=True,
+                        duration_ms=0,
+                        timestamp="",
+                        agent=self.role,
+                        agent_id=agent_id,
+                        task_id=task_id,
+                        source="agent",
+                        run_id=run_id,
+                    )
+                    setattr(cached, "read_cache_hit", True)
+                    with _FAILURE_LOCK:
+                        successful_tool_keys.append(dup_key)
+                    return tool_name, arguments, cached, None
+
         def _on_awaiting(name: str) -> None:
             self._publish_work_progress(
                 task_id=task_id,
@@ -2386,6 +2614,15 @@ class ScrumAgent:
                     path_key = str(arguments.get("path") or "")
                     if path_key:
                         purge_read_file_success_keys_for_path(successful_tool_keys, path_key)
+                        from backend.services.step_read_cache import get_step_read_cache
+
+                        get_step_read_cache(self).invalidate(path_key)
+                elif tool_name == "read_file":
+                    path_key = str(arguments.get("path") or "")
+                    if path_key:
+                        from backend.services.step_read_cache import get_step_read_cache
+
+                        get_step_read_cache(self).put(path_key, result.tool_output)
             _track_fingerprint()
 
         if not result.success and not result.pending_approval:
@@ -2701,6 +2938,7 @@ class ScrumAgent:
         # Durable post-rewind / post-fail recovery: must read_file then apply_patch.
         from backend.services.patch_recovery import (
             apply_batch_to_recovery_state,
+            build_patch_fail_excerpt_nudge,
             build_patch_recovery_nudge,
             build_patch_recovery_reminder,
             build_write_file_escalation_nudge,
@@ -2733,6 +2971,23 @@ class ScrumAgent:
                 old_text=str((args or {}).get("old_text") or ""),
                 new_text=str((args or {}).get("new_text") or ""),
             )
+            if identical_counts.get(fp, 0) >= 1 and injects < 3 and path:
+                from backend.workspace.files import read_workspace_file
+
+                body = read_workspace_file(path)
+                if body and not str(body).startswith("Error:"):
+                    messages.append(
+                        {
+                            "role": "system",
+                            "content": build_patch_fail_excerpt_nudge(
+                                path,
+                                body,
+                                str((args or {}).get("old_text") or ""),
+                            ),
+                        }
+                    )
+                    injects += 1
+                    self._patch_recovery_injects = injects
             identical_counts[fp] = int(identical_counts.get(fp) or 0) + 1
             if identical_counts[fp] >= 2:
                 escalate_paths.append(path)
@@ -3025,6 +3280,10 @@ class ScrumAgent:
 
             po_opts = sampling_options_for_role(self.role, ws=ws)
             self._step_num_predict = int(po_opts.get("num_predict") or PO_NUM_PREDICT_DEFAULT)
+        elif self.role == "Developer":
+            from backend.services.agent_efficiency import dev_num_predict_default
+
+            self._step_num_predict = dev_num_predict_default(ws)
         max_tool_failures = int(ws.get("maxToolFailuresPerStep", 5))
         max_duration_sec = int(ws.get("maxAgentStepDurationSec", 2700) or 2700)
         if max_step_duration_sec is not None:
@@ -3036,6 +3295,19 @@ class ScrumAgent:
         self._skip_cutoff_summary = False
         step_started_mono = time.monotonic()
         self._mid_step_backup_switched = False
+        setattr(self, "_use_cloud_provider", False)
+        setattr(self, "_cloud_provider_config", None)
+        task_id_for_session = state.ACTIVE_SPRINT_TASK_ID
+        session_task = find_task_by_id(task_id_for_session) if task_id_for_session else None
+        if session_task:
+            from backend.services.card_session import (
+                build_incremental_step_prompt,
+                load_card_session_messages,
+                should_resume_card_session,
+            )
+
+            if should_resume_card_session(session_task, role=self.role):
+                user_prompt = build_incremental_step_prompt(session_task, user_prompt)
         try:
             if getattr(state, "SPRINT_STEP_STARTED_MONO", None) is None:
                 state.SPRINT_STEP_STARTED_MONO = step_started_mono
@@ -3045,6 +3317,12 @@ class ScrumAgent:
             {"role": "system", "content": self._build_system_content()},
             {"role": "user", "content": self._build_user_content(user_prompt)},
         ]
+        if session_task and should_resume_card_session(session_task, role=self.role):
+            prior = load_card_session_messages(session_task)
+            if prior:
+                prior[0] = {"role": "system", "content": self._build_system_content()}
+                messages = prior
+                messages.append({"role": "user", "content": self._build_user_content(user_prompt)})
         rotation_enabled = bool(getattr(state, "SPRINT_PROMPT_ROTATION_ENABLED", False))
         rotation_blocks: List[str] = list(getattr(state, "SPRINT_PROMPT_ROTATION_BLOCKS", None) or [])
         rotation_names: List[str] = list(getattr(state, "SPRINT_PROMPT_ROTATION_NAMES", None) or [])
@@ -3125,6 +3403,11 @@ class ScrumAgent:
         self._patch_recovery_read_ok = set()
         self._patch_recovery_injects = 0
         self._identical_patch_fail_counts = {}
+        self._text_reject_hashes: Dict[str, int] = {}
+        self._forced_tool_mode = False
+        from backend.services.step_read_cache import StepReadCache
+
+        self._step_read_cache = StepReadCache()
         self._tool_batch_index = 0
         self._model_switches = 0
         # Prefer project PRIMARY_MODELS over registry init defaults.
@@ -3411,6 +3694,8 @@ class ScrumAgent:
                             iteration=iteration,
                             max_iterations=max_iterations,
                             run_status="thinking",
+                            ollama_wait_sec=elapsed,
+                            ollama_wait_max_sec=int(self._ollama_timeout_sec()),
                         )
 
                 ticker = threading.Thread(
@@ -3419,10 +3704,19 @@ class ScrumAgent:
                     daemon=True,
                 )
                 ticker.start()
+                active_tools = tools
+                if getattr(self, "_forced_tool_mode", False):
+                    allowed = frozenset({"apply_patch", "write_file"})
+                    active_tools = [
+                        t
+                        for t in (tools or [])
+                        if isinstance(t, dict)
+                        and str((t.get("function") or {}).get("name") or "") in allowed
+                    ]
                 try:
                     response = self._chat(
                         messages,
-                        tools=tools or None,
+                        tools=active_tools or None,
                         iteration=iteration,
                         task_id=task_id,
                     )
@@ -3848,6 +4142,51 @@ class ScrumAgent:
                         )
                         log_event("text_rejected", content[:200])
                         reject_label = "text-only"
+                    if reject_label == "text-only" and content:
+                        content_hash = hashlib.sha256(content.encode("utf-8", errors="replace")).hexdigest()[:16]
+                        hashes = getattr(self, "_text_reject_hashes", {}) or {}
+                        hashes[content_hash] = int(hashes.get(content_hash) or 0) + 1
+                        self._text_reject_hashes = hashes
+                        if hashes[content_hash] >= 2:
+                            try:
+                                log_event(
+                                    "identical_text_reject",
+                                    f"hash={content_hash} count={hashes[content_hash]}",
+                                )
+                            except Exception:
+                                pass
+                            stop_msg = (
+                                "Stopped: text rejection loop — identical text repeated "
+                                f"({hashes[content_hash]}×). Use apply_patch or write_file."
+                            )
+                            add_system_log(self.role, "warning", stop_msg)
+                            self._log_step_exit(stop_msg, "warning")
+                            self._finish_run(status="failed", error=stop_msg)
+                            pending_lesson = ("text_rejection_loop", set(tools_used), stop_msg)
+                            return stop_msg
+                    if (
+                        reject_label == "text-only"
+                        and text_n >= 3
+                        and not getattr(self, "_forced_tool_mode", False)
+                    ):
+                        from backend.services.agent_efficiency import forced_tool_num_predict
+
+                        self._forced_tool_mode = True
+                        self._step_num_predict = forced_tool_num_predict()
+                        try:
+                            log_event("forced_tool_mode", f"after {text_n} text rejects")
+                        except Exception:
+                            pass
+                        messages.append(
+                            {
+                                "role": "system",
+                                "content": (
+                                    "=== FORCED TOOL MODE ===\n"
+                                    "Text-only replies exhausted. Next message MUST be "
+                                    "apply_patch or write_file only — no prose."
+                                ),
+                            }
+                        )
                     if decision_trace_enabled():
                         amend_llm_log_entry(
                             task_id,
@@ -4039,6 +4378,17 @@ class ScrumAgent:
             if task_id:
                 task = find_task_by_id(task_id)
                 if task:
+                    try:
+                        from backend.services.card_session import save_card_session_messages
+
+                        save_card_session_messages(
+                            task,
+                            messages,
+                            user_prompt_snapshot=user_prompt,
+                            role=self.role,
+                        )
+                    except Exception:
+                        pass
                     sync_task_files_from_transcript(task)
                     from backend.services.board_service import publish_board_update
                     from backend.services.project_service import save_current_project_state

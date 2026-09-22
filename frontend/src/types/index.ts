@@ -75,6 +75,13 @@ export interface UserResolution {
   targetLane: string
 }
 
+export interface NeedsUserOption {
+  id: string
+  label: string
+  answer?: string
+  target?: 'dev' | 'po' | 'refinement'
+}
+
 export interface DependencyOutcome {
   taskId: string
   title: string
@@ -245,6 +252,7 @@ export interface Task {
   needsUserAction?: string | null
   needsUserKind?: string | null
   needsUserSuggestedTarget?: 'dev' | 'po' | 'refinement' | null
+  needsUserOptions?: NeedsUserOption[]
   userResolutions?: UserResolution[]
   needsUserCooldownUntilStep?: number | null
   needsUserDuplicate?: boolean
@@ -527,6 +535,9 @@ export interface WorkflowSettings {
   enableSplitOnStuck?: boolean
   requireWorkspaceStructure?: boolean
   autoScaffoldOnStructureGap?: boolean
+  requireFileCompleteness?: boolean
+  allowStubDelegation?: boolean
+  placeholderAllowlist?: string[]
   requireToolApproval?: boolean
   toolApprovalTools?: string[]
   nonBlockingToolApproval?: boolean
@@ -549,10 +560,29 @@ export interface WorkflowSettings {
   maxAgentStepDurationSec?: number
   /** Auto-move unmet blockedBy cards into Blocked lane (default true). */
   enableBlockedLane?: boolean
+  /** When multiple cards fail on the same file, block dependents on one fix card. */
+  enableFileBlockerOrchestration?: boolean
+  fileBlockerMinDependents?: number
+  fileBlockerAutoCreateFixCard?: boolean
   maxToolFailuresPerStep?: number
   autoStartSprint?: boolean
   autonomousMode?: boolean
   executionProfile?: 'scrum' | 'implementer' | string
+  planRunExecutionProfile?: 'implementer' | 'scrum' | 'inherit' | string
+  planRunSkipPoWhenActionable?: boolean
+  enableCloudDevProvider?: boolean
+  cloudDevBaseUrl?: string
+  cloudDevApiKey?: string
+  cloudDevApiKeyConfigured?: boolean
+  cloudDevModel?: string
+  cloudDevUseFor?: string
+  cloudDevStuckSteps?: number
+  cloudDevRequestTimeoutSec?: number
+  enableCardSessionContinuity?: boolean
+  enableCardSessionSummarize?: boolean
+  enableWorkspaceRulesInject?: boolean
+  workspaceRulesMaxChars?: number
+  implementerRelaxGatesOnAutoSprint?: boolean
   maxNeedsUserPerSprint?: number
   needsUserCooldownSteps?: number
   enableWebSearch?: boolean
@@ -570,6 +600,9 @@ export interface WorkflowSettings {
   ollamaNumCtx?: number
   ollamaNumCtxByRole?: Partial<Record<'po' | 'dev' | 'cr' | 'qa', number>>
   ollamaNumCtxAuto?: boolean
+  ollamaKvCacheType?: string
+  llmHostVramMb?: number
+  singleModelMode?: 'auto' | 'on' | 'off' | string
   ollamaNumCtxAdaptive?: boolean
   ollamaNumCtxAdaptiveStart?: number
   ollamaNumCtxAdaptiveStep?: number
@@ -807,6 +840,8 @@ export interface AgentRunState {
   devPhase?: string | null
   /** Structured Explore/Patch/Verify budget snapshot for the stepper UI. */
   devPhaseGraph?: DevPhaseGraphSnapshot | null
+  /** Live LLM token stream during generation (truncated server-side). */
+  streamingText?: string | null
 }
 
 export interface DevPhaseCycleHistoryEntry {
@@ -934,6 +969,12 @@ export interface SprintProgress {
   cardProgress?: CardWorkProgress
   numCtxFit?: NumCtxFit
   numCtxLabel?: string
+  /** Seconds elapsed waiting on Ollama for the current LLM call. */
+  ollamaWaitSec?: number
+  /** Configured max seconds before an Ollama wait times out. */
+  ollamaWaitMaxSec?: number
+  /** True when the active card hit the Developer visit cap. */
+  phaseCycleCapReached?: boolean
 }
 
 export interface StepProgress {
@@ -1315,6 +1356,9 @@ export interface WorkflowSettingsPayload {
   enableSplitOnStuck?: boolean
   requireWorkspaceStructure?: boolean
   autoScaffoldOnStructureGap?: boolean
+  requireFileCompleteness?: boolean
+  allowStubDelegation?: boolean
+  placeholderAllowlist?: string[]
   requireToolApproval?: boolean
   toolApprovalTools?: string[]
   nonBlockingToolApproval?: boolean
@@ -1334,10 +1378,28 @@ export interface WorkflowSettingsPayload {
   maxStuckSteps?: number
   maxAgentStepDurationSec?: number
   enableBlockedLane?: boolean
+  enableFileBlockerOrchestration?: boolean
+  fileBlockerMinDependents?: number
+  fileBlockerAutoCreateFixCard?: boolean
   maxToolFailuresPerStep?: number
   autoStartSprint?: boolean
   autonomousMode?: boolean
   executionProfile?: 'scrum' | 'implementer' | string
+  planRunExecutionProfile?: 'implementer' | 'scrum' | 'inherit' | string
+  planRunSkipPoWhenActionable?: boolean
+  enableCloudDevProvider?: boolean
+  cloudDevBaseUrl?: string
+  cloudDevApiKey?: string
+  cloudDevApiKeyConfigured?: boolean
+  cloudDevModel?: string
+  cloudDevUseFor?: string
+  cloudDevStuckSteps?: number
+  cloudDevRequestTimeoutSec?: number
+  enableCardSessionContinuity?: boolean
+  enableCardSessionSummarize?: boolean
+  enableWorkspaceRulesInject?: boolean
+  workspaceRulesMaxChars?: number
+  implementerRelaxGatesOnAutoSprint?: boolean
   maxNeedsUserPerSprint?: number
   needsUserCooldownSteps?: number
   enableWebSearch?: boolean
@@ -1355,6 +1417,9 @@ export interface WorkflowSettingsPayload {
   ollamaNumCtx?: number
   ollamaNumCtxByRole?: Partial<Record<'po' | 'dev' | 'cr' | 'qa', number>>
   ollamaNumCtxAuto?: boolean
+  ollamaKvCacheType?: string
+  llmHostVramMb?: number
+  singleModelMode?: 'auto' | 'on' | 'off' | string
   ollamaNumCtxAdaptive?: boolean
   ollamaNumCtxAdaptiveStart?: number
   ollamaNumCtxAdaptiveStep?: number
@@ -1739,6 +1804,9 @@ export const DEFAULT_WORKFLOW_SETTINGS: WorkflowSettings = {
   enableSplitOnStuck: true,
   requireWorkspaceStructure: true,
   autoScaffoldOnStructureGap: true,
+  requireFileCompleteness: true,
+  allowStubDelegation: false,
+  placeholderAllowlist: [],
   requireToolApproval: false,
   toolApprovalTools: ['write_file', 'run_command', 'delete_file'],
   nonBlockingToolApproval: true,
@@ -1758,10 +1826,27 @@ export const DEFAULT_WORKFLOW_SETTINGS: WorkflowSettings = {
   maxStuckSteps: 3,
   maxAgentStepDurationSec: 2700,
   enableBlockedLane: true,
+  enableFileBlockerOrchestration: true,
+  fileBlockerMinDependents: 2,
+  fileBlockerAutoCreateFixCard: true,
   maxToolFailuresPerStep: 4,
   autoStartSprint: true,
   autonomousMode: false,
   executionProfile: 'scrum',
+  planRunExecutionProfile: 'implementer',
+  planRunSkipPoWhenActionable: true,
+  enableCloudDevProvider: false,
+  cloudDevBaseUrl: '',
+  cloudDevApiKeyConfigured: false,
+  cloudDevModel: '',
+  cloudDevUseFor: 'implementer_autonomous',
+  cloudDevStuckSteps: 1,
+  cloudDevRequestTimeoutSec: 900,
+  enableCardSessionContinuity: true,
+  enableCardSessionSummarize: true,
+  enableWorkspaceRulesInject: true,
+  workspaceRulesMaxChars: 12000,
+  implementerRelaxGatesOnAutoSprint: true,
   maxNeedsUserPerSprint: 2,
   needsUserCooldownSteps: 3,
   enableWebSearch: false,

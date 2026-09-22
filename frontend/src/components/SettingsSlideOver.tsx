@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useState } from 'react'
-import { checkOllamaHealth, testLlmModel } from '../api/client'
+import { checkOllamaHealth, downloadSupportBundle, fetchConsoleLogTail, testLlmModel } from '../api/client'
 import type { AgentId, AppState, ConfigPayload, WorkflowSettings } from '../types'
 import { AGENT_LABELS, DEFAULT_WORKFLOW_SETTINGS } from '../types'
 import { isAutoLlmToolHealthOnPick, runAndPersistLlmProbeAll } from '../lib/toolHealthLlm'
@@ -129,6 +129,17 @@ export default function SettingsSlideOver({
   const [llmTestRunning, setLlmTestRunning] = useState(false)
   const [modelSlotStatus, setModelSlotStatus] = useState<Record<string, string>>({})
   const [apiTokenInput, setApiTokenInput] = useState('')
+  const [supportCopyStatus, setSupportCopyStatus] = useState<string | null>(null)
+
+  const handleCopyConsoleTail = useCallback(async () => {
+    try {
+      const text = await fetchConsoleLogTail(50)
+      await navigator.clipboard.writeText(text)
+      setSupportCopyStatus('Copied last 50 console lines')
+    } catch {
+      setSupportCopyStatus('Could not copy console lines')
+    }
+  }, [])
 
   useEffect(() => {
     if (!open) return
@@ -351,6 +362,22 @@ export default function SettingsSlideOver({
                   >
                     Export
                   </button>
+                  <button
+                    type="button"
+                    onClick={() => downloadSupportBundle()}
+                    className="flex-1 min-w-[90px] text-[10px] bg-cat-base border border-cat-surface1 rounded py-1.5 text-cat-subtext hover:text-white"
+                    title="Logs, board, workflow settings, and recent step diagnostics"
+                  >
+                    Support bundle
+                  </button>
+                  <button
+                    type="button"
+                    onClick={() => void handleCopyConsoleTail()}
+                    className="flex-1 min-w-[90px] text-[10px] bg-cat-base border border-cat-surface1 rounded py-1.5 text-cat-subtext hover:text-white"
+                    title="Copy last 50 console log lines for chat paste"
+                  >
+                    Copy logs
+                  </button>
                   <label className="flex-1 min-w-[70px] text-[10px] bg-cat-base border border-cat-surface1 rounded py-1.5 text-cat-subtext hover:text-white text-center cursor-pointer">
                     Import
                     <input
@@ -383,6 +410,9 @@ export default function SettingsSlideOver({
                     Delete project
                   </button>
                 </div>
+                {supportCopyStatus && (
+                  <p className="text-[10px] text-cat-subtext">{supportCopyStatus}</p>
+                )}
               </div>
               <div className="space-y-2 border-t border-cat-surface1 pt-4">
                 <h3 className="text-xs font-bold uppercase tracking-wider text-cat-subtext">
@@ -926,6 +956,12 @@ export default function SettingsSlideOver({
               changelog={state.briefChangelog ?? []}
               notifications={notifications}
               onSettingsChange={onWorkflowSettingsChange}
+              onApplyAllRoleModels={(model) => {
+                onPoModelChange(model)
+                onDevModelChange(model)
+                onCrModelChange(model)
+                onQaModelChange(model)
+              }}
               ollamaUrl={ollamaUrl}
               indexProgress={indexProgress}
               onOpenMemoryTab={onOpenMemoryTab}

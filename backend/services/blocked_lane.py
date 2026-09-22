@@ -17,6 +17,8 @@ BLOCKED_LANE = "Blocked"
 
 # Only park cards that are waiting in planning/ready queues — never yank active work.
 _ENTER_FROM: Set[str] = {"Backlog", "Refinement", "Pending Approval"}
+# File-fix waits may enter Blocked from active lanes (lint pile orchestration).
+_FILE_FIX_ENTER_FROM: Set[str] = {"In Progress", "Needs User", "QA", "Code Review"}
 
 
 def blocked_lane_enabled() -> bool:
@@ -134,6 +136,29 @@ def sync_blocked_lane(
                     lane,
                     BLOCKED_LANE,
                     reason=f"Waiting on deps — '{lane}' → Blocked",
+                )
+                entered += 1
+
+        # Enter Blocked from active lanes when blocked by shared-file fix card
+        from backend.services.file_blocker import is_file_blocker_wait
+
+        for lane in list(_FILE_FIX_ENTER_FROM):
+            for task in list(state.SHARED_BOARD.get(lane, [])):
+                if not isinstance(task, dict):
+                    continue
+                normalize_task(task)
+                if not is_file_blocker_wait(task):
+                    continue
+                if not (task.get("blockedBy") or []):
+                    continue
+                if task_dependencies_met(task):
+                    continue
+                task["blockedReturnLane"] = lane
+                _move_task_to_lane(
+                    task,
+                    lane,
+                    BLOCKED_LANE,
+                    reason=f"Waiting on file fix — '{lane}' → Blocked",
                 )
                 entered += 1
 

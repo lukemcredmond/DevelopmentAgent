@@ -219,7 +219,7 @@ def test_second_latch_with_lint_stays_in_progress_for_dev():
     )
     _empty_board()
     task = init_new_task(
-        {"id": "T-LATCH-LINT", "title": "Lint wall", "description": "d", "status": "In Progress"}
+        {"id": "T-LATCH-LINT", "title": "Lint: lib/presentation/store_bloc.dart", "description": "d", "status": "In Progress"}
     )
     task["phaseCycleCapReached"] = True
     task["phaseCycleCapAt"] = 13
@@ -245,6 +245,256 @@ def test_second_latch_with_lint_stays_in_progress_for_dev():
     assert live.get("phaseCycleCapReached") is False
     assert int(live.get("lintUnlatchCount") or 0) == 1
     assert len(state.SHARED_BOARD.get("Needs User") or []) == 0
+
+
+def test_identical_write_loop_lint_stays_in_progress_on_stuck_escalate():
+    initialize()
+    reset_workflow_settings()
+    save_workflow_settings(
+        {
+            "enableSplitOnStuck": False,
+            "maxStuckSteps": 1,
+            "pauseSprintOnNeedsUser": False,
+        }
+    )
+    _empty_board()
+    state.SPRINT_NEEDS_USER_COUNT = 0
+    task = init_new_task(
+        {
+            "id": "T-LINT-LOOP",
+            "title": "Lint: error lib/main.dart",
+            "description": "d",
+            "status": "In Progress",
+        }
+    )
+    task["lastCommandDiagnostics"] = [
+        {"file": "lib/main.dart", "line": 1, "message": "Undefined class 'BuildContext'"}
+    ]
+    task["lastStepOutcome"] = {"exitReason": "identical_write_loop", "stopReason": "identical_write_loop"}
+    task["stuckLoops"] = 0
+    state.SHARED_BOARD["In Progress"] = [task]
+
+    from backend.services.sprint_service import _check_stuck_and_escalate
+
+    _check_stuck_and_escalate("T-LINT-LOOP", "In Progress", agent_key="dev")
+    live = next(t for t in state.SHARED_BOARD["In Progress"] if t["id"] == "T-LINT-LOOP")
+    assert get_task_lane("T-LINT-LOOP") == "In Progress"
+    assert live.get("forcePatchNextDevStep") is True
+    assert state.SPRINT_NEEDS_USER_COUNT == 0
+    assert len(state.SHARED_BOARD.get("Needs User") or []) == 0
+
+
+def test_repeated_empty_generation_parks_to_needs_user():
+    initialize()
+    reset_workflow_settings()
+    save_workflow_settings(
+        {
+            "maxStuckSteps": 1,
+            "pauseSprintOnNeedsUser": False,
+            "enableSplitOnStuck": False,
+        }
+    )
+    _empty_board()
+    task = init_new_task(
+        {"id": "T-EG-PARK", "title": "Hung LLM", "description": "d", "status": "In Progress"}
+    )
+    task["lastStepOutcome"] = {
+        "exitReason": "empty_generation_timeout",
+        "stopReason": "empty_generation_timeout",
+    }
+    task["stuckLoops"] = 0
+    task["consecutiveEmptyGen"] = 2
+    state.SHARED_BOARD["In Progress"] = [task]
+
+    from backend.services.sprint_service import _check_stuck_and_escalate
+
+    _check_stuck_and_escalate("T-EG-PARK", "In Progress", agent_key="dev")
+    assert get_task_lane("T-EG-PARK") == "Needs User"
+
+
+def test_identical_write_loop_non_lint_parks_to_needs_user():
+    initialize()
+    reset_workflow_settings()
+    save_workflow_settings(
+        {
+            "enableSplitOnStuck": False,
+            "maxStuckSteps": 1,
+            "pauseSprintOnNeedsUser": False,
+        }
+    )
+    _empty_board()
+    task = init_new_task(
+        {"id": "T-LOOP-PARK", "title": "Feature work", "description": "d", "status": "In Progress"}
+    )
+    task["lastStepOutcome"] = {"exitReason": "identical_write_loop", "stopReason": "identical_write_loop"}
+    task["stuckLoops"] = 0
+    state.SHARED_BOARD["In Progress"] = [task]
+
+    from backend.services.sprint_service import _check_stuck_and_escalate
+
+    _check_stuck_and_escalate("T-LOOP-PARK", "In Progress", agent_key="dev")
+    assert get_task_lane("T-LOOP-PARK") == "Needs User"
+
+
+def test_identical_write_loop_lint_predev_skips_needs_user_park():
+    initialize()
+    reset_workflow_settings()
+    save_workflow_settings({"pauseSprintOnNeedsUser": False})
+    _empty_board()
+    task = init_new_task(
+        {
+            "id": "T-LINT-PRE",
+            "title": "Lint: overflow lib/main.dart",
+            "description": "d",
+            "status": "In Progress",
+        }
+    )
+    task["lastCommandDiagnostics"] = [
+        {"file": "lib/main.dart", "line": 10, "message": "RenderFlex overflowed"}
+    ]
+    task["lastStepOutcome"] = {"exitReason": "identical_write_loop", "stopReason": "identical_write_loop"}
+    state.SHARED_BOARD["In Progress"] = [task]
+
+    from backend.services.sprint_service import _run_developer_step
+
+    with patch("backend.services.sprint_service._try_move_to_needs_user") as park:
+        with patch("backend.services.sprint_speed_gates.begin_dev_step"):
+            _run_developer_step(task, "brief")
+    park.assert_not_called()
+    live = next(t for t in state.SHARED_BOARD["In Progress"] if t["id"] == "T-LINT-PRE")
+    assert get_task_lane("T-LINT-PRE") == "In Progress"
+    assert live.get("forcePatchNextDevStep") is True
+
+
+def test_same_next_lint_first_tick_parks_second_runs_developer():
+    initialize()
+    reset_workflow_settings()
+    save_workflow_settings({"pauseSprintOnNeedsUser": False})
+    _empty_board()
+    from backend.services.card_ledger import record_next_work_visit
+
+    task = init_new_task(
+        {
+            "id": "T-SAME-NEXT-LINT",
+            "title": "Lint: error lib/main.dart",
+            "description": "d",
+            "status": "In Progress",
+        }
+    )
+    task["lastCommandDiagnostics"] = [
+        {"file": "lib/main.dart", "line": 1, "message": "Undefined class 'BuildContext'"}
+    ]
+    record_next_work_visit(task, writes_succeeded=0, oracle_passed=None)
+    assert task.get("lastNextWorkNoWrite") is True
+    state.SHARED_BOARD["In Progress"] = [task]
+    state.SPRINT_PROGRESS_MAX = 20
+
+    from backend.services.sprint_service import _run_developer_step
+
+    with patch("backend.services.sprint_speed_gates.begin_dev_step") as begin:
+        _run_developer_step(dict(task), "brief")
+    begin.assert_not_called()
+    live = next(t for t in state.SHARED_BOARD["In Progress"] if t["id"] == "T-SAME-NEXT-LINT")
+    assert live.get("forcePatchNextDevStep") is True
+    assert live.get("lastNextWorkNoWrite") is None
+
+    with patch("backend.services.sprint_speed_gates.begin_dev_step", return_value=(2, False)) as begin2:
+        with patch("backend.services.fix_verify_loop.run_fix_verify_loop", return_value="done"):
+            _run_developer_step(dict(live), "brief")
+    begin2.assert_called_once()
+
+
+def test_force_patch_lint_bypasses_same_next_park_in_run_developer_step():
+    initialize()
+    reset_workflow_settings()
+    save_workflow_settings({"pauseSprintOnNeedsUser": False})
+    _empty_board()
+    from backend.services.card_ledger import record_next_work_visit
+
+    task = init_new_task(
+        {
+            "id": "T-FORCE-BYPASS",
+            "title": "Lint: error lib/main.dart",
+            "description": "d",
+            "status": "In Progress",
+            "forcePatchNextDevStep": True,
+        }
+    )
+    task["lastCommandDiagnostics"] = [{"file": "lib/main.dart", "line": 1, "message": "error"}]
+    record_next_work_visit(task, writes_succeeded=0, oracle_passed=None)
+    assert task.get("lastNextWorkNoWrite") is True
+    state.SHARED_BOARD["In Progress"] = [task]
+    state.SPRINT_PROGRESS_MAX = 20
+
+    from backend.services.sprint_service import _run_developer_step
+
+    with patch("backend.services.sprint_speed_gates.begin_dev_step", return_value=(3, False)) as begin:
+        with patch("backend.services.fix_verify_loop.run_fix_verify_loop", return_value="done"):
+            _run_developer_step(dict(task), "brief")
+    begin.assert_called_once()
+
+
+def test_feature_card_same_next_with_force_patch_runs_dev():
+    initialize()
+    reset_workflow_settings()
+    save_workflow_settings({"pauseSprintOnNeedsUser": False, "enableSplitOnStuck": False})
+    _empty_board()
+    from backend.services.card_ledger import record_next_work_visit
+
+    task = init_new_task(
+        {
+            "id": "T-FEAT-QA",
+            "title": "Implement import flow (2/2)",
+            "description": "d",
+            "status": "In Progress",
+        }
+    )
+    task["forcePatchNextDevStep"] = True
+    task["lastCommandDiagnostics"] = [
+        {"file": "lib/models.dart", "line": 1, "message": "Expected: true Actual: false"}
+    ]
+    record_next_work_visit(task, writes_succeeded=0, oracle_passed=None)
+    state.SHARED_BOARD["In Progress"] = [task]
+    state.SPRINT_PROGRESS_MAX = 20
+
+    from backend.services.sprint_service import _run_developer_step
+
+    with patch("backend.services.sprint_service._handle_lint_stuck") as lint_stuck:
+        with patch("backend.services.sprint_service._try_move_to_needs_user") as park:
+            with patch("backend.services.sprint_speed_gates.begin_dev_step", return_value=(3, False)) as begin:
+                with patch("backend.services.fix_verify_loop.run_fix_verify_loop", return_value="done"):
+                    _run_developer_step(dict(task), "brief")
+    lint_stuck.assert_not_called()
+    park.assert_not_called()
+    begin.assert_called_once()
+
+
+def test_capped_feature_card_precheck_calls_recover():
+    initialize()
+    reset_workflow_settings()
+    save_workflow_settings({"pauseSprintOnNeedsUser": False, "enableSplitOnStuck": False})
+    _empty_board()
+    task = init_new_task(
+        {
+            "id": "T-CAP-FEAT",
+            "title": "Implement import flow",
+            "description": "d",
+            "status": "In Progress",
+            "phaseCycleCapReached": True,
+            "devStepCount": 14,
+        }
+    )
+    state.SHARED_BOARD["In Progress"] = [task]
+    state.SPRINT_PROGRESS_MAX = 20
+
+    from backend.services.sprint_service import _run_developer_step
+
+    with patch("backend.services.sprint_speed_gates.begin_dev_step", return_value=(14, True)):
+        with patch("backend.services.sprint_service._recover_latched_dev_card") as recover:
+            with patch("backend.services.fix_verify_loop.run_fix_verify_loop") as fix_verify:
+                _run_developer_step(dict(task), "brief")
+    recover.assert_called_once()
+    fix_verify.assert_not_called()
 
 
 def test_recovered_latched_card_does_not_block_backlog_claim():
@@ -439,7 +689,7 @@ def test_recover_uri_errors_stay_in_progress_forced_patch():
     task = init_new_task(
         {
             "id": "T-URI",
-            "title": "Store repository",
+            "title": "Lint: lib/presentation/store_bloc.dart",
             "description": "d",
             "status": "In Progress",
         }
@@ -479,7 +729,7 @@ def test_lint_unlatch_used_skips_without_needs_user():
     from backend.services.sprint_service import _recover_latched_dev_card
 
     task = init_new_task(
-        {"id": "T-UNLATCH-USED", "title": "Still lint", "description": "d", "status": "In Progress"}
+        {"id": "T-UNLATCH-USED", "title": "Lint: a.dart", "description": "d", "status": "In Progress"}
     )
     task["phaseCycleCapReached"] = True
     task["devStepCount"] = 13
@@ -532,6 +782,7 @@ def test_auto_sprint_pauses_after_repeated_zero_work_interrupts():
             "autoSprintSessionRefreshEnabled": False,
             "enableZeroWorkRetryWatchdog": True,
             "zeroWorkRetryWatchdogMax": 3,
+            "maxZeroWorkRecoveryAttempts": 0,
             "enableAutoSprintInterruptBackoff": False,
             "enableSplitOnStuck": False,
             "maxStuckSteps": 99,
@@ -548,18 +799,8 @@ def test_auto_sprint_pauses_after_repeated_zero_work_interrupts():
         }
     )
     state.SHARED_BOARD["In Progress"] = [task]
-    state.LAST_STEP_OUTCOME = {
-        "taskId": "T-INT-STORM",
-        "exitReason": "po_clarified",
-        "ok": True,
-        "agent": "Product Owner",
-    }
-    state.LAST_STEP_DIAGNOSTICS = {
-        "taskId": "T-INT-STORM",
-        "exitReason": "po_clarified",
-        "ollamaCallCount": 0,
-        "toolCallCount": 0,
-    }
+    state.LAST_STEP_OUTCOME = None
+    state.LAST_STEP_DIAGNOSTICS = None
 
     from backend.services.sprint_service import run_auto_sprint
 
@@ -626,7 +867,56 @@ def test_auto_sprint_ui_pauses_on_retry_watchdog():
         / "frontend/src/hooks/useAppState.ts"
     ).read_text(encoding="utf-8")
     assert "retry_watchdog" in hook
-    assert "setAutoSprintPaused(true)" in hook
+    assert "hasSprintWork(nextBoard" in hook
+
+
+def test_auto_sprint_invokes_zero_work_recovery_before_watchdog_pause():
+    initialize()
+    reset_workflow_settings()
+    save_workflow_settings(
+        {
+            "enableZeroWorkRetryWatchdog": True,
+            "zeroWorkRetryWatchdogMax": 3,
+            "maxZeroWorkRecoveryAttempts": 2,
+            "enableAutoSprintInterruptBackoff": False,
+            "enableSplitOnStuck": False,
+        }
+    )
+    _empty_board()
+    task = init_new_task(
+        {"id": "T-ZW-REC", "title": "Feature card", "description": "d", "status": "In Progress"}
+    )
+    state.SHARED_BOARD["In Progress"] = [task]
+    precheck_msg = (
+        "Same next task reissued with no writes or better oracle — parking instead of another generate."
+    )
+
+    def _precheck_only(active_task, brief):
+        from backend.services.sprint_service import _record_dev_precheck_skip
+
+        _record_dev_precheck_skip(
+            active_task["id"],
+            active_task.get("title", ""),
+            "In Progress",
+            reason=precheck_msg,
+        )
+
+    from backend.services.sprint_service import run_auto_sprint
+
+    with patch("backend.services.sprint_service._run_developer_step", side_effect=_precheck_only):
+        with patch(
+            "backend.services.sprint_service._run_parallel_independent_dev_batch",
+            return_value=0,
+        ):
+            with patch(
+                "backend.services.sprint_service._recover_zero_work_stall",
+                return_value="reroute_dev",
+            ) as recover:
+                summary = run_auto_sprint("brief", "http://localhost:11434", max_steps=6)
+
+    recover.assert_called()
+    assert int(summary.get("stepsRun") or 0) > 3
+    assert summary.get("status") != "retry_watchdog"
 
 
 def test_manual_dev_move_splits_oversized_ready_card_and_retires_parent():
@@ -670,7 +960,7 @@ def test_manual_dev_move_routes_missing_spec_to_needs_po():
             "title": "Not ready",
             "description": "Some behavior",
             "status": "Backlog",
-            "acceptanceCriteria": ["a"],
+            "acceptanceCriteria": [],
             "workType": "implementation",
             "requiresDev": True,
         }
@@ -872,3 +1162,46 @@ def test_dirty_lint_logs_lane_advance_skipped(tmp_path, monkeypatch):
         for e in trace.events
     )
     clear_active_step_trace()
+
+
+def test_visit_cap_stall_tries_auto_split_before_needs_user():
+    initialize()
+    reset_workflow_settings()
+    save_workflow_settings(
+        {
+            "pauseSprintOnNeedsUser": False,
+            "enableSplitOnStuck": True,
+            "maxStuckSteps": 2,
+            "maxPoRoundTrips": 3,
+        }
+    )
+    _empty_board()
+    task = init_new_task(
+        {
+            "id": "T-SPLIT-FIRST",
+            "title": "Import from document",
+            "description": "Add import flow",
+            "status": "In Progress",
+        }
+    )
+    task["phaseCycleCapReached"] = True
+    task["stuckStepCount"] = 3
+    state.SHARED_BOARD["In Progress"] = [task]
+    park_msg = (
+        "Same next task reissued with no writes or better oracle — parking instead of another generate."
+    )
+    from backend.services.sprint_service import _handle_visit_cap_stall
+
+    with patch("backend.services.sprint_service._run_stuck_auto_split", return_value=True) as split:
+        with patch("backend.services.sprint_service._try_move_to_needs_user") as try_nu:
+            _handle_visit_cap_stall(
+                "T-SPLIT-FIRST",
+                task,
+                park_msg,
+                title=task["title"],
+                lane_before="In Progress",
+                brief="brief",
+            )
+    split.assert_called_once()
+    try_nu.assert_not_called()
+    assert get_task_lane("T-SPLIT-FIRST") == "In Progress"

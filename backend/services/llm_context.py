@@ -237,6 +237,15 @@ def prune_messages_if_needed(
     if estimate_messages_chars(messages) <= threshold:
         return messages
 
+    try:
+        from backend.services.card_session import maybe_summarize_before_prune
+
+        maybe_summarize_before_prune(messages)
+    except Exception:
+        pass
+    if estimate_messages_chars(messages) <= threshold:
+        return messages
+
     enable_episode = ws.get("enableEpisodeSummary", True)
     preserved_head = 2
     keep_from = _index_of_last_assistant(messages)

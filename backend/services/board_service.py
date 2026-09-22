@@ -81,6 +81,8 @@ def move_board_stage(
     target_lane: str,
     *,
     honor_dev_claim_gate: bool = True,
+    park_kind: str = "",
+    park_msg: str = "",
 ) -> str:
     requested_lane = str(target_lane)
     claim_block_reason = ""
@@ -104,6 +106,43 @@ def move_board_stage(
             )
         if len(matches) == 1 and source_lane == target_lane:
             return f"Task {task_id} is already in '{target_lane}'."
+        if requested_lane == "Needs User":
+            from backend.services.needs_user_guard import (
+                apply_needs_user_brief,
+                build_needs_user_brief,
+                enrich_needs_user_options,
+                needs_user_options_look_generic,
+                should_park_in_needs_user,
+            )
+
+            admission_kind = str(park_kind or active_task.get("needsUserKind") or "stuck_loop")
+            admission_msg = str(
+                park_msg or active_task.get("userQuestion") or active_task.get("needsUserReason") or ""
+            )
+            brief = build_needs_user_brief(
+                active_task,
+                kind=admission_kind,
+                raw_msg=admission_msg,
+            )
+            park_ok, park_reason = should_park_in_needs_user(active_task, brief)
+            if not park_ok:
+                return (
+                    f"Error: Cannot move task {task_id} to 'Needs User' ({park_reason}). "
+                    "Lint, tool, and explore blockers stay In Progress for Developer to fix autonomously."
+                )
+            existing_opts = active_task.get("needsUserOptions")
+            if not existing_opts and brief.get("options"):
+                apply_needs_user_brief(active_task, brief)
+                try:
+                    enrich_needs_user_options(active_task)
+                except Exception:
+                    pass
+            elif needs_user_options_look_generic(existing_opts, task=active_task):
+                apply_needs_user_brief(active_task, brief)
+                try:
+                    enrich_needs_user_options(active_task)
+                except Exception:
+                    pass
         if (
             target_lane == "In Progress"
             and honor_dev_claim_gate

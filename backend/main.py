@@ -6,7 +6,7 @@ from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import FileResponse
 from fastapi.staticfiles import StaticFiles
 
-from backend.api import agents, board, chat, files, git, memory, ollama, projects, simulation, skills, sprint, state as state_routes, terminal, tools, training
+from backend.api import agents, board, chat, files, git, memory, ollama, projects, simulation, skills, sprint, state as state_routes, support, terminal, tools, training
 from backend.config import CORS_ORIGINS, FRONTEND_DIST
 
 
@@ -73,6 +73,7 @@ app.include_router(tools.router)
 app.include_router(agents.router)
 app.include_router(memory.router)
 app.include_router(training.router)
+app.include_router(support.router)
 
 if FRONTEND_DIST.is_dir():
     assets_dir = FRONTEND_DIST / "assets"

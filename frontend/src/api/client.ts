@@ -209,6 +209,17 @@ export function exportProject(projectId: string): void {
   )
 }
 
+export function downloadSupportBundle(): void {
+  window.location.assign('/api/support/bundle')
+}
+
+export async function fetchConsoleLogTail(limit = 50): Promise<string> {
+  const res = await request<{ text: string }>(
+    `/api/support/console-tail?limit=${encodeURIComponent(String(limit))}`,
+  )
+  return res.text || ''
+}
+
 export async function importProject(file: File): Promise<AppState> {
   const form = new FormData()
   form.append('file', file)
@@ -800,11 +811,26 @@ export async function resolveUserQuestion(
   taskId: string,
   answer: string,
   target: 'dev' | 'refinement' | 'po' = 'dev',
+  options?: { optionId?: string; customAnswer?: string },
 ): Promise<AppState> {
   return request<AppState>(
     `/api/tasks/${encodeURIComponent(taskId)}/resolve-user`,
-    { method: 'POST', body: JSON.stringify({ answer, target }) },
+    {
+      method: 'POST',
+      body: JSON.stringify({
+        answer,
+        target,
+        optionId: options?.optionId,
+        customAnswer: options?.customAnswer,
+      }),
+    },
   )
+}
+
+export async function reconcileFileBlockers(): Promise<
+  AppState & { files?: number; blocked?: number; fixCards?: number; skipped?: string }
+> {
+  return request('/api/board/reconcile-file-blockers', { method: 'POST' })
 }
 
 export async function escalateNeedsUserToPo(): Promise<AppState & { movedTaskIds?: string[] }> {

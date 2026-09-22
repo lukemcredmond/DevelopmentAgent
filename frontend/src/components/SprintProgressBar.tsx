@@ -1,4 +1,7 @@
 import type { SprintProgress } from '../types'
+import { isSprintProgressActive } from '../utils/sprintProgress'
+
+export { isSprintProgressActive } from '../utils/sprintProgress'
 
 interface SprintProgressBarProps {
   progress: SprintProgress | null
@@ -42,12 +45,13 @@ export default function SprintProgressBar({
   onResume,
   cancelling = false,
 }: SprintProgressBarProps) {
-  const active =
-    planRunActive ||
-    planBacklogActive ||
-    sprintRunning ||
-    (progress != null && progress.phase !== 'done' && progress.phase !== 'cancelled') ||
-    needsUserCount > 0
+  const active = isSprintProgressActive({
+    planRunActive,
+    planBacklogActive,
+    sprintRunning,
+    progress,
+    needsUserCount,
+  })
 
   if (!active) {
     return null
@@ -96,6 +100,24 @@ export default function SprintProgressBar({
           {progress?.intent && (
             <span className="text-violet-200 truncate max-w-[min(100%,36rem)]" title={progress.intent}>
               {progress.intent}
+            </span>
+          )}
+          {progress?.ollamaWaitSec != null && progress.ollamaWaitSec > 0 && (
+            <span
+              className="text-amber-200/90 font-mono text-[10px]"
+              data-testid="sprint-ollama-wait"
+              title="Waiting for Ollama to respond"
+            >
+              Ollama {progress.ollamaWaitSec}s
+              {progress.ollamaWaitMaxSec != null ? ` / ${progress.ollamaWaitMaxSec}s max` : ''}
+            </span>
+          )}
+          {progress?.phaseCycleCapReached && (
+            <span
+              className="text-[10px] px-1.5 py-0.5 rounded bg-rose-950/50 text-rose-200 border border-rose-500/40"
+              data-testid="sprint-phase-cycle-cap"
+            >
+              Dev visit cap — split or reset latch
             </span>
           )}
           {progress?.cardProgress &&

@@ -52,6 +52,67 @@ from backend.services.sprint_service import (
 router = APIRouter()
 
 
+def _resolve_user_wants_latch_reset(
+    task: Dict[str, Any],
+    *,
+    option_id: str,
+    answer: str,
+    options: List[Any],
+) -> bool:
+    """True when the user chose to reset the Developer visit / phase-cycle latch."""
+    if task.get("needsUserKind") == "phase_cycle_cap":
+        hay = f"{option_id} {answer}".lower()
+        if "reset" in hay and "latch" in hay:
+            return True
+    for opt in options:
+        if not isinstance(opt, dict):
+            continue
+        if option_id and str(opt.get("id") or "") != option_id:
+            continue
+        label = str(opt.get("label") or "").lower()
+        ans = str(opt.get("answer") or "").lower()
+        if "reset" in label and "latch" in label:
+            return True
+        if "reset" in ans and ("latch" in ans or "phase cycle" in ans):
+            return True
+    ans_lower = answer.lower()
+    return "reset" in ans_lower and "latch" in ans_lower
+
+
+@router.post("/api/tasks/{task_id}/reset-dev-latch")
+def reset_dev_latch_route(task_id: str):
+    """Reset phase-cycle / Developer visit cap so Auto Sprint can run Dev again."""
+    from backend.services.sprint_speed_gates import reset_dev_cycle_latch
+
+    with state.STATE_LOCK:
+        task = find_task_by_id(task_id)
+        if not task:
+            raise HTTPException(status_code=404, detail="Task not found")
+        normalize_task(task)
+        reset_dev_cycle_latch(task)
+        task.pop("needsUserKind", None)
+        task.pop("userQuestion", None)
+        task.pop("needsUserReason", None)
+        task.pop("needsUserAction", None)
+        task.pop("needsUserOptions", None)
+        lane = None
+        for lane_name, lane_tasks in state.SHARED_BOARD.items():
+            if any(t.get("id") == task_id for t in lane_tasks):
+                lane = lane_name
+                break
+        if lane == "Needs User":
+            move_board_stage(task_id, "In Progress", honor_dev_claim_gate=False)
+        record_task_decision(
+            task_id,
+            "User",
+            "reset_latch",
+            "Developer visit latch reset",
+        )
+        add_system_log("System", "success", f"Reset Developer visit latch on {task_id}")
+        save_current_project_state()
+    return build_state_response()
+
+
 @router.post("/api/board/clear-tasks")
 def clear_board_tasks():
     from backend.agents.agent_run import get_active_run
@@ -362,6 +423,43 @@ def resolve_user_question(task_id: str, payload: ResolveUserPayload):
             raise HTTPException(status_code=400, detail="Task is not in Needs User")
         normalize_task(task)
         answer = payload.answer.strip()
+        target = (payload.target or "dev").strip().lower()
+        option_id = (payload.optionId or "").strip()
+        custom_answer = (payload.customAnswer or "").strip()
+        options = task.get("needsUserOptions") or []
+        if option_id and isinstance(options, list):
+            match = next(
+                (o for o in options if isinstance(o, dict) and str(o.get("id") or "") == option_id),
+                None,
+            )
+            if match:
+                if option_id == "other":
+                    answer = custom_answer or answer
+                else:
+                    answer = str(match.get("answer") or answer or match.get("label") or "").strip()
+                opt_target = str(match.get("target") or target).strip().lower()
+                if opt_target in ("dev", "po", "refinement"):
+                    target = opt_target
+        if not answer:
+            raise HTTPException(status_code=400, detail="answer is required")
+        if target not in ("dev", "refinement", "po"):
+            raise HTTPException(status_code=400, detail="target must be dev, refinement, or po")
+        reset_latch = _resolve_user_wants_latch_reset(
+            task,
+            option_id=option_id,
+            answer=answer,
+            options=options if isinstance(options, list) else [],
+        )
+        if reset_latch:
+            from backend.services.sprint_speed_gates import reset_dev_cycle_latch
+
+            reset_dev_cycle_latch(task)
+            add_system_log(
+                "System",
+                "success",
+                f"Reset Developer visit latch on {task_id}",
+            )
+        target_lane = lane_map[target]
         prior_question = (
             task.get("userQuestion")
             or task.get("needsUserReason")
@@ -382,6 +480,7 @@ def resolve_user_question(task_id: str, payload: ResolveUserPayload):
         task["needsUserAction"] = None
         task["needsUserKind"] = None
         task["needsUserSuggestedTarget"] = None
+        task.pop("needsUserOptions", None)
         record_task_decision(
             task_id,
             "User",
@@ -470,6 +569,15 @@ def diagnose_task_route(task_id: str, payload: DiagnoseTaskPayload):
         if not result.get("ok"):
             raise HTTPException(status_code=400, detail=result.get("error", "Diagnosis failed"))
     return {"state": build_state_response(), "diagnosis": result.get("diagnosis")}
+
+
+@router.post("/api/board/reconcile-file-blockers")
+def reconcile_file_blockers_route():
+    """One-click cleanup: consolidate lint piles into fix cards + Blocked dependents."""
+    from backend.services.file_blocker import reconcile_file_blockers_from_board
+
+    result = reconcile_file_blockers_from_board()
+    return {**build_state_response(), **result}
 
 
 @router.post("/api/tasks/split-batch")

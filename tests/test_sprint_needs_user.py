@@ -75,3 +75,7 @@ def test_apply_patch_escalates_after_two_failures():
     msg2 = files.apply_workspace_patch("lib/main.dart", "still missing", "new")
     assert "Patch failed 2 times" in msg2
     assert "write_file" in msg2
+
+    msg3 = files.apply_workspace_patch("lib/main.dart", "still missing again", "new")
+    assert "apply_patch blocked" in msg3
+    assert "write_file" in msg3

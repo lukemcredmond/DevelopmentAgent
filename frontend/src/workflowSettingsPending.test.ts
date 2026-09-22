@@ -14,6 +14,7 @@ function base(partial: Partial<WorkflowSettings> = {}): WorkflowSettings {
     llmProvider: 'ollama',
     llmProviderPreset: 'ollama',
     llmBaseUrl: 'http://localhost:11434',
+    executionProfile: 'scrum',
     ...partial,
   } as WorkflowSettings
 }
@@ -77,5 +78,14 @@ describe('workflowSettingsPending LLM overlay', () => {
       base({ llmBaseUrl: 'http://127.0.0.1:1234/v1' }),
     )
     expect(merged?.llmProviderPreset).toBe('lmstudio')
+  })
+
+  it('keeps implementer after a stale SSE snapshot that still says scrum', () => {
+    queuePendingWorkflowSettings({ executionProfile: 'implementer' })
+    const payload = snapshotPendingWorkflowPayloadForSave()
+    markWorkflowSaveSucceeded(base({ executionProfile: 'implementer' }), payload)
+
+    const stomped = mergePendingWorkflowSettings(base({ executionProfile: 'scrum' }))
+    expect(stomped?.executionProfile).toBe('implementer')
   })
 })

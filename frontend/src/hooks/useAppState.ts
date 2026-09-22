@@ -11,6 +11,7 @@ import {
   runSprint,
   stopBackgroundTerminal,
   subscribeEvents,
+  ApiError,
 } from '../api/client'
 import { mergePendingWorkflowSettings } from '../workflowSettingsPending'
 import { mergeAppStateIdentity, mergePendingSimulation, dismissedSimulationId } from '../utils/mergeAppState'
@@ -22,7 +23,6 @@ import type {
   BackgroundTerminalSession,
   Board,
   BoardLane,
-  CardWorkProgress,
   CommandDiagnostic,
   IndexProgress,
   PendingToolApproval,
@@ -33,7 +33,8 @@ import type {
 } from '../types'
 import { EMPTY_BOARD, hasSprintWork } from '../types'
 import { hydrateActivityFromBoard, mergeActivityEvents, filterActivityAfterClear, activityTimestampNow } from '../utils/activityFromBoard'
-import { appendTerminalOutput, capLogs } from '../utils/streamBuffers'
+import { mapCardProgress, mapSprintProgress } from '../utils/sprintProgress'
+import { appendTerminalOutput, capLogs, mergeLogsPreservingLive } from '../utils/streamBuffers'
 import { mergeTaskHistory, trimBoardHistory } from '../utils/boardMemory'
 
 const defaultState: AppState = {
@@ -151,52 +152,6 @@ function patchBoardFromEvent(data: unknown, prev: AppState): AppState | null {
   return { ...prev, board: mergeBoardPreservingHistory(prev.board, payload.board) }
 }
 
-function mapSprintProgress(data: Record<string, unknown>): SprintProgress {
-  const phase = String(data.phase ?? 'po_plan')
-  const validPhases = ['po_plan', 'sprint_step', 'done', 'cancelled'] as const
-  const phaseVal = validPhases.includes(phase as SprintProgress['phase'])
-    ? (phase as SprintProgress['phase'])
-    : 'po_plan'
-  return {
-    phase: phaseVal,
-    step: Number(data.step ?? 0),
-    maxSteps: Number(data.maxSteps ?? data.max_steps ?? 20),
-    agent: String(data.agent ?? ''),
-    taskId: String(data.taskId ?? data.task_id ?? ''),
-    taskTitle: String(data.taskTitle ?? data.task_title ?? ''),
-    lane: String(data.lane ?? ''),
-    status: data.status != null ? String(data.status) : undefined,
-    intent: data.intent != null ? String(data.intent) : undefined,
-    cardProgress: mapCardProgress(data.cardProgress ?? data.card_progress),
-  }
-}
-
-function mapCardProgress(raw: unknown): CardWorkProgress | undefined {
-  if (!raw || typeof raw !== 'object') return undefined
-  const d = raw as Record<string, unknown>
-  const gates = Array.isArray(d.gatesRemaining)
-    ? d.gatesRemaining.map((g) => String(g))
-    : Array.isArray(d.gates_remaining)
-      ? (d.gates_remaining as unknown[]).map((g) => String(g))
-      : undefined
-  const files = Array.isArray(d.filesThisStep)
-    ? d.filesThisStep.map((f) => String(f))
-    : Array.isArray(d.files_this_step)
-      ? (d.files_this_step as unknown[]).map((f) => String(f))
-      : undefined
-  return {
-    subtasksDone: Number(d.subtasksDone ?? d.subtasks_done ?? 0) || 0,
-    subtasksTotal: Number(d.subtasksTotal ?? d.subtasks_total ?? 0) || 0,
-    stepsOnCard: Number(d.stepsOnCard ?? d.steps_on_card ?? 0) || 0,
-    stuckLoops: Number(d.stuckLoops ?? d.stuck_loops ?? 0) || 0,
-    poRoundTrips: Number(d.poRoundTrips ?? d.po_round_trips ?? 0) || 0,
-    gatesRemaining: gates,
-    filesThisStep: files,
-    acCount: Number(d.acCount ?? d.ac_count ?? 0) || 0,
-    lane: d.lane != null ? String(d.lane) : undefined,
-  }
-}
-
 function mapAgentRun(raw: Record<string, unknown>): AgentRunState {
   const recentRaw = raw.recent_tools ?? raw.recentTools
   const recentTools = Array.isArray(recentRaw)
@@ -251,6 +206,10 @@ function mapAgentRun(raw: Record<string, unknown>): AgentRunState {
     devPhase:
       raw.devPhase != null || raw.dev_phase != null
         ? String(raw.devPhase ?? raw.dev_phase)
+        : null,
+    streamingText:
+      raw.streamingText != null || raw.streaming_text != null
+        ? String(raw.streamingText ?? raw.streaming_text)
         : null,
     devPhaseGraph: mapDevPhaseGraph(raw.devPhaseGraph ?? raw.dev_phase_graph),
   }
@@ -972,6 +931,7 @@ export function useAppState() {
       return {
         ...data,
         board,
+        logs: mergeLogsPreservingLive(prev.logs, data.logs),
         files: keepFiles ? prev.files : incomingFiles,
         filePaths: data.filePaths?.length ? data.filePaths : prev.filePaths,
         projectId: merged.projectId,
@@ -1228,16 +1188,24 @@ export function useAutoSprint(
   onState: (s: AppState) => void,
   pendingSimulation?: AppState['pendingSimulation'],
   onSessionRefresh?: () => void | Promise<void>,
+  options?: {
+    onSprintError?: (message: string) => void
+    appendLog?: (log: SystemLog) => void
+  },
 ) {
   const [autoSprint, setAutoSprint] = useState(false)
   const [autoSprintPaused, setAutoSprintPaused] = useState(false)
   const [sprintRunning, setSprintRunning] = useState(false)
   const cancelRef = useRef<AbortController | null>(null)
   const backlogLenRef = useRef(board.Backlog?.length ?? 0)
+  const inProgressSigRef = useRef('')
   const sessionStartedRef = useRef<number | null>(null)
   const [sessionStartedAt, setSessionStartedAt] = useState<number | null>(null)
+  const [lastAutoSprintStatus, setLastAutoSprintStatus] = useState<string | undefined>(undefined)
   const resumeKickRef = useRef(false)
   const startAutoSprintRef = useRef<(() => Promise<void>) | null>(null)
+  const onSprintError = options?.onSprintError
+  const appendSprintLog = options?.appendLog
 
   const persistAutoSprintSession = useCallback((startedAt: number | null) => {
     try {
@@ -1304,6 +1272,9 @@ export function useAutoSprint(
         max_steps: workflowSettings?.maxSprintSteps ?? 20,
       })
       onState(data)
+      const nextBoard = data.board ?? board
+      const sprintStatus = data.lastSprintSummary?.status
+      setLastAutoSprintStatus(sprintStatus)
       if (data.lastSprintSummary?.status === 'session_refresh') {
         try {
           sessionStorage.setItem('autoSprintResume', '1')
@@ -1321,17 +1292,48 @@ export function useAutoSprint(
         }
         setAutoSprintPaused(false)
         resumeKickRef.current = true
-      } else if (data.pendingSimulation?.id || data.lastSprintSummary?.status === 'simulation_pending') {
+      } else if (data.pendingSimulation?.id || sprintStatus === 'simulation_pending') {
         setAutoSprintPaused(true)
-      } else if (data.lastSprintSummary?.status === 'idle' || data.lastSprintSummary?.status === 'retry_watchdog') {
+      } else if (sprintStatus === 'idle') {
         setAutoSprintPaused(true)
+      } else if (sprintStatus === 'retry_watchdog') {
+        if (!hasSprintWork(nextBoard, workflowSettings)) {
+          setAutoSprintPaused(true)
+        } else {
+          setAutoSprintPaused(false)
+          resumeKickRef.current = true
+        }
       }
-    } catch {
-      /* sprint may be cancelled or endpoint unavailable */
+    } catch (err) {
+      const message =
+        err instanceof ApiError
+          ? err.detail
+          : err instanceof Error
+            ? err.message
+            : 'Auto sprint failed'
+      onSprintError?.(message)
+      appendSprintLog?.({
+        timestamp: new Date().toISOString(),
+        source: 'System',
+        type: 'error',
+        text: `Auto sprint failed: ${message}`,
+      })
+      setAutoSprintPaused(true)
     } finally {
       setSprintRunning(false)
     }
-  }, [brief, ollamaUrl, board, workflowSettings, onState, pendingSimulation?.id, onSessionRefresh, persistAutoSprintSession])
+  }, [
+    brief,
+    ollamaUrl,
+    board,
+    workflowSettings,
+    onState,
+    pendingSimulation?.id,
+    onSessionRefresh,
+    persistAutoSprintSession,
+    onSprintError,
+    appendSprintLog,
+  ])
 
   startAutoSprintRef.current = startAutoSprint
 
@@ -1385,6 +1387,23 @@ export function useAutoSprint(
   }, [autoSprint, autoSprintPaused, sprintRunning, board, workflowSettings, startAutoSprint, pendingSimulation?.id])
 
   useEffect(() => {
+    const inProgress = board['In Progress'] ?? []
+    const sig = inProgress
+      .map((t) => `${t.id}:${t.forcePatchNextDevStep ? 1 : 0}:${t.phaseCycleCapReached ? 1 : 0}`)
+      .join('|')
+    if (
+      autoSprint &&
+      autoSprintPaused &&
+      sig !== inProgressSigRef.current &&
+      hasSprintWork(board, workflowSettings)
+    ) {
+      setAutoSprintPaused(false)
+      resumeKickRef.current = true
+    }
+    inProgressSigRef.current = sig
+  }, [board, autoSprint, autoSprintPaused, workflowSettings])
+
+  useEffect(() => {
     const currentLen = board.Backlog?.length ?? 0
     if (
       autoSprint &&
@@ -1406,6 +1425,7 @@ export function useAutoSprint(
     startAutoSprint,
     stopAutoSprint,
     autoSprintSessionStartedAt: sessionStartedAt,
+    lastAutoSprintStatus,
     onSessionRefreshDue,
   }
 }

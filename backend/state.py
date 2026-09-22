@@ -26,6 +26,7 @@ ACTIVE_AGENT_RUN: Optional[Any] = None
 SPRINT_CANCEL = False
 # Discord/UI intent when SPRINT_CANCEL is set: "paused" | "cancelled" | None
 SPRINT_CANCEL_INTENT: Optional[str] = None
+AUTO_SPRINT_ACTIVE: bool = False
 EVENT_SUBSCRIBERS: List[Any] = []
 PENDING_TOOL_REQUESTS: List[Dict[str, Any]] = []
 PENDING_TOOL_APPROVALS: List[Any] = []

@@ -100,6 +100,48 @@ def test_release_blocked_when_dep_done():
         assert "blockedReturnLane" not in parent or not parent.get("blockedReturnLane")
 
 
+def test_file_fix_blocked_enters_from_in_progress():
+    _empty_board()
+    settings = {
+        "enableBlockedLane": True,
+        "requireBacklogRefinement": False,
+    }
+    with patch(
+        "backend.services.blocked_lane.get_workflow_settings",
+        return_value=settings,
+    ), patch(
+        "backend.services.workflow_settings.get_workflow_settings",
+        return_value=settings,
+    ):
+        from backend.services.file_blocker import BLOCKED_BY_KIND_FILE_FIX
+
+        fix = init_new_task(
+            {
+                "id": "FIX-IP",
+                "title": "Lint: lib/a.dart",
+                "description": "d",
+                "status": "Backlog",
+                "lintSourceFile": "lib/a.dart",
+            }
+        )
+        dep = init_new_task(
+            {
+                "id": "DEP-IP",
+                "title": "Feature using a.dart",
+                "description": "d",
+                "status": "In Progress",
+                "blockedBy": ["FIX-IP"],
+                "blockedByKind": BLOCKED_BY_KIND_FILE_FIX,
+            }
+        )
+        state.SHARED_BOARD["Backlog"] = [fix]
+        state.SHARED_BOARD["In Progress"] = [dep]
+        result = sync_blocked_lane(persist=False)
+        assert result["entered"] == 1
+        assert get_task_lane("DEP-IP") == "Blocked"
+        assert dep.get("blockedReturnLane") == "In Progress"
+
+
 def test_on_task_completed_releases_blocked_waiters():
     """Completion hook alone (not only move_board_stage post-sync) frees Blocked cards."""
     from backend.agents.task_context import on_task_completed

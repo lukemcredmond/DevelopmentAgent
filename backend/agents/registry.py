@@ -205,7 +205,10 @@ def _guarded_update_board(
     **_extra: Any,
 ) -> str:
     from backend.agents.task_context import find_task_by_id, get_task_lane, normalize_task
-    from backend.services.needs_user_guard import should_escalate_to_needs_user
+    from backend.services.needs_user_guard import (
+        reroute_tool_blocker_to_dev,
+        should_escalate_to_needs_user,
+    )
     from backend.services.sprint_service import (
         _redirect_to_needs_po,
         _try_move_to_needs_user,
@@ -235,6 +238,12 @@ def _guarded_update_board(
                     if _redirect_to_needs_po(task_id, task, question, kind="board_clarification"):
                         return f"Task {task_id} routed to Needs PO (clarification, not Needs User)."
                     return "Error: Could not route to Needs PO — PO round-trip limit reached."
+                if block_reason == "lint_use_file_blocker":
+                    reroute_tool_blocker_to_dev(task_id, task, block_reason)
+                    return (
+                        "Error: Needs User not allowed for lint/tool failures — "
+                        "Developer will retry autonomously."
+                    )
                 if block_reason in (
                     "duplicate_question",
                     "cooldown_active",
@@ -383,6 +392,15 @@ def _guarded_update_board(
                         )
                     return f"Task {task_id} stayed in 'Needs PO'."
                 return f"Task {task_id} moved to '{dest}'."
+    if target_lane.strip() == "Done":
+        live = find_task_by_id(task_id)
+        if live:
+            try:
+                from backend.services.card_session import clear_card_session
+
+                clear_card_session(live)
+            except Exception:
+                pass
     return move_board_stage(task_id, target_lane)
 
 

@@ -64,3 +64,54 @@ def test_resolve_user_to_po():
     assert resp.status_code == 200
     board = resp.json()["board"]
     assert any(t["id"] == "T-PO" for t in board.get("Needs PO", []))
+
+
+def test_reset_dev_latch_route():
+    initialize()
+    from fastapi.testclient import TestClient
+    from backend.main import app
+
+    task = _setup_needs_user_task("T-LATCH")
+    task["phaseCycleCapReached"] = True
+    task["devStepCount"] = 8
+    task["needsUserKind"] = "phase_cycle_cap"
+    client = TestClient(app)
+    resp = client.post("/api/tasks/T-LATCH/reset-dev-latch")
+    assert resp.status_code == 200
+    board = resp.json()["board"]
+    live = next(t for t in board.get("In Progress", []) if t["id"] == "T-LATCH")
+    assert live.get("phaseCycleCapReached") is False
+    assert live.get("devStepCount") == 0
+
+
+def test_resolve_user_reset_latch_clears_cap():
+    initialize()
+    from fastapi.testclient import TestClient
+    from backend.main import app
+
+    task = _setup_needs_user_task("T-RESET")
+    task["phaseCycleCapReached"] = True
+    task["devStepCount"] = 9
+    task["needsUserKind"] = "phase_cycle_cap"
+    task["needsUserOptions"] = [
+        {
+            "id": "b",
+            "label": "Reset Developer visit latch",
+            "answer": "Reset the phase cycle cap and continue implementation on this card.",
+            "target": "dev",
+        }
+    ]
+    client = TestClient(app)
+    resp = client.post(
+        "/api/tasks/T-RESET/resolve-user",
+        json={
+            "answer": "Reset the phase cycle cap and continue implementation on this card.",
+            "target": "dev",
+            "optionId": "b",
+        },
+    )
+    assert resp.status_code == 200
+    board = resp.json()["board"]
+    live = next(t for t in board.get("In Progress", []) if t["id"] == "T-RESET")
+    assert live.get("phaseCycleCapReached") is False
+    assert live.get("devStepCount") == 0

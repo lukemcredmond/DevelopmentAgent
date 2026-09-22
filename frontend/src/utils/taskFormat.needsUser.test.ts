@@ -51,4 +51,16 @@ describe('needsUserCardPreview', () => {
     })
     expect(needsUserCardPreview(task)).toBe('Which file should Developer create first?')
   })
+
+  it('shows pick A-D when structured options exist', () => {
+    const task = baseTask({
+      userQuestion: 'Split or reset latch?',
+      needsUserOptions: [
+        { id: 'a', label: 'Split into smaller cards', target: 'po' },
+        { id: 'other', label: 'Other (type below)', target: 'dev' },
+      ],
+    })
+    expect(needsUserCardPreview(task)).toContain('Pick A–D')
+    expect(needsUserCardPreview(task)).toContain('Split into smaller cards')
+  })
 })

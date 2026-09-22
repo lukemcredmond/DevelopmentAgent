@@ -20,11 +20,13 @@ from backend.services.card_ledger import (
     record_next_work_visit,
     same_next_task_should_park,
     seed_ledger_from_task,
+    should_bypass_same_next_task_park,
     should_run_ideation,
     summarize_truncated_generation,
     write_oracle,
 )
 from backend.services.sprint_speed_gates import same_next_task_should_park as gates_same
+from backend.services.step_diagnostics import clear_active_step_trace
 from backend.services.workflow_settings import (
     DEFAULT_WORKFLOW_SETTINGS,
     get_workflow_settings,
@@ -142,6 +144,81 @@ def test_same_next_task_parks_without_writes(tmp_path):
 
     record_next_work_visit(task, writes_succeeded=0, oracle_passed=True)
     assert same_next_task_should_park(task) is False
+
+
+def test_force_patch_lint_bypasses_same_next_task_park(tmp_path):
+    task = _task(
+        tmp_path,
+        title="Lint: lib/main.dart",
+        forcePatchNextDevStep=True,
+        lastCommandDiagnostics=[{"file": "lib/main.dart", "line": 1, "message": "x"}],
+    )
+    record_next_work_visit(task, writes_succeeded=0, oracle_passed=None)
+    assert task.get("lastNextWorkNoWrite") is True
+    assert should_bypass_same_next_task_park(task) is True
+    assert same_next_task_should_park(task) is False
+
+
+def test_keep_lint_card_clears_last_next_work_no_write(tmp_path):
+    from backend.services.sprint_service import _keep_lint_card_for_developer
+
+    task = _task(
+        tmp_path,
+        title="Lint: lib/main.dart",
+        lastCommandDiagnostics=[{"file": "lib/main.dart", "line": 1, "message": "x"}],
+    )
+    record_next_work_visit(task, writes_succeeded=0, oracle_passed=None)
+    assert same_next_task_should_park(task) is True
+    _keep_lint_card_for_developer(task)
+    assert task.get("lastNextWorkNoWrite") is None
+    assert task.get("forcePatchNextDevStep") is True
+    assert same_next_task_should_park(task) is False
+
+
+def test_feature_card_force_patch_bypasses_same_next_task_park(tmp_path):
+    task = _task(
+        tmp_path,
+        title="Implement import flow",
+        forcePatchNextDevStep=True,
+        lastCommandDiagnostics=[{"file": "lib/models.dart", "line": 1, "message": "test failed"}],
+    )
+    record_next_work_visit(task, writes_succeeded=0, oracle_passed=None)
+    assert should_bypass_same_next_task_park(task) is True
+    assert same_next_task_should_park(task) is False
+
+
+def test_reroute_tool_blocker_clears_last_next_work_markers(tmp_path):
+    from backend.services.needs_user_guard import reroute_tool_blocker_to_dev
+
+    task = _task(tmp_path, title="Implement import flow")
+    record_next_work_visit(task, writes_succeeded=0, oracle_passed=None)
+    assert same_next_task_should_park(task) is True
+    reroute_tool_blocker_to_dev(task["id"], task, "stall")
+    assert task.get("lastNextWorkNoWrite") is None
+    assert task.get("lastNextWorkKey") is None
+    assert task.get("forcePatchNextDevStep") is True
+    assert same_next_task_should_park(task) is False
+
+
+def test_cap_precheck_does_not_rearm_last_next_work_no_write(tmp_path):
+    from backend.services.sprint_service import _record_dev_precheck_skip
+
+    task = _task(tmp_path, title="Feature card")
+    record_next_work_visit(task, writes_succeeded=0, oracle_passed=None)
+    task.pop("lastNextWorkNoWrite", None)
+    state.SHARED_BOARD = {"In Progress": [task], "Needs User": []}
+    for lane in ("Backlog", "Needs PO", "QA", "Done", "Refinement", "Code Review", "Blocked"):
+        state.SHARED_BOARD.setdefault(lane, [])
+    state.SPRINT_PROGRESS_MAX = 20
+    clear_active_step_trace()
+
+    _record_dev_precheck_skip(
+        task["id"],
+        task["title"],
+        "In Progress",
+        reason="Stopped: phase cycle cap reached at Developer visit 14. Split required.",
+    )
+    assert task.get("lastNextWorkNoWrite") is None
 
 
 def test_length_cutoff_summarizer_once(tmp_path):

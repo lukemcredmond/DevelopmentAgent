@@ -25,10 +25,12 @@ UNHEALTHY_LANE_ADVANCE_EXITS = frozenset(
         "patch_budget_exhausted",
         "completed_text_only",
         "completed_with_writes_no_advance",
+        "lint_stay_in_progress",
         "tool_output_echo",
         "identical_write_loop",
         "empty_generation_timeout",
         "llm_call_failed",
+        "text_rejection_loop",
     }
 )
 
@@ -77,6 +79,7 @@ CIRCUIT_BREAKER_EXITS = frozenset(
         "po_generation_truncated",
         "empty_generation_timeout",
         "llm_call_failed",
+        "text_rejection_loop",
         "step_timeout",
         "interrupted",
     }
@@ -523,6 +526,16 @@ def note_zero_work_exit(
     if not zero_work:
         watchdog.clear()
         return False
+    if key[1] == "dev_precheck_skip" and key[0]:
+        try:
+            from backend.agents.task_context import find_task_by_id
+
+            task = find_task_by_id(key[0])
+            if isinstance(task, dict) and task.get("forcePatchNextDevStep"):
+                watchdog.clear()
+                return False
+        except Exception:
+            pass
     if watchdog.get("key") == key:
         watchdog["streak"] = int(watchdog.get("streak") or 0) + 1
     else:

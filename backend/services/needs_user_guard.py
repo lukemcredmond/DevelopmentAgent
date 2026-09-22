@@ -6,7 +6,7 @@ import datetime
 import difflib
 import hashlib
 import re
-from typing import Any, Dict, List, Optional, Tuple
+from typing import Any, Callable, Dict, List, Optional, Tuple
 
 from backend import state
 from backend.services.workflow_settings import get_workflow_settings
@@ -165,6 +165,180 @@ def append_user_resolution(
             pass
 
 
+_USER_ONLY_ESCALATION_KINDS = frozenset(
+    {"phase_cycle_cap", "secret", "product_choice", "po_limit", "dev_board_move"}
+)
+
+_AUTONOMOUS_KINDS = frozenset({"lint", "explore", "patch"})
+
+_MISROUTED_NEEDS_USER_PATTERNS = (
+    "old_text not found",
+    "apply_patch",
+    "blocked on lint",
+)
+
+
+def brief_has_actionable_options(brief: Dict[str, Any]) -> bool:
+    opts = brief.get("options") or []
+    return isinstance(opts, list) and len(opts) >= 2
+
+
+def should_park_in_needs_user(
+    task: Dict[str, Any],
+    brief: Dict[str, Any],
+) -> Tuple[bool, str]:
+    """Needs User only when there are real MCQ choices for the user."""
+    kind = str(brief.get("kind") or "")
+    if kind in _AUTONOMOUS_KINDS:
+        return False, "autonomous_tool_blocker"
+    if stuck_is_tool_or_lint(task) and kind not in (
+        "secret",
+        "phase_cycle_cap",
+        "product_choice",
+    ):
+        return False, "lint_use_file_blocker"
+    if not brief_has_actionable_options(brief):
+        return False, "no_mcq_options"
+    return True, ""
+
+
+def clear_needs_user_fields(task: Dict[str, Any]) -> None:
+    for key in (
+        "userQuestion",
+        "needsUserReason",
+        "needsUserAction",
+        "needsUserKind",
+        "needsUserSuggestedTarget",
+        "needsUserOptions",
+    ):
+        task.pop(key, None)
+
+
+def reroute_tool_blocker_to_dev(
+    task_id: str,
+    task: Dict[str, Any],
+    reason: str,
+) -> bool:
+    """Keep card In Progress for autonomous Developer retry instead of Needs User."""
+    clear_needs_user_fields(task)
+    task["forcePatchNextDevStep"] = True
+    task.pop("needsUserDuplicate", None)
+    task.pop("lastNextWorkKey", None)
+    task.pop("lastNextWorkNoWrite", None)
+    try:
+        from backend.services.logs import add_system_log
+
+        add_system_log(
+            "System",
+            "info",
+            f"{task_id}: staying In Progress for autonomous Dev retry — {str(reason or '')[:120]}",
+        )
+    except Exception:
+        pass
+    return True
+
+
+def should_reconcile_needs_user_task(task: Dict[str, Any]) -> bool:
+    if not isinstance(task, dict):
+        return False
+    kind = str(task.get("needsUserKind") or "")
+    if kind in _AUTONOMOUS_KINDS:
+        return True
+    if kind in ("stuck", "phase_cycle_cap") and not task.get("needsUserOptions"):
+        return True
+    if not task.get("needsUserOptions") and stuck_is_tool_or_lint(task):
+        return True
+    blob = " ".join(
+        [
+            str(task.get("userQuestion") or ""),
+            str(task.get("needsUserReason") or ""),
+            str(task.get("needsUserAction") or ""),
+        ]
+    ).lower()
+    if any(pattern in blob for pattern in _MISROUTED_NEEDS_USER_PATTERNS):
+        return True
+    brief = build_needs_user_brief(task, kind=kind or "stuck_loop")
+    allowed, _ = should_park_in_needs_user(task, brief)
+    return not allowed
+
+
+def reconcile_needs_user_task_to_dev(
+    task: Dict[str, Any],
+    *,
+    source: str = "reconcile",
+) -> bool:
+    """Move misrouted Needs User cards back to In Progress for autonomous Dev."""
+    task_id = str(task.get("id") or "")
+    if not task_id:
+        return False
+    try:
+        from backend.agents.task_context import get_task_lane
+    except Exception:
+        get_task_lane = lambda _tid: ""  # type: ignore[assignment,misc]
+
+    lane = get_task_lane(task_id)
+    on_board_nu = lane == "Needs User"
+    if not on_board_nu and str(task.get("status") or "") != "Needs User":
+        return False
+
+    clear_needs_user_fields(task)
+    if is_lint_wall_card(task):
+        if on_board_nu:
+            from backend.services.sprint_service import _keep_lint_card_for_developer
+
+            _keep_lint_card_for_developer(task)
+        else:
+            task["forcePatchNextDevStep"] = True
+            task["status"] = "In Progress"
+    else:
+        task["forcePatchNextDevStep"] = True
+        if on_board_nu:
+            task["status"] = "In Progress"
+            from backend.services.board_service import move_board_stage
+
+            move_board_stage(task_id, "In Progress")
+        else:
+            task["status"] = "In Progress"
+
+    try:
+        from backend.services.logs import add_system_log
+
+        add_system_log(
+            "System",
+            "info",
+            f"{task_id}: Reconciled misrouted Needs User → In Progress ({source})",
+        )
+    except Exception:
+        pass
+    return True
+
+
+def reconcile_autonomous_needs_user_cards() -> Dict[str, Any]:
+    """Scan Needs User lane and reroute autonomous lint/tool/explore cards to Dev."""
+    reconciled: List[str] = []
+    refreshed: List[str] = []
+    with state.STATE_LOCK:
+        tasks = list(state.SHARED_BOARD.get("Needs User") or [])
+    for task in tasks:
+        if not isinstance(task, dict):
+            continue
+        task_id = str(task.get("id") or "")
+        if should_reconcile_needs_user_task(task):
+            if task_id and reconcile_needs_user_task_to_dev(task, source="autonomous"):
+                reconciled.append(task_id)
+            continue
+        if task_id and refresh_generic_needs_user_options(task):
+            refreshed.append(task_id)
+    if reconciled or refreshed:
+        try:
+            from backend.services.project_service import save_current_project_state
+
+            save_current_project_state()
+        except Exception:
+            pass
+    return {"reconciled": reconciled, "refreshed": refreshed, "count": len(reconciled)}
+
+
 def should_escalate_to_needs_user(
     task: Dict[str, Any],
     msg: str,
@@ -175,6 +349,9 @@ def should_escalate_to_needs_user(
     text = str(msg or "").strip()
     if not text:
         return False, "empty_question"
+
+    if stuck_is_tool_or_lint(task) and kind not in _USER_ONLY_ESCALATION_KINDS:
+        return False, "lint_use_file_blocker"
 
     latch_park = kind == "phase_cycle_cap" or bool(task.get("phaseCycleCapReached"))
 
@@ -215,6 +392,14 @@ def should_escalate_to_needs_user(
     task["needsUserDuplicate"] = False
     task["lastNeedsUserReasonHash"] = h
     return True, ""
+
+
+def is_lint_wall_card(task: Dict[str, Any]) -> bool:
+    """True for lint fanout cards (Lint: title or lintSourceFile), not generic feature cards."""
+    if not isinstance(task, dict):
+        return False
+    title = str(task.get("title") or "")
+    return title.startswith("Lint: ") or bool(task.get("lintSourceFile"))
 
 
 def stuck_is_tool_or_lint(task: Dict[str, Any]) -> bool:
@@ -328,6 +513,29 @@ def _last_failed_tool(task: Dict[str, Any]) -> str:
     return ""
 
 
+_FLUTTER_ANALYZE_TAIL = re.compile(
+    r"(\S+\.[A-Za-z0-9_]+):(\d+)(?::(\d+))?\s*$"
+)
+_FLUTTER_ANALYZE_PREFIX = re.compile(r"^(?:error|warning|info)\s+[•\-]", re.I)
+
+
+def _sanitize_diag_file(file_val: str, line: Any) -> Tuple[str, str]:
+    """If `file` stored a whole analyze line, recover path:line."""
+    raw = str(file_val or "").strip().replace("\\", "/")
+    line_s = str(line if line not in (None, "") else "?")
+    if not raw:
+        return "?", line_s
+    if _FLUTTER_ANALYZE_PREFIX.search(raw) or (raw.count("•") >= 1 and ":" in raw):
+        tail = _FLUTTER_ANALYZE_TAIL.search(raw)
+        if tail:
+            return tail.group(1), tail.group(2)
+    if len(raw) > 80 and " " in raw:
+        tail = _FLUTTER_ANALYZE_TAIL.search(raw)
+        if tail:
+            return tail.group(1), tail.group(2)
+    return raw, line_s
+
+
 def _first_lint_line(task: Dict[str, Any]) -> str:
     diagnostics = task.get("lastCommandDiagnostics") or []
     if not isinstance(diagnostics, list) or not diagnostics:
@@ -335,8 +543,15 @@ def _first_lint_line(task: Dict[str, Any]) -> str:
     first = diagnostics[0]
     if not isinstance(first, dict):
         return str(first)[:160]
-    loc = f"{first.get('file', '?')}:{first.get('line', '?')}"
-    return f"{loc} — {str(first.get('message') or '')[:140]}"
+    path, line_s = _sanitize_diag_file(str(first.get("file") or ""), first.get("line"))
+    msg = str(first.get("message") or "").strip()
+    if msg.startswith("error") and "•" in msg:
+        inner = re.sub(r"^(?:error|warning|info)\s+[•\-]\s+", "", msg, flags=re.I)
+        inner = re.split(r"\s+[•\-]\s+", inner, maxsplit=1)[0].strip()
+        if inner:
+            msg = inner
+    loc = f"{path}:{line_s}"
+    return f"{loc} — {msg[:140]}" if msg else loc
 
 
 def _spec_gap_lines(task: Dict[str, Any]) -> List[str]:
@@ -378,11 +593,10 @@ def _resolve_needs_user_kind(task: Dict[str, Any], kind: str, raw_msg: str) -> s
     raw = str(raw_msg or "")
     if _looks_secret_ask(raw) or _looks_secret_ask(str(task.get("userQuestion") or "")):
         return "secret"
-    if stuck_is_tool_or_lint(task):
-        return "lint"
-    # Cycle-cap park must not be rewritten as missing-file questions unless lint is present.
     if kind == "phase_cycle_cap" or task.get("phaseCycleCapReached"):
         return "phase_cycle_cap"
+    if stuck_is_tool_or_lint(task):
+        return "lint"
     exit_r = _exit_reason(task)
     if exit_r in ("explore_budget_exhausted", "read_only_no_edits") or task.get(
         "forcePatchNextDevStep"
@@ -403,12 +617,292 @@ def _resolve_needs_user_kind(task: Dict[str, Any], kind: str, raw_msg: str) -> s
     return "stuck"
 
 
+_OPTION_IDS = ("a", "b", "c", "d")
+_OTHER_OPTION: Dict[str, str] = {
+    "id": "other",
+    "label": "Other (type below)",
+    "answer": "",
+    "target": "dev",
+}
+_BANNED_OPTION_SNIPPETS = (
+    "proceed with the simplest option that matches the spec",
+    "send back to product owner to refine the spec",
+    "answer in my own words",
+)
+_PHASE_CAP_ONLY_LABELS = frozenset(
+    {
+        "split into smaller cards",
+        "reset developer visit latch",
+    }
+)
+_VISIT_CAP_QUESTION_MARKERS = (
+    "visit latch",
+    "reset the developer visit",
+    "reset the phase cycle",
+    "split into smaller cards, or reset",
+)
+_needs_user_options_chat: Optional[Callable[[str], str]] = None
+
+
+def _short_label(text: str, limit: int = 160) -> str:
+    t = " ".join(str(text or "").split())
+    if not t:
+        return ""
+    if len(t) <= limit:
+        return t
+    return t[: limit - 1].rstrip() + "…"
+
+
+def _is_banned_option_label(label: str) -> bool:
+    lab = str(label or "").strip().lower()
+    if not lab:
+        return True
+    if lab in ("other", "other (type below)"):
+        return True
+    return any(s in lab for s in _BANNED_OPTION_SNIPPETS)
+
+
+def _target_from_suggested_agent(suggested: str) -> str:
+    s = str(suggested or "").strip().lower()
+    if s in ("po", "product owner"):
+        return "po"
+    if s in ("refinement",):
+        return "refinement"
+    return "dev"
+
+
+def _alternatives_from_question(question: str) -> List[str]:
+    q = str(question or "").strip()
+    if not q:
+        return []
+    lower = q.lower()
+    if any(m in lower for m in _VISIT_CAP_QUESTION_MARKERS):
+        return []
+    vs = re.search(r"\b(.+?)\s+vs\.?\s+(.+?)\s*\??\s*$", q, re.I)
+    if vs:
+        left = vs.group(1).strip()
+        right = vs.group(2).strip(" ?.")
+        left = " ".join(left.split()[-6:])
+        if 1 < len(left) < 80 and 1 < len(right) < 80:
+            return [left, right]
+    m = re.search(
+        r"(?:be|use|choose|pick|prefer|want)\s+(.+?)\s+or\s+(.+?)\s*\??\s*$",
+        q,
+        re.I,
+    )
+    if m:
+        a, b = m.group(1).strip(" .,"), m.group(2).strip(" ?,.")
+        if 1 < len(a) < 80 and 1 < len(b) < 80:
+            return [a, b]
+    m = re.search(r":\s*(.+?)\s+or\s+(.+?)\s*\??\s*$", q, re.I)
+    if m:
+        a, b = m.group(1).strip(" .,"), m.group(2).strip(" ?,.")
+        if 1 < len(a) < 80 and 1 < len(b) < 80:
+            return [a, b]
+    m = re.search(
+        r"\b([A-Za-z][\w +/\-]{1,40})\s+or\s+([A-Za-z][\w +/\-]{1,40})\s*\??\s*$",
+        q,
+    )
+    if m:
+        a, b = m.group(1).strip(), m.group(2).strip(" ?.")
+        if a.lower() not in ("split", "reset") and b.lower() not in ("split", "reset"):
+            return [a, b]
+    return []
+
+
+def _finalize_options(raw: List[Dict[str, str]]) -> List[Dict[str, str]]:
+    seen: set[str] = set()
+    out: List[Dict[str, str]] = []
+    for item in raw:
+        if not isinstance(item, dict):
+            continue
+        label = str(item.get("label") or "").strip()
+        if not label or _is_banned_option_label(label):
+            continue
+        key = normalize_question(label)[:120]
+        if key in seen:
+            continue
+        seen.add(key)
+        if len(out) >= 4:
+            break
+        target = str(item.get("target") or "dev").strip().lower()
+        if target not in ("dev", "po", "refinement"):
+            target = "dev"
+        answer = str(item.get("answer") or label).strip() or label
+        out.append(
+            {
+                "id": _OPTION_IDS[len(out)],
+                "label": label[:160],
+                "answer": answer[:500],
+                "target": target,
+            }
+        )
+    if not out:
+        return []
+    other = dict(_OTHER_OPTION)
+    out.append(other)
+    return out
+
+
+def needs_user_options_look_generic(
+    options: Any,
+    *,
+    task: Optional[Dict[str, Any]] = None,
+) -> bool:
+    """True when options match the old kind templates and should be rebuilt."""
+    if not isinstance(options, list) or not options:
+        return False
+    labels: List[str] = []
+    for opt in options:
+        if not isinstance(opt, dict):
+            continue
+        if str(opt.get("id") or "") == "other":
+            continue
+        labels.append(re.sub(r"\s+", " ", str(opt.get("label") or "").strip().lower()))
+    if not labels:
+        return False
+    if any(_is_banned_option_label(lab) for lab in labels):
+        return True
+    if set(labels) <= _PHASE_CAP_ONLY_LABELS:
+        if task is None:
+            return True
+        diagnosis = task.get("lastDiagnosis") if isinstance(task.get("lastDiagnosis"), dict) else {}
+        has_evidence = bool(
+            (diagnosis or {}).get("recommendedAction")
+            or (diagnosis or {}).get("problem")
+            or _first_lint_line(task)
+            or _last_failed_tool(task)
+        )
+        return has_evidence
+    return False
+
+
+def _build_needs_user_options(
+    task: Dict[str, Any],
+    resolved_kind: str,
+    *,
+    question: str = "",
+) -> List[Dict[str, str]]:
+    """Evidence-based A/B/C/D + Other options for genuine user decisions."""
+    title = str(task.get("title") or task.get("id") or "this card")
+    diagnosis = task.get("lastDiagnosis") if isinstance(task.get("lastDiagnosis"), dict) else {}
+    problem = str((diagnosis or {}).get("problem") or "").strip()
+    recommended = str((diagnosis or {}).get("recommendedAction") or "").strip()
+    suggested_agent = str((diagnosis or {}).get("suggestedAgent") or "").strip()
+    lint_line = _first_lint_line(task)
+    failed_tool = _last_failed_tool(task)
+    gaps = _spec_gap_lines(task)
+    collected: List[Dict[str, str]] = []
+
+    def add(label: str, answer: str, target: str = "dev") -> None:
+        lab = str(label or "").strip()
+        if not lab:
+            return
+        collected.append(
+            {
+                "label": _short_label(lab) or lab[:160],
+                "answer": str(answer or lab).strip()[:500],
+                "target": target,
+            }
+        )
+
+    if recommended and not looks_generic_needs_user_text(recommended):
+        add(recommended, recommended, _target_from_suggested_agent(suggested_agent))
+    elif problem and not looks_generic_needs_user_text(problem):
+        add(
+            f"Resolve: {problem}",
+            f"Resolve this blocker: {problem}",
+            _target_from_suggested_agent(suggested_agent),
+        )
+
+    for alt in _alternatives_from_question(question):
+        add(alt, f"Use {alt}.", "dev")
+
+    if lint_line:
+        add(
+            f"Fix {lint_line}",
+            f"Fix this lint/tool error first: {lint_line}",
+            "dev",
+        )
+
+    if failed_tool:
+        tool_name = failed_tool.split(":", 1)[0].strip() or "the last tool"
+        add(
+            f"Fix the {tool_name} failure and retry",
+            f"Fix this tool failure, then continue: {failed_tool}",
+            "dev",
+        )
+
+    if gaps:
+        if "acceptance criteria are empty" in gaps:
+            add(
+                "Write 2–5 acceptance criteria",
+                f'Write 2–5 done-when acceptance criteria for "{title}".',
+                "po",
+            )
+        else:
+            add(
+                f"Fill spec: {gaps[0]}",
+                f'Fill the spec gap for "{title}": {gaps[0]}.',
+                "po",
+            )
+
+    if resolved_kind == "secret":
+        add(
+            "Use an environment variable (do not commit)",
+            "Use an environment variable for the secret; do not commit credentials to the repo.",
+            "dev",
+        )
+        add(
+            "I will paste the secret in Other",
+            "I will provide the secret value in a follow-up message.",
+            "dev",
+        )
+
+    if resolved_kind == "phase_cycle_cap":
+        add(
+            "Split into smaller cards",
+            f"Split '{title}' into smaller focused cards.",
+            "po",
+        )
+        add(
+            "Reset Developer visit latch",
+            "Reset the phase cycle cap and continue implementation on this card.",
+            "dev",
+        )
+
+    if resolved_kind == "explore" and not any(
+        "file" in str(c.get("label") or "").lower() for c in collected
+    ):
+        add(
+            f'Name the first file/function to change for "{title}"',
+            f'Change this first file/function to implement "{title}", then continue.',
+            "dev",
+        )
+
+    finalized = _finalize_options(collected)
+    real = [o for o in finalized if o.get("id") != "other"]
+    if len(real) < 2:
+        add(
+            f'Continue implementing "{title}" with the current spec',
+            f'Continue implementing "{title}" using the current description and acceptance criteria.',
+            "dev",
+        )
+        add(
+            f'Split "{title}" into smaller focused cards',
+            f"Split '{title}' into smaller focused cards.",
+            "po",
+        )
+        finalized = _finalize_options(collected)
+    return finalized
+
+
 def build_needs_user_brief(
     task: Dict[str, Any],
     *,
     kind: str = "stuck_loop",
     raw_msg: str = "",
-) -> Dict[str, str]:
+) -> Dict[str, Any]:
     """Structured Needs User copy: question, why, action, suggested resolve target.
 
     Does not call an LLM — uses diagnosis, lint, last step outcome, and spec gaps.
@@ -443,10 +937,20 @@ def build_needs_user_brief(
             "Then click Send to Developer."
         )
     elif resolved_kind == "phase_cycle_cap":
-        question = (
-            f'Split "{title}" into smaller cards, or reset the Developer visit latch '
-            "so implementation can continue?"
-        )
+        if problem and not looks_generic_needs_user_text(problem):
+            question = f"How should we resolve: {problem[:220]}?"
+        elif lint_line:
+            question = (
+                "This card hit its Developer visit cap. "
+                f"What should Developer do about: {lint_line}?"
+            )
+        elif recommended and not looks_generic_needs_user_text(recommended):
+            question = f"How should we proceed: {recommended[:220]}?"
+        else:
+            question = (
+                f'Split "{title}" into smaller cards, or reset the Developer visit latch '
+                "so implementation can continue?"
+            )
         why_parts.append(
             "This card hit its Developer visit cap. Auto Sprint will not run Product Owner "
             "or Developer on it until it is split or the latch is reset."
@@ -575,10 +1079,11 @@ def build_needs_user_brief(
         "why": why[:600],
         "action": action[:600],
         "suggestedTarget": suggested,
+        "options": _build_needs_user_options(task, resolved_kind, question=question),
     }
 
 
-def apply_needs_user_brief(task: Dict[str, Any], brief: Dict[str, str]) -> None:
+def apply_needs_user_brief(task: Dict[str, Any], brief: Dict[str, Any]) -> None:
     """Write structured Needs User fields onto the task."""
     task["userQuestion"] = str(brief.get("question") or "")[:500]
     task["needsUserReason"] = str(brief.get("why") or "")[:600]
@@ -588,6 +1093,160 @@ def apply_needs_user_brief(task: Dict[str, Any], brief: Dict[str, str]) -> None:
     if target not in ("dev", "po", "refinement"):
         target = "dev"
     task["needsUserSuggestedTarget"] = target
+    options = brief.get("options")
+    if isinstance(options, list) and options:
+        task["needsUserOptions"] = options
+    else:
+        task.pop("needsUserOptions", None)
+
+
+def _build_options_llm_prompt(task: Dict[str, Any], evidence: List[Dict[str, str]]) -> str:
+    diagnosis = task.get("lastDiagnosis") if isinstance(task.get("lastDiagnosis"), dict) else {}
+    ac = task.get("acceptanceCriteria") or []
+    evidence_labels = [
+        str(o.get("label") or "")
+        for o in evidence
+        if isinstance(o, dict) and str(o.get("id") or "") != "other"
+    ]
+    parts = [
+        "You help a user unblock a kanban card. Propose 2-4 mutually exclusive concrete solutions they can pick.",
+        "Each option is a decision or instruction, not a process meta-label.",
+        'Do NOT use labels like "Proceed with the simplest option", "Send back to Product Owner to refine the spec", or "Answer in my own words".',
+        "Do not invent secrets or credentials.",
+        "Prefer specific files, commands, and product choices from the evidence.",
+        "target must be one of: dev, po, refinement.",
+        'Return ONLY JSON: {"options": [{"id":"a","label":"one-line solution","answer":"instruction to the agent","target":"dev"}]}',
+        f"Task: {task.get('title') or task.get('id')}",
+        f"Question: {task.get('userQuestion') or ''}",
+        f"Why: {task.get('needsUserReason') or ''}",
+        f"Acceptance criteria: {ac}",
+    ]
+    if diagnosis:
+        parts.append(
+            "Diagnosis: "
+            + str(diagnosis.get("problem") or "")
+            + " | "
+            + str(diagnosis.get("recommendedAction") or "")
+        )
+    lint_line = _first_lint_line(task)
+    if lint_line:
+        parts.append(f"Lint: {lint_line}")
+    failed = _last_failed_tool(task)
+    if failed:
+        parts.append(f"Last failed tool: {failed}")
+    if evidence_labels:
+        parts.append("Evidence options already considered: " + "; ".join(evidence_labels[:4]))
+    return "\n".join(parts)[:8000]
+
+
+def _default_needs_user_options_chat(prompt: str) -> str:
+    import os
+
+    if os.environ.get("PYTEST_CURRENT_TEST"):
+        return ""
+    from backend.agents.registry import agent_po
+    from backend.services.llm_provider import build_provider, chat_config
+
+    cfg = dict(chat_config())
+    cfg["timeoutSec"] = 20
+    provider = build_provider(cfg)
+    model = str(getattr(agent_po, "model", "") or "qwen2.5-coder:14b")
+    result = provider.chat(
+        model,
+        [
+            {
+                "role": "system",
+                "content": "Reply with valid JSON only. No markdown fences unless needed.",
+            },
+            {"role": "user", "content": prompt},
+        ],
+        options={"num_predict": 512, "temperature": 0.2},
+    )
+    message = getattr(result, "message", None)
+    content = getattr(message, "content", None) if message is not None else None
+    return str(content or "")
+
+
+def enrich_needs_user_options(
+    task: Dict[str, Any],
+    *,
+    chat_fn: Optional[Callable[[str], str]] = None,
+) -> bool:
+    """Best-effort LLM refine of needsUserOptions. Returns True when replaced."""
+    if not isinstance(task, dict):
+        return False
+    existing = task.get("needsUserOptions")
+    if not isinstance(existing, list):
+        existing = []
+    fn = _needs_user_options_chat if chat_fn is None else chat_fn
+    if fn is None:
+        fn = _default_needs_user_options_chat
+    prompt = _build_options_llm_prompt(task, existing)
+    try:
+        raw = fn(prompt)
+    except Exception:
+        return False
+    if not str(raw or "").strip():
+        return False
+    parsed: Optional[Dict[str, Any]] = None
+    try:
+        from backend.services.po_clarification import extract_json_object_from_text
+
+        parsed = extract_json_object_from_text(str(raw))
+    except Exception:
+        parsed = None
+    if not isinstance(parsed, dict):
+        try:
+            import json as _json
+
+            loaded = _json.loads(str(raw))
+            parsed = loaded if isinstance(loaded, dict) else None
+        except Exception:
+            return False
+    if not isinstance(parsed, dict):
+        return False
+    incoming = parsed.get("options")
+    if not isinstance(incoming, list):
+        return False
+    normalized: List[Dict[str, str]] = []
+    for item in incoming:
+        if not isinstance(item, dict):
+            continue
+        label = str(item.get("label") or "").strip()
+        if not label:
+            continue
+        normalized.append(
+            {
+                "label": label,
+                "answer": str(item.get("answer") or label).strip(),
+                "target": str(item.get("target") or "dev"),
+            }
+        )
+    finalized = _finalize_options(normalized)
+    if len([o for o in finalized if o.get("id") != "other"]) < 2:
+        return False
+    task["needsUserOptions"] = finalized
+    return True
+
+
+def refresh_generic_needs_user_options(
+    task: Dict[str, Any],
+    *,
+    chat_fn: Optional[Callable[[str], str]] = None,
+    with_llm: bool = False,
+) -> bool:
+    """Rebuild template A/B/C options from current evidence. Optional LLM refine."""
+    if not isinstance(task, dict):
+        return False
+    if not needs_user_options_look_generic(task.get("needsUserOptions"), task=task):
+        return False
+    kind = str(task.get("needsUserKind") or "stuck_loop")
+    raw_msg = str(task.get("userQuestion") or task.get("needsUserReason") or "")
+    brief = build_needs_user_brief(task, kind=kind, raw_msg=raw_msg)
+    apply_needs_user_brief(task, brief)
+    if with_llm:
+        enrich_needs_user_options(task, chat_fn=chat_fn)
+    return True
 
 
 def needs_user_fields_empty(task: Dict[str, Any]) -> bool:
@@ -618,15 +1277,19 @@ def ensure_needs_user_brief(
 
     Returns True when fields were written.
     """
-    if not isinstance(task, dict) or not needs_user_fields_empty(task):
+    if not isinstance(task, dict):
         return False
-    brief = build_needs_user_brief(
-        task,
-        kind=kind or "stuck_loop",
-        raw_msg=raw_msg or _raw_msg_from_task_evidence(task),
-    )
-    apply_needs_user_brief(task, brief)
-    return True
+    if needs_user_fields_empty(task):
+        brief = build_needs_user_brief(
+            task,
+            kind=kind or "stuck_loop",
+            raw_msg=raw_msg or _raw_msg_from_task_evidence(task),
+        )
+        apply_needs_user_brief(task, brief)
+        return True
+    if refresh_generic_needs_user_options(task):
+        return True
+    return False
 
 
 def build_stuck_escalation_message(task: Dict[str, Any], lane: str, max_stuck: int) -> str:
