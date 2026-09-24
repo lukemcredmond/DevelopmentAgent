@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import re
 from collections import defaultdict
 from typing import Any, Dict, List, Optional, Tuple
 
@@ -33,6 +34,110 @@ _DEPENDENT_LANES = (
 
 def normalize_file_path(path: str) -> str:
     return str(path or "").strip().replace("\\", "/")
+
+
+_VALID_DEV_EDIT_PATH_RE = re.compile(r"^[\w./-]+$")
+_MAX_DEV_EDIT_PATH_LEN = 260
+
+
+def validate_dev_edit_target_path(path: str) -> bool:
+    """True when path looks like a workspace-relative file, not a lint diagnostic line."""
+    raw = normalize_file_path(path)
+    if not raw or len(raw) > _MAX_DEV_EDIT_PATH_LEN:
+        return False
+    lower = raw.lower()
+    if "•" in raw or "warning" in lower or raw.startswith("Error:"):
+        return False
+    if not _VALID_DEV_EDIT_PATH_RE.match(raw):
+        return False
+    return not is_junk_lint_path(raw)
+
+
+def _extract_path_from_diagnostic_line(line: str) -> str:
+    """Extract trailing filename from formatted lint lines."""
+    raw = str(line or "").strip()
+    if "•" in raw:
+        tail = normalize_file_path(raw.rsplit("•", 1)[-1])
+        if validate_dev_edit_target_path(tail):
+            return tail
+    if validate_dev_edit_target_path(raw):
+        return raw
+    return ""
+
+
+def _title_derived_edit_path(title: str) -> str:
+    title = str(title or "")
+    lower = title.lower()
+    for hint in ("pubspec.yaml", "analysis_options.yaml"):
+        if hint in lower:
+            return hint
+    if "main.dart" in lower or "main app" in lower:
+        return "lib/main.dart"
+    match = re.search(r"(lib/[\w./-]+\.(?:dart|yaml))", title, re.I)
+    if match:
+        candidate = normalize_file_path(match.group(1))
+        if validate_dev_edit_target_path(candidate):
+            return candidate
+    return ""
+
+
+def infer_lint_source_file(task: Dict[str, Any]) -> str:
+    """Set lintSourceFile from diagnostics when missing (e.g. flutter_lints URI errors)."""
+    if not isinstance(task, dict):
+        return ""
+    existing = normalize_file_path(str(task.get("lintSourceFile") or ""))
+    if existing and existing not in ("(unknown)", "__overflow__"):
+        return existing
+    blob = " ".join(
+        str(d.get(field) or "")
+        for d in (task.get("lastCommandDiagnostics") or [])
+        if isinstance(d, dict)
+        for field in ("file", "path", "message")
+    )
+    lower = blob.lower()
+    if "package:flutter_lints/flutter.yaml" in lower or "analysis_options.yaml" in lower:
+        return "analysis_options.yaml"
+    if "pubspec.yaml" in lower:
+        return "pubspec.yaml"
+    return ""
+
+
+def resolve_dev_edit_target_path(task: Dict[str, Any]) -> str:
+    """Resolve a safe workspace file for synthetic read / text-loop hints."""
+    if not isinstance(task, dict):
+        return ""
+    src = normalize_file_path(str(task.get("lintSourceFile") or ""))
+    if src and src not in ("(unknown)", "__overflow__") and validate_dev_edit_target_path(src):
+        return src
+    title = str(task.get("title") or "")
+    if title.startswith("Lint: "):
+        path = normalize_file_path(title[6:])
+        if validate_dev_edit_target_path(path):
+            return path
+    for key in ("writePaths", "scaffoldedFiles"):
+        for raw in task.get(key) or []:
+            path = normalize_file_path(str(raw or ""))
+            if validate_dev_edit_target_path(path):
+                return path
+    inferred = infer_lint_source_file(task)
+    if inferred and validate_dev_edit_target_path(inferred):
+        if not task.get("lintSourceFile"):
+            task["lintSourceFile"] = inferred
+        return inferred
+    for diagnostic in reversed(task.get("lastCommandDiagnostics") or []):
+        if not isinstance(diagnostic, dict):
+            continue
+        for field in ("file", "path"):
+            raw = str(diagnostic.get(field) or "")
+            if validate_dev_edit_target_path(raw):
+                return normalize_file_path(raw)
+            extracted = _extract_path_from_diagnostic_line(raw)
+            if extracted:
+                return extracted
+    derived = _title_derived_edit_path(title)
+    if derived:
+        return derived
+    return ""
 
 
 def is_file_blocker_wait(task: Dict[str, Any]) -> bool:

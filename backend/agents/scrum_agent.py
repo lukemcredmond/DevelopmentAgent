@@ -1633,6 +1633,11 @@ class ScrumAgent:
 
         def _run_attempts(attempt_delays: List[int], *, phase: str) -> Optional[Any]:
             nonlocal last_error, last_error_type
+            from backend.services.workflow_settings import get_workflow_settings as _get_ws
+
+            runaway_cap = max(1, int(_get_ws().get("runawayAbortCapPerStep", 2)))
+            if int(getattr(self, "_runaway_abort_count", 0) or 0) >= runaway_cap:
+                return None
             total = len(attempt_delays)
             for idx, delay in enumerate(attempt_delays):
                 if delay:
@@ -1714,8 +1719,18 @@ class ScrumAgent:
                         error_type=err_type,
                         phase=phase,
                     )
-                    if err_type in ("timeout", "empty_generation_timeout"):
+                    if err_type in ("timeout", "empty_generation_timeout", "runaway_generation"):
+                        from backend.services.agent_efficiency import dev_eval_timeout_sec
+                        from backend.services.workflow_settings import get_workflow_settings as _get_ws
+
+                        _ws = _get_ws()
                         waited = timeout_sec if err_type == "timeout" else empty_timeout_sec
+                        if err_type == "runaway_generation":
+                            self._runaway_abort_count = int(
+                                getattr(self, "_runaway_abort_count", 0) or 0
+                            ) + 1
+                            cap = max(1, int(_ws.get("runawayAbortCapPerStep", 2)))
+                            waited = int(dev_eval_timeout_sec(_ws))
                         add_system_log(
                             self.role,
                             "warning",
@@ -1724,6 +1739,15 @@ class ScrumAgent:
                         )
                         self._last_chat_error = err
                         self._last_chat_error_type = err_type
+                        if err_type == "runaway_generation":
+                            cap = max(1, int(_ws.get("runawayAbortCapPerStep", 2)))
+                            if self._runaway_abort_count >= cap:
+                                add_system_log(
+                                    self.role,
+                                    "warning",
+                                    f"Runaway generation cap reached ({self._runaway_abort_count}/{cap}) "
+                                    "— skipping further Ollama retries this step.",
+                                )
                         return None
                     if err_type == "context_overflow":
                         if self._bump_num_ctx_on_overflow():
@@ -1753,10 +1777,22 @@ class ScrumAgent:
             return result
 
         ws = get_workflow_settings()
+        runaway_cap = max(1, int(ws.get("runawayAbortCapPerStep", 2)))
+        runaway_capped = (
+            last_error_type == "runaway_generation"
+            and int(getattr(self, "_runaway_abort_count", 0) or 0) >= runaway_cap
+        )
         if (
             last_error_type
-            not in ("context_overflow", "timeout", "empty_generation_timeout", "invalid_tool_json")
+            not in (
+                "context_overflow",
+                "timeout",
+                "empty_generation_timeout",
+                "runaway_generation",
+                "invalid_tool_json",
+            )
             and ws.get("ollamaCooldownRetryEnabled", True)
+            and not runaway_capped
         ):
             cooldown = max(0, int(ws.get("ollamaCooldownRetrySec", 15)))
             extra_attempts = max(0, int(ws.get("ollamaCooldownRetryAttempts", 2)))
@@ -1783,6 +1819,314 @@ class ScrumAgent:
             f"({last_error_type or 'other'}): {summary[:200]}",
         )
         return None
+
+    @staticmethod
+    def _is_safety_refusal(content: str) -> bool:
+        lower = str(content or "").strip().lower()
+        if not lower:
+            return False
+        return (
+            "can't assist" in lower
+            or "cannot assist" in lower
+            or ("i'm sorry" in lower and "assist" in lower)
+            or ("as an ai" in lower and ("can't" in lower or "cannot" in lower))
+        )
+
+    def _switch_dev_backup_model(
+        self,
+        *,
+        task_id: Optional[str],
+        plan_n: int,
+        text_n: int,
+        reason: str,
+        log_label: str,
+    ) -> bool:
+        if self.role != "Developer" or getattr(self, "_mid_step_backup_switched", False):
+            return False
+        try:
+            from backend.services.backup_model import (
+                arm_backup_for_agent,
+                backup_model,
+                primary_model,
+            )
+            from backend.services.step_diagnostics import log_event
+
+            board_task = find_task_by_id(task_id) if task_id else None
+            if not board_task:
+                return False
+            backup = backup_model("dev")
+            primary = primary_model("dev")
+            if not backup or backup == primary or backup == str(self.model or ""):
+                return False
+            armed = arm_backup_for_agent(
+                "dev",
+                board_task,
+                reason=reason,
+                force=True,
+            )
+            if armed or backup:
+                try:
+                    from backend.services.ollama_warmup import maybe_vram_unload_primary
+
+                    maybe_vram_unload_primary(primary, backup=backup)
+                except Exception:
+                    pass
+                self.model = backup
+                self._mid_step_backup_switched = True
+                self._model_switches = int(getattr(self, "_model_switches", 0) or 0) + 1
+                add_system_log(
+                    self.role,
+                    "info",
+                    f"{log_label} → {backup} (after {plan_n} plan / {text_n} text rejects)",
+                )
+                try:
+                    log_event("backup_model_switched", f"{backup} — {reason[:180]}")
+                except Exception:
+                    pass
+                return True
+        except Exception:
+            pass
+        return False
+
+    def _maybe_switch_backup_on_forced_patch_refusal(
+        self,
+        *,
+        task_id: Optional[str],
+        plan_n: int,
+        text_n: int,
+        reason: str,
+    ) -> None:
+        if not getattr(self, "_forced_patch_step", False):
+            return
+        self._switch_dev_backup_model(
+            task_id=task_id,
+            plan_n=plan_n,
+            text_n=text_n,
+            reason=reason,
+            log_label="Forced-patch backup switch",
+        )
+
+    def _maybe_switch_backup_on_text_reject(
+        self,
+        *,
+        task_id: Optional[str],
+        plan_n: int,
+        text_n: int,
+        reason: str,
+    ) -> bool:
+        return self._switch_dev_backup_model(
+            task_id=task_id,
+            plan_n=plan_n,
+            text_n=text_n,
+            reason=reason,
+            log_label="Text-reject backup switch",
+        )
+
+    def _maybe_switch_backup_on_identical_text(
+        self,
+        *,
+        task_id: Optional[str],
+        plan_n: int,
+        text_n: int,
+        reason: str,
+    ) -> bool:
+        """Switch to backup coder when the model repeats the same apology text."""
+        return self._switch_dev_backup_model(
+            task_id=task_id,
+            plan_n=plan_n,
+            text_n=text_n,
+            reason=reason,
+            log_label="Identical-text backup switch",
+        )
+
+    def _is_slim_recovery_step(self, task_id: Optional[str]) -> bool:
+        if not task_id:
+            return False
+        try:
+            from backend.services.sprint_service import _should_slim_dev_prompt
+
+            board_task = find_task_by_id(str(task_id))
+            return bool(board_task and _should_slim_dev_prompt(board_task))
+        except Exception:
+            return False
+
+    @staticmethod
+    def _resolve_text_reject_target_path(task_id: Optional[str]) -> str:
+        if not task_id:
+            return ""
+        try:
+            from backend.services.file_blocker import resolve_dev_edit_target_path
+
+            board_task = find_task_by_id(str(task_id))
+            if board_task:
+                return str(resolve_dev_edit_target_path(board_task) or "").strip()
+        except Exception:
+            pass
+        return ""
+
+    def _execute_synthetic_read_fallback(
+        self,
+        messages: List[Dict[str, Any]],
+        *,
+        task_id: Optional[str],
+        target: str,
+        tools_used: set[str],
+    ) -> bool:
+        """Cursor-like fallback: execute read_file when forced tool mode still gets prose."""
+        path = str(target or "").strip()
+        if not path:
+            return False
+        from backend.services.file_blocker import validate_dev_edit_target_path
+
+        if not validate_dev_edit_target_path(path):
+            if task_id:
+                path = ScrumAgent._resolve_text_reject_target_path(task_id)
+            if not path or not validate_dev_edit_target_path(path):
+                return False
+        try:
+            from backend.agents.registry import AGENT_MAP
+            from backend.services.step_diagnostics import get_active_trace, log_event, log_tool
+
+            agent_id = next((aid for aid, a in AGENT_MAP.items() if a is self), "dev")
+            add_system_log(
+                self.role,
+                "warning",
+                f"Forced tool mode text-only — synthetic read_file on {path}",
+            )
+            log_event("synthetic_read_fallback", path)
+            result = execute_tool(
+                agent_id,
+                "read_file",
+                {"path": path},
+                task_id=task_id,
+                source="agent",
+            )
+            tools_used.add("read_file")
+            summary = str(getattr(result, "tool_output", "") or getattr(result, "summary", "") or "")
+            log_tool("read_file", bool(getattr(result, "success", False)), summary)
+            if task_id:
+                record_task_transcript(
+                    task_id,
+                    "tool",
+                    summary,
+                    agent=self.role,
+                    toolName="read_file",
+                    toolSuccess=bool(getattr(result, "success", False)),
+                )
+            read_ok = bool(getattr(result, "success", False))
+            board_task = find_task_by_id(str(task_id)) if task_id else None
+            lint_nudge = ""
+            if board_task and read_ok:
+                from backend.services.lint_wall_recovery import (
+                    build_lint_wall_recovery_nudge,
+                    deterministic_lint_wall_patch,
+                )
+
+                lint_nudge = build_lint_wall_recovery_nudge(board_task, target_path=path)
+                det = deterministic_lint_wall_patch(board_task, path, summary)
+                if det:
+                    det_path, old_text, new_text = det
+                    patch_result = execute_tool(
+                        agent_id,
+                        "apply_patch",
+                        {"path": det_path, "old_text": old_text, "new_text": new_text},
+                        task_id=task_id,
+                        source="agent",
+                    )
+                    if bool(getattr(patch_result, "success", False)):
+                        tools_used.add("apply_patch")
+                        patch_summary = str(
+                            getattr(patch_result, "summary", "") or "deterministic lint-wall patch"
+                        )
+                        log_tool("apply_patch", True, patch_summary)
+                        messages.append(
+                            {
+                                "role": "system",
+                                "content": (
+                                    f"=== DETERMINISTIC LINT FIX ===\n"
+                                    f"apply_patch({det_path}) applied automatically.\n"
+                                    f"{patch_summary[:800]}"
+                                ),
+                            }
+                        )
+                        trace = get_active_trace()
+                        if trace:
+                            trace.note_forced_tool_mode_effective()
+                        return True
+            body = (
+                f"=== SYNTHETIC READ ===\n"
+                f"read_file({path}) executed because the model returned text-only.\n"
+                f"{summary[:1200]}\n"
+                "Next message MUST call apply_patch or write_file for this file."
+            )
+            if lint_nudge:
+                body = f"{body}\n\n{lint_nudge}"
+            messages.append({"role": "system", "content": body})
+            trace = get_active_trace()
+            if trace:
+                trace.note_forced_tool_mode_effective()
+            return True
+        except Exception:
+            return False
+
+    def _continue_after_synthetic_read(
+        self,
+        messages: List[Dict[str, Any]],
+        *,
+        target: str,
+        plan_rejection_message: str,
+    ) -> bool:
+        """Log continue event, arm stall watchdog, and loop to next LLM iteration."""
+        from backend.services.step_diagnostics import log_event
+
+        log_event("synthetic_read_continue", target)
+        self._synthetic_read_deadline = time.monotonic() + 300
+        messages.append({"role": "system", "content": plan_rejection_message})
+        return True
+
+    def _try_park_text_rejection_loop(
+        self,
+        task_id: Optional[str],
+        *,
+        text_n: int,
+        content: str,
+        tools_used: set[str],
+    ) -> Optional[str]:
+        """Park to Needs User before a hard text_rejection_loop stop."""
+        if not task_id or text_n < 2:
+            return None
+        board_task = find_task_by_id(str(task_id))
+        if not board_task:
+            return None
+        write_tools = tools_used & {"write_file", "apply_patch"}
+        if write_tools:
+            return None
+        try:
+            from backend.services.sprint_service import _try_move_to_needs_user
+            from backend.services.step_diagnostics import log_event
+
+            target = self._resolve_text_reject_target_path(task_id) or "target file"
+            msg = (
+                f"Model returned text-only ({text_n}×) instead of tools on "
+                f"'{board_task.get('title')}'. "
+                f"Try backup model or manual edit on {target}."
+            )
+            if not _try_move_to_needs_user(task_id, board_task, msg, kind="stuck_loop"):
+                return None
+            try:
+                log_event("needs_user_parked", f"text_rejection_loop on {target}")
+            except Exception:
+                pass
+            stop_msg = (
+                f"Parked: text rejection loop — model refused tools on {target}. "
+                "Card moved to Needs User."
+            )
+            add_system_log(self.role, "warning", stop_msg)
+            self._log_step_exit(stop_msg, "warning")
+            self._finish_run(status="failed", error=stop_msg)
+            return stop_msg
+        except Exception:
+            return None
 
     def _maybe_stop_after_dev_phase_nudge(
         self, tools_used: set[str]
@@ -2971,7 +3315,7 @@ class ScrumAgent:
                 old_text=str((args or {}).get("old_text") or ""),
                 new_text=str((args or {}).get("new_text") or ""),
             )
-            if identical_counts.get(fp, 0) >= 1 and injects < 3 and path:
+            if identical_counts.get(fp, 0) >= 1 and injects < 1 and path:
                 from backend.workspace.files import read_workspace_file
 
                 body = read_workspace_file(path)
@@ -3073,7 +3417,7 @@ class ScrumAgent:
             for p in paths_needing_read_before_patch(pending_paths, read_ok, recovery_batch)
             if p not in set(failed_paths)
         ]
-        if offenders and injects < 2:
+        if offenders and injects < 1:
             messages.append(
                 {"role": "system", "content": build_patch_recovery_reminder(offenders)}
             )
@@ -3087,7 +3431,7 @@ class ScrumAgent:
 
             log_event("patch_recovery", f"blocked={','.join(offenders)}")
 
-        if failed_paths and injects < 2:
+        if failed_paths and injects < 1:
             for p in failed_paths:
                 pending_paths.add(p)
                 read_ok.discard(p)
@@ -3405,6 +3749,11 @@ class ScrumAgent:
         self._identical_patch_fail_counts = {}
         self._text_reject_hashes: Dict[str, int] = {}
         self._forced_tool_mode = False
+        self._synthetic_read_fallback_used = False
+        self._synthetic_read_deadline: Optional[float] = None
+        self._reflect_injects = 0
+        self._runaway_abort_count = 0
+        self._forced_patch_step = False
         from backend.services.step_read_cache import StepReadCache
 
         self._step_read_cache = StepReadCache()
@@ -3421,17 +3770,21 @@ class ScrumAgent:
             steps_on_card = 0
             focus_ac_index = None
             force_patch = False
+            prior_task = None
             if task_id:
                 try:
                     prior_task = find_task_by_id(str(task_id))
                     if prior_task:
                         normalize_task(prior_task)
                         try:
+                            from backend.services.needs_user_guard import is_lint_wall_card
                             from backend.services.sprint_speed_gates import (
                                 should_force_patch_next_dev_step,
                             )
 
                             force_patch = should_force_patch_next_dev_step(prior_task)
+                            if is_lint_wall_card(prior_task):
+                                force_patch = True
                             if prior_task.get("forcePatchNextDevStep"):
                                 prior_task.pop("forcePatchNextDevStep", None)
                                 prior_task["forcePatchAttempted"] = True
@@ -3466,12 +3819,15 @@ class ScrumAgent:
                 except Exception:
                     # Keep any prior_snap already resolved; do not wipe history on focus/stuck parse errors.
                     pass
+            phase_task = prior_task if task_id else None
             self._dev_phase_graph = DevPhaseGraph.for_new_step(
                 prior_snap=prior_snap,
                 steps_on_card=steps_on_card,
                 focus_ac_index=focus_ac_index,
                 force_patch=force_patch,
+                task=phase_task,
             )
+            self._forced_patch_step = bool(force_patch)
             # Cycle cap: bail before burning another Ollama step on a non-converging card.
             graph = self._dev_phase_graph
             if graph is not None and getattr(graph, "phase", None) == "stuck":
@@ -3489,6 +3845,20 @@ class ScrumAgent:
                         pass
                     self._log_step_exit(stop_msg, "warning")
                     self._finish_run(status="failed", error=stop_msg)
+                    if task_id:
+                        try:
+                            from backend.services.sprint_service import _try_move_to_needs_user
+
+                            live = find_task_by_id(str(task_id))
+                            if live:
+                                _try_move_to_needs_user(
+                                    str(task_id),
+                                    live,
+                                    stop_msg,
+                                    kind="phase_cycle_cap",
+                                )
+                        except Exception:
+                            pass
                     return stop_msg
             graph = self._dev_phase_graph
             if graph is not None and getattr(graph, "forced_patch", False):
@@ -3512,6 +3882,14 @@ class ScrumAgent:
                 except Exception:
                     pass
 
+        if getattr(self, "_forced_patch_step", False) and task_id:
+            try:
+                from backend.services.tool_llm_probe import maybe_route_backup_from_step_probe
+
+                maybe_route_backup_from_step_probe(self, task_id)
+            except Exception:
+                pass
+
         try:
             for iteration in range(1, max_iterations + 1):
                 elapsed = time.monotonic() - step_started_mono
@@ -3531,6 +3909,20 @@ class ScrumAgent:
                         )
                     except Exception:
                         pass
+                    self._finish_run(status="failed", error=stop_msg)
+                    pending_lesson = ("step_timeout", set(tools_used), stop_msg)
+                    return stop_msg
+                if (
+                    getattr(self, "_synthetic_read_deadline", None)
+                    and time.monotonic() > float(self._synthetic_read_deadline)
+                ):
+                    stop_msg = (
+                        "Stopped: step stall after synthetic read recovery "
+                        "(no LLM progress within 5 min)."
+                    )
+                    add_system_log(self.role, "warning", stop_msg)
+                    self._log_step_exit(stop_msg, "warning")
+                    log_event("step_stall_watchdog", stop_msg)
                     self._finish_run(status="failed", error=stop_msg)
                     pending_lesson = ("step_timeout", set(tools_used), stop_msg)
                     return stop_msg
@@ -3706,7 +4098,7 @@ class ScrumAgent:
                 ticker.start()
                 active_tools = tools
                 if getattr(self, "_forced_tool_mode", False):
-                    allowed = frozenset({"apply_patch", "write_file"})
+                    allowed = frozenset({"apply_patch", "write_file", "read_file"})
                     active_tools = [
                         t
                         for t in (tools or [])
@@ -3724,6 +4116,9 @@ class ScrumAgent:
                     ollama_wait_done.set()
                 ollama_duration_ms = int((time.time() - ollama_started) * 1000)
                 from backend.services.step_diagnostics import log_ollama_call
+
+                if response is not None:
+                    self._synthetic_read_deadline = None
 
                 if response is None:
                     err_type = getattr(self, "_last_chat_error_type", None) or "unavailable"
@@ -3746,6 +4141,7 @@ class ScrumAgent:
                     return outcome
 
                 message = response.message
+                native_tool_calls_before_recovery = bool(message.tool_calls)
                 recovered_tool_names, message = apply_tool_call_recovery(
                     message, self.registry.tool_names()
                 )
@@ -3759,6 +4155,17 @@ class ScrumAgent:
                         "tool_calls_recovered_from_content",
                         ", ".join(recovered_tool_names),
                     )
+                    if (
+                        iteration == 1
+                        and self.role == "Developer"
+                        and not native_tool_calls_before_recovery
+                    ):
+                        self._maybe_switch_backup_on_text_reject(
+                            task_id=task_id,
+                            plan_n=0,
+                            text_n=1,
+                            reason="markdown tool recovery on first LLM turn",
+                        )
                     from backend.services.llm_decision_trace import (
                         build_decision_trace as _build_dt,
                         decision_trace_enabled as _dt_on,
@@ -3807,6 +4214,7 @@ class ScrumAgent:
                     done_reason=usage.get("doneReason"),
                     prompt_eval_ms=usage.get("promptEvalMs"),
                     eval_ms=usage.get("evalMs"),
+                    native_tool_calls=bool(tool_call_names) and not bool(recovered_tool_names),
                 )
                 if (
                     self.role == "Developer"
@@ -4142,6 +4550,63 @@ class ScrumAgent:
                         )
                         log_event("text_rejected", content[:200])
                         reject_label = "text-only"
+                    forced_patch_step = bool(getattr(self, "_forced_patch_step", False))
+                    slim_recovery = self._is_slim_recovery_step(task_id)
+                    safety_refusal = reject_label == "text-only" and self._is_safety_refusal(content)
+                    dev_text_reject = reject_label == "text-only" and self.role == "Developer"
+                    if dev_text_reject:
+                        self._maybe_switch_backup_on_text_reject(
+                            task_id=task_id,
+                            plan_n=plan_n,
+                            text_n=text_n,
+                            reason="first Developer text-only reject",
+                        )
+                    if safety_refusal and (forced_patch_step or slim_recovery):
+                        self._switch_dev_backup_model(
+                            task_id=task_id,
+                            plan_n=plan_n,
+                            text_n=text_n,
+                            reason="safety refusal on forced-patch/slim recovery step",
+                            log_label="Safety-refusal backup switch",
+                        )
+                    forced_tool_threshold = 1 if dev_text_reject or forced_patch_step or safety_refusal else 3
+                    if (
+                        reject_label == "text-only"
+                        and text_n >= forced_tool_threshold
+                        and not getattr(self, "_forced_tool_mode", False)
+                    ):
+                        from backend.services.agent_efficiency import forced_tool_num_predict
+
+                        self._forced_tool_mode = True
+                        self._step_num_predict = forced_tool_num_predict()
+                        target_hint = self._resolve_text_reject_target_path(task_id)
+                        try:
+                            log_event("forced_tool_mode", f"after {text_n} text rejects")
+                        except Exception:
+                            pass
+                        target_line = (
+                            f"Target file: {target_hint}. read_file is allowed once, then apply_patch/write_file.\n"
+                            if target_hint
+                            else ""
+                        )
+                        messages.append(
+                            {
+                                "role": "system",
+                                "content": (
+                                    "=== FORCED TOOL MODE ===\n"
+                                    + target_line
+                                    + "Text-only replies exhausted. Next message MUST be a tool call "
+                                    "(read_file, apply_patch, or write_file) — no prose."
+                                ),
+                            }
+                        )
+                    if safety_refusal and forced_patch_step:
+                        self._maybe_switch_backup_on_forced_patch_refusal(
+                            task_id=task_id,
+                            plan_n=plan_n,
+                            text_n=text_n,
+                            reason="forced-patch safety refusal",
+                        )
                     if reject_label == "text-only" and content:
                         content_hash = hashlib.sha256(content.encode("utf-8", errors="replace")).hexdigest()[:16]
                         hashes = getattr(self, "_text_reject_hashes", {}) or {}
@@ -4155,6 +4620,47 @@ class ScrumAgent:
                                 )
                             except Exception:
                                 pass
+                            self._maybe_switch_backup_on_identical_text(
+                                task_id=task_id,
+                                plan_n=plan_n,
+                                text_n=text_n,
+                                reason=f"identical text apology hash={content_hash}",
+                            )
+                            if getattr(self, "_forced_tool_mode", False):
+                                target = self._resolve_text_reject_target_path(task_id)
+                                if target and not getattr(self, "_synthetic_read_fallback_used", False):
+                                    self._synthetic_read_fallback_used = True
+                                    if self._execute_synthetic_read_fallback(
+                                        messages,
+                                        task_id=task_id,
+                                        target=target,
+                                        tools_used=tools_used,
+                                    ):
+                                        self._continue_after_synthetic_read(
+                                            messages,
+                                            target=target,
+                                            plan_rejection_message=_PLAN_REJECTION_MESSAGE,
+                                        )
+                                        continue
+                            if safety_refusal and getattr(self, "_mid_step_backup_switched", False):
+                                parked = self._try_park_text_rejection_loop(
+                                    task_id,
+                                    text_n=text_n,
+                                    content=content,
+                                    tools_used=tools_used,
+                                )
+                                if parked:
+                                    pending_lesson = ("text_rejection_loop", set(tools_used), parked)
+                                    return parked
+                            parked = self._try_park_text_rejection_loop(
+                                task_id,
+                                text_n=text_n,
+                                content=content,
+                                tools_used=tools_used,
+                            )
+                            if parked:
+                                pending_lesson = ("text_rejection_loop", set(tools_used), parked)
+                                return parked
                             stop_msg = (
                                 "Stopped: text rejection loop — identical text repeated "
                                 f"({hashes[content_hash]}×). Use apply_patch or write_file."
@@ -4166,27 +4672,43 @@ class ScrumAgent:
                             return stop_msg
                     if (
                         reject_label == "text-only"
-                        and text_n >= 3
-                        and not getattr(self, "_forced_tool_mode", False)
+                        and getattr(self, "_forced_tool_mode", False)
+                        and not getattr(self, "_synthetic_read_fallback_used", False)
                     ):
-                        from backend.services.agent_efficiency import forced_tool_num_predict
-
-                        self._forced_tool_mode = True
-                        self._step_num_predict = forced_tool_num_predict()
-                        try:
-                            log_event("forced_tool_mode", f"after {text_n} text rejects")
-                        except Exception:
-                            pass
-                        messages.append(
-                            {
-                                "role": "system",
-                                "content": (
-                                    "=== FORCED TOOL MODE ===\n"
-                                    "Text-only replies exhausted. Next message MUST be "
-                                    "apply_patch or write_file only — no prose."
-                                ),
-                            }
+                        target = self._resolve_text_reject_target_path(task_id)
+                        if target:
+                            self._synthetic_read_fallback_used = True
+                            if self._execute_synthetic_read_fallback(
+                                messages,
+                                task_id=task_id,
+                                target=target,
+                                tools_used=tools_used,
+                            ):
+                                self._continue_after_synthetic_read(
+                                    messages,
+                                    target=target,
+                                    plan_rejection_message=_PLAN_REJECTION_MESSAGE,
+                                )
+                                continue
+                        if safety_refusal and getattr(self, "_mid_step_backup_switched", False):
+                            parked = self._try_park_text_rejection_loop(
+                                task_id,
+                                text_n=text_n,
+                                content=content,
+                                tools_used=tools_used,
+                            )
+                            if parked:
+                                pending_lesson = ("text_rejection_loop", set(tools_used), parked)
+                                return parked
+                        parked = self._try_park_text_rejection_loop(
+                            task_id,
+                            text_n=text_n,
+                            content=content,
+                            tools_used=tools_used,
                         )
+                        if parked:
+                            pending_lesson = ("text_rejection_loop", set(tools_used), parked)
+                            return parked
                     if decision_trace_enabled():
                         amend_llm_log_entry(
                             task_id,
@@ -4220,8 +4742,10 @@ class ScrumAgent:
                         publish_activity_event=True,
                     )
                     messages.append({"role": "system", "content": _PLAN_REJECTION_MESSAGE})
-                    # Micro-reflect: force a concrete next tool after repeated rejects.
-                    if (plan_n + text_n) >= 2:
+                    # Micro-reflect: force a concrete next tool after repeated rejects (max 1/step).
+                    reflect_injects = int(getattr(self, "_reflect_injects", 0) or 0)
+                    if (plan_n + text_n) >= 2 and reflect_injects < 1:
+                        self._reflect_injects = reflect_injects + 1
                         messages.append(
                             {
                                 "role": "system",

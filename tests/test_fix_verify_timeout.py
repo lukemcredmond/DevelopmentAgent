@@ -13,6 +13,48 @@ from backend.services.workflow_settings import reset_workflow_settings, save_wor
 from backend.storage.code_index import _rrf_fuse, _mmr_path_diverse
 
 
+def test_fix_verify_skips_lint_when_no_writes():
+    initialize()
+    reset_workflow_settings()
+    save_workflow_settings(
+        {
+            "enableFixVerifyLoop": True,
+            "requireCleanLint": True,
+            "maxFixVerifyRounds": 2,
+        }
+    )
+    task = init_new_task({"id": "T-FV-NW", "title": "No writes", "description": "d"})
+    normalize_task(task)
+    lint_calls = {"n": 0}
+
+    def execute_step(prompt, max_iterations=4):
+        return "Stopped: explore tool budget reached without apply_patch/write_file."
+
+    agent = MagicMock()
+    agent.execute_step.side_effect = execute_step
+    agent._dev_phase_graph = None
+
+    def run_lint(*args, **kwargs):
+        lint_calls["n"] += 1
+        dirty = MagicMock()
+        dirty.outcome = "fail"
+        dirty.diagnostics = []
+        dirty.summary = "should not run"
+        return dirty, False
+
+    with patch(
+        "backend.services.fix_verify_loop.derive_project_lint_command",
+        return_value="echo lint",
+    ), patch(
+        "backend.services.fix_verify_loop._run_lint_once",
+        side_effect=run_lint,
+    ):
+        result = run_fix_verify_loop(agent, task, "fix lint", max_iterations=4)
+
+    assert "explore tool budget" in result
+    assert lint_calls["n"] == 0
+
+
 def test_fix_verify_respects_sprint_cancel_between_rounds():
     initialize()
     reset_workflow_settings()
@@ -54,11 +96,14 @@ def test_fix_verify_respects_sprint_cancel_between_rounds():
     ), patch(
         "backend.services.fix_verify_loop.find_task_by_id",
         return_value=task,
+    ), patch(
+        "backend.services.fix_verify_loop._agent_had_successful_write",
+        return_value=True,
     ):
         out = run_fix_verify_loop(agent, task, "prompt", max_iterations=4)
 
-    assert "aborted" in out.lower() or "cancelled" in out.lower() or calls["n"] == 1
     assert calls["n"] == 1  # second round blocked by SPRINT_CANCEL
+    assert out == "did work"
     assert isinstance(task.get("lastCommandDiagnostics"), list)
 
 
@@ -84,6 +129,9 @@ def test_fix_verify_clean_on_first_round_stops():
     ), patch(
         "backend.services.fix_verify_loop.find_task_by_id",
         return_value=task,
+    ), patch(
+        "backend.services.fix_verify_loop._agent_had_successful_write",
+        return_value=True,
     ):
         out = run_fix_verify_loop(agent, task, "prompt", max_iterations=4)
     assert out == "ok"

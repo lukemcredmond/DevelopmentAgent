@@ -533,6 +533,21 @@ def _outcome_suggested_action(
             "Next Developer step is Forced Patch — call apply_patch/write_file "
             "(do not re-read docs/tasks; scaffold or patch lib/ now)."
         )
+    if stop_reason == "phase_cycle_cap":
+        return "Split the card or reset the Developer visit latch — Auto Sprint will not retry Dev."
+    if stop_reason == "text_rejection_loop":
+        target = ""
+        if task:
+            try:
+                from backend.services.file_blocker import _task_file_path
+
+                target = str(_task_file_path(task) or "").strip()
+            except Exception:
+                target = str(task.get("lintSourceFile") or "").strip()
+        file_hint = f" on {target}" if target else ""
+        return (
+            f"Model refused tools{file_hint}; try backup model, manual edit, or split the card."
+        )
     return "Run In Progress again or edit the workspace files manually, then move the card to QA."
 
 
@@ -550,9 +565,11 @@ def _build_last_step_outcome(
 
     task = find_task_by_id(task_id)
     lane_after = get_task_lane(task_id) or lane_before
-    tool_failures = _count_task_tool_failures(task) if task else 0
+    card_tool_failures = _count_task_tool_failures(task) if task else 0
     title = str(task.get("title", task_id)) if task else task_id
     trace = get_active_trace()
+    step_tool_failures = trace.tool_failures if trace else card_tool_failures
+    tool_failures = step_tool_failures
     plan_rejections = trace.plan_rejections if trace else 0
     text_rejections = trace.text_rejections if trace else 0
     tools_used = sorted(trace.tools_used) if trace else []
@@ -664,6 +681,7 @@ def _build_last_step_outcome(
         "laneBefore": lane_before,
         "laneAfter": lane_after,
         "toolFailures": tool_failures,
+        "cardToolFailures": card_tool_failures,
         "ok": ok,
         "message": message,
         "stopReason": stop_reason,
@@ -2286,10 +2304,37 @@ def _patch_recovery_hint(task: Dict[str, Any]) -> str:
     return ""
 
 
+def _should_slim_dev_prompt(task: Optional[Dict[str, Any]]) -> bool:
+    """Tight prompt for forced-patch, lint-wall, and stuck Developer steps."""
+    if not isinstance(task, dict):
+        return False
+    try:
+        from backend.services.needs_user_guard import is_lint_wall_card
+        from backend.services.sprint_speed_gates import (
+            last_step_exit_reason,
+            should_force_patch_next_dev_step,
+        )
+
+        if should_force_patch_next_dev_step(task) or is_lint_wall_card(task):
+            return True
+        if int(task.get("consecutiveBadExits") or 0) >= 2:
+            return True
+        prior = last_step_exit_reason(task)
+        if prior in {"text_rejection_loop", "explore_budget_exhausted", "llm_call_failed"}:
+            return True
+        if _count_task_tool_failures(task) >= 3:
+            return True
+    except Exception:
+        return bool(task.get("forcePatchNextDevStep"))
+    return False
+
+
 def _force_patch_dev_instruction(task: Optional[Dict[str, Any]], agent_role: str) -> str:
     if agent_role != "Developer" or not isinstance(task, dict):
         return ""
-    recovery = _patch_recovery_hint(task)
+    slim = _should_slim_dev_prompt(task)
+    identical_patch = int(task.get("identicalPatchFailCount") or 0) >= 2
+    recovery = _patch_recovery_hint(task) if (not slim or identical_patch) else ""
     try:
         from backend.services.sprint_speed_gates import should_force_patch_next_dev_step
 
@@ -2349,12 +2394,20 @@ def _inject_sprint_context(
     local_slm = is_local_slm_profile(ws)
     preload = local_slm_sprint_preload_enabled(ws)
     num_ctx = initial_ollama_num_ctx(agent_role)
+    slim_dev_prompt = agent_role == "Developer" and _should_slim_dev_prompt(active_task)
     semantic_block, sem_paths = "", []
     graph_block = ""
     file_block, file_paths = "", []
     context_block = ""
     graph_used = False
-    if preload:
+    if preload and slim_dev_prompt:
+        budgets = sprint_preload_budgets(num_ctx, local_slm=local_slm, role=agent_role)
+        file_block, file_paths = build_sprint_file_context(
+            active_task,
+            max_chars=min(int(budgets.get("total") or 6000), 6000),
+        )
+        context_block = file_block or ""
+    elif preload:
         budgets = sprint_preload_budgets(num_ctx, local_slm=local_slm, role=agent_role)
         top_k_override = None
         if implementer:
@@ -2447,7 +2500,7 @@ def _inject_sprint_context(
 
     codebase_pack = ""
     pack_mode = "off"
-    if agent_role == "Developer" and preload:
+    if agent_role == "Developer" and preload and not slim_dev_prompt:
         pack_mode = str(get_workflow_settings().get("contextPacker") or "off").strip().lower()
         if pack_mode not in ("", "off", "none", "false"):
             try:
@@ -2510,9 +2563,35 @@ def _inject_sprint_context(
         state.SPRINT_PROMPT_ROTATION_ENABLED = False
         state.SPRINT_PROMPT_ROTATION_BLOCKS = []
         state.SPRINT_PROMPT_ROTATION_NAMES = []
+    elif slim_dev_prompt and agent_role == "Developer":
+        from backend.services.prompt_sections import FocusContext, compose_prompt
+
+        focus = FocusContext(
+            agent_role=agent_role,
+            focus_mode="whole",
+            include_full_spec=False,
+        )
+        slim_sections = [
+            "card_core",
+            "ac_focus",
+            "last_outcome",
+            "lane_instructions",
+        ]
+        base = compose_prompt(
+            active_task,
+            brief,
+            slim_sections,
+            focus,
+            agent_role=agent_role,
+        )
+        add_system_log(
+            agent_role,
+            "info",
+            f"Slim recovery prompt for {task_id} ({len(base)} chars)",
+        )
     else:
         base = build_task_prompt(active_task, brief, agent_role=agent_role)
-    if not local_slm and agent_role == "Developer":
+    if not local_slm and agent_role == "Developer" and not slim_dev_prompt:
         from backend.services.focus_slice import (
             dev_micro_steps_enabled,
             focus_context_from_task,
@@ -2583,7 +2662,7 @@ def _inject_sprint_context(
         parts.append(context_block)
         parts.append(CONTEXT_INJECT_NOTE)
     structure_audit = ""
-    if agent_role == "Developer" and not local_slm:
+    if agent_role == "Developer" and not local_slm and not slim_dev_prompt:
         try:
             from backend.services.workspace_structure_audit import (
                 audit_workspace_structure,
@@ -2609,7 +2688,7 @@ def _inject_sprint_context(
                 f"Auto-scaffold stubs on this card: {shown}{extra}\n"
                 "Replace each stub with complete working code before advancing to QA."
             )
-    if agent_role == "Developer" and not local_slm:
+    if agent_role == "Developer" and not local_slm and not slim_dev_prompt:
         try:
             from backend.services.workspace_structure_audit import greenfield_wander_nudge
 

@@ -69,3 +69,31 @@ def test_apply_patch_blocked_after_two_failures_on_same_path():
     result = apply_workspace_patch("cap_patch.txt", "missing three", "new")
     assert "apply_patch blocked" in result
     assert "write_file" in result
+
+
+def test_apply_patch_rejects_noop_zero_char_replace():
+    initialize()
+    state.ACTIVE_SPRINT_TASK_ID = "T-NOOP"
+    state.STEP_FILE_READS.clear()
+    write_workspace_file("noop_patch.txt", "hello\n")
+    record_step_file_read("noop_patch.txt", "hello\n")
+    result = apply_workspace_patch("noop_patch.txt", "hello", "hello")
+    assert "noop" in result.lower()
+    assert "0-char" in result.lower() or "equals new_text" in result.lower()
+
+
+def test_apply_patch_blocked_when_card_identical_patch_fail_count():
+    initialize()
+    state.ACTIVE_SPRINT_TASK_ID = "T-CARD-BLOCK"
+    state.STEP_FILE_READS.clear()
+    from backend.agents.task_context import init_new_task
+    from backend import state as st
+
+    task = init_new_task({"id": "T-CARD-BLOCK", "title": "Block", "status": "In Progress"})
+    task["identicalPatchFailCount"] = 2
+    st.SHARED_BOARD["In Progress"] = [task]
+    write_workspace_file("card_block.txt", "alpha\n")
+    record_step_file_read("card_block.txt", "alpha\n")
+    result = apply_workspace_patch("card_block.txt", "alpha", "beta")
+    assert "apply_patch blocked" in result
+    assert "write_file" in result

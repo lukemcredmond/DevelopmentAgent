@@ -37,6 +37,15 @@ def test_classify_ollama_error_timeout():
         ScrumAgent._classify_ollama_error("Ollama empty generation timed out after 90s")
         == "empty_generation_timeout"
     )
+    assert (
+        ScrumAgent._classify_ollama_error("Ollama generation aborted after 60s without tool calls")
+        == "runaway_generation"
+    )
+
+
+def test_is_safety_refusal_detects_model_refusal():
+    assert ScrumAgent._is_safety_refusal("I'm sorry, but I can't assist with that request.")
+    assert not ScrumAgent._is_safety_refusal("I'll apply_patch on lib/main.dart next.")
 
 
 def test_chat_cooldown_retry_on_transient_failure():

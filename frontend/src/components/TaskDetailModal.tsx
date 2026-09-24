@@ -1690,6 +1690,40 @@ export default function TaskDetailModal({
                     <span className="text-cat-overlay">rejects:</span> plan{' '}
                     {safeTask.lastStepDiagnostics.planRejections ?? 0} / text{' '}
                     {safeTask.lastStepDiagnostics.textRejections ?? 0}
+                    {typeof safeTask.lastStepDiagnostics.textOnlyTurns === 'number' &&
+                      ` · textOnlyTurns ${safeTask.lastStepDiagnostics.textOnlyTurns}`}
+                  </p>
+                )}
+                {(typeof safeTask.lastStepDiagnostics?.promptTokensAtFirstCall === 'number' ||
+                  typeof safeTask.lastStepDiagnostics?.nativeToolCallRate === 'number' ||
+                  typeof safeTask.lastStepOutcome?.cardToolFailures === 'number') && (
+                  <p>
+                    {typeof safeTask.lastStepDiagnostics?.promptTokensAtFirstCall === 'number' && (
+                      <>
+                        <span className="text-cat-overlay">prompt@1:</span>{' '}
+                        {safeTask.lastStepDiagnostics.promptTokensAtFirstCall}
+                        {' · '}
+                      </>
+                    )}
+                    {typeof safeTask.lastStepDiagnostics?.nativeToolCallRate === 'number' && (
+                      <>
+                        <span className="text-cat-overlay">nativeToolRate:</span>{' '}
+                        {(safeTask.lastStepDiagnostics.nativeToolCallRate * 100).toFixed(0)}%
+                        {' · '}
+                      </>
+                    )}
+                    {typeof safeTask.lastStepOutcome?.cardToolFailures === 'number' && (
+                      <>
+                        <span className="text-cat-overlay">cardToolFailures:</span>{' '}
+                        {safeTask.lastStepOutcome.cardToolFailures}
+                      </>
+                    )}
+                    {safeTask.lastStepDiagnostics?.forcedToolModeEffective && (
+                      <> · forcedTool effective</>
+                    )}
+                    {safeTask.lastStepDiagnostics?.cursorLikenessScore && (
+                      <> · cursor-like</>
+                    )}
                   </p>
                 )}
                 {(safeTask.lastStepDiagnostics?.toolsUsed?.length ?? 0) > 0 && (

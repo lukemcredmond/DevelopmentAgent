@@ -394,7 +394,36 @@ def test_po_clarified_ok_despite_historic_tool_failures(tmp_path, monkeypatch):
 
     assert outcome["stopReason"] == "po_clarified"
     assert outcome["ok"] is True
-    assert outcome["toolFailures"] >= 1
+    assert outcome["toolFailures"] == 0
+    assert outcome.get("cardToolFailures", 0) >= 1
+
+
+def test_last_step_outcome_step_tool_failures_not_card_cumulative(tmp_path, monkeypatch):
+    monkeypatch.setenv("ALLHANDS_HOME", str(tmp_path))
+    initialize()
+    task = init_new_task({"id": "T-FAIL", "title": "Export", "description": "d", "status": "In Progress"})
+    task["transcript"] = [
+        {"role": "tool", "toolSuccess": False, "content": "apply_patch FAILED"},
+        {"role": "tool", "toolSuccess": False, "content": "apply_patch FAILED"},
+        {"role": "tool", "toolSuccess": False, "content": "apply_patch FAILED"},
+    ]
+    state.SHARED_BOARD["In Progress"] = [task]
+    state.CURRENT_PROJECT_ID = "test-proj"
+    state.DEV_STEP_READ_ONLY_NO_EDITS = False
+
+    trace = start_step_trace("T-FAIL", "Export", "Developer", "In Progress")
+    trace.log_tool("apply_patch", False, "lib/main.dart (replace 10 chars)")
+
+    outcome = _build_last_step_outcome(
+        "T-FAIL",
+        "In Progress",
+        "Developer",
+        agent_result="Stopped: explore tool budget reached without apply_patch/write_file.",
+    )
+
+    assert outcome["toolFailures"] == 1
+    assert outcome["cardToolFailures"] == 3
+    assert "1 tool failure" in outcome["message"]
 
 
 def test_po_incomplete_not_ok_when_card_stays_needs_po(tmp_path, monkeypatch):

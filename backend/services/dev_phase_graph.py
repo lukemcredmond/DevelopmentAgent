@@ -234,7 +234,38 @@ class DevPhaseGraph:
         self.status_text = self.last_rewind_detail
 
     @classmethod
-    def from_settings(cls, ws: Optional[Dict[str, Any]] = None) -> Optional["DevPhaseGraph"]:
+    def explore_max_for_task(
+        cls,
+        task: Optional[Dict[str, Any]] = None,
+        ws: Optional[Dict[str, Any]] = None,
+    ) -> int:
+        """Lint-wall / recovery cards get 1 explore tool; feature cards use workflow default."""
+        if ws is None:
+            from backend.services.workflow_settings import get_workflow_settings
+
+            ws = get_workflow_settings()
+        base = max(1, int(ws.get("devExploreMaxTools") or 2))
+        if not isinstance(task, dict):
+            return base
+        try:
+            from backend.services.needs_user_guard import is_lint_wall_card
+            from backend.services.sprint_speed_gates import should_force_patch_next_dev_step
+
+            if is_lint_wall_card(task) or should_force_patch_next_dev_step(task):
+                return 1
+        except Exception:
+            pass
+        if int(task.get("consecutiveBadExits") or 0) >= 2:
+            return 1
+        return base
+
+    @classmethod
+    def from_settings(
+        cls,
+        ws: Optional[Dict[str, Any]] = None,
+        *,
+        task: Optional[Dict[str, Any]] = None,
+    ) -> Optional["DevPhaseGraph"]:
         if ws is None:
             from backend.services.workflow_settings import get_workflow_settings
 
@@ -242,7 +273,7 @@ class DevPhaseGraph:
         if not bool(ws.get("enableDevPhaseGraph", True)):
             return None
         return cls(
-            explore_max=max(1, int(ws.get("devExploreMaxTools") or 3)),
+            explore_max=cls.explore_max_for_task(task, ws),
             patch_max=max(1, int(ws.get("devPatchMaxTools") or 4)),
             verify_max=max(1, int(ws.get("devVerifyMaxTools") or 2)),
         )
@@ -256,9 +287,10 @@ class DevPhaseGraph:
         steps_on_card: int = 0,
         focus_ac_index: Optional[int] = None,
         force_patch: bool = False,
+        task: Optional[Dict[str, Any]] = None,
     ) -> Optional["DevPhaseGraph"]:
         """Create a graph for a new Developer step, seeding cycle + restart status text."""
-        g = cls.from_settings(ws)
+        g = cls.from_settings(ws, task=task)
         if g is None:
             return None
         g.seed_step_context(
@@ -352,6 +384,7 @@ class DevPhaseGraph:
             return
         if force_patch:
             self.start_forced_patch(in_step=False)
+            self.explore_max = 0
 
     @staticmethod
     def applies_to(*, role: str, lane: Optional[str]) -> bool:
@@ -479,6 +512,7 @@ class DevPhaseGraph:
         if (
             self.phase == "explore"
             and not self.write_succeeded
+            and not self.forced_patch
             and self.explore_count >= self.explore_max
         ):
             if not self.explore_nudge_sent:

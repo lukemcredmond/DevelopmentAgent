@@ -547,6 +547,26 @@ def test_derive_exit_reason_lint_recovery_message():
     ) == "lint_stay_in_progress"
 
 
+def test_derive_exit_reason_explore_budget_reclassified_when_patch_attempted():
+    clear_active_step_trace()
+    start_step_trace("T-EXPLORE", "Patch fail", "Developer", "In Progress")
+    get_active_trace().log_tool("apply_patch", False, "lib/main.dart (replace 10 chars)")
+    reason = derive_exit_reason(
+        agent_result=(
+            "Stopped: explore tool budget reached without apply_patch/write_file. "
+            "Next Developer step will start in Patch."
+        ),
+        tools_used={"apply_patch"},
+        lane_before="In Progress",
+        lane_after="In Progress",
+    )
+    assert reason == "tool_failure_stop"
+
+
+def test_classify_tool_failure_patch_noop():
+    assert classify_tool_failure("apply_patch", "Error: apply_patch noop on 'x' — 0-char replace") == "patch_noop"
+
+
 def test_derive_exit_reason_patch_fail_on_lint_card(tmp_path, monkeypatch):
     monkeypatch.setenv("ALLHANDS_HOME", str(tmp_path))
     initialize()

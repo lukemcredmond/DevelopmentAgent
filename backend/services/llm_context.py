@@ -226,7 +226,7 @@ def prune_messages_if_needed(
 
     num_ctx = resolve_ollama_num_ctx()
     pct = float(force_threshold_pct) if force_threshold_pct is not None else float(
-        ws.get("messagePruneThresholdPct") or 60
+        ws.get("messagePruneThresholdPct") or 70
     )
     if force_threshold_pct is None and (
         num_ctx <= PACKED_NUM_CTX_FLOOR or prompt_fills_ctx_window(messages, num_ctx)

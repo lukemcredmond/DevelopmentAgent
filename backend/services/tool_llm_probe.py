@@ -284,3 +284,64 @@ def run_llm_probe_all(
             )
         )
     return results
+
+
+def maybe_route_backup_from_step_probe(agent: Any, task_id: Optional[str]) -> bool:
+    """Step-start probe: route to backup coder when native tool calls fail on forced-patch steps."""
+    if getattr(agent, "role", "") != "Developer":
+        return False
+    if not getattr(agent, "_forced_patch_step", False):
+        return False
+    if getattr(agent, "_mid_step_backup_switched", False) or not task_id:
+        return False
+    try:
+        from backend.agents.registry import AGENT_MAP
+        from backend.services.backup_model import arm_backup_for_agent, backup_model, primary_model
+        from backend.services.logs import add_system_log
+
+        agent_id = next((aid for aid, a in AGENT_MAP.items() if a is agent), "dev")
+        model = str(getattr(agent, "model", "") or "")
+        probe = run_llm_tool_probe(agent_id, "read_file", model=model)
+        if probe.get("modelCalledTool") and probe.get("success"):
+            return False
+        board_task = None
+        try:
+            from backend.agents.task_context import find_task_by_id
+
+            board_task = find_task_by_id(str(task_id))
+        except Exception:
+            board_task = None
+        if not board_task:
+            return False
+        backup = backup_model("dev")
+        primary = primary_model("dev")
+        if not backup or backup == primary or backup == model:
+            return False
+        armed = arm_backup_for_agent(
+            "dev",
+            board_task,
+            reason=f"step-start tool probe failed ({probe.get('status')})",
+            force=True,
+        )
+        if armed or backup:
+            try:
+                from backend.services.ollama_warmup import maybe_vram_unload_primary
+
+                maybe_vram_unload_primary(primary, backup=backup)
+            except Exception:
+                pass
+            agent.model = backup
+            agent._mid_step_backup_switched = True
+            agent._model_switches = int(getattr(agent, "_model_switches", 0) or 0) + 1
+            add_system_log(
+                "Developer",
+                "info",
+                f"Step-start tool probe failed — backup switch → {backup}",
+            )
+            from backend.services.step_diagnostics import log_event
+
+            log_event("step_start_tool_probe_fail", str(probe.get("output") or "")[:200])
+            return True
+    except Exception:
+        pass
+    return False

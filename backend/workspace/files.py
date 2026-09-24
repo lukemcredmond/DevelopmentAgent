@@ -777,6 +777,21 @@ def apply_workspace_patch(path: str, old_text: str, new_text: str) -> str:
             f"Call read_file, then retry with old_text copied exactly from that output."
         )
 
+    if state.ACTIVE_SPRINT_TASK_ID:
+        try:
+            from backend.agents.task_context import find_task_by_id
+
+            board_task = find_task_by_id(state.ACTIVE_SPRINT_TASK_ID)
+            card_patch_fails = int((board_task or {}).get("identicalPatchFailCount") or 0)
+            if card_patch_fails >= 2:
+                return (
+                    f"Error: apply_patch blocked on '{path}' — identical patch failed "
+                    f"{card_patch_fails} time(s) on this card. Call read_file for the full file, "
+                    "then write_file with the complete corrected content."
+                )
+        except Exception:
+            pass
+
     prior_fails = state.STEP_PATCH_FAILURES.get(safe_path, 0)
     if prior_fails >= 2:
         return (
@@ -790,6 +805,17 @@ def apply_workspace_patch(path: str, old_text: str, new_text: str) -> str:
 
     cleaned_old = _strip_numbered_line_prefixes(old_text)
     cleaned_new = _strip_numbered_line_prefixes(new_text)
+
+    if not cleaned_old.strip() and not cleaned_new.strip():
+        return (
+            f"Error: apply_patch noop on '{path}' — old_text and new_text are empty. "
+            "Provide non-empty old_text from read_file output, or use write_file."
+        )
+    if cleaned_old == cleaned_new:
+        return (
+            f"Error: apply_patch noop on '{path}' — old_text equals new_text (0-char replace). "
+            "Change new_text or use write_file with the full corrected file."
+        )
 
     last_read = state.STEP_FILE_READS.get(safe_path)
     if last_read is not None and cleaned_old:

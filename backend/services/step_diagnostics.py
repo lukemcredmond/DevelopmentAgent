@@ -52,6 +52,8 @@ def classify_tool_failure(name: str, summary: str) -> Optional[str]:
     if name == "apply_patch":
         if any(k in text for k in ("mismatch", "old_text", "not found", "context", "fuzzy", "does not match")):
             return "patch_mismatch"
+        if "noop" in text or "0-char replace" in text:
+            return "patch_noop"
         return "patch_failed"
     if name == "run_command":
         return "command_nonzero"
@@ -143,6 +145,11 @@ class StepDiagnosticsTracker:
         self.text_rejections = 0
         self.identical_text_reject_count = 0
         self.forced_tool_mode = False
+        self.forced_tool_mode_effective = False
+        self.text_only_turns = 0
+        self.native_tool_llm_calls = 0
+        self.total_llm_calls_with_tools = 0
+        self.prompt_tokens_at_first_call: Optional[int] = None
         self.runaway_generation_aborted = False
         self.llm_iterations_used = 0
         self.llm_iterations_max = 0
@@ -154,6 +161,7 @@ class StepDiagnosticsTracker:
         self.po_json_applied: Optional[bool] = None
         self.po_num_predict_bumped = False
         self.lane_after_tool: Optional[str] = None
+        self._last_checkpoint_monotonic: float = 0.0
 
     def log_ollama_call(
         self,
@@ -176,6 +184,7 @@ class StepDiagnosticsTracker:
         truncated: Optional[bool] = None,
         attempt: Optional[int] = None,
         phase: Optional[str] = None,
+        native_tool_calls: Optional[bool] = None,
     ) -> None:
         self.llm_iterations_used = max(self.llm_iterations_used, iteration)
         self.last_event = f"ollama:iter{iteration}"
@@ -208,6 +217,17 @@ class StepDiagnosticsTracker:
             entry["numCtx"] = int(num_ctx)
         if done_reason:
             entry["doneReason"] = str(done_reason)
+        if self.prompt_tokens_at_first_call is None and int(prompt_tokens or 0) > 0:
+            self.prompt_tokens_at_first_call = int(prompt_tokens or 0)
+        if tool_calls:
+            self.note_llm_call_with_tools()
+            if native_tool_calls is True:
+                self.note_native_tool_call()
+            elif native_tool_calls is None and not any(
+                str(e.get("kind") or "") == "tool_calls_recovered_from_content"
+                for e in self.events[-5:]
+            ):
+                self.note_native_tool_call()
         if prompt_eval_ms is not None:
             entry["promptEvalMs"] = int(prompt_eval_ms)
         if eval_ms is not None:
@@ -260,17 +280,31 @@ class StepDiagnosticsTracker:
             if lane:
                 self.lane_after_tool = lane
         self.tools_log.append(entry)
+        if self.forced_tool_mode and success:
+            self.note_forced_tool_mode_effective()
         self._flush_checkpoint()
+
+    def note_forced_tool_mode_effective(self) -> None:
+        self.forced_tool_mode_effective = True
+
+    def note_native_tool_call(self) -> None:
+        self.native_tool_llm_calls += 1
+
+    def note_llm_call_with_tools(self) -> None:
+        self.total_llm_calls_with_tools += 1
 
     def log_event(self, kind: str, message: str) -> None:
         if kind == "plan_rejected":
             self.plan_rejections += 1
         elif kind == "text_rejected":
             self.text_rejections += 1
+            self.text_only_turns += 1
         elif kind == "identical_text_reject":
             self.identical_text_reject_count += 1
         elif kind == "forced_tool_mode":
             self.forced_tool_mode = True
+        elif kind == "synthetic_read_fallback":
+            self.note_forced_tool_mode_effective()
         elif kind == "runaway_generation_aborted":
             self.runaway_generation_aborted = True
         elif kind == "po_num_predict_bump":
@@ -339,6 +373,10 @@ class StepDiagnosticsTracker:
                 "Valid JSON is applied automatically — do not restate it on the next step."
             ),
             "po_clarified": "PO clarification applied and the card left Needs PO.",
+            "text_rejection_loop": (
+                "Model returned apology prose instead of tools. Try backup model, manual edit "
+                "on the target file, or split the card."
+            ),
         }
         return hints.get(
             exit_reason,
@@ -375,6 +413,15 @@ class StepDiagnosticsTracker:
             "textRejections": self.text_rejections,
             "identicalTextRejectCount": self.identical_text_reject_count,
             "forcedToolMode": self.forced_tool_mode,
+            "forcedToolModeEffective": self.forced_tool_mode_effective,
+            "textOnlyTurns": self.text_only_turns,
+            "promptTokensAtFirstCall": self.prompt_tokens_at_first_call,
+            "nativeToolCallRate": round(
+                self.native_tool_llm_calls / max(1, len(self.ollama_calls)),
+                3,
+            )
+            if self.ollama_calls
+            else None,
             "runawayGenerationAborted": self.runaway_generation_aborted,
             "llmIterations": {
                 "used": self.llm_iterations_used,
@@ -490,6 +537,14 @@ class StepDiagnosticsTracker:
         except Exception:
             pass
         payload["fixVerifyLintClean"] = lint_clean
+        native_rate = (
+            self.native_tool_llm_calls / max(1, len(self.ollama_calls))
+            if self.ollama_calls
+            else 0.0
+        )
+        payload["cursorLikenessScore"] = bool(
+            writes_succeeded > 0 and native_rate >= 0.5 and duration_ms < 180_000
+        )
         if failure_classes:
             payload["toolFailureClasses"] = failure_classes
         if self.agent == "Product Owner":
@@ -519,7 +574,14 @@ class StepDiagnosticsTracker:
                     payload["needsUserKind"] = kind
         return payload
 
-    def _flush_checkpoint(self) -> None:
+    def _flush_checkpoint(self, *, force: bool = False) -> None:
+        import time
+
+        now = time.monotonic()
+        if not force and self._last_checkpoint_monotonic and (now - self._last_checkpoint_monotonic) < 60:
+            if str(self.last_event or "").startswith("ollama_wait"):
+                return
+        self._last_checkpoint_monotonic = now
         payload = self._build_payload(status="running")
         self.file_path.parent.mkdir(parents=True, exist_ok=True)
         with open(self.file_path, "w", encoding="utf-8") as f:
@@ -726,6 +788,7 @@ def log_ollama_call(
     truncated: Optional[bool] = None,
     attempt: Optional[int] = None,
     phase: Optional[str] = None,
+    native_tool_calls: Optional[bool] = None,
 ) -> None:
     trace = get_active_trace()
     if trace:
@@ -748,6 +811,7 @@ def log_ollama_call(
             truncated=truncated,
             attempt=attempt,
             phase=phase,
+            native_tool_calls=native_tool_calls,
         )
         from backend.services.sprint_session import touch_session
 
@@ -1280,6 +1344,18 @@ def derive_exit_reason(
         if "identical arguments" in lower or "same arguments" in lower:
             return "duplicate_tool"
         if "explore tool budget" in lower:
+            trace = get_active_trace()
+            if trace and trace.tools_log:
+                patch_attempted = any(
+                    str(e.get("toolName") or "") == "apply_patch" for e in trace.tools_log
+                )
+                writes_attempted = sum(
+                    1
+                    for e in trace.tools_log
+                    if str(e.get("toolName") or "") in _WRITE_TOOLS
+                )
+                if patch_attempted or writes_attempted > 0:
+                    return "tool_failure_stop"
             return "explore_budget_exhausted"
         if "patch tool budget" in lower:
             return "patch_budget_exhausted"

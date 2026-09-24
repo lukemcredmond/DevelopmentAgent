@@ -1004,6 +1004,7 @@ export interface LastStepOutcome {
   laneBefore: string
   laneAfter: string
   toolFailures: number
+  cardToolFailures?: number
   ok: boolean
   message: string
   stopReason?: string
@@ -1050,6 +1051,13 @@ export interface LastStepDiagnostics {
   ok?: boolean
   lastEvent?: string
   stepProgress?: StepProgress
+  promptTokensAtFirstCall?: number | null
+  nativeToolCallRate?: number | null
+  textOnlyTurns?: number
+  forcedToolMode?: boolean
+  forcedToolModeEffective?: boolean
+  cursorLikenessScore?: boolean
+  cardToolFailures?: number
 }
 
 export interface ActiveStepDiagnostics {

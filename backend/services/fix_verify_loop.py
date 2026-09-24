@@ -158,15 +158,26 @@ def run_fix_verify_loop(
                 log_event("fix_verify_done", "skipped_lint_explore_stop")
                 return last_result
 
-            if hard and not wrote:
+            if not wrote:
                 add_system_log(
                     "Developer",
                     "warning",
-                    f"Fix-verify aborted after hard stop on round {round_num}: "
-                    f"{(last_result or '')[:160]}",
+                    "Fix-verify skipping lint — no writes this round",
                 )
-                log_event("fix_verify_done", f"aborted_hard_stop round={round_num}")
-                return last_result
+                log_event("fix_verify_done", "skipped_lint_no_writes")
+                if hard:
+                    add_system_log(
+                        "Developer",
+                        "warning",
+                        f"Fix-verify aborted after hard stop on round {round_num}: "
+                        f"{(last_result or '')[:160]}",
+                    )
+                    log_event("fix_verify_done", f"aborted_hard_stop round={round_num}")
+                    return last_result
+                if round_num >= max_rounds:
+                    log_event("fix_verify_done", f"no_writes after {max_rounds} rounds")
+                    break
+                continue
 
             cmd_result, clean = _run_lint_once(task_id, task, lint_cmd)
             finding_count = len(cmd_result.diagnostics) if cmd_result.diagnostics else 0

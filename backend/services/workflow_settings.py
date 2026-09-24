@@ -46,7 +46,7 @@ DEFAULT_WORKFLOW_SETTINGS: Dict[str, Any] = {
     "forceCompleteOnUnhealthyExit": False,
     # Circuit breaker: stop endless same-card In Progress retries after N bad exits / identical patches.
     "enableStuckCircuitBreaker": True,
-    "circuitBreakerMaxBadExits": 3,
+    "circuitBreakerMaxBadExits": 2,
     "circuitBreakerIdenticalPatchFails": 3,
     # Park a card after this many consecutive explore-exhaust / duplicate-tool steps with no write.
     "maxConsecutiveNoWriteStall": 2,
@@ -60,8 +60,8 @@ DEFAULT_WORKFLOW_SETTINGS: Dict[str, Any] = {
     "zeroWorkRetryWatchdogMax": 3,
     "maxZeroWorkRecoveryAttempts": 2,
     # Cap Explore→Patch→Verify cycles per card before forcing stuck / split.
-    "maxDevPhaseCyclesPerCard": 12,
-    "maxDevStepsPerCard": 12,
+    "maxDevPhaseCyclesPerCard": 8,
+    "maxDevStepsPerCard": 8,
     # Optional: run independent In Progress cards concurrently (workspace write-locked).
     "enableParallelIndependentCards": False,
     "maxParallelDevCards": 2,
@@ -185,7 +185,8 @@ DEFAULT_WORKFLOW_SETTINGS: Dict[str, Any] = {
     "warmModelOnSprintStart": True,
     "devNumPredictDefault": 2048,
     "devEvalTimeoutSec": 60,
-    "forcedToolNumPredict": 256,
+    "runawayAbortCapPerStep": 2,
+    "forcedToolNumPredict": 512,
     "ollamaRequestTimeoutSec": 900,
     # Abort a stream if prefill finished and no eval tokens arrive (hung empty gen).
     "ollamaEmptyGenerationTimeoutSec": 90,
@@ -232,7 +233,7 @@ DEFAULT_WORKFLOW_SETTINGS: Dict[str, Any] = {
     # Budgets sized so a multi-file change is reachable; the total tool-call cap and
     # the wall-clock timeout remain the real stops.
     "enableDevPhaseGraph": True,
-    "devExploreMaxTools": 1,
+    "devExploreMaxTools": 2,
     # When explore budget is hit, transition to Patch in the same step (block further reads).
     "devExploreForcePatchInStep": True,
     "poNumPredictOverride": False,

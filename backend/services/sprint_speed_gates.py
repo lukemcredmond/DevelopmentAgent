@@ -347,6 +347,8 @@ DEV_STALL_FORCE_PATCH_EXITS = frozenset(
         "read_only_no_edits",
         "explore_budget_exhausted",
         "duplicate_tool",
+        "text_rejection_loop",
+        "llm_call_failed",
     }
 )
 
