@@ -40,6 +40,27 @@ def test_deterministic_patch_comments_include_line():
     assert "disabled until flutter_lints" in new
 
 
+def test_detect_widget_import_pattern():
+    task = {
+        "title": "Lint: error • Undefined class 'Widget' • lib/main.dart",
+        "lastCommandDiagnostics": [{"message": "Undefined class 'Widget'"}],
+    }
+    assert detect_lint_wall_pattern(task) == "flutter_material_import"
+
+
+def test_deterministic_material_import_on_main_dart():
+    task = {
+        "title": "Lint: lib/main.dart",
+        "lastCommandDiagnostics": [{"message": "Undefined class 'Widget'"}],
+    }
+    content = "void main() {}\n"
+    det = deterministic_lint_wall_patch(task, "lib/main.dart", content)
+    assert det is not None
+    _, old, new = det
+    assert "package:flutter/material.dart" in new
+    assert old == "void main() {}"
+
+
 def test_deterministic_pubspec_adds_flutter_lints():
     task = {
         "title": "Lint: pubspec.yaml",

@@ -1661,6 +1661,19 @@ export default function TaskDetailModal({
             <CollapsibleSection title="Step diagnostics" defaultOpen>
               <div className="space-y-1 text-[11px] font-mono text-cat-subtext" data-testid="task-step-diagnostics">
                 <p className="text-cat-overlay text-[10px] uppercase tracking-wide">LAST_STEP_DIAGNOSTICS</p>
+                {(safeTask.lastStepDiagnostics?.appBuild?.gitSha ||
+                  safeTask.lastStepDiagnostics?.diagnosticsSchemaVersion != null) && (
+                  <p data-testid="task-step-diagnostics-build">
+                    <span className="text-cat-overlay">build:</span>{' '}
+                    {safeTask.lastStepDiagnostics?.appBuild?.gitSha ?? '?'}
+                    {safeTask.lastStepDiagnostics?.diagnosticsSchemaVersion != null && (
+                      <> · schema v{safeTask.lastStepDiagnostics.diagnosticsSchemaVersion}</>
+                    )}
+                    {safeTask.lastStepDiagnostics?.traceId && (
+                      <> · trace {safeTask.lastStepDiagnostics.traceId}</>
+                    )}
+                  </p>
+                )}
                 {safeTask.lastStepDiagnostics?.exitReason && (
                   <p>
                     <span className="text-cat-overlay">exitReason:</span>{' '}

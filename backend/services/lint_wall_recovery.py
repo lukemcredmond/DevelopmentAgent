@@ -13,6 +13,11 @@ _FLUTTER_LINTS_URI_RE = re.compile(
 )
 _ANALYSIS_OPTIONS_RE = re.compile(r"analysis_options\.yaml", re.I)
 _PUBSPEC_RE = re.compile(r"pubspec\.yaml", re.I)
+_UNDEFINED_WIDGET_RE = re.compile(
+    r"Undefined class ['\"]Widget['\"]",
+    re.I,
+)
+_MAIN_DART_RE = re.compile(r"lib/main\.dart", re.I)
 
 
 def _diag_lines(task: Dict[str, Any]) -> List[str]:
@@ -41,6 +46,11 @@ def detect_lint_wall_pattern(task: Dict[str, Any]) -> Optional[str]:
         return "flutter_lints_analysis_options"
     if title.startswith("Lint: ") and _ANALYSIS_OPTIONS_RE.search(title):
         return "flutter_lints_analysis_options"
+    lower = combined.lower()
+    if _UNDEFINED_WIDGET_RE.search(combined) or (
+        "undefined class" in lower and "widget" in lower and _MAIN_DART_RE.search(combined)
+    ):
+        return "flutter_material_import"
     return None
 
 
@@ -59,6 +69,13 @@ def build_lint_wall_recovery_nudge(
             "`pubspec.yaml` adding under dev_dependencies:\n"
             "  flutter_lints: ^5.0.0\n"
             "Then run_command: flutter pub get"
+        )
+    if pattern == "flutter_material_import":
+        return (
+            f"{LINT_WALL_MARKER}\n"
+            f"On `{path or 'lib/main.dart'}`: add `import 'package:flutter/material.dart';` "
+            "at the top if missing, then fix the Widget usage.\n"
+            "Next tool call MUST be apply_patch or write_file — no prose."
         )
     if pattern == "flutter_lints_analysis_options":
         pubspec_note = (
@@ -101,6 +118,22 @@ def deterministic_lint_wall_patch(
             return None
         old = anchor
         new = f"{anchor}\n  flutter_lints: ^5.0.0"
+        return (norm_path, old, new)
+    if pattern == "flutter_material_import" and norm_path.endswith("main.dart"):
+        if "package:flutter/material.dart" in content:
+            return None
+        lines = content.splitlines()
+        if not lines:
+            old = ""
+            new = "import 'package:flutter/material.dart';\n"
+            return (norm_path, old, new)
+        first = lines[0]
+        if first.startswith("import "):
+            old = first
+            new = "import 'package:flutter/material.dart';\n" + first
+            return (norm_path, old, new)
+        old = first
+        new = "import 'package:flutter/material.dart';\n" + first
         return (norm_path, old, new)
     if (
         pattern == "flutter_lints_analysis_options"

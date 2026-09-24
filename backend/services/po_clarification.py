@@ -202,8 +202,37 @@ def task_has_ready_spec(task: Optional[Dict[str, Any]]) -> bool:
     return bool(desc and ac)
 
 
+def po_skip_churn_should_block(task: Optional[Dict[str, Any]]) -> tuple[bool, str]:
+    """Block PO LLM skip when repeated round-trips did not fix model refusal loops."""
+    if not isinstance(task, dict):
+        return False, ""
+    from backend.services.sprint_speed_gates import last_step_exit_reason
+
+    reason = last_step_exit_reason(task) or ""
+    if reason not in {"text_rejection_loop", "phase_cycle_cap"}:
+        return False, ""
+    po_trips = 0
+    lsp = task.get("lastStepProgress") or {}
+    if isinstance(lsp, dict):
+        cp = lsp.get("cardProgress") or lsp.get("card_progress") or {}
+        if isinstance(cp, dict):
+            try:
+                po_trips = int(cp.get("poRoundTrips") or cp.get("po_round_trips") or 0)
+            except (TypeError, ValueError):
+                po_trips = 0
+    if po_trips < 2:
+        return False, ""
+    return True, (
+        f"Repeated PO skip ({po_trips} round-trips) after {reason} — "
+        "park for manual edit or split the lint card from feature work."
+    )
+
+
 def should_move_off_needs_po_without_llm(task: Optional[Dict[str, Any]]) -> bool:
     """True when the card already has a spec and only needs update_board back to Dev."""
+    blocked, _ = po_skip_churn_should_block(task)
+    if blocked:
+        return False
     if not task_has_ready_spec(task):
         return False
     if int(task.get("identicalPoClarificationCount") or 0) >= 1:

@@ -99,6 +99,10 @@ def infer_lint_source_file(task: Dict[str, Any]) -> str:
         return "analysis_options.yaml"
     if "pubspec.yaml" in lower:
         return "pubspec.yaml"
+    title_lower = str(task.get("title") or "").lower()
+    if "undefined class" in lower and "widget" in lower:
+        if "main.dart" in lower or "main.dart" in title_lower:
+            return "lib/main.dart"
     return ""
 
 

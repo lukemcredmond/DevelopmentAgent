@@ -348,6 +348,18 @@ def log_preflight_on_startup() -> Dict[str, Any]:
     """Run preflight at boot and write the findings to the system log."""
     from backend.services.logs import add_system_log
 
+    try:
+        from backend.services.build_info import get_app_build_info
+
+        build = get_app_build_info()
+        add_system_log(
+            "System",
+            "info",
+            f"AllHands build gitSha={build.get('gitSha')} "
+            f"diagnosticsSchema={build.get('diagnosticsSchemaVersion')}",
+        )
+    except Exception:
+        pass
     result = run_preflight()
     level = {STATUS_OK: "info", STATUS_WARN: "warning", STATUS_FAIL: "error"}[result["status"]]
     add_system_log("System", level, f"Preflight: {result['summary']}")

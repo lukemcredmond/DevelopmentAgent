@@ -53,9 +53,17 @@ def _isolate_allhands_home(tmp_path, monkeypatch):
 
 @pytest.fixture(autouse=True)
 def _reset_workflow_settings_after_test():
+    try:
+        state.ACTIVE_STEP_DIAGNOSTICS = None
+    except Exception:
+        pass
     yield
     try:
         reset_workflow_settings()
+    except Exception:
+        pass
+    try:
+        state.ACTIVE_STEP_DIAGNOSTICS = None
     except Exception:
         pass
 

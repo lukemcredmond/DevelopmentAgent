@@ -1020,7 +1020,16 @@ export interface LastStepOutcome {
   numCtxLabel?: string
 }
 
+export interface AppBuildInfo {
+  diagnosticsSchemaVersion?: number
+  gitSha?: string
+  gitShaFull?: string
+  recoveryFeatures?: string[]
+}
+
 export interface LastStepDiagnostics {
+  diagnosticsSchemaVersion?: number
+  appBuild?: AppBuildInfo
   traceId: string
   projectId: string
   taskId: string

@@ -185,6 +185,7 @@ class StepDiagnosticsTracker:
         attempt: Optional[int] = None,
         phase: Optional[str] = None,
         native_tool_calls: Optional[bool] = None,
+        model_used: Optional[str] = None,
     ) -> None:
         self.llm_iterations_used = max(self.llm_iterations_used, iteration)
         self.last_event = f"ollama:iter{iteration}"
@@ -234,6 +235,8 @@ class StepDiagnosticsTracker:
             entry["evalMs"] = int(eval_ms)
         if truncated is not None:
             entry["truncated"] = bool(truncated)
+        if model_used:
+            entry["modelUsed"] = str(model_used)
         self.ollama_calls.append(entry)
         self._flush_checkpoint()
         # Live rollup onto the card
@@ -395,7 +398,11 @@ class StepDiagnosticsTracker:
     ) -> Dict[str, Any]:
         now = datetime.now()
         duration_ms = int((now - self.started_monotonic).total_seconds() * 1000)
+        from backend.services.build_info import diagnostics_schema_version, get_app_build_info
+
         payload: Dict[str, Any] = {
+            "diagnosticsSchemaVersion": diagnostics_schema_version(),
+            "appBuild": get_app_build_info(),
             "traceId": self.trace_id,
             "projectId": state.CURRENT_PROJECT_ID,
             "taskId": self.task_id,
@@ -789,6 +796,7 @@ def log_ollama_call(
     attempt: Optional[int] = None,
     phase: Optional[str] = None,
     native_tool_calls: Optional[bool] = None,
+    model_used: Optional[str] = None,
 ) -> None:
     trace = get_active_trace()
     if trace:
@@ -812,6 +820,7 @@ def log_ollama_call(
             attempt=attempt,
             phase=phase,
             native_tool_calls=native_tool_calls,
+            model_used=model_used,
         )
         from backend.services.sprint_session import touch_session
 

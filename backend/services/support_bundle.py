@@ -41,6 +41,12 @@ def build_support_bundle_bytes(*, max_diagnostics: int = 30) -> bytes:
             json.dumps(state.SHARED_BOARD or {}, indent=2, default=str),
         )
         zf.writestr("workflow_settings.json", json.dumps(ws, indent=2, default=str))
+        try:
+            from backend.services.build_info import get_app_build_info
+
+            zf.writestr("app_build.json", json.dumps(get_app_build_info(), indent=2))
+        except Exception:
+            pass
         if isinstance(state.LAST_STEP_OUTCOME, dict):
             zf.writestr("last_step_outcome.json", json.dumps(state.LAST_STEP_OUTCOME, indent=2))
         if isinstance(state.LAST_STEP_DIAGNOSTICS, dict):

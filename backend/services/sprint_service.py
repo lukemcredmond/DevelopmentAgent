@@ -2317,6 +2317,8 @@ def _should_slim_dev_prompt(task: Optional[Dict[str, Any]]) -> bool:
 
         if should_force_patch_next_dev_step(task) or is_lint_wall_card(task):
             return True
+        if task.get("forcePatchNextDevStep"):
+            return True
         if int(task.get("consecutiveBadExits") or 0) >= 2:
             return True
         prior = last_step_exit_reason(task)
@@ -2379,6 +2381,14 @@ def _inject_sprint_context(
     task_id = active_task["id"]
     normalize_task(active_task)
     if agent_role == "Developer":
+        try:
+            from backend.services.file_blocker import infer_lint_source_file
+
+            inferred = infer_lint_source_file(active_task)
+            if inferred and not active_task.get("lintSourceFile"):
+                active_task["lintSourceFile"] = inferred
+        except Exception:
+            pass
         try:
             from backend.services.task_spec_markdown import ensure_task_spec_for_work
 
@@ -4591,9 +4601,20 @@ def _run_po_clarification(active_task: Dict[str, Any], brief: str) -> None:
         from backend.services.po_clarification import (
             move_off_needs_po,
             po_llm_skip_block_reason,
+            po_skip_churn_should_block,
             should_move_off_needs_po_without_llm,
         )
 
+        churn_block, churn_msg = po_skip_churn_should_block(task_for_prompt)
+        if churn_block:
+            parked = _try_move_to_needs_user(
+                task_id,
+                task_for_prompt,
+                churn_msg,
+                kind="po_skip_churn",
+            )
+            if parked:
+                return f"Parked to Needs User: {churn_msg}"
         if should_move_off_needs_po_without_llm(task_for_prompt):
             with state.STATE_LOCK:
                 locked = find_task_by_id(task_id)

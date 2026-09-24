@@ -2038,6 +2038,7 @@ class ScrumAgent:
                         patch_summary = str(
                             getattr(patch_result, "summary", "") or "deterministic lint-wall patch"
                         )
+                        log_event("lint_wall_deterministic_patch", det_path)
                         log_tool("apply_patch", True, patch_summary)
                         messages.append(
                             {
@@ -2211,6 +2212,18 @@ class ScrumAgent:
 
     def _apply_phase_model_routing(self) -> str:
         """Select Explore vs Patch Ollama model; return model name in use."""
+        if getattr(self, "_mid_step_backup_switched", False):
+            pinned = str(self.model or "").strip()
+            if pinned:
+                if not getattr(self, "_backup_model_pinned_logged", False):
+                    try:
+                        from backend.services.step_diagnostics import log_event
+
+                        log_event("backup_model_pinned", pinned)
+                    except Exception:
+                        pass
+                    self._backup_model_pinned_logged = True
+                return pinned
         from backend.services.agent_efficiency import effective_role_model
         from backend.services.workflow_settings import get_workflow_settings
 
@@ -3639,6 +3652,7 @@ class ScrumAgent:
         self._skip_cutoff_summary = False
         step_started_mono = time.monotonic()
         self._mid_step_backup_switched = False
+        self._backup_model_pinned_logged = False
         setattr(self, "_use_cloud_provider", False)
         setattr(self, "_cloud_provider_config", None)
         task_id_for_session = state.ACTIVE_SPRINT_TASK_ID
@@ -4215,6 +4229,7 @@ class ScrumAgent:
                     prompt_eval_ms=usage.get("promptEvalMs"),
                     eval_ms=usage.get("evalMs"),
                     native_tool_calls=bool(tool_call_names) and not bool(recovered_tool_names),
+                    model_used=str(self.model or model_in_use or ""),
                 )
                 if (
                     self.role == "Developer"
