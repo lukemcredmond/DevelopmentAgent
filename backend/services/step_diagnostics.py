@@ -99,6 +99,91 @@ def _is_dev_precheck_skip_message(agent_result: Optional[str]) -> bool:
     )
 
 
+def _time_to_first_write_ms(trace: "StepDiagnosticsTracker") -> Optional[int]:
+    started = _parse_ts(trace.started_at)
+    if not started:
+        return None
+    for entry in trace.tools_log:
+        name = str(entry.get("toolName") or "")
+        if name not in _WRITE_TOOLS or not entry.get("success"):
+            continue
+        ts = _parse_ts(str(entry.get("timestamp") or ""))
+        if ts:
+            return max(0, int((ts - started).total_seconds() * 1000))
+    return None
+
+
+def _parse_ts(value: str) -> Optional[datetime]:
+    text = str(value or "").strip()
+    if not text:
+        return None
+    try:
+        return datetime.strptime(text, "%Y-%m-%d %H:%M:%S")
+    except ValueError:
+        return None
+
+
+def _infer_primary_bottleneck(
+    trace: "StepDiagnosticsTracker",
+    *,
+    exit_reason: Optional[str] = None,
+) -> str:
+    kinds = {str(e.get("kind") or "") for e in trace.events if isinstance(e, dict)}
+    if "backup_model_switched" in kinds:
+        return "backup_model_switch"
+    if "tool_calls_recovered_from_content" in kinds:
+        return "markdown_tool_recovery"
+    if trace.runaway_generation_aborted or "runaway_generation_aborted" in kinds:
+        return "runaway_generation"
+    if str(exit_reason or "") == "phase_cycle_cap":
+        return "visit_cap_latch"
+    patch_fails = sum(
+        1
+        for e in trace.tools_log
+        if isinstance(e, dict)
+        and str(e.get("toolName") or "") == "apply_patch"
+        and not e.get("success")
+    )
+    if patch_fails >= 2:
+        return "patch_loop"
+    if trace.text_rejections >= 2:
+        return "text_rejection_loop"
+    return "none"
+
+
+def build_performance_summary(
+    trace: "StepDiagnosticsTracker",
+    *,
+    duration_ms: int,
+    writes_succeeded: int,
+    native_rate: float,
+    exit_reason: Optional[str] = None,
+) -> Dict[str, Any]:
+    events = trace.events or []
+    markdown_recovery = any(
+        isinstance(e, dict) and e.get("kind") == "tool_calls_recovered_from_content"
+        for e in events
+    )
+    backup_switched = any(
+        isinstance(e, dict) and e.get("kind") == "backup_model_switched"
+        for e in events
+    )
+    backup_skipped = any(
+        isinstance(e, dict) and e.get("kind") == "backup_model_skipped_recovery_ok"
+        for e in events
+    )
+    return {
+        "timeToFirstWriteMs": _time_to_first_write_ms(trace),
+        "markdownRecovery": markdown_recovery,
+        "backupSwitched": backup_switched,
+        "backupSkippedRecoveryOk": backup_skipped,
+        "primaryBottleneck": _infer_primary_bottleneck(trace, exit_reason=exit_reason),
+        "fastSuccess": bool(
+            writes_succeeded > 0 and native_rate >= 0.5 and duration_ms < 120_000
+        ),
+    }
+
+
 def _apply_patch_failed_after_write(tools_log: Optional[List[Dict[str, Any]]] = None) -> bool:
     entries = tools_log
     if entries is None:
@@ -551,6 +636,13 @@ class StepDiagnosticsTracker:
         )
         payload["cursorLikenessScore"] = bool(
             writes_succeeded > 0 and native_rate >= 0.5 and duration_ms < 180_000
+        )
+        payload["performanceSummary"] = build_performance_summary(
+            self,
+            duration_ms=duration_ms,
+            writes_succeeded=writes_succeeded,
+            native_rate=native_rate,
+            exit_reason=exit_reason if status == "complete" else None,
         )
         if failure_classes:
             payload["toolFailureClasses"] = failure_classes

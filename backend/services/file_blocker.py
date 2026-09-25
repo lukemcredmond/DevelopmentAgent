@@ -144,6 +144,40 @@ def resolve_dev_edit_target_path(task: Dict[str, Any]) -> str:
     return ""
 
 
+def dev_edit_path_explicitly_allowed(task: Dict[str, Any], path: str) -> bool:
+    """True when path is in scope even if it differs from resolve_dev_edit_target_path."""
+    norm = normalize_file_path(path)
+    if not norm:
+        return False
+    fix_for = normalize_file_path(str(task.get("fileFixFor") or ""))
+    if fix_for and fix_for == norm:
+        return True
+    title = str(task.get("title") or "").lower()
+    if norm == "pubspec.yaml" and ("pubspec" in title or "sdk constraint" in title):
+        return True
+    if norm == "analysis_options.yaml" and "analysis_options" in title:
+        return True
+    scoped_src = normalize_file_path(str(task.get("lintSourceFile") or ""))
+    if scoped_src and scoped_src == norm:
+        return True
+    return False
+
+
+def dev_edit_path_allowed_for_tool(task: Dict[str, Any], path: str) -> tuple[bool, str]:
+    """Gate Developer apply_patch/write_file to the card's resolved edit target."""
+    norm = normalize_file_path(path)
+    if not norm or not validate_dev_edit_target_path(norm):
+        return False, f"Invalid or missing edit path: {path or '(empty)'}"
+    target = resolve_dev_edit_target_path(task)
+    if not target:
+        return True, ""
+    if normalize_file_path(target) == norm:
+        return True, ""
+    if dev_edit_path_explicitly_allowed(task, norm):
+        return True, ""
+    return False, f"This card is scoped to `{target}`; do not edit `{norm}`."
+
+
 def is_file_blocker_wait(task: Dict[str, Any]) -> bool:
     return str(task.get("blockedByKind") or "") == BLOCKED_BY_KIND_FILE_FIX
 

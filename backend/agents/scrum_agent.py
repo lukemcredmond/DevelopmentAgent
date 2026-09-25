@@ -3346,7 +3346,19 @@ class ScrumAgent:
                     injects += 1
                     self._patch_recovery_injects = injects
             identical_counts[fp] = int(identical_counts.get(fp) or 0) + 1
-            if identical_counts[fp] >= 2:
+            escalate_threshold = 2
+            if path == "pubspec.yaml" and task_id:
+                live_scope = find_task_by_id(task_id)
+                if live_scope:
+                    from backend.services.file_blocker import (
+                        normalize_file_path,
+                        resolve_dev_edit_target_path,
+                    )
+
+                    scoped = normalize_file_path(resolve_dev_edit_target_path(live_scope))
+                    if scoped and scoped != "pubspec.yaml":
+                        escalate_threshold = 1
+            if identical_counts[fp] >= escalate_threshold:
                 escalate_paths.append(path)
             # Cross-step circuit breaker fingerprint on the card.
             if task_id:
@@ -4144,6 +4156,45 @@ class ScrumAgent:
                             error=err_detail[:200],
                             error_type=err_type,
                         )
+                    if (
+                        iteration == 1
+                        and self.role == "Developer"
+                        and err_type == "runaway_generation"
+                        and not getattr(self, "_runaway_iter1_recovery_tried", False)
+                    ):
+                        self._runaway_iter1_recovery_tried = True
+                        from backend.services.agent_efficiency import forced_tool_num_predict
+
+                        self._forced_tool_mode = True
+                        self._step_num_predict = forced_tool_num_predict()
+                        try:
+                            log_event("forced_tool_mode", "runaway iter 1 recovery")
+                        except Exception:
+                            pass
+                        try:
+                            from backend.services.sprint_service import _should_slim_dev_prompt
+
+                            board_task = find_task_by_id(str(task_id)) if task_id else None
+                            if board_task and _should_slim_dev_prompt(board_task):
+                                slim_ctx = min(self._effective_num_ctx(), 5120)
+                                self._step_num_ctx = slim_ctx
+                        except Exception:
+                            pass
+                        target = self._resolve_text_reject_target_path(task_id)
+                        if target and not getattr(self, "_synthetic_read_fallback_used", False):
+                            self._synthetic_read_fallback_used = True
+                            if self._execute_synthetic_read_fallback(
+                                messages,
+                                task_id=task_id,
+                                target=target,
+                                tools_used=tools_used,
+                            ):
+                                self._continue_after_synthetic_read(
+                                    messages,
+                                    target=target,
+                                    plan_rejection_message=_PLAN_REJECTION_MESSAGE,
+                                )
+                                continue
                     outcome = self._outcome_for_failed_chat(err_type, err_detail)
                     if outcome == "SIMULATION_FALLBACK":
                         self._log_step_exit("LLM provider unreachable — SIMULATION_FALLBACK", "warning")
@@ -4174,12 +4225,13 @@ class ScrumAgent:
                         and self.role == "Developer"
                         and not native_tool_calls_before_recovery
                     ):
-                        self._maybe_switch_backup_on_text_reject(
-                            task_id=task_id,
-                            plan_n=0,
-                            text_n=1,
-                            reason="markdown tool recovery on first LLM turn",
-                        )
+                        try:
+                            log_event(
+                                "backup_model_skipped_recovery_ok",
+                                ", ".join(recovered_tool_names)[:240],
+                            )
+                        except Exception:
+                            pass
                     from backend.services.llm_decision_trace import (
                         build_decision_trace as _build_dt,
                         decision_trace_enabled as _dt_on,

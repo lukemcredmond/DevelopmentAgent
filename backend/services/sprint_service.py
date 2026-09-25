@@ -973,6 +973,12 @@ def _record_dev_precheck_skip(
 ) -> None:
     """Write step diagnostics when Developer is skipped in a pre-check (no LLM call)."""
     _ensure_dev_step_trace(task_id, title, lane_before)
+    try:
+        from backend.services.step_diagnostics import log_event
+
+        log_event("dev_precheck_skip", (reason or "")[:500])
+    except Exception:
+        pass
     state.LAST_AGENT_STEP_RESULT = reason
     with state.STATE_LOCK:
         _record_last_step_outcome(
@@ -4864,6 +4870,9 @@ def _run_developer_step(active_task: Dict[str, Any], brief: str) -> None:
             return
         _recover_latched_dev_card(dict(live_task), brief)
         return
+    from backend.services.sprint_speed_gates import maybe_unlatch_dev_for_forced_patch
+
+    maybe_unlatch_dev_for_forced_patch(live_task)
     visit, capped = begin_dev_step(live_task)
     if capped:
         result = (

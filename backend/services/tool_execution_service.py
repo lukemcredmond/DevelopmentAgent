@@ -650,8 +650,27 @@ def execute_tool(
         tool_output = ""
         success = False
         from_cache = False
+        scope_blocked = False
 
-        if source == "agent":
+        if (
+            source == "agent"
+            and agent_role == "Developer"
+            and tool_name in ("apply_patch", "write_file")
+            and task_id
+        ):
+            from backend.agents.task_context import find_task_by_id
+            from backend.services.file_blocker import dev_edit_path_allowed_for_tool
+
+            board_task = find_task_by_id(task_id)
+            if board_task:
+                edit_path = str(arguments.get("path") or "")
+                allowed, scope_err = dev_edit_path_allowed_for_tool(board_task, edit_path)
+                if not allowed:
+                    tool_output = scope_err
+                    success = False
+                    scope_blocked = True
+
+        if source == "agent" and not scope_blocked:
             from backend.services.tool_cache import (
                 check_run_command_cache,
                 get_cached_result,
@@ -679,7 +698,7 @@ def execute_tool(
                         tool_output, success = cached
                         from_cache = True
 
-        if not from_cache:
+        if not from_cache and not scope_blocked:
             if not skip_approval and tool_requires_approval(tool_name, arguments):
                 if on_awaiting_approval:
                     on_awaiting_approval(tool_name)

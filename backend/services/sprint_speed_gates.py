@@ -570,6 +570,24 @@ def _stored_phase_cycle(task: Dict[str, Any]) -> int:
         return 0
 
 
+def maybe_unlatch_dev_for_forced_patch(task: Dict[str, Any]) -> bool:
+    """One-shot visit-cap reset so a queued Forced Patch can run on lint/file-fix cards."""
+    if not task.get("phaseCycleCapReached"):
+        return False
+    if not task.get("forcePatchNextDevStep"):
+        return False
+    if task.get("forcePatchUnlatchUsed"):
+        return False
+    from backend.services.file_blocker import is_file_blocker_wait
+    from backend.services.needs_user_guard import is_lint_wall_card
+
+    if not (is_lint_wall_card(task) or is_file_blocker_wait(task)):
+        return False
+    reset_dev_cycle_latch(task)
+    task["forcePatchUnlatchUsed"] = True
+    return True
+
+
 def begin_dev_step(
     task: Dict[str, Any],
     ws: Optional[Dict[str, Any]] = None,
@@ -582,6 +600,7 @@ def begin_dev_step(
         from backend.services.workflow_settings import get_workflow_settings
 
         ws = get_workflow_settings()
+    maybe_unlatch_dev_for_forced_patch(task)
     if task.get("phaseCycleCapReached"):
         return int(task.get("devStepCount") or 0), True
 
@@ -616,3 +635,4 @@ def reset_dev_cycle_latch(task: Dict[str, Any]) -> None:
     task["latchedRecoveryAttempted"] = False
     task["consecutiveNoWriteStall"] = 0
     task["parkFailed"] = False
+    task.pop("forcePatchUnlatchUsed", None)
