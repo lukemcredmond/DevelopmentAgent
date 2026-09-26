@@ -24,5 +24,7 @@ def test_build_support_bundle_includes_core_files(tmp_path, monkeypatch):
         assert "board_snapshot.json" in names
         assert "workflow_settings.json" in names
         assert "environment.txt" in names
+        assert "sprint_rollup.json" in names
+        assert "sprint_move_summary_by_task.json" in names
         logs = json.loads(zf.read("console_logs.json"))
         assert logs[0]["message"] == "hello"

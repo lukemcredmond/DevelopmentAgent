@@ -17,6 +17,12 @@ function ReportBody({
 }) {
   const transitions = Object.entries(report.byTransition || {}).sort((a, b) => b[1] - a[1])
   const moves = report.moves || []
+  const pingPongSuspects = Object.values(report.pingPongByTask || {}).filter(
+    (row) => row.pingPongFlag,
+  )
+  pingPongSuspects.sort(
+    (a, b) => (b.pingPongRoundTrips ?? 0) - (a.pingPongRoundTrips ?? 0),
+  )
   return (
     <div className="space-y-3">
       <div className="grid grid-cols-2 sm:grid-cols-4 gap-2">
@@ -35,6 +41,37 @@ function ReportBody({
                 <span className="text-cat-overlay"> × {count}</span>
               </li>
             ))}
+          </ul>
+        </div>
+      )}
+      {pingPongSuspects.length > 0 && (
+        <div>
+          <p className="text-[10px] uppercase tracking-wider text-amber-400/90 mb-1">
+            Ping-pong suspects
+          </p>
+          <ul className="space-y-1 text-[11px]">
+            {pingPongSuspects.map((row) => {
+              const tid = row.taskId || ''
+              return (
+                <li key={tid} className="font-mono">
+                  <button
+                    type="button"
+                    className="text-sky-300 hover:underline"
+                    onClick={() => tid && onTaskClick?.(tid)}
+                  >
+                    {tid.slice(0, 12) || 'task'}
+                  </button>
+                  <span className="text-cat-overlay">
+                    {' '}
+                    {formatTaskText(row.title || '').slice(0, 50)}
+                  </span>
+                  <span className="text-cat-subtext">
+                    {' '}
+                    · {row.pingPongRoundTrips ?? 0} NU↔IP round-trips
+                  </span>
+                </li>
+              )
+            })}
           </ul>
         </div>
       )}

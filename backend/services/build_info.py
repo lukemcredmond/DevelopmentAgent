@@ -30,6 +30,9 @@ RECOVERY_FEATURES: List[str] = [
     "forced_patch_read_exception",
     "meta_refusal_class",
     "sprint_diagnostics_rollup",
+    "sprint_ping_pong_detector",
+    "support_bundle_sprint_rollup",
+    "dev_defer_soft_queue",
 ]
 
 

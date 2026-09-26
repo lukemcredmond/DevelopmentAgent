@@ -70,11 +70,35 @@ def build_support_bundle_bytes(*, max_diagnostics: int = 30) -> bytes:
                 continue
 
         try:
-            from backend.services.sprint_report import list_sprint_reports
+            from backend.services.sprint_report import current_sprint_report, list_sprint_reports
 
             reports = list_sprint_reports(pid)[:10]
             if reports:
                 zf.writestr("sprint_reports/index.json", json.dumps(reports, indent=2))
+            current = current_sprint_report()
+            if isinstance(current, dict):
+                zf.writestr(
+                    "current_sprint_report.json",
+                    json.dumps(current, indent=2, default=str),
+                )
+        except Exception:
+            pass
+
+        try:
+            from backend.services.sprint_diagnostics_rollup import build_sprint_diagnostics_rollup
+            from backend.services.sprint_ping_pong import build_move_summary_by_task
+
+            rollup = build_sprint_diagnostics_rollup(
+                project_id=pid,
+                limit=50,
+                since_hours=72,
+            )
+            zf.writestr("sprint_rollup.json", json.dumps(rollup, indent=2, default=str))
+            move_summary = build_move_summary_by_task(project_id=pid)
+            zf.writestr(
+                "sprint_move_summary_by_task.json",
+                json.dumps(move_summary, indent=2, default=str),
+            )
         except Exception:
             pass
 

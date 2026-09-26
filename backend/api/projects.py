@@ -14,13 +14,14 @@ from backend.api.helpers import build_state_response
 from backend.api.schemas import (
     ConfigPayload,
     CreateProjectPayload,
+    CloneProjectPayload,
     OpenWorkspacePayload,
     ProjectDocumentsPayload,
 )
 from backend.bootstrap import load_project_into_state
 from backend.config import DEFAULT_BOARD, DEFAULT_VIRTUAL_FS
 from backend.services.logs import add_system_log
-from backend.services.project_service import save_current_project_state
+from backend.services.project_service import clone_project_for_experiment, save_current_project_state
 
 router = APIRouter()
 
@@ -57,6 +58,29 @@ def create_new_project(payload: CreateProjectPayload):
         )
 
         add_system_log("System", "success", f"Created and loaded new project: '{state.PROJECT_NAME}' at {state.WORKSPACE_DIR}")
+    return build_state_response()
+
+
+@router.post("/api/projects/{project_id}/clone")
+def clone_project_for_model_test(project_id: str, payload: CloneProjectPayload):
+    try:
+        clone_project_for_experiment(
+            project_id,
+            name=payload.projectName,
+            workspace_dir=payload.workspaceDir,
+            po_model=payload.poModel,
+            dev_model=payload.devModel,
+            cr_model=payload.crModel,
+            qa_model=payload.qaModel,
+            po_backup_model=payload.poBackupModel,
+            dev_backup_model=payload.devBackupModel,
+            cr_backup_model=payload.crBackupModel,
+            qa_backup_model=payload.qaBackupModel,
+        )
+    except LookupError as exc:
+        raise HTTPException(status_code=404, detail=str(exc)) from exc
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
     return build_state_response()
 
 

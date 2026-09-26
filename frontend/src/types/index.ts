@@ -934,6 +934,22 @@ export interface SprintWorkBreakdown {
   runnableNeedsPo: number
   latchedSkipCount: number
   skipReasons: string[]
+  pingPongDeprioritizedCount?: number
+  pingPongDeprioritizedTasks?: { taskId: string; title: string }[]
+}
+
+export interface SprintReportPingPongTask {
+  taskId?: string
+  title?: string
+  moveCount?: number
+  byTransition?: Record<string, number>
+  pingPongRoundTrips?: number
+  pingPongScore?: number
+  pingPongFlag?: boolean
+  needsUserIn?: number
+  needsUserOut?: number
+  lastMoveAt?: string
+  pingPongLastTransition?: string
 }
 
 export interface SprintReportMove {
@@ -960,6 +976,7 @@ export interface SprintReport {
   needsUserOut?: number
   laneCountsStart?: Record<string, number>
   laneCountsEnd?: Record<string, number>
+  pingPongByTask?: Record<string, SprintReportPingPongTask>
 }
 
 export interface CardWorkProgress {
@@ -1355,6 +1372,19 @@ export interface SaveBuiltSkillPayload {
 export interface CreateProjectPayload {
   projectName: string
   workspaceDir: string
+}
+
+export interface CloneProjectPayload {
+  projectName: string
+  workspaceDir: string
+  poModel?: string
+  devModel?: string
+  crModel?: string
+  qaModel?: string
+  poBackupModel?: string
+  devBackupModel?: string
+  crBackupModel?: string
+  qaBackupModel?: string
 }
 
 export interface ManualTaskPayload {

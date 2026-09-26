@@ -70,6 +70,19 @@ class CreateProjectPayload(BaseModel):
     workspaceDir: str
 
 
+class CloneProjectPayload(BaseModel):
+    projectName: str
+    workspaceDir: str
+    poModel: Optional[str] = None
+    devModel: Optional[str] = None
+    crModel: Optional[str] = None
+    qaModel: Optional[str] = None
+    poBackupModel: Optional[str] = None
+    devBackupModel: Optional[str] = None
+    crBackupModel: Optional[str] = None
+    qaBackupModel: Optional[str] = None
+
+
 class OpenWorkspacePayload(BaseModel):
     workspaceDir: str
 

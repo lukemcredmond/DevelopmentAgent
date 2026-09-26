@@ -76,6 +76,12 @@ def apply_rollups(report: Dict[str, Any]) -> Dict[str, Any]:
     report["needsUserOut"] = needs_out
     if report.get("status") == "running":
         report["laneCountsEnd"] = lane_counts()
+    try:
+        from backend.services.sprint_ping_pong import compute_ping_pong_by_task
+
+        report["pingPongByTask"] = compute_ping_pong_by_task(moves)
+    except Exception:
+        pass
     return report
 
 
@@ -117,6 +123,12 @@ def record_lane_move(
     )
     report["moves"] = moves
     apply_rollups(report)
+    try:
+        from backend.services.sprint_ping_pong import refresh_ping_pong_from_report
+
+        refresh_ping_pong_from_report()
+    except Exception:
+        pass
 
 
 def current_sprint_report() -> Optional[Dict[str, Any]]:

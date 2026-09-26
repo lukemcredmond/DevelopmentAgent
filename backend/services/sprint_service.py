@@ -5995,7 +5995,6 @@ def _in_progress_dev_runnable(board: Optional[Dict[str, Any]] = None) -> List[Di
     from backend.services.sprint_speed_gates import no_write_stall_should_park, empty_gen_should_skip
 
     board = board if board is not None else state.SHARED_BOARD
-    from backend.services.dev_refusal_triage import dev_deferred_active
 
     return [
         task
@@ -6003,10 +6002,15 @@ def _in_progress_dev_runnable(board: Optional[Dict[str, Any]] = None) -> List[Di
         if isinstance(task, dict)
         and not task.get("phaseCycleCapReached")
         and not task.get("pendingSplit")
-        and not dev_deferred_active(task)
         and not no_write_stall_should_park(task)
         and not empty_gen_should_skip(task)
     ]
+
+
+def _sorted_in_progress_dev_runnable(board: Optional[Dict[str, Any]] = None) -> List[Dict[str, Any]]:
+    from backend.services.sprint_ping_pong import sort_dev_runnable
+
+    return sort_dev_runnable(_in_progress_dev_runnable(board))
 
 
 def _in_progress_pending_recovery(board: Optional[Dict[str, Any]] = None) -> List[Dict[str, Any]]:
@@ -6233,6 +6237,14 @@ def summarize_sprint_work(board: Optional[Dict[str, Any]] = None) -> Dict[str, A
                     reasons.append("; ".join(parts))
             if latched_skip and ws.get("implementerStopOnLatch", True):
                 reasons.append(f"{latched_skip} latched card(s) trigger implementerStopOnLatch")
+    ping_pong_summary: Dict[str, Any] = {}
+    try:
+        from backend.services.sprint_ping_pong import summarize_ping_pong_board
+
+        ping_pong_summary = summarize_ping_pong_board(board)
+    except Exception:
+        ping_pong_summary = {}
+
     return {
         "hasWork": has_work,
         "totalCards": total_cards,
@@ -6242,6 +6254,7 @@ def summarize_sprint_work(board: Optional[Dict[str, Any]] = None) -> Dict[str, A
         "runnableNeedsPo": 1 if runnable_needs_po else 0,
         "latchedSkipCount": latched_skip,
         "skipReasons": reasons,
+        **ping_pong_summary,
     }
 
 
@@ -6584,7 +6597,7 @@ def _select_sprint_step_handler() -> Tuple[Optional[str], Optional[Dict[str, Any
 
     profile = get_execution_profile()
     needs_po_task = _first_runnable_needs_po()
-    runnable = _in_progress_dev_runnable()
+    runnable = _sorted_in_progress_dev_runnable()
     pending_recovery = _in_progress_pending_recovery()
 
     def _idle_recovery() -> Tuple[Optional[str], Optional[Dict[str, Any]]]:
@@ -6827,10 +6840,9 @@ def run_in_progress_step(
                 in_progress = [
                     task for task in in_progress if not task.get("phaseCycleCapReached")
                 ]
-            sorted_tasks = sorted(
-                in_progress,
-                key=lambda t: (t.get("priority") if isinstance(t.get("priority"), (int, float)) else 100, str(t.get("id", ""))),
-            )
+            from backend.services.sprint_ping_pong import sort_dev_runnable
+
+            sorted_tasks = sort_dev_runnable(in_progress)
             active_task = dict(sorted_tasks[0])
         else:
             raise ValueError("No cards in In Progress")

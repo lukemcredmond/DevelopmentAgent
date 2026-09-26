@@ -11,6 +11,7 @@ import type {
   BoardDuplicateAuditReport,
   ConfigPayload,
   CreateProjectPayload,
+  CloneProjectPayload,
   FileDiffResponse,
   FileSearchResult,
   FileTreeNode,
@@ -130,6 +131,19 @@ export async function createProject(
     method: 'POST',
     body: JSON.stringify(payload),
   })
+}
+
+export async function cloneProject(
+  sourceProjectId: string,
+  payload: CloneProjectPayload,
+): Promise<AppState> {
+  return request<AppState>(
+    `/api/projects/${encodeURIComponent(sourceProjectId)}/clone`,
+    {
+      method: 'POST',
+      body: JSON.stringify(payload),
+    },
+  )
 }
 
 export async function openWorkspaceProject(workspaceDir: string): Promise<AppState> {

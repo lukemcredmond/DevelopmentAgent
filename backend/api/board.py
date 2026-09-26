@@ -529,6 +529,12 @@ def resolve_user_question(task_id: str, payload: ResolveUserPayload):
         task["needsUserKind"] = None
         task["needsUserSuggestedTarget"] = None
         task.pop("needsUserOptions", None)
+        try:
+            from backend.services.sprint_ping_pong import clear_ping_pong_deprioritize
+
+            clear_ping_pong_deprioritize(task)
+        except Exception:
+            pass
         record_task_decision(
             task_id,
             "User",

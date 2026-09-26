@@ -326,6 +326,17 @@ def _settings_key(project_id: str) -> str:
     return f"workflow:{project_id}"
 
 
+def copy_workflow_settings_blob(source_project_id: str, dest_project_id: str) -> None:
+    """Copy raw workflow JSON from one project to another (used by project clone)."""
+    src = str(source_project_id or "").strip()
+    dest = str(dest_project_id or "").strip()
+    if not src or not dest or src == dest:
+        return
+    raw = state.storage.get_setting(_settings_key(src))
+    if raw:
+        state.storage.set_setting(_settings_key(dest), raw)
+
+
 def _summary_key(project_id: str) -> str:
     return f"sprint_summary:{project_id}"
 

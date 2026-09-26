@@ -9,6 +9,7 @@ import {
   rewindChatHistory,
   clearTaskTranscript,
   createProject,
+  cloneProject,
   deleteProject,
   deleteTask,
   diagnoseTask,
@@ -66,6 +67,7 @@ import GitPanel from './components/GitPanel'
 import KanbanBoard from './components/KanbanBoard'
 import ManualTaskModal from './components/ManualTaskModal'
 import NewProjectModal from './components/NewProjectModal'
+import CloneProjectModal from './components/CloneProjectModal'
 import SearchPanel from './components/SearchPanel'
 import SettingsSlideOver from './components/SettingsSlideOver'
 import Sidebar from './components/Sidebar'
@@ -358,6 +360,7 @@ export default function App() {
   const [chatPinnedTask, setChatPinnedTask] = useState<Task | null>(null)
 
   const [showNewProject, setShowNewProject] = useState(false)
+  const [showCloneProject, setShowCloneProject] = useState(false)
   const [newProjName, setNewProjName] = useState('')
   const [newProjDir, setNewProjDir] = useState('./workspace_new')
 
@@ -1889,6 +1892,7 @@ export default function App() {
           setToolsPreferredSubTab('custom')
         }}
         onExportProject={() => exportProject(state.projectId)}
+        onOpenCloneProject={() => setShowCloneProject(true)}
         onImportProject={(file) =>
           void withLoading(async () => handleState(await importProject(file)))
         }
@@ -2690,6 +2694,44 @@ export default function App() {
           })
         }
         onClose={() => setShowNewProject(false)}
+      />
+
+      <CloneProjectModal
+        open={showCloneProject}
+        loading={loading}
+        defaultName={`${state.projectName || 'Project'} (model test)`}
+        models={{
+          poModel,
+          devModel,
+          crModel,
+          qaModel,
+          poBackupModel,
+          devBackupModel,
+          crBackupModel,
+          qaBackupModel,
+        }}
+        onSubmit={(form) =>
+          void withLoading(async () => {
+            const data = await cloneProject(state.projectId, {
+              projectName: form.name,
+              workspaceDir: form.workspaceDir,
+              poModel: form.poModel,
+              devModel: form.devModel,
+              crModel: form.crModel,
+              qaModel: form.qaModel,
+              poBackupModel: form.poBackupModel || undefined,
+              devBackupModel: form.devBackupModel || undefined,
+              crBackupModel: form.crBackupModel || undefined,
+              qaBackupModel: form.qaBackupModel || undefined,
+            })
+            handleState(data)
+            applyStateFields(data, setters)
+            setBrief(data.brief ?? brief)
+            setShowCloneProject(false)
+            setSettingsOpen(false)
+          })
+        }
+        onClose={() => setShowCloneProject(false)}
       />
 
       <ManualTaskModal

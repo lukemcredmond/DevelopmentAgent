@@ -206,6 +206,13 @@ def move_board_stage(
 
             clear_needs_user_reason_hash(active_task)
 
+        try:
+            from backend.services.sprint_ping_pong import maybe_clear_ping_pong_on_lane_change
+
+            maybe_clear_ping_pong_on_lane_change(active_task, target_lane)
+        except Exception:
+            pass
+
         active_task["status"] = target_lane
         normalize_task(active_task)
         if target_lane == "Needs User":

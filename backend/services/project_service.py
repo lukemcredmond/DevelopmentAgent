@@ -1,9 +1,145 @@
 from typing import Optional
 import logging
+import os
+import uuid
+from pathlib import Path
 
 from backend import state
 
 logger = logging.getLogger(__name__)
+
+
+def _resolve_source_skills_dir(source: dict, source_project_id: str) -> str:
+    from backend.services.project_file import read_project_file
+
+    workspace = str(source.get("workspace_dir") or "").strip()
+    if workspace:
+        sidecar = read_project_file(workspace)
+        if isinstance(sidecar, dict):
+            sd = str(sidecar.get("skills_dir") or "").strip()
+            if sd:
+                return sd
+    if source_project_id == state.CURRENT_PROJECT_ID:
+        return str(getattr(state, "SKILLS_DIR", "") or "").strip()
+    return ""
+
+
+def clone_project_for_experiment(
+    source_project_id: str,
+    *,
+    name: str,
+    workspace_dir: str,
+    po_model: Optional[str] = None,
+    dev_model: Optional[str] = None,
+    cr_model: Optional[str] = None,
+    qa_model: Optional[str] = None,
+    po_backup_model: Optional[str] = None,
+    dev_backup_model: Optional[str] = None,
+    cr_backup_model: Optional[str] = None,
+    qa_backup_model: Optional[str] = None,
+) -> str:
+    """Copy brief, skills, and workflow settings; fresh board, plan, and workspace folder."""
+    from backend.bootstrap import load_project_into_state
+    from backend.config import DEFAULT_BOARD, DEFAULT_VIRTUAL_FS
+    from backend.services.logs import add_system_log
+    from backend.services.workflow_settings import copy_workflow_settings_blob
+
+    source_id = str(source_project_id or "").strip()
+    if not source_id:
+        raise ValueError("source project id required")
+
+    workspace = str(workspace_dir or "").strip()
+    if not workspace:
+        raise ValueError("workspaceDir required")
+    project_name = str(name or "").strip()
+    if not project_name:
+        raise ValueError("projectName required")
+
+    with state.STATE_LOCK:
+        if source_id == state.CURRENT_PROJECT_ID:
+            save_current_project_state(project_id=source_id)
+
+    source = state.storage.load_project(source_id)
+    if not source:
+        raise LookupError("Project not found")
+
+    source_ws = str(source.get("workspace_dir") or "").strip()
+    try:
+        if source_ws and Path(source_ws).expanduser().resolve() == Path(workspace).expanduser().resolve():
+            raise ValueError("Clone workspace must differ from the source project workspace")
+    except OSError:
+        if os.path.normpath(source_ws) == os.path.normpath(workspace):
+            raise ValueError("Clone workspace must differ from the source project workspace")
+
+    skills_dir = _resolve_source_skills_dir(source, source_id)
+    new_id = str(uuid.uuid4())
+    os.makedirs(workspace, exist_ok=True)
+
+    board = {k: list(v) for k, v in DEFAULT_BOARD.items()}
+    files = dict(DEFAULT_VIRTUAL_FS)
+
+    def _model(field: Optional[str], key: str, default: str) -> str:
+        if field is not None and str(field).strip():
+            return str(field).strip()
+        return str(source.get(key) or default)
+
+    po_m = _model(po_model, "po_model", "llama3:8b")
+    dev_m = _model(dev_model, "dev_model", "qwen2.5-coder:14b")
+    cr_m = _model(cr_model, "cr_model", "qwen2.5-coder:7b")
+    qa_m = _model(qa_model, "qa_model", "qwen2.5-coder:7b")
+
+    def _backup(field: Optional[str], key: str) -> str:
+        if field is not None:
+            return str(field).strip()
+        return str(source.get(key) or "")
+
+    state.storage.save_project(
+        new_id,
+        project_name,
+        str(source.get("brief") or ""),
+        workspace,
+        board,
+        files,
+        list(source.get("po_skills") or []),
+        list(source.get("dev_skills") or []),
+        list(source.get("cr_skills") or []),
+        list(source.get("qa_skills") or []),
+        po_m,
+        dev_m,
+        cr_m,
+        qa_m,
+        _backup(po_backup_model, "po_backup_model"),
+        _backup(dev_backup_model, "dev_backup_model"),
+        _backup(cr_backup_model, "cr_backup_model"),
+        _backup(qa_backup_model, "qa_backup_model"),
+        plan_outline="",
+        persist_board=True,
+        force_board=True,
+        original_brief=str(source.get("original_brief") or ""),
+    )
+    copy_workflow_settings_blob(source_id, new_id)
+
+    with state.STATE_LOCK:
+        load_project_into_state(new_id)
+        if skills_dir:
+            state.SKILLS_DIR = skills_dir
+            state.storage.set_setting("skills_dir", skills_dir)
+        state.PROJECT_PLAN_OUTLINE = ""
+        state.PROJECT_TOOL_EVIDENCE = []
+        state.CURRENT_SPRINT_REPORT = None
+        state.SYSTEM_LOGS.clear()
+        save_current_project_state(project_id=new_id, force_board=True)
+        state.storage.set_active_project_id(new_id)
+
+    from backend.services.recent_workspaces import touch_recent
+
+    touch_recent(project_id=new_id, name=project_name, workspace_dir=workspace)
+    add_system_log(
+        "System",
+        "success",
+        f"Cloned project '{project_name}' from {source_id[:8]}… — empty board/plan; adjust models and run Plan outline/backlog",
+    )
+    return new_id
 
 
 def save_current_project_state(

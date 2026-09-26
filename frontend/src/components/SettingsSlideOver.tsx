@@ -52,6 +52,7 @@ interface SettingsSlideOverProps {
   unsavedChanges?: boolean
   onExportProject: () => void
   onImportProject: (file: File) => void
+  onOpenCloneProject?: () => void
   onOpenWorkspace?: () => void
   onDeleteProject: () => void
   onOpenMemoryTab?: () => void
@@ -117,6 +118,7 @@ export default function SettingsSlideOver({
   unsavedChanges = false,
   onExportProject,
   onImportProject,
+  onOpenCloneProject,
   onOpenWorkspace,
   onDeleteProject,
   onOpenMemoryTab,
@@ -367,6 +369,16 @@ export default function SettingsSlideOver({
                   >
                     Export
                   </button>
+                  {onOpenCloneProject && (
+                    <button
+                      type="button"
+                      onClick={onOpenCloneProject}
+                      className="flex-1 min-w-[100px] text-[10px] bg-violet-950/30 border border-violet-500/30 rounded py-1.5 text-violet-200 hover:bg-violet-950/50"
+                      title="Same brief, settings, and skills; empty board and plan"
+                    >
+                      Clone model test
+                    </button>
+                  )}
                   <button
                     type="button"
                     onClick={() => downloadSupportBundle()}
