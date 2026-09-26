@@ -4,22 +4,22 @@ overview: "Review of [GVS5H](https://github.com/slee-persis/GVS5H) vs All Hands,
 todos:
   - id: ledger
     content: Per-card size-bounded ledger (.allhands/cards/{id}/plan.md, notes.md, tasks.json) injected before transcript
-    status: in_progress
+    status: completed
   - id: ideation
     content: "First Dev visit: no-code brainstorm into notes.md before Explore/Patch"
-    status: pending
+    status: completed
   - id: oracle
     content: Failing lint/tests override Done and write ground-truth into ledger
-    status: pending
+    status: completed
   - id: same-task-stop
     content: Reissued identical next-task with no writes parks the card
-    status: pending
+    status: completed
   - id: cutoff-summary
     content: Summarize truncated (non-empty) generations; do not retry empty-gen
-    status: pending
+    status: completed
   - id: docs-tests
     content: Spec/README note + pytest for ledger, oracle, same-task, summarizer
-    status: pending
+    status: completed
 isProject: false
 ---
 

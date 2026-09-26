@@ -417,8 +417,13 @@ Persisted per project. Update via sidebar **Workflow** or `POST /api/workflow/se
 | Setting | Default | Purpose |
 |---------|---------|---------|
 | autonomousMode | Off | Reduce Needs User escalations |
-| maxNeedsUserPerSprint | 2 | Cap Needs User cards per auto-sprint run |
+| maxNeedsUserPerSprint | 2 | Cap Needs User cards per auto-sprint run (implementer multi-card sprints: use **8+**; `stuck_loop` / `phase_cycle_cap` parks are exempt from this cap) |
 | needsUserCooldownSteps | 3 | Steps between Needs User escalations |
+| implementerStopOnLatch | On | When execution profile is **implementer**, pause auto-sprint after latched card(s) that cannot park instead of dev_recovery churn |
+| useComposerDevStep | On (implementer) | Single bounded Dev turn + one lint check instead of multi-round fix-verify |
+| implementerMaxLlmIterationsPerStep | 5 | Cap tool iterations per implementer Dev step |
+| implementerMaxDevStepWallSec | 180 | Wall-clock budget for composer Dev step |
+| implementerMaxPreloadTokens | 4000 | Max preloaded file context chars for implementer (skips semantic/graph preload) |
 | autoStartSprint | On | Auto-start sprint after Plan & Run (Settings → Workflow) |
 
 #### Tools and safety

@@ -2,8 +2,11 @@
 
 from __future__ import annotations
 
+import os
 import re
 from typing import Any, Dict, List, Optional, Tuple
+
+from backend.services.logs import add_system_log
 
 LINT_WALL_MARKER = "=== LINT WALL RECOVERY ==="
 
@@ -182,3 +185,79 @@ def deterministic_lint_wall_patch(
         new = f"# {line}  # disabled until flutter_lints is added to pubspec.yaml"
         return (norm_path, old, new)
     return None
+
+
+def _pubspec_add_dependency_patch(content: str, pkg: str) -> Optional[Tuple[str, str, str]]:
+    if re.search(rf"^\s*{re.escape(pkg)}\s*:", content, re.M):
+        return None
+    anchor = "dependencies:"
+    if anchor not in content:
+        return None
+    return ("pubspec.yaml", anchor, f"{anchor}\n  {pkg}: ^2.0.0")
+
+
+def try_deterministic_missing_pubspec_fix(
+    task: Dict[str, Any],
+    *,
+    task_id: Optional[str] = None,
+) -> Optional[str]:
+    """
+    When diagnostics show a missing package: URI, patch pubspec.yaml and run flutter pub get
+    before the Developer LLM loop. Returns a short log summary when work was done.
+    """
+    from backend import state
+
+    pkg = detect_missing_pubspec_package(task)
+    if not pkg:
+        return None
+    root = getattr(state, "WORKSPACE_DIR", None) or ""
+    if not root:
+        return None
+    pubspec_path = os.path.join(root, "pubspec.yaml")
+    if not os.path.isfile(pubspec_path):
+        return None
+    try:
+        with open(pubspec_path, encoding="utf-8", errors="replace") as fh:
+            content = fh.read()
+    except OSError:
+        return None
+    det = _pubspec_add_dependency_patch(content, pkg)
+    if not det:
+        return None
+    det_path, old_text, new_text = det
+    from backend.agents.registry import agent_dev
+    from backend.services.step_diagnostics import get_active_trace, log_event
+    from backend.services.tool_execution_service import execute_tool
+
+    agent_id = str(getattr(agent_dev, "agent_id", None) or "dev")
+    patch_result = execute_tool(
+        agent_id,
+        "apply_patch",
+        {"path": det_path, "old_text": old_text, "new_text": new_text},
+        task_id=task_id,
+        source="agent",
+        skip_approval=True,
+    )
+    if not bool(getattr(patch_result, "success", False)):
+        return None
+    trace = get_active_trace()
+    if trace:
+        trace.note_forced_tool_mode_effective()
+        log_event("deterministic_pubspec_dependency", f"{pkg} → {det_path}")
+    get_result = execute_tool(
+        agent_id,
+        "run_command",
+        {"command": "flutter pub get"},
+        task_id=task_id,
+        source="agent",
+        skip_approval=True,
+    )
+    get_ok = bool(getattr(get_result, "success", False))
+    summary = str(getattr(get_result, "summary", "") or "")[:240]
+    add_system_log(
+        "Developer",
+        "info",
+        f"Deterministic pubspec fix: added {pkg}; flutter pub get "
+        f"{'ok' if get_ok else 'failed'} — {summary}",
+    )
+    return f"Added `{pkg}` to pubspec.yaml and ran flutter pub get ({'ok' if get_ok else 'check logs'})."

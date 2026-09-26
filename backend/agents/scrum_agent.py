@@ -1863,6 +1863,20 @@ class ScrumAgent:
             primary = primary_model("dev")
             if not backup or backup == primary or backup == str(self.model or ""):
                 return False
+            from backend.services.backup_model import dev_backup_model_allowed
+
+            allowed, block = dev_backup_model_allowed(backup)
+            if not allowed:
+                try:
+                    log_event("backup_model_switch_blocked", f"{backup} — {block}")
+                except Exception:
+                    pass
+                add_system_log(
+                    self.role,
+                    "warning",
+                    f"Backup switch skipped — {backup} ({block})",
+                )
+                return False
             armed = arm_backup_for_agent(
                 "dev",
                 board_task,
@@ -1925,8 +1939,11 @@ class ScrumAgent:
         plan_n: int,
         text_n: int,
         reason: str,
+        content: str = "",
     ) -> None:
         if not getattr(self, "_forced_patch_step", False):
+            return
+        if self._is_safety_refusal(content):
             return
         self._switch_dev_backup_model(
             task_id=task_id,
@@ -1943,7 +1960,10 @@ class ScrumAgent:
         plan_n: int,
         text_n: int,
         reason: str,
+        content: str = "",
     ) -> bool:
+        if self._is_safety_refusal(content):
+            return False
         return self._switch_dev_backup_model(
             task_id=task_id,
             plan_n=plan_n,
@@ -2124,7 +2144,8 @@ class ScrumAgent:
         tools_used: set[str],
     ) -> Optional[str]:
         """Park to Needs User before a hard text_rejection_loop stop."""
-        if not task_id or text_n < 2:
+        min_n = 1 if self._is_safety_refusal(content) else 2
+        if not task_id or text_n < min_n:
             return None
         board_task = find_task_by_id(str(task_id))
         if not board_task:
@@ -2133,16 +2154,38 @@ class ScrumAgent:
         if write_tools:
             return None
         try:
-            from backend.services.sprint_service import _try_move_to_needs_user
+            from backend.services.sprint_service import _try_move_to_needs_user_with_reason
             from backend.services.step_diagnostics import log_event
+            from backend.services.workflow_settings import get_workflow_settings
 
             target = self._resolve_text_reject_target_path(task_id) or "target file"
+            ws = get_workflow_settings()
+            backup_hint = ""
+            if ws.get("enableBackupModelOnStuck", True):
+                try:
+                    from backend.services.backup_model import backup_model, dev_backup_model_allowed
+
+                    b = backup_model("dev")
+                    if b and dev_backup_model_allowed(b)[0]:
+                        backup_hint = " Try the configured backup coder model or manual edit."
+                except Exception:
+                    pass
             msg = (
                 f"Model returned text-only ({text_n}×) instead of tools on "
                 f"'{board_task.get('title')}'. "
-                f"Try backup model or manual edit on {target}."
+                f"Manual edit or split may be required on {target}.{backup_hint}"
             )
-            if not _try_move_to_needs_user(task_id, board_task, msg, kind="stuck_loop"):
+            parked, park_block = _try_move_to_needs_user_with_reason(
+                task_id, board_task, msg, kind="stuck_loop"
+            )
+            if not parked:
+                try:
+                    log_event(
+                        "needs_user_park_blocked",
+                        park_block or "text_rejection_loop",
+                    )
+                except Exception:
+                    pass
                 return None
             try:
                 log_event("needs_user_parked", f"text_rejection_loop on {target}")
@@ -4252,6 +4295,37 @@ class ScrumAgent:
                         "tool_calls_recovered_from_content",
                         ", ".join(recovered_tool_names),
                     )
+                    trace = get_active_trace()
+                    if trace:
+                        trace.note_markdown_tool_recovery(
+                            native_before=native_tool_calls_before_recovery,
+                            recovered_count=len(recovered_tool_names),
+                        )
+                    if (
+                        self.role == "Developer"
+                        and iteration == 1
+                        and not native_tool_calls_before_recovery
+                        and ollama_duration_ms > 20_000
+                        and not getattr(self, "_markdown_native_retry_used", False)
+                    ):
+                        self._markdown_native_retry_used = True
+                        try:
+                            log_event(
+                                "markdown_recovery_slow_retry",
+                                f"{ollama_duration_ms}ms — native-only retry",
+                            )
+                        except Exception:
+                            pass
+                        messages.append(
+                            {
+                                "role": "assistant",
+                                "content": (message.content or "")[:4000],
+                            }
+                        )
+                        messages.append(
+                            {"role": "system", "content": _DEV_NATIVE_TOOLS_HINT},
+                        )
+                        continue
                     if (
                         iteration == 1
                         and self.role == "Developer"
@@ -4654,6 +4728,17 @@ class ScrumAgent:
                     safety_refusal = reject_label == "text-only" and self._is_safety_refusal(content)
                     dev_text_reject = reject_label == "text-only" and self.role == "Developer"
                     if dev_text_reject:
+                        min_park = 1 if safety_refusal else 2
+                        if text_n >= min_park:
+                            parked = self._try_park_text_rejection_loop(
+                                task_id,
+                                text_n=text_n,
+                                content=content,
+                                tools_used=tools_used,
+                            )
+                            if parked:
+                                pending_lesson = ("text_rejection_loop", set(tools_used), parked)
+                                return parked
                         target = self._resolve_text_reject_target_path(task_id)
                         if target and not getattr(self, "_synthetic_read_fallback_used", False):
                             if forced_patch_step or slim_recovery or safety_refusal:
@@ -4676,6 +4761,7 @@ class ScrumAgent:
                                 plan_n=plan_n,
                                 text_n=text_n,
                                 reason="first Developer text-only reject",
+                                content=content,
                             )
                     forced_tool_threshold = 1 if dev_text_reject or forced_patch_step or safety_refusal else 3
                     if (

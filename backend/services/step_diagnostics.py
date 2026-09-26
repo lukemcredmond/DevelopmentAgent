@@ -234,6 +234,8 @@ class StepDiagnosticsTracker:
         self.text_only_turns = 0
         self.native_tool_llm_calls = 0
         self.total_llm_calls_with_tools = 0
+        self.native_tool_calls_before_recovery = 0
+        self.recovery_only_tool_calls = 0
         self.prompt_tokens_at_first_call: Optional[int] = None
         self.runaway_generation_aborted = False
         self.llm_iterations_used = 0
@@ -378,6 +380,13 @@ class StepDiagnosticsTracker:
     def note_native_tool_call(self) -> None:
         self.native_tool_llm_calls += 1
 
+    def note_markdown_tool_recovery(
+        self, *, native_before: bool, recovered_count: int
+    ) -> None:
+        if native_before:
+            self.native_tool_calls_before_recovery += 1
+        self.recovery_only_tool_calls += max(0, int(recovered_count or 0))
+
     def note_llm_call_with_tools(self) -> None:
         self.total_llm_calls_with_tools += 1
 
@@ -514,6 +523,8 @@ class StepDiagnosticsTracker:
             )
             if self.ollama_calls
             else None,
+            "nativeToolCallsBeforeRecovery": self.native_tool_calls_before_recovery,
+            "recoveryOnlyToolCalls": self.recovery_only_tool_calls,
             "runawayGenerationAborted": self.runaway_generation_aborted,
             "llmIterations": {
                 "used": self.llm_iterations_used,
@@ -682,6 +693,9 @@ class StepDiagnosticsTracker:
                 if last_step_outcome.get("parkAttempted"):
                     payload["parkAttempted"] = True
                     payload["parkSucceeded"] = bool(last_step_outcome.get("parkSucceeded"))
+                block = str(last_step_outcome.get("parkBlockReason") or "").strip()
+                if block:
+                    payload["parkBlockReason"] = block
                 kind = str(last_step_outcome.get("needsUserKind") or "").strip()
                 if kind:
                     payload["needsUserKind"] = kind

@@ -4,13 +4,13 @@ overview: The attached Diagnostics show the visit-cap auto-split never ran in th
 todos:
   - id: record-moves
     content: "sprint_report.py: begin/record/finalize; hook move_board_stage, blocked unblocks, sprint start/end; persist last 20"
-    status: in_progress
+    status: completed
   - id: reports-tab
     content: Expose sprintReports on state; SprintReportsPanel + Reports bottom tab
-    status: pending
+    status: completed
   - id: report-tests
     content: Tests for move/unblock rollups and state payload
-    status: pending
+    status: completed
 isProject: false
 ---
 

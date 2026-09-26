@@ -4,25 +4,25 @@ overview: "Stop the 2-hour In Progress churn from the last run: treat write + ca
 todos:
   - id: dup-verify-stop
     content: Stop after write when verify is already known; do not spend another LLM turn on skipped flutter test
-    status: pending
+    status: completed
   - id: advance-on-verify
     content: Orchestrator-advance In Progress → QA/CR on write+verify; do not Needs-PO bounce after write-stop
-    status: pending
+    status: completed
   - id: rewrite-loop
     content: Tighten identical write loop (limit 2) and stop another In Progress rewrite step
-    status: pending
+    status: completed
   - id: po-skip
     content: Deterministic move_off_needs_po before PO execute_step when only update_board is needed
-    status: pending
+    status: completed
   - id: num-ctx
     content: Size num_ctx from packed prompt + headroom, clamped to ceiling
-    status: pending
+    status: completed
   - id: patch-write
     content: Escalate apply_patch mismatch to write_file after one failure
-    status: pending
+    status: completed
   - id: empty-gen-timeout
     content: Stream agent chat; abort when eval_count stays 0 after empty-gen timeout
-    status: pending
+    status: completed
 isProject: false
 ---
 

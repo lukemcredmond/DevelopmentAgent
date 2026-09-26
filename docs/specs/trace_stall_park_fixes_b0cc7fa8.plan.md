@@ -4,16 +4,16 @@ overview: Overnight traces (01:14–03:01) still show explore wheels, aborted fi
 todos:
   - id: forced-patch-verify-block
     content: Block VERIFY tools on Forced Patch until write_succeeded; treat run_command-only as explore-only stop
-    status: pending
+    status: completed
   - id: stall-no-advance
     content: Do not reset consecutiveNoWriteStall on writes that stay In Progress; increment on write-cap / identical_write_loop
-    status: pending
+    status: completed
   - id: force-park-no-retrace
     content: Bypass Needs User cooldown for cycle-cap park; stop re-selecting exhausted IP cards
-    status: pending
+    status: completed
   - id: regression-tests
     content: Tests for verify-block, stall-after-write-cap, park-despite-cooldown, no second cap trace
-    status: pending
+    status: completed
 isProject: false
 ---
 

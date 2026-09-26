@@ -13,6 +13,9 @@ from backend.services.workflow_settings import get_workflow_settings
 
 AGENT_KEYS = ("po", "dev", "cr", "qa")
 
+# Models that refuse coding tasks or break native tool use when used as Dev backup.
+_KNOWN_REFUSAL_BACKUP_SUBSTRINGS = ("ornith",)
+
 _ROLE_LABEL = {
     "po": "Product Owner",
     "dev": "Developer",
@@ -58,6 +61,46 @@ def primary_model(agent_key: str) -> str:
 
 def backup_model(agent_key: str) -> str:
     return str((getattr(state, "BACKUP_MODELS", {}) or {}).get(agent_key) or "").strip()
+
+
+def dev_backup_model_allowed(backup: str) -> tuple[bool, str]:
+    """Return (allowed, block_reason) for using a model as Developer backup."""
+    from backend.services.agent_efficiency import _is_coder_model
+
+    b = str(backup or "").strip()
+    if not b:
+        return False, "no_backup_configured"
+    lower = b.lower()
+    for frag in _KNOWN_REFUSAL_BACKUP_SUBSTRINGS:
+        if frag in lower:
+            return False, f"known_refusal_model:{frag}"
+    ws = get_workflow_settings()
+    blocklist = ws.get("devBackupModelBlocklist") or []
+    if isinstance(blocklist, str):
+        blocklist = [p.strip() for p in blocklist.replace(",", "\n").splitlines() if p.strip()]
+    for entry in blocklist:
+        needle = str(entry or "").strip().lower()
+        if needle and needle in lower:
+            return False, "blocklisted"
+    if not _is_coder_model(b):
+        return False, "not_coder_model"
+    return True, ""
+
+
+def warn_invalid_dev_backup_at_sprint_start() -> None:
+    """Log once per sprint when configured Dev backup is not coder-shaped."""
+    backup = backup_model("dev")
+    if not backup:
+        return
+    ok, reason = dev_backup_model_allowed(backup)
+    if ok:
+        return
+    add_system_log(
+        "System",
+        "warning",
+        f"Dev backup model '{backup}' will not be used ({reason}). "
+        "Configure a coder model (e.g. qwen2.5-coder) in Settings → Models.",
+    )
 
 
 def clear_backup_remaining(task: Dict[str, Any], agent_key: Optional[str] = None) -> None:
@@ -136,6 +179,10 @@ def _arm_skip_reason(
         )
     if backup == primary:
         return f"backup model not armed: {label} backup equals primary ({primary})"
+    if agent_key == "dev":
+        ok, block = dev_backup_model_allowed(backup)
+        if not ok:
+            return f"backup model not armed: {label} backup rejected ({block})"
     if not force and stuck_is_tool_or_lint(task):
         return (
             "backup model not armed: lint/tool wall "
@@ -289,6 +336,28 @@ def apply_model_for_step(agent, agent_key: str, task: Optional[Dict[str, Any]]) 
     backup = backup_model(agent_key)
 
     if left > 0 and backup and backup != primary:
+        if agent_key == "dev":
+            ok, block = dev_backup_model_allowed(backup)
+            if not ok:
+                rem[agent_key] = 0
+                task["backupModelStepsRemaining"] = rem
+                add_system_log(
+                    "System",
+                    "warning",
+                    f"Skipping invalid Dev backup model '{backup}' ({block}) — using primary",
+                )
+                restore_primary_model(agent, agent_key)
+                chosen, reason = effective_role_model(
+                    role=role_label,
+                    primary_model=primary,
+                    phase=dev_phase,
+                    backup_model=backup,
+                    ws=ws,
+                )
+                if chosen:
+                    agent.model = chosen
+                _record_model_route_reason(reason)
+                return str(getattr(agent, "model", "") or chosen or primary)
         try:
             from backend.services.ollama_warmup import maybe_vram_unload_primary
 

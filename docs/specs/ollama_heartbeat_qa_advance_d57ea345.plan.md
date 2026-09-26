@@ -4,13 +4,13 @@ overview: This batch shows the prior loop fixes are live (lint-after-write, skip
 todos:
   - id: ollama-wait-heartbeat
     content: Refresh ollama_wait lastEvent every 15s with elapsed seconds
-    status: pending
+    status: completed
   - id: advance-after-lint-write
     content: After lint_after_write with writes + lint_clean, orchestrator-move to QA/CR; persist fixVerifyLintClean on diagnostics
-    status: pending
+    status: completed
   - id: heartbeat-advance-tests
     content: Tests for wait heartbeat and auto-advance vs dirty lint stay IP
-    status: pending
+    status: completed
 isProject: false
 ---
 

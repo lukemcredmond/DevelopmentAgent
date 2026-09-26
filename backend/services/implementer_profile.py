@@ -35,3 +35,17 @@ def resolve_plan_run_execution_profile(ws: Optional[Dict[str, Any]] = None) -> s
     if raw == "implementer":
         return "implementer"
     return "scrum"
+
+
+def implementer_needs_user_cap_hint(ws: Optional[Dict[str, Any]] = None) -> str:
+    """UI copy: recommend higher Needs User cap for multi-card implementer sprints."""
+    settings = ws or get_workflow_settings()
+    cap = int(settings.get("maxNeedsUserPerSprint") or 2)
+    if get_execution_profile(settings) != "implementer":
+        return ""
+    if cap >= 8:
+        return ""
+    return (
+        "Implementer mode: raise max Needs User per sprint to at least 8 when running "
+        "multi-card auto-sprint so stuck_loop / phase_cycle_cap escalations are not capped at 2."
+    )

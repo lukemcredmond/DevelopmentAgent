@@ -4,16 +4,16 @@ overview: The sprint is running. Forced Patch reject, writes, and duplicate-test
 todos:
   - id: no-timeout-retry
     content: Stop retrying Ollama timeouts with a new HTTP chat; default timeout 900s
-    status: pending
+    status: completed
   - id: console-wait-heartbeat
     content: Log Still waiting for Ollama elapsed= to Console every 15s
-    status: pending
+    status: completed
   - id: stop-after-write-dup-test
     content: Stop extra LLM writes after successful write + skipped duplicate test this step
-    status: pending
+    status: completed
   - id: timeout-retry-tests
     content: "Tests: timeout is not retried; connection errors still retry; console tick helper"
-    status: pending
+    status: completed
 isProject: false
 ---
 

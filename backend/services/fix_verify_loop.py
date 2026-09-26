@@ -174,10 +174,8 @@ def run_fix_verify_loop(
                     )
                     log_event("fix_verify_done", f"aborted_hard_stop round={round_num}")
                     return last_result
-                if round_num >= max_rounds:
-                    log_event("fix_verify_done", f"no_writes after {max_rounds} rounds")
-                    break
-                continue
+                log_event("fix_verify_done", f"no_writes round={round_num}")
+                return last_result
 
             cmd_result, clean = _run_lint_once(task_id, task, lint_cmd)
             finding_count = len(cmd_result.diagnostics) if cmd_result.diagnostics else 0

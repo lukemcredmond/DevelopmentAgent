@@ -1379,8 +1379,26 @@ export default function WorkflowPanel({
         </label>
         <p className="text-[10px] text-cat-overlay leading-relaxed pl-5">
           Implementer skips Product Owner clarification when the spec is already present, turns
-          off lint fan-out, and keeps the Developer on the card until files change.
+          off lint fan-out, and keeps the Developer on the card until files change. Use a coder-shaped
+          dev backup model; set max Needs User per sprint to 8+ for multi-card runs (scrum default
+          stays 2).
         </p>
+        <label className="flex items-center gap-2 text-[11px] text-cat-subtext cursor-pointer pl-5">
+          <input
+            type="checkbox"
+            checked={settings.useComposerDevStep !== false}
+            onChange={(e) => onSettingsChange({ useComposerDevStep: e.target.checked })}
+          />
+          Composer dev step (single bounded turn; scrum uses fix-verify loop)
+        </label>
+        <label className="flex items-center gap-2 text-[11px] text-cat-subtext cursor-pointer pl-5">
+          <input
+            type="checkbox"
+            checked={settings.implementerStopOnLatch !== false}
+            onChange={(e) => onSettingsChange({ implementerStopOnLatch: e.target.checked })}
+          />
+          Pause auto-sprint when a latched card cannot park (implementerStopOnLatch)
+        </label>
         <p className="text-[10px] text-cat-overlay/80 leading-relaxed pl-5">
           Saved to project file when you change profile.
         </p>

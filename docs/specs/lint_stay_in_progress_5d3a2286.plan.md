@@ -4,13 +4,13 @@ overview: Analyzer errors like invalid_annotation, extends_non_class, and uri_do
 todos:
   - id: recover-lint-stay
     content: If stuck_is_tool_or_lint, _recover_latched_dev_card stays In Progress, Forced Patch, reset stall, unlatch once
-    status: in_progress
+    status: completed
   - id: escalate-no-nu-lint
     content: Stop _check_stuck_and_escalate from parking latched lint walls to Needs User
-    status: pending
+    status: completed
   - id: lint-unlatch-tests
     content: "Tests: analyzer diagnostics stay IP; non-lint cap still parks to Needs User"
-    status: pending
+    status: completed
 isProject: false
 ---
 

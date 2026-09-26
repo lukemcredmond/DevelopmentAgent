@@ -149,6 +149,12 @@ DEFAULT_WORKFLOW_SETTINGS: Dict[str, Any] = {
     # Soften completeness/CR/QA gates during implementer auto-sprint.
     "implementerRelaxGatesOnAutoSprint": True,
     "implementerRelaxGatesAlways": True,
+    "implementerStopOnLatch": True,
+    "implementerStopOnLatchCount": 1,
+    "useComposerDevStep": True,
+    "implementerMaxLlmIterationsPerStep": 5,
+    "implementerMaxDevStepWallSec": 180,
+    "implementerMaxPreloadTokens": 4000,
     "maxNeedsUserPerSprint": 2,
     "needsUserCooldownSteps": 3,
     "enableWebSearch": False,

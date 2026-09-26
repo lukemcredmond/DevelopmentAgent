@@ -559,6 +559,7 @@ def _build_last_step_outcome(
     park_attempted: bool = False,
     park_succeeded: bool = False,
     needs_user_kind: str = "",
+    park_block_reason: str = "",
 ) -> Dict[str, Any]:
     from backend.services.step_diagnostics import get_active_trace
 
@@ -702,6 +703,9 @@ def _build_last_step_outcome(
     if park_attempted:
         outcome["parkAttempted"] = True
         outcome["parkSucceeded"] = bool(park_succeeded)
+    park_block = str(park_block_reason or getattr(state, "LAST_PARK_BLOCK_REASON", "") or "").strip()
+    if park_block:
+        outcome["parkBlockReason"] = park_block[:120]
     if needs_user_kind:
         outcome["needsUserKind"] = str(needs_user_kind)[:40]
     route_reason = str(getattr(state, "LAST_MODEL_ROUTE_REASON", "") or "").strip()
@@ -843,6 +847,7 @@ def _record_last_step_outcome(
     park_attempted: bool = False,
     park_succeeded: bool = False,
     needs_user_kind: str = "",
+    park_block_reason: str = "",
 ) -> None:
     state.LAST_STEP_OUTCOME = _build_last_step_outcome(
         task_id,
@@ -852,6 +857,7 @@ def _record_last_step_outcome(
         park_attempted=park_attempted,
         park_succeeded=park_succeeded,
         needs_user_kind=needs_user_kind,
+        park_block_reason=park_block_reason,
     )
     task = find_task_by_id(task_id)
     if task and isinstance(state.LAST_STEP_OUTCOME, dict):
@@ -969,6 +975,7 @@ def _record_dev_precheck_skip(
     park_attempted: bool = False,
     park_succeeded: bool = False,
     needs_user_kind: str = "",
+    park_block_reason: str = "",
 ) -> None:
     """Write step diagnostics when Developer is skipped in a pre-check (no LLM call)."""
     _ensure_dev_step_trace(task_id, title, lane_before)
@@ -989,6 +996,7 @@ def _record_dev_precheck_skip(
             park_attempted=park_attempted,
             park_succeeded=park_succeeded,
             needs_user_kind=needs_user_kind,
+            park_block_reason=park_block_reason,
         )
 
 
@@ -1217,11 +1225,49 @@ def _autonomous_instruction_suffix() -> str:
     )
 
 
-def _needs_user_cap_reached() -> bool:
+def _needs_user_cap_reached(*, kind: str = "") -> bool:
     if not _autonomous_mode_active():
+        return False
+    if kind in ("stuck_loop", "phase_cycle_cap"):
         return False
     cap = int(get_workflow_settings().get("maxNeedsUserPerSprint", 2))
     return state.SPRINT_NEEDS_USER_COUNT >= cap
+
+
+def _latched_card_skip_auto_sprint(task: Dict[str, Any]) -> bool:
+    """True when a latched card should not be selected for dev_recovery churn."""
+    if not isinstance(task, dict):
+        return False
+    if not task.get("phaseCycleCapReached"):
+        return False
+    if task.get("parkFailed") or task.get("poAutoSkip"):
+        return True
+    if task.get("latchedRecoveryAttempted"):
+        return True
+    return False
+
+
+def _count_implementer_latched_skip_cards() -> int:
+    """Cards latched and marked to skip auto-sprint recovery churn."""
+    count = 0
+    with state.STATE_LOCK:
+        for tasks in state.SHARED_BOARD.values():
+            for task in tasks:
+                if isinstance(task, dict) and _latched_card_skip_auto_sprint(task):
+                    count += 1
+    return count
+
+
+def _implementer_auto_sprint_should_pause_on_latch(ws: Optional[Dict[str, Any]] = None) -> bool:
+    from backend.services.workflow_settings import get_execution_profile
+
+    settings = ws or get_workflow_settings()
+    if get_execution_profile(settings) != "implementer":
+        return False
+    if not settings.get("implementerStopOnLatch", True):
+        return False
+    threshold = max(1, int(settings.get("implementerStopOnLatchCount") or 1))
+    return _count_implementer_latched_skip_cards() >= threshold
 
 
 def _set_needs_user_fields(task: Dict[str, Any], msg: str, *, kind: str = "stuck_loop") -> None:
@@ -1308,7 +1354,16 @@ def _handle_visit_cap_stall(
 
     live = _live_board_task(task_id) or live
     if live.get("phaseCycleCapReached"):
-        parked = _try_move_to_needs_user(task_id, live, reason, kind="phase_cycle_cap")
+        parked, park_block = _try_move_to_needs_user_with_reason(
+            task_id, live, reason, kind="phase_cycle_cap"
+        )
+        if not parked:
+            live = _live_board_task(task_id) or live
+            if isinstance(live, dict):
+                live["latchedRecoveryAttempted"] = True
+                live["poAutoSkip"] = True
+                if park_block:
+                    live["lastParkBlockReason"] = park_block
         _record_dev_precheck_skip(
             task_id,
             title,
@@ -1317,6 +1372,7 @@ def _handle_visit_cap_stall(
             park_attempted=True,
             park_succeeded=parked,
             needs_user_kind="phase_cycle_cap" if parked else "",
+            park_block_reason=park_block,
         )
         return
 
@@ -1331,23 +1387,39 @@ def _try_move_to_needs_user(
     *,
     kind: str = "stuck_loop",
 ) -> bool:
+    ok, _block = _try_move_to_needs_user_with_reason(task_id, task, msg, kind=kind)
+    return ok
+
+
+def _try_move_to_needs_user_with_reason(
+    task_id: str,
+    task: Dict[str, Any],
+    msg: str,
+    *,
+    kind: str = "stuck_loop",
+) -> Tuple[bool, str]:
+    state.LAST_PARK_BLOCK_REASON = ""
     live = _live_board_task(task_id)
     if not live:
         add_system_log("System", "warning", f"{task_id}: Needs User park failed — task not on board")
-        return False
+        return False, "task_not_on_board"
     allowed, block_reason = should_escalate_to_needs_user(live, msg, kind=kind)
     if not allowed:
         if block_reason == "clarification_use_po" and kind != "phase_cycle_cap":
             max_po = int(get_workflow_settings().get("maxPoRoundTrips", 3))
             if int(live.get("poRoundTrips") or 0) < max_po:
-                return _redirect_to_needs_po(task_id, live, msg, kind=kind)
+                if _redirect_to_needs_po(task_id, live, msg, kind=kind):
+                    return False, "redirected_needs_po"
+                return False, "redirect_needs_po_failed"
             if stuck_is_tool_or_lint(live):
-                return _reroute_tool_blocker_instead_of_needs_user(
+                _reroute_tool_blocker_instead_of_needs_user(
                     task_id, live, "po_exhausted_tool_blocker"
                 )
+                return False, "po_exhausted_tool_blocker"
             allowed = True
         elif block_reason == "lint_use_file_blocker":
-            return _reroute_tool_blocker_instead_of_needs_user(task_id, live, block_reason)
+            _reroute_tool_blocker_instead_of_needs_user(task_id, live, block_reason)
+            return False, block_reason
         elif block_reason in (
             "duplicate_question",
             "cooldown_active",
@@ -1360,18 +1432,43 @@ def _try_move_to_needs_user(
                 f"{task_id}: Needs User blocked ({block_reason}) — {msg[:120]}",
             )
         if not allowed:
-            return False
-    if kind != "phase_cycle_cap" and _needs_user_cap_reached():
+            state.LAST_PARK_BLOCK_REASON = block_reason or "escalation_blocked"
+            try:
+                from backend.services.step_diagnostics import log_event
+
+                log_event(
+                    "needs_user_park_blocked",
+                    state.LAST_PARK_BLOCK_REASON[:240],
+                )
+            except Exception:
+                pass
+            return False, state.LAST_PARK_BLOCK_REASON
+    if _needs_user_cap_reached(kind=kind):
         add_system_log(
             "System",
             "warning",
             f"{task_id}: Needs User blocked by autonomous cap ({state.SPRINT_NEEDS_USER_COUNT}) — {msg[:120]}",
         )
-        return False
+        state.LAST_PARK_BLOCK_REASON = "autonomous_cap"
+        try:
+            from backend.services.step_diagnostics import log_event
+
+            log_event("needs_user_park_blocked", "autonomous_cap")
+        except Exception:
+            pass
+        return False, "autonomous_cap"
     brief = build_needs_user_brief(live, kind=kind, raw_msg=msg)
     park_ok, park_reason = should_park_in_needs_user(live, brief)
     if not park_ok:
-        return _reroute_tool_blocker_instead_of_needs_user(task_id, live, park_reason)
+        _reroute_tool_blocker_instead_of_needs_user(task_id, live, park_reason)
+        state.LAST_PARK_BLOCK_REASON = park_reason or "no_mcq_options"
+        try:
+            from backend.services.step_diagnostics import log_event
+
+            log_event("needs_user_park_blocked", state.LAST_PARK_BLOCK_REASON[:240])
+        except Exception:
+            pass
+        return False, state.LAST_PARK_BLOCK_REASON
     apply_needs_user_brief(live, brief)
     activity_msg = str(brief.get("question") or msg)
     move_result = move_board_stage(
@@ -1387,7 +1484,14 @@ def _try_move_to_needs_user(
             "warning",
             f"{task_id}: Needs User park failed — {move_result[:200]}",
         )
-        return False
+        state.LAST_PARK_BLOCK_REASON = "board_move_failed"
+        try:
+            from backend.services.step_diagnostics import log_event
+
+            log_event("needs_user_park_blocked", "board_move_failed")
+        except Exception:
+            pass
+        return False, "board_move_failed"
     state.SPRINT_NEEDS_USER_COUNT += 1
     publish_activity(
         task_id,
@@ -1421,7 +1525,7 @@ def _try_move_to_needs_user(
         )
     except Exception:
         pass
-    return True
+    return True, ""
 
 
 def _split_ollama_url(explicit: str = "") -> str:
@@ -2331,6 +2435,10 @@ def _should_slim_dev_prompt(task: Optional[Dict[str, Any]]) -> bool:
     if not isinstance(task, dict):
         return False
     try:
+        from backend.services.workflow_settings import get_execution_profile
+
+        if get_execution_profile() == "implementer":
+            return True
         from backend.services.needs_user_guard import is_lint_wall_card
         from backend.services.sprint_speed_gates import (
             last_step_exit_reason,
@@ -2432,7 +2540,14 @@ def _inject_sprint_context(
     file_block, file_paths = "", []
     context_block = ""
     graph_used = False
-    if preload and slim_dev_prompt:
+    if implementer and agent_role == "Developer":
+        preload_cap = max(1000, int(ws.get("implementerMaxPreloadTokens") or 4000))
+        file_block, file_paths = build_sprint_file_context(
+            active_task,
+            max_chars=min(preload_cap, 4000),
+        )
+        context_block = file_block or ""
+    elif preload and slim_dev_prompt:
         budgets = sprint_preload_budgets(num_ctx, local_slm=local_slm, role=agent_role)
         file_block, file_paths = build_sprint_file_context(
             active_task,
@@ -3309,7 +3424,12 @@ def _audit_dev_files_written(task: Dict[str, Any], lane_before: str, task_id: st
 
 
 def _llm_iterations(task: Optional[Dict[str, Any]] = None) -> int:
-    base = int(get_workflow_settings().get("maxLlmIterationsPerStep", 8))
+    ws = get_workflow_settings()
+    from backend.services.workflow_settings import get_execution_profile
+
+    base = int(ws.get("maxLlmIterationsPerStep", 8))
+    if get_execution_profile(ws) == "implementer":
+        base = min(base, max(1, int(ws.get("implementerMaxLlmIterationsPerStep") or 5)))
     if isinstance(task, dict):
         lsp = task.get("lastStepProgress") or {}
         if isinstance(lsp, dict):
@@ -5050,12 +5170,45 @@ def _run_developer_step(active_task: Dict[str, Any], brief: str) -> None:
             pass
         from backend.services.fix_verify_loop import run_fix_verify_loop
 
-        result = run_fix_verify_loop(
-            agent_dev,
-            active_task,
-            prompt,
-            max_iterations=_llm_iterations(find_task_by_id(task_id) or active_task),
+        live_pre = find_task_by_id(task_id) or active_task
+        iters = _llm_iterations(live_pre)
+        ws_dev = get_workflow_settings()
+        use_composer = (
+            get_execution_profile() == "implementer"
+            and ws_dev.get("useComposerDevStep", True)
         )
+        if use_composer:
+            from backend.services.composer_dev_step import run_composer_dev_step
+
+            result = run_composer_dev_step(
+                agent_dev,
+                live_pre,
+                prompt,
+                max_iterations=iters,
+                task_id=task_id,
+            )
+        else:
+            try:
+                from backend.services.sprint_speed_gates import should_force_patch_next_dev_step
+                from backend.services.lint_wall_recovery import try_deterministic_missing_pubspec_fix
+
+                if (
+                    get_execution_profile() == "implementer"
+                    and should_force_patch_next_dev_step(live_pre)
+                ):
+                    det_msg = try_deterministic_missing_pubspec_fix(
+                        live_pre, task_id=task_id
+                    )
+                    if det_msg:
+                        add_system_log("Developer", "info", det_msg)
+            except Exception:
+                pass
+            result = run_fix_verify_loop(
+                agent_dev,
+                active_task,
+                prompt,
+                max_iterations=iters,
+            )
         try:
             from backend.services.system_auto_verify import maybe_run_system_auto_verify
 
@@ -5744,6 +5897,7 @@ def _in_progress_pending_recovery(board: Optional[Dict[str, Any]] = None) -> Lis
         for task in board.get("In Progress") or []
         if isinstance(task, dict)
         and not task.get("latchedRecoveryAttempted")
+        and not _latched_card_skip_auto_sprint(task)
         and (
             task.get("phaseCycleCapReached")
             or no_write_stall_should_park(task)
@@ -5757,16 +5911,9 @@ def _in_progress_pending_recovery(board: Optional[Dict[str, Any]] = None) -> Lis
 
 
 def _in_progress_exhausted_latched(board: Optional[Dict[str, Any]] = None) -> List[Dict[str, Any]]:
-    """Latched after one recovery — park once more unless a prior park already failed."""
-    board = board if board is not None else state.SHARED_BOARD
-    return [
-        task
-        for task in board.get("In Progress") or []
-        if isinstance(task, dict)
-        and task.get("phaseCycleCapReached")
-        and task.get("latchedRecoveryAttempted")
-        and not task.get("parkFailed")
-    ]
+    """Deprecated second-chance recovery — avoid dev_recovery trace churn."""
+    del board
+    return []
 
 
 def _needs_po_pending_park(board: Optional[Dict[str, Any]] = None) -> List[Dict[str, Any]]:
@@ -5830,10 +5977,10 @@ def has_sprint_work() -> bool:
     """True when auto-sprint has actionable (not merely blocked) work."""
     board = state.SHARED_BOARD
     if (
-        _first_runnable_needs_po(board)
-        or _needs_po_pending_park(board)
-        or _in_progress_dev_runnable(board)
+        _in_progress_dev_runnable(board)
         or _in_progress_pending_recovery(board)
+        or _needs_po_pending_park(board)
+        or _first_runnable_needs_po(board)
     ):
         return True
     ws = get_workflow_settings()
@@ -6091,6 +6238,14 @@ def _recover_latched_dev_card(
         task = find_task_by_id(task_id)
         if not task:
             return
+        if _latched_card_skip_auto_sprint(task):
+            if not quiet:
+                add_system_log(
+                    "System",
+                    "info",
+                    f"{task_id}: skipping repeat latched recovery (poAutoSkip/latch already handled)",
+                )
+            return
         if is_lint_wall_card(task):
             _handle_lint_stuck(task_id, task, park_msg)
             lane_now = get_task_lane(task_id) or ""
@@ -6118,6 +6273,9 @@ def _recover_latched_dev_card(
                 state.LAST_AGENT_STEP_RESULT = result
                 _record_last_step_outcome(task_id, lane_before, "System", agent_result=result)
                 _finalize_dev_step_diagnostics_if_auto_sprint(task_id, lane_before)
+            if kept and not task.get("latchedRecoveryAttempted"):
+                task["latchedRecoveryAttempted"] = True
+                task["poAutoSkip"] = True
             return
         ws = get_workflow_settings()
         max_stuck = int(ws.get("maxStuckSteps", 3) or 3)
@@ -6152,15 +6310,29 @@ def _recover_latched_dev_card(
         if not quiet:
             _ensure_step_trace(task_id, title, "System", lane_before)
             state.LAST_AGENT_STEP_RESULT = result
-            _record_last_step_outcome(task_id, lane_before, "System", agent_result=result)
-        parked = _try_move_to_needs_user(task_id, task, park_msg, kind="phase_cycle_cap")
+        parked, park_block = _try_move_to_needs_user_with_reason(
+            task_id, task, park_msg, kind="phase_cycle_cap"
+        )
+        if not quiet:
+            _record_last_step_outcome(
+                task_id,
+                lane_before,
+                "System",
+                agent_result=result,
+                park_attempted=True,
+                park_succeeded=parked,
+                needs_user_kind="phase_cycle_cap" if parked else "",
+                park_block_reason=park_block,
+            )
         if not parked:
             task["parkFailed"] = True
+            if park_block:
+                task["lastParkBlockReason"] = park_block
             add_system_log(
                 "System",
                 "warning",
                 f"{task_id}: phase-cycle-cap park did not move to Needs User — "
-                "skipping Auto Sprint PO/Dev on this card",
+                f"{park_block or 'unknown'} — skipping Auto Sprint PO/Dev on this card",
             )
         else:
             task.pop("parkFailed", None)
@@ -6324,7 +6496,8 @@ def run_sprint_step(brief: str, ollama_url: str) -> None:
         elif handler == "dev" and active_task:
             _run_developer_step(active_task, brief)
         elif handler == "dev_recovery" and active_task:
-            _recover_latched_dev_card(active_task, brief)
+            quiet = _latched_card_skip_auto_sprint(active_task)
+            _recover_latched_dev_card(active_task, brief, quiet=quiet)
         elif handler == "refinement_dev" and active_task:
             _run_refinement_dev_review(active_task, brief)
         elif handler == "spike_dev" and active_task:
@@ -6670,6 +6843,12 @@ def _run_auto_sprint_body(
 
     log_backlog_preflight_warnings()
     ws = get_workflow_settings()
+    try:
+        from backend.services.backup_model import warn_invalid_dev_backup_at_sprint_start
+
+        warn_invalid_dev_backup_at_sprint_start()
+    except Exception:
+        pass
     limit = max_steps if max_steps is not None else int(ws.get("maxSprintSteps", 20))
     state.SPRINT_PROGRESS_MAX = limit
     publish_sprint_progress(
@@ -6835,6 +7014,15 @@ def _run_auto_sprint_body(
                 "warning",
                 f"Auto sprint paused after {zero_work_watchdog.get('streak')} zero-work exits for "
                 f"{task_id} ({reason}); no fourth retry scheduled.",
+            )
+            break
+        if _implementer_auto_sprint_should_pause_on_latch(ws):
+            status = "implementer_latch_pause"
+            add_system_log(
+                "System",
+                "warning",
+                "Auto sprint paused — implementerStopOnLatch: latched card(s) need human "
+                "split/reset or Needs User review.",
             )
             break
         if refresh_enabled and (time.monotonic() - session_start) >= refresh_sec:

@@ -266,6 +266,12 @@ class WorkflowSettingsPayload(BaseModel):
     workspaceRulesMaxChars: Optional[int] = None
     implementerRelaxGatesOnAutoSprint: Optional[bool] = None
     implementerRelaxGatesAlways: Optional[bool] = None
+    implementerStopOnLatch: Optional[bool] = None
+    implementerStopOnLatchCount: Optional[int] = None
+    useComposerDevStep: Optional[bool] = None
+    implementerMaxLlmIterationsPerStep: Optional[int] = None
+    implementerMaxDevStepWallSec: Optional[int] = None
+    implementerMaxPreloadTokens: Optional[int] = None
     maxNeedsUserPerSprint: Optional[int] = None
     needsUserCooldownSteps: Optional[int] = None
     enableWebSearch: Optional[bool] = None

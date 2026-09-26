@@ -4,16 +4,16 @@ overview: The 13 attached step traces show the speed gates did not deliver. Pack
 todos:
   - id: no-retry-empty-gen
     content: Do not retry empty_generation_timeout; wall-clock abort; close stream; log each attempt
-    status: pending
+    status: completed
   - id: po-skip-widen
     content: Skip PO LLM when spec exists for max_iterations / incomplete / text-only / LLM fail exits
-    status: pending
+    status: completed
   - id: picker-backoff
     content: Park/rotate after empty-gen; hard-stop fix-verify on LLM_CALL_FAILED
-    status: pending
+    status: completed
   - id: tests
     content: Extend ollama retry, PO skip, and consume_chat_stream tests to lock the 90s-not-10min behavior
-    status: pending
+    status: completed
 isProject: false
 ---
 

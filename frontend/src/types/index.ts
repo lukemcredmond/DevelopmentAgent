@@ -583,6 +583,12 @@ export interface WorkflowSettings {
   enableWorkspaceRulesInject?: boolean
   workspaceRulesMaxChars?: number
   implementerRelaxGatesOnAutoSprint?: boolean
+  implementerStopOnLatch?: boolean
+  implementerStopOnLatchCount?: number
+  useComposerDevStep?: boolean
+  implementerMaxLlmIterationsPerStep?: number
+  implementerMaxDevStepWallSec?: number
+  implementerMaxPreloadTokens?: number
   maxNeedsUserPerSprint?: number
   needsUserCooldownSteps?: number
   enableWebSearch?: boolean
@@ -1418,6 +1424,12 @@ export interface WorkflowSettingsPayload {
   enableWorkspaceRulesInject?: boolean
   workspaceRulesMaxChars?: number
   implementerRelaxGatesOnAutoSprint?: boolean
+  implementerStopOnLatch?: boolean
+  implementerStopOnLatchCount?: number
+  useComposerDevStep?: boolean
+  implementerMaxLlmIterationsPerStep?: number
+  implementerMaxDevStepWallSec?: number
+  implementerMaxPreloadTokens?: number
   maxNeedsUserPerSprint?: number
   needsUserCooldownSteps?: number
   enableWebSearch?: boolean
@@ -1865,6 +1877,12 @@ export const DEFAULT_WORKFLOW_SETTINGS: WorkflowSettings = {
   enableWorkspaceRulesInject: true,
   workspaceRulesMaxChars: 12000,
   implementerRelaxGatesOnAutoSprint: true,
+  implementerStopOnLatch: true,
+  implementerStopOnLatchCount: 1,
+  useComposerDevStep: true,
+  implementerMaxLlmIterationsPerStep: 5,
+  implementerMaxDevStepWallSec: 180,
+  implementerMaxPreloadTokens: 4000,
   maxNeedsUserPerSprint: 2,
   needsUserCooldownSteps: 3,
   enableWebSearch: false,

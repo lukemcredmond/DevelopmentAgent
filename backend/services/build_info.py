@@ -16,6 +16,13 @@ RECOVERY_FEATURES: List[str] = [
     "slim_dev_prompt",
     "backup_model_pinned",
     "diagnostics_build_stamp",
+    "phase3_latch_dedupe",
+    "needs_user_cap_exempt",
+    "dev_backup_guard",
+    "implementer_stop_on_latch",
+    "phase4_composer_dev_step",
+    "phase4_text_rejection_park",
+    "phase4_sprint_work_latch",
 ]
 
 

@@ -190,15 +190,22 @@ def should_park_in_needs_user(
     """Needs User only when there are real MCQ choices for the user."""
     kind = str(brief.get("kind") or "")
     if kind in _AUTONOMOUS_KINDS:
-        return False, "autonomous_tool_blocker"
+        if not _text_rejection_bypass_lint_blocker(
+            task,
+            kind="stuck_loop",
+            msg=str(brief.get("question") or ""),
+        ):
+            return False, "autonomous_tool_blocker"
     if stuck_is_tool_or_lint(task) and kind not in (
         "secret",
         "phase_cycle_cap",
         "product_choice",
     ):
-        if kind == "stuck_loop" and (
+        q = str(brief.get("question") or "")
+        if kind in ("stuck_loop", "stuck") and (
             _text_rejection_escalation_allowed(task)
-            or brief_has_actionable_options(brief)
+            or _text_rejection_park_message(q)
+            or _text_rejection_bypass_lint_blocker(task, kind=kind, msg=q)
         ):
             pass
         else:
@@ -364,6 +371,28 @@ def _text_rejection_park_message(msg: str) -> bool:
     return "text rejection loop" in lower or "refused tools" in lower or "text-only" in lower
 
 
+def _text_rejection_bypass_lint_blocker(
+    task: Dict[str, Any],
+    *,
+    kind: str,
+    msg: str = "",
+    safety_refusal: bool = False,
+    step_text_rejections: int = 0,
+) -> bool:
+    """Feature-card text loops and safety refusals may park despite lint diagnostics on card."""
+    if kind != "stuck_loop":
+        return False
+    if is_lint_wall_card(task):
+        return False
+    if safety_refusal or int(step_text_rejections or 0) >= 2:
+        return True
+    if _text_rejection_escalation_allowed(task) or _text_rejection_park_message(msg):
+        return True
+    if _exit_reason(task) == "text_rejection_loop":
+        return True
+    return False
+
+
 def should_escalate_to_needs_user(
     task: Dict[str, Any],
     msg: str,
@@ -377,7 +406,9 @@ def should_escalate_to_needs_user(
 
     if stuck_is_tool_or_lint(task) and kind not in _USER_ONLY_ESCALATION_KINDS:
         if kind == "stuck_loop" and (
-            _text_rejection_escalation_allowed(task) or _text_rejection_park_message(text)
+            _text_rejection_escalation_allowed(task)
+            or _text_rejection_park_message(text)
+            or _text_rejection_bypass_lint_blocker(task, kind=kind, msg=text)
         ):
             pass
         else:
@@ -758,6 +789,11 @@ def _resolve_needs_user_kind(task: Dict[str, Any], kind: str, raw_msg: str) -> s
     if kind == "phase_cycle_cap" or task.get("phaseCycleCapReached"):
         return "phase_cycle_cap"
     if stuck_is_tool_or_lint(task):
+        exit_r = _exit_reason(task)
+        if (exit_r == "text_rejection_loop" or _text_rejection_park_message(raw)) and not is_lint_wall_card(
+            task
+        ):
+            return "stuck_loop"
         return "lint"
     exit_r = _exit_reason(task)
     if exit_r in ("explore_budget_exhausted", "read_only_no_edits") or task.get(
@@ -1095,6 +1131,25 @@ def _build_needs_user_options(
             "dev",
         )
 
+    step_exit = _exit_reason(task)
+    if resolved_kind in ("stuck", "stuck_loop") and not is_lint_wall_card(task):
+        if step_exit == "text_rejection_loop" or _text_rejection_park_message(question):
+            add(
+                f'Split "{title}" into smaller cards',
+                f"The model refused tools on this scope — split '{title}' into smaller cards.",
+                "po",
+            )
+            add(
+                "Manual edit in the IDE, then Send to Developer",
+                "Edit the target file yourself, then click Send to Developer to continue.",
+                "dev",
+            )
+            add(
+                "Defer this feature",
+                "Move this card out of the sprint and implement a smaller slice first.",
+                "po",
+            )
+
     if resolved_kind == "explore" and not any(
         "file" in str(c.get("label") or "").lower() for c in collected
     ):
@@ -1271,6 +1326,33 @@ def build_needs_user_brief(
             "Answer the question above, then click Send to Developer. "
             "Only click Send to Product Owner if you are rewriting acceptance criteria."
         )
+    elif resolved_kind in ("stuck", "stuck_loop") and not is_lint_wall_card(task):
+        if exit_r == "text_rejection_loop" or _text_rejection_park_message(raw_msg):
+            question = question or (
+                f'Model refused tools on "{title}". Split the card or choose how to proceed?'
+            )
+            why_parts.append(
+                "Developer returned text-only or safety refusals instead of apply_patch/write_file."
+            )
+            action = (
+                "Choose split, manual edit, or defer — then Send to Developer or Product Owner."
+            )
+        elif not question:
+            if problem:
+                question = f"How should we resolve: {problem[:220]}?"
+            else:
+                question = (
+                    f'What decision or missing fact does Developer need to continue "{title}"?'
+                )
+        if why_stayed:
+            why_parts.append(why_stayed[:280])
+        elif exit_r and exit_r != "text_rejection_loop":
+            why_parts.append(f"Last step ended with {exit_r}.")
+        if not action:
+            action = (
+                "Answer in one short message, then click Send to Developer to resume implementation. "
+                "Use Send to Product Owner only to rewrite the spec."
+            )
     else:
         if not question:
             if problem:

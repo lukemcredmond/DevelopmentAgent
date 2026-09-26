@@ -4,16 +4,16 @@ overview: The new 10:50–12:13 traces already prove packed num_ctx and the 90s 
 todos:
   - id: log-advance-events
     content: Log lane_advance and lane_advance_skipped with reason into step diagnostics
-    status: pending
+    status: completed
   - id: log-po-ctx-timeout
     content: Log po_llm_skipped/started, empty_generation_timeout, ctx_truncated, verify_stop source
-    status: pending
+    status: completed
   - id: fix-advance-on-dup-stop
     content: Advance after write+dup-verify stop even if tools_log lacks run_command; fix whyCardStayed
-    status: pending
+    status: completed
   - id: tests-diag-events
     content: Tests for advance-on-dup-stop and new diagnostic event kinds
-    status: pending
+    status: completed
 isProject: false
 ---
 

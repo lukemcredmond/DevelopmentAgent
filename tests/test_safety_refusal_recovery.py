@@ -29,6 +29,7 @@ def test_safety_refusal_skips_backup_on_first_reject():
             plan_n=0,
             text_n=1,
             reason="first Developer text-only reject",
+            content=content,
         )
     assert switched["called"] is False
 
