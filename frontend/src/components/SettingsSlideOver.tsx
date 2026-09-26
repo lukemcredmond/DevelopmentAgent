@@ -6,6 +6,7 @@ import { isAutoLlmToolHealthOnPick, runAndPersistLlmProbeAll } from '../lib/tool
 import BoardRecoveryPanel from './BoardRecoveryPanel'
 import GpuModelRecommendations from './GpuModelRecommendations'
 import InstalledModelsPanel from './InstalledModelsPanel'
+import SprintDiagnosticsPanel from './SprintDiagnosticsPanel'
 import { SettingHint } from './SettingHint'
 import SlideOver from './SlideOver'
 import WorkflowPanel from './WorkflowPanel'
@@ -56,6 +57,8 @@ interface SettingsSlideOverProps {
   onOpenMemoryTab?: () => void
   onOpenCustomTools?: () => void
   onBoardRestored?: (state: AppState) => void
+  onOpenTreeDependencies?: () => void
+  sprintRunning?: boolean
   indexProgress?: import('../types').IndexProgress | null
   skillSuggestionCounts?: Record<AgentId, number>
   initialTab?: SettingsTab
@@ -119,6 +122,8 @@ export default function SettingsSlideOver({
   onOpenMemoryTab,
   onOpenCustomTools,
   onBoardRestored,
+  onOpenTreeDependencies,
+  sprintRunning = false,
   indexProgress = null,
   skillSuggestionCounts = { po: 0, dev: 0, cr: 0, qa: 0 },
   initialTab = 'project',
@@ -413,6 +418,12 @@ export default function SettingsSlideOver({
                 {supportCopyStatus && (
                   <p className="text-[10px] text-cat-subtext">{supportCopyStatus}</p>
                 )}
+                <SprintDiagnosticsPanel
+                  active={open && tab === 'project'}
+                  sprintRunning={sprintRunning}
+                  onStateUpdate={onBoardRestored}
+                  onOpenTreeDependencies={onOpenTreeDependencies}
+                />
               </div>
               <div className="space-y-2 border-t border-cat-surface1 pt-4">
                 <h3 className="text-xs font-bold uppercase tracking-wider text-cat-subtext">

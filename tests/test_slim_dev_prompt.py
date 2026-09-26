@@ -37,6 +37,12 @@ def test_slim_prompt_omits_heavy_sections():
     ), patch(
         "backend.storage.code_index.build_semantic_sprint_context",
         return_value=("SEMANTIC_BLOCK" * 50, ["lib/a.dart"]),
+    ), patch(
+        "backend.services.sprint_service.get_workflow_settings",
+        return_value={"executionProfile": "default", "implementerSlimPrompt": "never"},
+    ), patch(
+        "backend.services.workflow_settings.get_execution_profile",
+        return_value="default",
     ):
         slim = _inject_sprint_context(task, brief, "Developer", instructions)
         task_full = dict(task)

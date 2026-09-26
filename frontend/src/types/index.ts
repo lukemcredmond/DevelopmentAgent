@@ -303,6 +303,16 @@ export interface Task {
   phaseCycleCapReached?: boolean
   latchedRecoveryAttempted?: boolean
   poAutoSkip?: boolean
+  duplicateOfTaskId?: string | null
+  duplicateClusterId?: string | null
+  forcePatchNextDevStep?: boolean
+  devDeferredUntilStep?: number | null
+  lastRefusalDiagnosis?: {
+    cause?: string
+    recommendedAction?: string
+    exitReason?: string
+    refusalSnippet?: string
+  } | null
   lastStepProgress?: StepProgress | null
   agentWorkItems?: AgentWorkItem[]
   pendingSplit?: {
@@ -585,6 +595,7 @@ export interface WorkflowSettings {
   implementerRelaxGatesOnAutoSprint?: boolean
   implementerStopOnLatch?: boolean
   implementerStopOnLatchCount?: number
+  implementerSlimPrompt?: 'always' | 'recovery_only' | 'never'
   useComposerDevStep?: boolean
   implementerMaxLlmIterationsPerStep?: number
   implementerMaxDevStepWallSec?: number
@@ -911,7 +922,18 @@ export interface SprintSummary {
   blocked: string[]
   needsPo: number
   needsUser: number
-  status?: 'completed' | 'idle' | 'cancelled' | 'max_steps' | 'simulation_pending' | 'session_refresh' | 'retry_watchdog'
+  status?: 'completed' | 'idle' | 'cancelled' | 'max_steps' | 'simulation_pending' | 'session_refresh' | 'retry_watchdog' | 'implementer_latch_pause'
+}
+
+export interface SprintWorkBreakdown {
+  hasWork: boolean
+  totalCards: number
+  devRunnable: number
+  pendingRecovery: number
+  needsPoPark: number
+  runnableNeedsPo: number
+  latchedSkipCount: number
+  skipReasons: string[]
 }
 
 export interface SprintReportMove {
@@ -1074,6 +1096,16 @@ export interface LastStepDiagnostics {
   cursorLikenessScore?: boolean
   cursorLikenessScoreV2?: boolean
   cardToolFailures?: number
+  textRefusalClass?: 'none' | 'safety_refusal' | 'meta_refusal' | string
+  textRefusalSnippet?: string
+  patchRecovery?: {
+    pendingPaths?: string[]
+    readOkPaths?: string[]
+    writeOverwriteAllowed?: string[]
+    identicalPatchBlocked?: boolean
+  }
+  toolPolicyDeadlock?: boolean
+  toolPolicyDeadlockReason?: string
 }
 
 export interface ActiveStepDiagnostics {
@@ -1244,6 +1276,7 @@ export interface AppState {
   activeLanes?: BoardLane[]
   briefChangelog?: BriefChangelogEntry[]
   lastSprintSummary?: SprintSummary
+  sprintWorkBreakdown?: SprintWorkBreakdown
   sprintReports?: SprintReport[]
   currentSprintReport?: SprintReport | null
   notifications?: WorkflowNotifications
@@ -1426,6 +1459,7 @@ export interface WorkflowSettingsPayload {
   implementerRelaxGatesOnAutoSprint?: boolean
   implementerStopOnLatch?: boolean
   implementerStopOnLatchCount?: number
+  implementerSlimPrompt?: 'always' | 'recovery_only' | 'never'
   useComposerDevStep?: boolean
   implementerMaxLlmIterationsPerStep?: number
   implementerMaxDevStepWallSec?: number
@@ -1694,6 +1728,68 @@ export interface RefinementAuditReport {
   defaultRemoveTaskIds: string[]
 }
 
+export interface SprintRollupRecentStep {
+  taskId?: string
+  taskTitle?: string
+  exitReason?: string
+  textRefusalClass?: string
+  toolPolicyDeadlock?: boolean
+  durationMs?: number
+  endedAt?: string
+}
+
+export interface SprintDiagnosticsRollup {
+  projectId?: string
+  window?: { limit?: number; sinceHours?: number; stepsIncluded?: number }
+  appBuild?: AppBuildInfo
+  stepsTotal: number
+  okRate?: number
+  medianDurationMs?: number | null
+  cursorLikenessV2Rate?: number
+  exitReason: Record<string, number>
+  textRefusalClass: Record<string, number>
+  toolPolicyDeadlock: {
+    true: number
+    false: number
+    topReasons?: { reason: string; count: number }[]
+  }
+  topTasksByBadSteps?: { taskId: string; taskTitle?: string; unhealthySteps: number }[]
+  recentSteps?: SprintRollupRecentStep[]
+  duplicateClusterCount?: number
+  duplicateExtraCount?: number
+}
+
+export interface BoardDuplicateAuditMember {
+  taskId: string
+  title: string
+  lane?: string
+  similarityToKeep?: number
+  reasons?: string[]
+  isSuggestedKeep?: boolean
+}
+
+export interface BoardDuplicateAuditCluster {
+  clusterId: string
+  matchKind: string
+  confidence: number
+  achievementSummary: string
+  recommendedAction: string
+  suggestedKeepTaskId: string
+  memberCount: number
+  members: BoardDuplicateAuditMember[]
+  removableTaskIds: string[]
+}
+
+export interface BoardDuplicateAuditReport {
+  lanesScanned: string[]
+  tasksScanned: number
+  duplicateClusterCount: number
+  duplicateExtraCount: number
+  estimatedUniqueAfterMerge: number
+  clusters: BoardDuplicateAuditCluster[]
+  defaultRemoveTaskIds: string[]
+}
+
 export interface ChatResponse {
   agent: AgentId
   response: string
@@ -1879,6 +1975,7 @@ export const DEFAULT_WORKFLOW_SETTINGS: WorkflowSettings = {
   implementerRelaxGatesOnAutoSprint: true,
   implementerStopOnLatch: true,
   implementerStopOnLatchCount: 1,
+  implementerSlimPrompt: 'recovery_only',
   useComposerDevStep: true,
   implementerMaxLlmIterationsPerStep: 5,
   implementerMaxDevStepWallSec: 180,
@@ -2016,8 +2113,19 @@ export const EMPTY_BOARD: Board = {
   Done: [],
 }
 
+export function sprintHasActionableWork(
+  board: Board,
+  settings?: WorkflowSettings,
+  breakdown?: SprintWorkBreakdown | null,
+): boolean {
+  if (breakdown && typeof breakdown.hasWork === 'boolean') {
+    return breakdown.hasWork
+  }
+  return hasSprintWork(board, settings)
+}
+
 export function hasSprintWork(board: Board, settings?: WorkflowSettings): boolean {
-  // Lane order mirrors backend _sprint_lanes_active (implementation before refinement when enabled).
+  const stallLimit = settings?.maxConsecutiveNoWriteStall ?? 2
   const prioritizeImpl = settings?.prioritizeImplementationOverRefinement !== false
   const lanes: BoardLane[] = ['Needs PO', 'In Progress']
   if (prioritizeImpl && settings?.requireBacklogRefinement) {
@@ -2040,6 +2148,8 @@ export function hasSprintWork(board: Board, settings?: WorkflowSettings): boolea
     }
     if (lane === 'In Progress') {
       return cards.some((t) => {
+        const stalled = (t.consecutiveNoWriteStall ?? 0) >= stallLimit
+        if (stalled && !t.forcePatchNextDevStep) return false
         if (!t.phaseCycleCapReached) return true
         return !t.latchedRecoveryAttempted
       })

@@ -23,6 +23,13 @@ RECOVERY_FEATURES: List[str] = [
     "phase4_composer_dev_step",
     "phase4_text_rejection_park",
     "phase4_sprint_work_latch",
+    "dev_refusal_triage",
+    "dev_step_wall_intrastep",
+    "needs_user_hash_reset_on_defer",
+    "patch_write_overwrite_recovery",
+    "forced_patch_read_exception",
+    "meta_refusal_class",
+    "sprint_diagnostics_rollup",
 ]
 
 

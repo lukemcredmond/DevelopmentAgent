@@ -93,7 +93,14 @@ import CommandPalette, {
   collectBoardTasks,
   type CommandPaletteItem,
 } from './components/CommandPalette'
-import KanbanToggleBar, { readKanbanOpen, writeKanbanOpen } from './components/KanbanToggleBar'
+import KanbanToggleBar, {
+  readBoardViewMode,
+  readKanbanOpen,
+  writeBoardViewMode,
+  writeKanbanOpen,
+  type BoardViewMode,
+} from './components/KanbanToggleBar'
+import CardTreePanel from './components/CardTreePanel'
 import ToolsPanel from './components/ToolsPanel'
 import MemoryPanel from './components/MemoryPanel'
 import EditorPanel from './components/EditorPanel'
@@ -301,6 +308,7 @@ export default function App() {
   const [bottomTab, setBottomTab] = useState<BottomTab>('console')
   const [memoryCount, setMemoryCount] = useState(0)
   const [kanbanOpen, setKanbanOpen] = useState(readKanbanOpen)
+  const [boardViewMode, setBoardViewMode] = useState<BoardViewMode>(readBoardViewMode)
   const [briefOpen, setBriefOpen] = useState(() => (readKanbanOpen() ? false : readBriefOpen()))
   const [settingsOpen, setSettingsOpen] = useState(false)
   const [bottomPanelHeight, setBottomPanelHeight] = useState(readBottomPanelHeight)
@@ -521,6 +529,7 @@ export default function App() {
       llmCallUrl,
       state.board,
       state.workflowSettings,
+      state.sprintWorkBreakdown,
       handleState,
       state.pendingSimulation,
       async () => {
@@ -1679,6 +1688,7 @@ export default function App() {
         autoSprintPaused={autoSprintPaused}
         autoSprintPauseStatus={lastAutoSprintStatus ?? state.lastSprintSummary?.status}
         hasSprintWork={hasSprintWork(state.board, state.workflowSettings)}
+        sprintWorkBreakdown={state.sprintWorkBreakdown ?? null}
         sprintRunning={orchestratedActive}
         autoSprintSessionStartedAt={autoSprintSessionStartedAt}
         autoSprintSessionRefreshMinutes={
@@ -1893,6 +1903,14 @@ export default function App() {
           handleState(st)
           applyStateFields(st, setters)
         }}
+        sprintRunning={orchestratedActive}
+        onOpenTreeDependencies={() => {
+          setSettingsOpen(false)
+          setKanbanOpen(true)
+          writeKanbanOpen(true)
+          setBoardViewMode('tree')
+          writeBoardViewMode('tree')
+        }}
         onDeleteProject={handleDeleteProject}
         onOpenMemoryTab={handleOpenMemoryTab}
       />
@@ -1931,11 +1949,24 @@ export default function App() {
           projectName={state.projectName}
           open={kanbanOpen}
           onToggle={handleToggleKanban}
+          boardViewMode={boardViewMode}
+          onBoardViewModeChange={(mode) => {
+            setBoardViewMode(mode)
+            writeBoardViewMode(mode)
+          }}
           activeLanes={state.activeLanes}
           workflowSettings={state.workflowSettings}
         />
         {kanbanOpen && (
           <div className="flex-[1.4] min-h-[32vh] flex flex-col overflow-hidden">
+            {boardViewMode === 'tree' ? (
+              <CardTreePanel
+                board={state.board}
+                onTaskClick={(task) =>
+                  setSelectedTask(findTaskOnBoard(state.board, task.id) ?? task)
+                }
+              />
+            ) : (
             <KanbanBoard
               board={state.board}
               projectName={state.projectName}
@@ -1956,6 +1987,7 @@ export default function App() {
               onAuditDone={() => setDoneAuditOpen(true)}
               onAuditRefinement={() => setRefinementAuditOpen(true)}
             />
+            )}
           </div>
         )}
 
@@ -2223,7 +2255,12 @@ export default function App() {
                 )}
                 {bottomTab === 'model' && (
                   <div className="absolute inset-0 flex flex-col min-h-0">
-                    <ModelDebugPanel selectedTaskId={selectedTask?.id ?? null} />
+                    <ModelDebugPanel
+                      selectedTaskId={selectedTask?.id ?? null}
+                      stepDiagnostics={
+                        selectedTask?.lastStepDiagnostics ?? state.lastStepDiagnostics
+                      }
+                    />
                   </div>
                 )}
                 {bottomTab === 'ollamaServer' && (

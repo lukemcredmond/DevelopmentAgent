@@ -1707,6 +1707,37 @@ export default function TaskDetailModal({
                       ` · textOnlyTurns ${safeTask.lastStepDiagnostics.textOnlyTurns}`}
                   </p>
                 )}
+                {safeTask.lastStepDiagnostics?.textRefusalClass &&
+                  safeTask.lastStepDiagnostics.textRefusalClass !== 'none' && (
+                    <p data-testid="task-step-text-refusal-class">
+                      <span className="text-cat-overlay">textRefusalClass:</span>{' '}
+                      {safeTask.lastStepDiagnostics.textRefusalClass}
+                      {safeTask.lastStepDiagnostics.textRefusalSnippet
+                        ? ` — ${safeTask.lastStepDiagnostics.textRefusalSnippet}`
+                        : ''}
+                    </p>
+                  )}
+                {safeTask.lastStepDiagnostics?.patchRecovery && (
+                  <p>
+                    <span className="text-cat-overlay">patchRecovery:</span>{' '}
+                    pending{' '}
+                    {(safeTask.lastStepDiagnostics.patchRecovery.pendingPaths ?? []).join(', ') ||
+                      '—'}
+                    {' · '}
+                    overwrite{' '}
+                    {(safeTask.lastStepDiagnostics.patchRecovery.writeOverwriteAllowed ?? []).join(
+                      ', ',
+                    ) || '—'}
+                  </p>
+                )}
+                {safeTask.lastStepDiagnostics?.toolPolicyDeadlock && (
+                  <p>
+                    <span className="text-rose-300">toolPolicyDeadlock</span>
+                    {safeTask.lastStepDiagnostics.toolPolicyDeadlockReason
+                      ? `: ${safeTask.lastStepDiagnostics.toolPolicyDeadlockReason}`
+                      : ''}
+                  </p>
+                )}
                 {(typeof safeTask.lastStepDiagnostics?.promptTokensAtFirstCall === 'number' ||
                   typeof safeTask.lastStepDiagnostics?.nativeToolCallRate === 'number' ||
                   typeof safeTask.lastStepOutcome?.cardToolFailures === 'number') && (

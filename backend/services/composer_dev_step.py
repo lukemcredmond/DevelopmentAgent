@@ -27,6 +27,13 @@ def run_composer_dev_step(
     tid = task_id or str(task.get("id") or "")
 
     try:
+        from backend import state as _state
+
+        _state.DEV_STEP_INTRASTEP_WALL = False
+    except Exception:
+        pass
+
+    try:
         from backend.services.sprint_speed_gates import should_force_patch_next_dev_step
         from backend.services.lint_wall_recovery import try_deterministic_missing_pubspec_fix
 
@@ -37,7 +44,11 @@ def run_composer_dev_step(
     except Exception:
         pass
 
-    result = agent.execute_step(user_prompt, max_iterations=max(1, int(max_iterations)))
+    result = agent.execute_step(
+        user_prompt,
+        max_iterations=max(1, int(max_iterations)),
+        max_step_duration_sec=wall_sec,
+    )
     elapsed = time.monotonic() - started
     if elapsed > wall_sec:
         add_system_log(

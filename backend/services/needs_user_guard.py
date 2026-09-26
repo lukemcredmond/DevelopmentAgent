@@ -135,6 +135,14 @@ def reason_hash(msg: str) -> str:
     return hashlib.sha256(normalize_question(msg).encode()).hexdigest()[:16]
 
 
+def clear_needs_user_reason_hash(task: Dict[str, Any]) -> None:
+    """Allow re-escalation after PO/IP bounce or refusal defer."""
+    if not isinstance(task, dict):
+        return
+    task.pop("lastNeedsUserReasonHash", None)
+    task["needsUserDuplicate"] = False
+
+
 def append_user_resolution(
     task: Dict[str, Any],
     question: str,
@@ -398,6 +406,8 @@ def should_escalate_to_needs_user(
     msg: str,
     *,
     kind: str = "",
+    safety_refusal: bool = False,
+    step_text_rejections: int = 0,
 ) -> Tuple[bool, str]:
     """Return (allowed, block_reason). block_reason is empty when allowed."""
     text = str(msg or "").strip()
@@ -408,7 +418,13 @@ def should_escalate_to_needs_user(
         if kind == "stuck_loop" and (
             _text_rejection_escalation_allowed(task)
             or _text_rejection_park_message(text)
-            or _text_rejection_bypass_lint_blocker(task, kind=kind, msg=text)
+            or _text_rejection_bypass_lint_blocker(
+                task,
+                kind=kind,
+                msg=text,
+                safety_refusal=safety_refusal,
+                step_text_rejections=step_text_rejections,
+            )
         ):
             pass
         else:
@@ -439,8 +455,15 @@ def should_escalate_to_needs_user(
     last_hash = task.get("lastNeedsUserReasonHash")
     h = reason_hash(text)
     if last_hash and last_hash == h and not latch_park:
-        task["needsUserDuplicate"] = True
-        return False, "same_reason_hash"
+        if safety_refusal or (
+            kind == "stuck_loop"
+            and int(step_text_rejections or 0) >= 1
+            and _text_rejection_park_message(text)
+        ):
+            pass
+        else:
+            task["needsUserDuplicate"] = True
+            return False, "same_reason_hash"
 
     # Phase-cycle cap is a latch park, not a PO clarification bounce.
     if kind != "phase_cycle_cap":

@@ -1,5 +1,5 @@
 import { memo, useEffect, useRef, useState, type ReactNode } from 'react'
-import type { AppState, SprintProgress } from '../types'
+import type { AppState, SprintProgress, SprintWorkBreakdown } from '../types'
 import { SettingHint } from './SettingHint'
 
 const PLAN_OUTLINE_HINT =
@@ -28,6 +28,7 @@ interface SidebarProps {
   autoSprintPaused?: boolean
   autoSprintPauseStatus?: string
   hasSprintWork?: boolean
+  sprintWorkBreakdown?: SprintWorkBreakdown | null
   sprintRunning: boolean
   autoSprintSessionStartedAt?: number | null
   autoSprintSessionRefreshMinutes?: number
@@ -97,6 +98,23 @@ function formatAutoSprintPauseMessage(
   return 'Paused — waiting for backlog'
 }
 
+function formatSprintBlockedBanner(
+  breakdown: SprintWorkBreakdown | null | undefined,
+  frontendHasWork: boolean,
+): string | null {
+  if (!breakdown || breakdown.hasWork) return null
+  if (breakdown.totalCards <= 0) return null
+  if (frontendHasWork) {
+    const reasons = breakdown.skipReasons?.slice(0, 2).join('; ')
+    return reasons
+      ? `Sprint blocked — backend sees no runnable work (${reasons}). Reset latch or clear stall counters on stuck cards.`
+      : 'Sprint blocked — cards on the board but auto-sprint filters them out. Reset latch or split stuck cards.'
+  }
+  return breakdown.skipReasons?.length
+    ? `No sprint work — ${breakdown.skipReasons.slice(0, 2).join('; ')}`
+    : `No sprint work — ${breakdown.totalCards} card(s) on board but none are runnable.`
+}
+
 export default memo(function Sidebar({
   state,
   brief,
@@ -105,6 +123,7 @@ export default memo(function Sidebar({
   autoSprintPaused = false,
   autoSprintPauseStatus,
   hasSprintWork: boardHasSprintWork = true,
+  sprintWorkBreakdown = null,
   sprintRunning,
   autoSprintSessionStartedAt = null,
   autoSprintSessionRefreshMinutes = 60,
@@ -447,6 +466,15 @@ export default memo(function Sidebar({
                 {formatSprintStatus(sprintProgress) ?? 'Sprint active'}
               </p>
             )}
+            {sprintRunning && (
+              <button
+                type="button"
+                onClick={onOpenSettings}
+                className="w-full text-left text-[10px] text-indigo-300/90 hover:text-indigo-200"
+              >
+                Sprint diagnostics rollup (Settings → Project)
+              </button>
+            )}
             {autoSprint && autoSprintSessionStartedAt && refreshCountdown && (
               <p className="text-[9px] text-cat-overlay font-mono">
                 {sprintRunning
@@ -464,6 +492,13 @@ export default memo(function Sidebar({
                 ) ?? 'Paused'}
               </p>
             )}
+            {autoSprint &&
+              !sprintRunning &&
+              formatSprintBlockedBanner(sprintWorkBreakdown, boardHasSprintWork) && (
+                <p className="text-[9px] text-rose-300/90 leading-snug">
+                  {formatSprintBlockedBanner(sprintWorkBreakdown, boardHasSprintWork)}
+                </p>
+              )}
             {(notifications.needsUser ?? 0) > 0 && onEscalateNeedsUserToPo && (
               <button
                 type="button"

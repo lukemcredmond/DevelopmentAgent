@@ -50,6 +50,8 @@ LAST_STEP_PROGRESS: Optional[Dict[str, Any]] = None
 DEV_STEP_READ_ONLY_NO_EDITS: bool = False
 DEV_STEP_COMMAND_REPEAT_NO_PROGRESS: bool = False
 DEV_STEP_INTERRUPTED: bool = False
+# Set when implementer dev step wall aborts mid execute_step.
+DEV_STEP_INTRASTEP_WALL: bool = False
 
 # Active per-step diagnostics trace (manual sprint steps).
 ACTIVE_STEP_DIAGNOSTICS: Optional[Any] = None

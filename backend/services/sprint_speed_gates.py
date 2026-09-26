@@ -31,6 +31,9 @@ UNHEALTHY_LANE_ADVANCE_EXITS = frozenset(
         "empty_generation_timeout",
         "llm_call_failed",
         "text_rejection_loop",
+        "safety_refusal",
+        "meta_refusal",
+        "dev_step_wall",
     }
 )
 
@@ -80,6 +83,9 @@ CIRCUIT_BREAKER_EXITS = frozenset(
         "empty_generation_timeout",
         "llm_call_failed",
         "text_rejection_loop",
+        "safety_refusal",
+        "meta_refusal",
+        "dev_step_wall",
         "step_timeout",
         "interrupted",
     }
@@ -327,19 +333,83 @@ def latch_needs_po_auto_skip(task: Dict[str, Any], *, reason: str = "") -> None:
         task["poAutoSkipReason"] = str(reason)[:300]
 
 
+def needs_po_title_key(task: Dict[str, Any]) -> str:
+    import re
+
+    title = str(task.get("title") or task.get("id") or "")
+    return re.sub(r"\s+", " ", title.lower()).strip()[:120]
+
+
+def needs_po_shadows_in_progress(
+    task: Dict[str, Any], board: Optional[Dict[str, Any]] = None
+) -> bool:
+    """Skip PO when the same title is already In Progress (duplicate card churn)."""
+    if not isinstance(task, dict):
+        return False
+    from backend import state
+
+    board = board if board is not None else state.SHARED_BOARD
+    key = needs_po_title_key(task)
+    if not key:
+        return False
+    for ip in board.get("In Progress") or []:
+        if isinstance(ip, dict) and needs_po_title_key(ip) == key:
+            return True
+    return False
+
+
 def needs_po_should_skip_auto(
     task: Dict[str, Any], ws: Optional[Dict[str, Any]] = None
 ) -> bool:
     if not isinstance(task, dict):
         return False
+    if needs_po_shadows_in_progress(task):
+        return True
     if task.get("phaseCycleCapReached"):
         return True
     if task.get("poAutoSkip"):
         return True
     if empty_gen_should_skip(task):
         return True
-    trip, _ = circuit_breaker_should_trip(task, ws)
-    return trip
+    trip, reason = circuit_breaker_should_trip(task, ws)
+    if trip:
+        if not task.get("circuitBreakerPoRetryUsed"):
+            return False
+        return True
+    return False
+
+
+def mark_needs_po_circuit_retry(task: Dict[str, Any]) -> None:
+    """Consume the one allowed PO pass after a circuit breaker trip."""
+    if isinstance(task, dict):
+        task["circuitBreakerPoRetryUsed"] = True
+
+
+def try_park_circuit_breaker_needs_po(
+    task_id: str, task: Dict[str, Any], ws: Optional[Dict[str, Any]] = None
+) -> bool:
+    """After PO retry is exhausted, park to Needs User instead of silent skip."""
+    if ws is None:
+        from backend.services.workflow_settings import get_workflow_settings
+
+        ws = get_workflow_settings()
+    if not task.get("circuitBreakerPoRetryUsed"):
+        return False
+    trip, reason = circuit_breaker_should_trip(task, ws)
+    if not trip or task.get("circuitBreakerParked"):
+        return False
+    try:
+        from backend.services.sprint_service import _try_move_to_needs_user_with_reason
+
+        msg = reason or "Circuit breaker — split the card or reset the Developer visit latch."
+        parked, _ = _try_move_to_needs_user_with_reason(
+            task_id, task, msg, kind="stuck_loop"
+        )
+        if parked:
+            task["circuitBreakerParked"] = True
+        return parked
+    except Exception:
+        return False
 
 
 DEV_STALL_FORCE_PATCH_EXITS = frozenset(
@@ -636,3 +706,15 @@ def reset_dev_cycle_latch(task: Dict[str, Any]) -> None:
     task["consecutiveNoWriteStall"] = 0
     task["parkFailed"] = False
     task.pop("forcePatchUnlatchUsed", None)
+    task["poAutoSkip"] = False
+    task.pop("poAutoSkipReason", None)
+    task["consecutiveBadExits"] = 0
+    task["identicalPatchFailCount"] = 0
+    task.pop("lastCircuitExitReason", None)
+    task["consecutiveEmptyGen"] = 0
+    task.pop("emptyGenBackoffUntil", None)
+    task.pop("devDeferredUntilStep", None)
+    task.pop("lastRefusalDiagnosis", None)
+    from backend.services.needs_user_guard import clear_needs_user_reason_hash
+
+    clear_needs_user_reason_hash(task)

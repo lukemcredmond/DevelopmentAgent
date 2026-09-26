@@ -23,6 +23,13 @@ def _projects_list() -> list:
     return projects_list_for_client()
 
 
+def _sprint_work_breakdown_for_client() -> dict:
+    from backend.services.sprint_service import summarize_sprint_work
+
+    with state.STATE_LOCK:
+        return summarize_sprint_work(state.SHARED_BOARD)
+
+
 def build_state_response(*, include_files: bool = True) -> dict:
     normalize_board_tasks()
     from backend.services.board_lanes import FEATURES_LANE
@@ -81,6 +88,7 @@ def build_state_response(*, include_files: bool = True) -> dict:
         "activeLanes": get_active_lanes(ws),
         "briefChangelog": state.storage.get_brief_changelog(state.CURRENT_PROJECT_ID, limit=50),
         "lastSprintSummary": get_last_sprint_summary(),
+        "sprintWorkBreakdown": _sprint_work_breakdown_for_client(),
         "sprintReports": list_sprint_reports(),
         "currentSprintReport": current_sprint_report(),
         "notifications": build_workflow_notifications(),

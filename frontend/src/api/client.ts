@@ -7,6 +7,8 @@ import type {
   ChatResponse,
   DoneAuditReport,
   RefinementAuditReport,
+  SprintDiagnosticsRollup,
+  BoardDuplicateAuditReport,
   ConfigPayload,
   CreateProjectPayload,
   FileDiffResponse,
@@ -536,6 +538,41 @@ export async function applyDoneAudit(payload: {
       taskIds: payload.taskIds,
       moveTo: payload.moveTo,
       onlyIncomplete: payload.onlyIncomplete ?? true,
+    }),
+  })
+}
+
+export async function fetchSprintDiagnosticsRollup(params?: {
+  limit?: number
+  sinceHours?: number
+}): Promise<SprintDiagnosticsRollup> {
+  const q = new URLSearchParams()
+  if (params?.limit != null) q.set('limit', String(params.limit))
+  if (params?.sinceHours != null) q.set('sinceHours', String(params.sinceHours))
+  const suffix = q.toString() ? `?${q.toString()}` : ''
+  return request<SprintDiagnosticsRollup>(`/api/diagnostics/sprint-rollup${suffix}`)
+}
+
+export async function fetchBoardDuplicateAudit(): Promise<BoardDuplicateAuditReport> {
+  return request<BoardDuplicateAuditReport>('/api/board/duplicate-audit')
+}
+
+export async function applyBoardDuplicateAudit(payload: {
+  applyRecommended?: boolean
+  duplicateOfByTaskId?: Record<string, string>
+}): Promise<
+  AppState & {
+    duplicateAuditResult?: {
+      blockedOrDone?: string[]
+      skipped?: string[]
+    }
+  }
+> {
+  return request('/api/board/duplicate-audit/apply', {
+    method: 'POST',
+    body: JSON.stringify({
+      applyRecommended: payload.applyRecommended ?? false,
+      duplicateOfByTaskId: payload.duplicateOfByTaskId,
     }),
   })
 }

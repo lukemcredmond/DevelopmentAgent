@@ -31,7 +31,7 @@ import type {
   Task,
   ToolExecutionEvent,
 } from '../types'
-import { EMPTY_BOARD, hasSprintWork } from '../types'
+import { EMPTY_BOARD, hasSprintWork, sprintHasActionableWork } from '../types'
 import { hydrateActivityFromBoard, mergeActivityEvents, filterActivityAfterClear, activityTimestampNow } from '../utils/activityFromBoard'
 import { mapCardProgress, mapSprintProgress } from '../utils/sprintProgress'
 import { appendTerminalOutput, capLogs, mergeLogsPreservingLive } from '../utils/streamBuffers'
@@ -1185,6 +1185,7 @@ export function useAutoSprint(
   ollamaUrl: string,
   board: AppState['board'],
   workflowSettings: AppState['workflowSettings'],
+  sprintWorkBreakdown: AppState['sprintWorkBreakdown'],
   onState: (s: AppState) => void,
   pendingSimulation?: AppState['pendingSimulation'],
   onSessionRefresh?: () => void | Promise<void>,
@@ -1250,7 +1251,7 @@ export function useAutoSprint(
       setAutoSprintPaused(true)
       return
     }
-    if (!hasSprintWork(board, workflowSettings)) {
+    if (!sprintHasActionableWork(board, workflowSettings, sprintWorkBreakdown)) {
       setAutoSprintPaused(true)
       return
     }
@@ -1273,6 +1274,7 @@ export function useAutoSprint(
       })
       onState(data)
       const nextBoard = data.board ?? board
+      const nextBreakdown = data.sprintWorkBreakdown ?? sprintWorkBreakdown
       const sprintStatus = data.lastSprintSummary?.status
       setLastAutoSprintStatus(sprintStatus)
       if (data.lastSprintSummary?.status === 'session_refresh') {
@@ -1294,10 +1296,10 @@ export function useAutoSprint(
         resumeKickRef.current = true
       } else if (data.pendingSimulation?.id || sprintStatus === 'simulation_pending') {
         setAutoSprintPaused(true)
-      } else if (sprintStatus === 'idle') {
+      } else if (sprintStatus === 'idle' || nextBreakdown?.hasWork === false) {
         setAutoSprintPaused(true)
       } else if (sprintStatus === 'retry_watchdog') {
-        if (!hasSprintWork(nextBoard, workflowSettings)) {
+        if (!sprintHasActionableWork(nextBoard, workflowSettings, nextBreakdown)) {
           setAutoSprintPaused(true)
         } else {
           setAutoSprintPaused(false)
@@ -1327,6 +1329,7 @@ export function useAutoSprint(
     ollamaUrl,
     board,
     workflowSettings,
+    sprintWorkBreakdown,
     onState,
     pendingSimulation?.id,
     onSessionRefresh,
@@ -1378,13 +1381,13 @@ export function useAutoSprint(
     if (!autoSprint || autoSprintPaused || pendingSimulation?.id) return
 
     const interval = window.setInterval(() => {
-      if (!sprintRunning && hasSprintWork(board, workflowSettings)) {
+      if (!sprintRunning && sprintHasActionableWork(board, workflowSettings, sprintWorkBreakdown)) {
         void startAutoSprint()
       }
     }, 5000)
 
     return () => window.clearInterval(interval)
-  }, [autoSprint, autoSprintPaused, sprintRunning, board, workflowSettings, startAutoSprint, pendingSimulation?.id])
+  }, [autoSprint, autoSprintPaused, sprintRunning, board, workflowSettings, sprintWorkBreakdown, startAutoSprint, pendingSimulation?.id])
 
   useEffect(() => {
     const inProgress = board['In Progress'] ?? []
@@ -1395,13 +1398,14 @@ export function useAutoSprint(
       autoSprint &&
       autoSprintPaused &&
       sig !== inProgressSigRef.current &&
-      hasSprintWork(board, workflowSettings)
+      hasSprintWork(board, workflowSettings) &&
+      sprintHasActionableWork(board, workflowSettings, sprintWorkBreakdown)
     ) {
       setAutoSprintPaused(false)
       resumeKickRef.current = true
     }
     inProgressSigRef.current = sig
-  }, [board, autoSprint, autoSprintPaused, workflowSettings])
+  }, [board, autoSprint, autoSprintPaused, workflowSettings, sprintWorkBreakdown])
 
   useEffect(() => {
     const currentLen = board.Backlog?.length ?? 0
@@ -1409,13 +1413,14 @@ export function useAutoSprint(
       autoSprint &&
       autoSprintPaused &&
       currentLen > backlogLenRef.current &&
-      hasSprintWork(board, workflowSettings)
+      hasSprintWork(board, workflowSettings) &&
+      sprintHasActionableWork(board, workflowSettings, sprintWorkBreakdown)
     ) {
       setAutoSprintPaused(false)
       void startAutoSprint()
     }
     backlogLenRef.current = currentLen
-  }, [board.Backlog?.length, autoSprint, autoSprintPaused, board, workflowSettings, startAutoSprint])
+  }, [board.Backlog?.length, autoSprint, autoSprintPaused, board, workflowSettings, sprintWorkBreakdown, startAutoSprint])
 
   return {
     autoSprint,

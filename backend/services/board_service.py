@@ -201,6 +201,11 @@ def move_board_stage(
                 t for t in state.SHARED_BOARD[lane] if str(t.get("id", "")) != needle
             ]
 
+        if source_lane == "Needs User" and target_lane != "Needs User":
+            from backend.services.needs_user_guard import clear_needs_user_reason_hash
+
+            clear_needs_user_reason_hash(active_task)
+
         active_task["status"] = target_lane
         normalize_task(active_task)
         if target_lane == "Needs User":

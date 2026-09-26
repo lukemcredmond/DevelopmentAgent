@@ -1267,7 +1267,11 @@ def _implementer_auto_sprint_should_pause_on_latch(ws: Optional[Dict[str, Any]] 
     if not settings.get("implementerStopOnLatch", True):
         return False
     threshold = max(1, int(settings.get("implementerStopOnLatchCount") or 1))
-    return _count_implementer_latched_skip_cards() >= threshold
+    if _count_implementer_latched_skip_cards() < threshold:
+        return False
+    if _in_progress_dev_runnable():
+        return False
+    return True
 
 
 def _set_needs_user_fields(task: Dict[str, Any], msg: str, *, kind: str = "stuck_loop") -> None:
@@ -1397,13 +1401,21 @@ def _try_move_to_needs_user_with_reason(
     msg: str,
     *,
     kind: str = "stuck_loop",
+    safety_refusal: bool = False,
+    step_text_rejections: int = 0,
 ) -> Tuple[bool, str]:
     state.LAST_PARK_BLOCK_REASON = ""
     live = _live_board_task(task_id)
     if not live:
         add_system_log("System", "warning", f"{task_id}: Needs User park failed — task not on board")
         return False, "task_not_on_board"
-    allowed, block_reason = should_escalate_to_needs_user(live, msg, kind=kind)
+    allowed, block_reason = should_escalate_to_needs_user(
+        live,
+        msg,
+        kind=kind,
+        safety_refusal=safety_refusal,
+        step_text_rejections=step_text_rejections,
+    )
     if not allowed:
         if block_reason == "clarification_use_po" and kind != "phase_cycle_cap":
             max_po = int(get_workflow_settings().get("maxPoRoundTrips", 3))
@@ -1431,6 +1443,16 @@ def _try_move_to_needs_user_with_reason(
                 "warning",
                 f"{task_id}: Needs User blocked ({block_reason}) — {msg[:120]}",
             )
+            if block_reason == "same_reason_hash" and kind == "stuck_loop":
+                from backend.services.dev_refusal_triage import defer_dev_card_on_park_blocked
+
+                if defer_dev_card_on_park_blocked(
+                    task_id,
+                    live,
+                    msg,
+                    safety_refusal=safety_refusal,
+                ):
+                    return False, "deferred_after_park_block"
         if not allowed:
             state.LAST_PARK_BLOCK_REASON = block_reason or "escalation_blocked"
             try:
@@ -2435,10 +2457,17 @@ def _should_slim_dev_prompt(task: Optional[Dict[str, Any]]) -> bool:
     if not isinstance(task, dict):
         return False
     try:
-        from backend.services.workflow_settings import get_execution_profile
+        from backend.services.workflow_settings import get_execution_profile, get_workflow_settings
 
-        if get_execution_profile() == "implementer":
-            return True
+        ws = get_workflow_settings()
+        if get_execution_profile(ws) == "implementer":
+            mode = str(ws.get("implementerSlimPrompt") or "recovery_only").strip().lower()
+            if mode == "always":
+                return True
+            if mode not in ("recovery_only", "never", "off", "false"):
+                mode = "recovery_only"
+            if mode in ("never", "off", "false"):
+                return False
         from backend.services.needs_user_guard import is_lint_wall_card
         from backend.services.sprint_speed_gates import (
             last_step_exit_reason,
@@ -2847,6 +2876,12 @@ def _inject_sprint_context(
     force_patch_note = _force_patch_dev_instruction(active_task, agent_role)
     if force_patch_note:
         parts.append(force_patch_note)
+    if agent_role == "Developer":
+        from backend.api.chat import CHAT_ROLE_ADDENDUM
+
+        dev_chat = CHAT_ROLE_ADDENDUM.get("dev")
+        if dev_chat:
+            parts.append(dev_chat)
 
     if use_focus_compose and state.SPRINT_PROMPT_ROTATION_ENABLED:
         state.SPRINT_PROMPT_FIXED_PREFIX = "\n\n".join(parts)
@@ -3429,7 +3464,13 @@ def _llm_iterations(task: Optional[Dict[str, Any]] = None) -> int:
 
     base = int(ws.get("maxLlmIterationsPerStep", 8))
     if get_execution_profile(ws) == "implementer":
-        base = min(base, max(1, int(ws.get("implementerMaxLlmIterationsPerStep") or 5)))
+        cap = max(1, int(ws.get("implementerMaxLlmIterationsPerStep") or 5))
+        base = min(base, cap)
+        if isinstance(task, dict):
+            ac = task.get("acceptanceCriteria") or []
+            ac_count = len(ac) if isinstance(ac, list) else 0
+            if ac_count > 2 or str(task.get("workType") or "").lower() == "feature":
+                base = max(base, min(8, int(ws.get("maxLlmIterationsPerStep", 8))))
     if isinstance(task, dict):
         lsp = task.get("lastStepProgress") or {}
         if isinstance(lsp, dict):
@@ -4731,6 +4772,7 @@ def _run_po_clarification(active_task: Dict[str, Any], brief: str) -> None:
     set_active_sprint_context(task_id, "Product Owner")
     _ensure_step_trace(task_id, title, "Product Owner", lane_before)
     result = ""
+    circuit_po_retry_pending = False
     try:
         try:
             from backend.services.backup_model import apply_model_for_step
@@ -4740,6 +4782,27 @@ def _run_po_clarification(active_task: Dict[str, Any], brief: str) -> None:
             pass
         add_system_log("Product Owner", "info", f"Clarifying '{active_task['title']}'…")
         task_for_prompt = find_task_by_id(task_id) or active_task
+        from backend.services.sprint_speed_gates import (
+            circuit_breaker_should_trip,
+            mark_needs_po_circuit_retry,
+            try_park_circuit_breaker_needs_po,
+        )
+
+        trip_cb, _trip_reason = circuit_breaker_should_trip(task_for_prompt)
+        if trip_cb and task_for_prompt.get("circuitBreakerPoRetryUsed"):
+            with state.STATE_LOCK:
+                live_cb = find_task_by_id(task_id) or task_for_prompt
+                if try_park_circuit_breaker_needs_po(task_id, live_cb):
+                    _record_last_step_outcome(
+                        task_id,
+                        lane_before,
+                        "Product Owner",
+                        agent_result="Parked to Needs User (circuit breaker exhausted).",
+                    )
+                    return
+        circuit_po_retry_pending = bool(
+            trip_cb and not task_for_prompt.get("circuitBreakerPoRetryUsed")
+        )
         from backend.services.po_clarification import (
             move_off_needs_po,
             po_llm_skip_block_reason,
@@ -4809,16 +4872,21 @@ def _run_po_clarification(active_task: Dict[str, Any], brief: str) -> None:
             )
         except Exception:
             pass
+        from backend.services.brief_service import PO_SMALLEST_TASKS_GUIDANCE
+
         prompt = (
             build_task_prompt(task_for_prompt, brief)
+            + "\n\n"
+            + PO_SMALLEST_TASKS_GUIDANCE
             + _po_clarification_retry_prompt_block(task_for_prompt)
             + "\nDeveloper needs clarification. Reply with a JSON object: "
             '{"description": "...", "acceptanceCriteria": ["..."], "briefAddition": "..."}\n'
+            "Keep ≤3 acceptance criteria; one primary file per card. "
             "Then use update_board to move back to 'In Progress' "
             "(optional description/acceptanceCriteria on that call). "
             "Valid JSON alone is enough — do not restate it after the board moves."
         )
-        result = agent_po.execute_step(prompt, max_iterations=_llm_iterations())
+        result = agent_po.execute_step(prompt, max_iterations=_llm_iterations(task_for_prompt))
 
         with state.STATE_LOCK:
             task = find_task_by_id(task_id)
@@ -4909,6 +4977,10 @@ def _run_po_clarification(active_task: Dict[str, Any], brief: str) -> None:
                             "warning",
                             f"Clarification incomplete for '{task['title']}' — {note}",
                         )
+            if circuit_po_retry_pending:
+                live_retry = find_task_by_id(task_id)
+                if live_retry:
+                    mark_needs_po_circuit_retry(live_retry)
             _record_last_step_outcome(
                 task_id, lane_before, "Product Owner", agent_result=result or ""
             )
@@ -4940,6 +5012,9 @@ def _run_developer_step(active_task: Dict[str, Any], brief: str) -> None:
     step_started = _mark_sprint_step_start()
     set_active_sprint_context(task_id, "Developer")
     live_task = find_task_by_id(task_id) or active_task
+    if live_task.get("forcePatchNextDevStep"):
+        live_task["consecutiveNoWriteStall"] = 0
+        live_task.pop("lastNextWorkNoWrite", None)
     from backend.services.sprint_speed_gates import (
         begin_dev_step,
         empty_gen_should_skip,
@@ -4989,7 +5064,7 @@ def _run_developer_step(active_task: Dict[str, Any], brief: str) -> None:
             f"{task_id}: skipping Developer — empty-generation GPU cool-off",
         )
         return
-    if no_write_stall_should_park(live_task) and int(state.SPRINT_PROGRESS_MAX or 1) != 1:
+    if no_write_stall_should_park(live_task) and not _forced_patch_retry_allowed(live_task):
         add_system_log(
             "System",
             "warning",
@@ -5405,6 +5480,54 @@ def _run_developer_step(active_task: Dict[str, Any], brief: str) -> None:
                 _record_last_step_outcome(
                     task_id, lane_before, "Developer", agent_result=result
                 )
+            except Exception:
+                pass
+            try:
+                from backend.services.dev_refusal_triage import maybe_run_dev_refusal_triage
+
+                maybe_run_dev_refusal_triage(task_id, agent_result=result)
+                try:
+                    from backend.services.board_duplicate_audit import duplicate_audit_summary
+
+                    dup = duplicate_audit_summary()
+                    extra = int(dup.get("duplicateExtraCount") or 0)
+                    if extra >= 2:
+                        add_system_log(
+                            "System",
+                            "info",
+                            f"Sprint rollup: {extra} possible duplicate card(s) on board "
+                            "(Settings → Project → Sprint diagnostics)",
+                        )
+                except Exception:
+                    pass
+                try:
+                    from backend.services.step_diagnostics import get_active_trace
+
+                    trace = get_active_trace()
+                    if trace and trace.text_refusal_class in (
+                        "meta_refusal",
+                        "safety_refusal",
+                    ):
+                        live_after = find_task_by_id(task_id)
+                        if (
+                            live_after
+                            and str(result or "").startswith("Parked:")
+                            and get_task_lane(task_id) == "Needs User"
+                        ):
+                            from backend.services.dev_refusal_triage import (
+                                maybe_defer_dev_on_policy_refusal,
+                                policy_refusal_defer_recommended,
+                            )
+
+                            if policy_refusal_defer_recommended(live_after):
+                                snippet = trace.text_refusal_snippet or str(result or "")
+                                maybe_defer_dev_on_policy_refusal(
+                                    task_id,
+                                    live_after,
+                                    content=snippet,
+                                )
+                except Exception:
+                    pass
             except Exception:
                 pass
             try:
@@ -5872,12 +5995,15 @@ def _in_progress_dev_runnable(board: Optional[Dict[str, Any]] = None) -> List[Di
     from backend.services.sprint_speed_gates import no_write_stall_should_park, empty_gen_should_skip
 
     board = board if board is not None else state.SHARED_BOARD
+    from backend.services.dev_refusal_triage import dev_deferred_active
+
     return [
         task
         for task in board.get("In Progress") or []
         if isinstance(task, dict)
         and not task.get("phaseCycleCapReached")
         and not task.get("pendingSplit")
+        and not dev_deferred_active(task)
         and not no_write_stall_should_park(task)
         and not empty_gen_should_skip(task)
     ]
@@ -5973,9 +6099,9 @@ def _select_downstream_sprint_handler() -> tuple[Optional[str], Optional[Dict[st
     return handler, active_task
 
 
-def has_sprint_work() -> bool:
+def has_sprint_work(board: Optional[Dict[str, Any]] = None) -> bool:
     """True when auto-sprint has actionable (not merely blocked) work."""
-    board = state.SHARED_BOARD
+    board = board if board is not None else state.SHARED_BOARD
     if (
         _in_progress_dev_runnable(board)
         or _in_progress_pending_recovery(board)
@@ -6021,6 +6147,102 @@ def has_sprint_work() -> bool:
                 ):
                     return True
     return False
+
+
+def summarize_sprint_work(board: Optional[Dict[str, Any]] = None) -> Dict[str, Any]:
+    """Explain why auto-sprint may be idle while the board still has cards."""
+    from backend.services.sprint_speed_gates import (
+        circuit_breaker_should_trip,
+        empty_gen_should_skip,
+        needs_po_should_skip_auto,
+        no_write_stall_should_park,
+    )
+
+    board = board if board is not None else state.SHARED_BOARD
+    ws = get_workflow_settings()
+    ip = board.get("In Progress") or []
+    np = board.get("Needs PO") or []
+    dev_runnable = _in_progress_dev_runnable(board)
+    pending_recovery = _in_progress_pending_recovery(board)
+    needs_po_park = _needs_po_pending_park(board)
+    runnable_needs_po = _first_runnable_needs_po(board)
+
+    skip_ip_no_write = 0
+    skip_ip_empty_gen = 0
+    skip_ip_phase = 0
+    skip_ip_latched_recovery = 0
+    for task in ip:
+        if not isinstance(task, dict):
+            continue
+        if task.get("phaseCycleCapReached"):
+            skip_ip_phase += 1
+            if task.get("latchedRecoveryAttempted"):
+                skip_ip_latched_recovery += 1
+            continue
+        if no_write_stall_should_park(task, ws):
+            skip_ip_no_write += 1
+        if empty_gen_should_skip(task):
+            skip_ip_empty_gen += 1
+
+    skip_np_phase = 0
+    skip_np_po_auto = 0
+    skip_np_circuit = 0
+    skip_np_empty = 0
+    for task in np:
+        if not isinstance(task, dict):
+            continue
+        if task.get("phaseCycleCapReached"):
+            skip_np_phase += 1
+        if task.get("poAutoSkip"):
+            skip_np_po_auto += 1
+        if empty_gen_should_skip(task):
+            skip_np_empty += 1
+        trip, _ = circuit_breaker_should_trip(task, ws)
+        if trip:
+            skip_np_circuit += 1
+
+    total_cards = sum(
+        len(board.get(lane) or [])
+        for lane in board
+        if isinstance(board.get(lane), list)
+    )
+    has_work = has_sprint_work(board)
+    latched_skip = _count_implementer_latched_skip_cards()
+    reasons: List[str] = []
+    if not has_work:
+        if dev_runnable:
+            reasons.append(f"{len(dev_runnable)} runnable In Progress Dev card(s)")
+        else:
+            if skip_ip_no_write:
+                reasons.append(f"{skip_ip_no_write} In Progress blocked by no-write stall")
+            if skip_ip_phase:
+                reasons.append(f"{skip_ip_phase} In Progress at phase visit cap")
+            if skip_ip_latched_recovery and skip_ip_phase:
+                reasons.append(
+                    f"{skip_ip_latched_recovery} latched In Progress with recovery already tried"
+                )
+            if not runnable_needs_po and np:
+                parts = []
+                if skip_np_circuit:
+                    parts.append(f"{skip_np_circuit} Needs PO circuit breaker")
+                if skip_np_po_auto:
+                    parts.append(f"{skip_np_po_auto} Needs PO auto-skip")
+                if skip_np_phase:
+                    parts.append(f"{skip_np_phase} Needs PO phase cap")
+                if parts:
+                    reasons.append("; ".join(parts))
+            if latched_skip and ws.get("implementerStopOnLatch", True):
+                reasons.append(f"{latched_skip} latched card(s) trigger implementerStopOnLatch")
+    return {
+        "hasWork": has_work,
+        "totalCards": total_cards,
+        "devRunnable": len(dev_runnable),
+        "pendingRecovery": len(pending_recovery),
+        "needsPoPark": len(needs_po_park),
+        "runnableNeedsPo": 1 if runnable_needs_po else 0,
+        "latchedSkipCount": latched_skip,
+        "skipReasons": reasons,
+    }
 
 
 def list_independent_in_progress_cards(limit: int = 2) -> List[Dict[str, Any]]:
@@ -7085,7 +7307,20 @@ def _run_auto_sprint_body(
             f"Auto sprint paused for session refresh after {steps} step(s).",
         )
     elif status == "idle":
-        add_system_log("System", "info", "Auto sprint paused — no backlog work remaining.")
+        breakdown = summarize_sprint_work()
+        if breakdown.get("totalCards") and not breakdown.get("hasWork"):
+            reasons = breakdown.get("skipReasons") or []
+            detail = "; ".join(reasons) if reasons else "all lanes filtered by stall or circuit rules"
+            add_system_log(
+                "System",
+                "info",
+                f"Auto sprint paused — no actionable work ({detail}). "
+                f"Board has {breakdown['totalCards']} card(s); "
+                f"Dev runnable {breakdown.get('devRunnable', 0)}, "
+                f"Needs PO runnable {breakdown.get('runnableNeedsPo', 0)}.",
+            )
+        else:
+            add_system_log("System", "info", "Auto sprint paused — no backlog work remaining.")
     else:
         add_system_log("System", "info", f"Auto sprint finished after {steps} step(s).")
     return _build_sprint_summary(steps, status)

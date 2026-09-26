@@ -105,3 +105,16 @@ def test_synthetic_read_uses_resolved_path_not_diagnostic():
         if m.get("role") == "system"
     )
     trace.finalize(exit_reason="completed_with_writes", lane_after="In Progress", ok=True)
+
+
+def test_safety_refusal_stop_maps_to_exit_reason():
+    from backend.services.step_diagnostics import derive_exit_reason
+
+    initialize()
+    reason = derive_exit_reason(
+        agent_result="Stopped: model safety refusal — card deferred for sprint triage.",
+        tools_used=set(),
+        lane_before="In Progress",
+        lane_after="In Progress",
+    )
+    assert reason == "safety_refusal"

@@ -249,6 +249,11 @@ class StepDiagnosticsTracker:
         self.po_num_predict_bumped = False
         self.lane_after_tool: Optional[str] = None
         self._last_checkpoint_monotonic: float = 0.0
+        self.text_refusal_class: str = "none"
+        self.text_refusal_snippet: str = ""
+        self.patch_recovery: Optional[Dict[str, Any]] = None
+        self.tool_policy_deadlock: bool = False
+        self.tool_policy_deadlock_reason: str = ""
 
     def log_ollama_call(
         self,
@@ -390,6 +395,47 @@ class StepDiagnosticsTracker:
     def note_llm_call_with_tools(self) -> None:
         self.total_llm_calls_with_tools += 1
 
+    def note_text_refusal(self, refusal_class: str, snippet: str = "") -> None:
+        rc = str(refusal_class or "none").strip() or "none"
+        if rc != "none":
+            self.text_refusal_class = rc
+            if snippet:
+                self.text_refusal_snippet = str(snippet)[:120]
+
+    def note_patch_recovery(
+        self,
+        *,
+        pending_paths: Optional[Set[str]] = None,
+        read_ok_paths: Optional[Set[str]] = None,
+        write_overwrite_allowed: Optional[Set[str]] = None,
+        identical_patch_blocked: bool = False,
+    ) -> None:
+        pending = sorted(
+            {str(p).strip().replace("\\", "/") for p in (pending_paths or set()) if str(p).strip()}
+        )
+        read_ok = sorted(
+            {str(p).strip().replace("\\", "/") for p in (read_ok_paths or set()) if str(p).strip()}
+        )
+        overwrite = sorted(
+            {
+                str(p).strip().replace("\\", "/")
+                for p in (write_overwrite_allowed or set())
+                if str(p).strip()
+            }
+        )
+        self.patch_recovery = {
+            "pendingPaths": pending[:24],
+            "readOkPaths": read_ok[:24],
+            "writeOverwriteAllowed": overwrite[:24],
+            "identicalPatchBlocked": bool(identical_patch_blocked),
+        }
+
+    def note_tool_policy_deadlock(self, reason: str) -> None:
+        self.tool_policy_deadlock = True
+        text = str(reason or "").strip()
+        if text:
+            self.tool_policy_deadlock_reason = text[:200]
+
     def log_event(self, kind: str, message: str) -> None:
         if kind == "plan_rejected":
             self.plan_rejections += 1
@@ -473,6 +519,14 @@ class StepDiagnosticsTracker:
             "text_rejection_loop": (
                 "Model returned apology prose instead of tools. Try backup model, manual edit "
                 "on the target file, or split the card."
+            ),
+            "safety_refusal": (
+                "Model refused with safety-style prose. Card deferred — check patch recovery / "
+                "tool policy or split the task."
+            ),
+            "meta_refusal": (
+                "Model gave up (cannot proceed) — often a tool-policy deadlock. Check patchRecovery "
+                "and toolPolicyDeadlock in this trace."
             ),
         }
         return hints.get(
@@ -589,6 +643,10 @@ class StepDiagnosticsTracker:
                     "identicalPatchFailCount": int(task.get("identicalPatchFailCount") or 0),
                     "forcePatchNextDevStep": bool(task.get("forcePatchNextDevStep")),
                 }
+                if task.get("devDeferredUntilStep") is not None:
+                    ccs["devDeferredUntilStep"] = task.get("devDeferredUntilStep")
+                if isinstance(task.get("lastRefusalDiagnosis"), dict):
+                    ccs["lastRefusalDiagnosis"] = task.get("lastRefusalDiagnosis")
                 graph = self.phase_graph
                 if isinstance(graph, dict) and graph.get("phase"):
                     ccs["phaseGraph"] = {
@@ -671,6 +729,16 @@ class StepDiagnosticsTracker:
         )
         if failure_classes:
             payload["toolFailureClasses"] = failure_classes
+        if self.text_refusal_class and self.text_refusal_class != "none":
+            payload["textRefusalClass"] = self.text_refusal_class
+            if self.text_refusal_snippet:
+                payload["textRefusalSnippet"] = self.text_refusal_snippet
+        if self.patch_recovery:
+            payload["patchRecovery"] = dict(self.patch_recovery)
+        if self.tool_policy_deadlock:
+            payload["toolPolicyDeadlock"] = True
+            if self.tool_policy_deadlock_reason:
+                payload["toolPolicyDeadlockReason"] = self.tool_policy_deadlock_reason
         if self.agent == "Product Owner":
             payload["poJsonApplied"] = bool(self.po_json_applied)
             payload["poNumPredictBumped"] = bool(self.po_num_predict_bumped)
@@ -1455,13 +1523,25 @@ def derive_exit_reason(
             return "empty_generation_timeout"
         return "llm_call_failed"
     if agent_result and agent_result.startswith("Timed out:"):
+        if getattr(state, "DEV_STEP_INTRASTEP_WALL", False):
+            return "dev_step_wall"
         return "step_timeout"
     if agent_result and _is_lint_recovery_message(agent_result):
         return "lint_stay_in_progress"
     if agent_result and _is_dev_precheck_skip_message(agent_result):
         return "dev_precheck_skip"
+    if getattr(state, "DEV_STEP_INTRASTEP_WALL", False):
+        return "dev_step_wall"
     if agent_result and agent_result.startswith("Stopped:"):
         lower = agent_result.lower()
+        if "safety refusal" in lower:
+            return "safety_refusal"
+        if "meta refusal" in lower:
+            return "meta_refusal"
+        if "deferred to pick another card" in lower and "meta refusal" in lower:
+            return "meta_refusal"
+        if "tool-policy churn" in lower:
+            return "meta_refusal"
         if "text rejection loop" in lower:
             return "text_rejection_loop"
         if "phase cycle cap" in lower or "developer visit budget" in lower:

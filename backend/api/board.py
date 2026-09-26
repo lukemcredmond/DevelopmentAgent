@@ -23,6 +23,7 @@ from backend.api.schemas import (
     MoveTaskPayload,
     ReorderTasksPayload,
     RefinementAuditApplyPayload,
+    DuplicateAuditApplyPayload,
     ResolveUserPayload,
     SplitBatchPayload,
     SplitTaskPayload,
@@ -38,6 +39,10 @@ from backend.services.board_service import (
 )
 from backend.services.done_audit import apply_done_audit_actions, audit_done_tasks
 from backend.services.refinement_audit import apply_refinement_audit_actions, audit_refinement_lane
+from backend.services.board_duplicate_audit import (
+    apply_board_duplicate_audit,
+    audit_board_duplicates,
+)
 from backend.services.logs import add_system_log
 from backend.services.needs_user_guard import append_user_resolution, set_needs_user_cooldown
 from backend.services.project_service import save_current_project_state
@@ -125,6 +130,49 @@ def clear_board_tasks():
             )
         clear_all_board_tasks()
     return build_state_response()
+
+
+@router.post("/api/board/reset-sprint-stalls")
+def reset_sprint_stalls():
+    """Clear stall/circuit/latch counters on In Progress and Needs PO cards."""
+    from backend.agents.agent_run import get_active_run
+    from backend.services.sprint_speed_gates import reset_dev_cycle_latch
+
+    with state.STATE_LOCK:
+        if get_active_run() is not None:
+            raise HTTPException(
+                status_code=409,
+                detail="Cannot reset stalls while an agent sprint step is running.",
+            )
+        reset_count = 0
+        for lane in ("In Progress", "Needs PO", "Blocked"):
+            for task in state.SHARED_BOARD.get(lane) or []:
+                if not isinstance(task, dict):
+                    continue
+                if not (
+                    task.get("forcePatchNextDevStep")
+                    or int(task.get("consecutiveNoWriteStall") or 0) > 0
+                    or task.get("phaseCycleCapReached")
+                    or task.get("poAutoSkip")
+                    or int(task.get("identicalPatchFailCount") or 0) > 0
+                ):
+                    continue
+                reset_dev_cycle_latch(task)
+                task.pop("circuitBreakerPoRetryUsed", None)
+                task.pop("circuitBreakerParked", None)
+                from backend.services.needs_user_guard import clear_needs_user_reason_hash
+
+                clear_needs_user_reason_hash(task)
+                task.pop("devDeferredUntilStep", None)
+                task.pop("lastRefusalDiagnosis", None)
+                reset_count += 1
+        add_system_log(
+            "System",
+            "success",
+            f"Reset sprint stall/latch fields on {reset_count} card(s).",
+        )
+        save_current_project_state(force_board=True)
+    return {**build_state_response(), "resetCount": reset_count}
 
 
 @router.post("/api/tasks/manual")
@@ -770,6 +818,38 @@ def apply_refinement_audit(payload: RefinementAuditApplyPayload):
             f"Backlog {len(result.get('movedBacklog') or [])}",
         )
     return {**build_state_response(), "refinementAuditResult": result}
+
+
+@router.get("/api/board/duplicate-audit")
+def get_duplicate_audit():
+    with state.STATE_LOCK:
+        report = audit_board_duplicates(state.SHARED_BOARD)
+    return report
+
+
+@router.post("/api/board/duplicate-audit/apply")
+def apply_duplicate_audit(payload: DuplicateAuditApplyPayload):
+    from backend.agents.agent_run import get_active_run
+
+    with state.STATE_LOCK:
+        if get_active_run() is not None:
+            raise HTTPException(
+                status_code=409,
+                detail="Cannot apply duplicate consolidation while an agent sprint step is running.",
+            )
+    result = apply_board_duplicate_audit(
+        apply_recommended=payload.apply_recommended,
+        duplicate_of_by_task_id=payload.duplicate_of_by_task_id,
+    )
+    if not result.get("ok"):
+        raise HTTPException(status_code=400, detail=result.get("error") or "Apply failed")
+    with state.STATE_LOCK:
+        add_system_log(
+            "System",
+            "info",
+            f"Duplicate audit: consolidated {len(result.get('blockedOrDone') or [])} card(s)",
+        )
+    return {**build_state_response(), "duplicateAuditResult": result}
 
 
 @router.post("/api/tasks/delete")

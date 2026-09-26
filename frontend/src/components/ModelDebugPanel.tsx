@@ -1,9 +1,10 @@
 import { useCallback, useEffect, useMemo, useState } from 'react'
-import type { LlmDebugEntry, ModelTimelineItem, ModelTimelineThread } from '../types'
+import type { LlmDebugEntry, LastStepDiagnostics, ModelTimelineItem, ModelTimelineThread } from '../types'
 import { clearLlmLogs, fetchLlmLogs, fetchModelTimeline } from '../api/client'
 
 interface ModelDebugPanelProps {
   selectedTaskId?: string | null
+  stepDiagnostics?: Partial<LastStepDiagnostics> | null
 }
 
 type ViewMode = 'list' | 'conversation'
@@ -80,7 +81,10 @@ function LlmTimelineEntry({ item, itemKey }: { item: ModelTimelineItem; itemKey:
   )
 }
 
-export default function ModelDebugPanel({ selectedTaskId }: ModelDebugPanelProps) {
+export default function ModelDebugPanel({
+  selectedTaskId,
+  stepDiagnostics = null,
+}: ModelDebugPanelProps) {
   const [entries, setEntries] = useState<LlmDebugEntry[]>([])
   const [threads, setThreads] = useState<ModelTimelineThread[]>([])
   const [agentFilter, setAgentFilter] = useState('')
@@ -257,6 +261,44 @@ export default function ModelDebugPanel({ selectedTaskId }: ModelDebugPanelProps
           </button>
         )}
       </div>
+
+      {(stepDiagnostics?.textRefusalClass ||
+        stepDiagnostics?.patchRecovery ||
+        stepDiagnostics?.toolPolicyDeadlock) && (
+        <div
+          className="shrink-0 mx-2 mt-2 px-3 py-2 rounded border border-amber-700/40 bg-amber-950/20 text-[10px] font-mono text-cat-subtext space-y-1"
+          data-testid="model-debug-step-diagnostics"
+        >
+          {stepDiagnostics?.textRefusalClass &&
+            stepDiagnostics.textRefusalClass !== 'none' && (
+              <p>
+                <span className="text-amber-200">textRefusalClass:</span>{' '}
+                {stepDiagnostics.textRefusalClass}
+                {stepDiagnostics.textRefusalSnippet
+                  ? ` — ${stepDiagnostics.textRefusalSnippet}`
+                  : ''}
+              </p>
+            )}
+          {stepDiagnostics?.patchRecovery && (
+            <p>
+              <span className="text-amber-200">patchRecovery:</span>{' '}
+              pending=
+              {(stepDiagnostics.patchRecovery.pendingPaths ?? []).join(', ') || '—'}
+              {' · '}
+              overwrite=
+              {(stepDiagnostics.patchRecovery.writeOverwriteAllowed ?? []).join(', ') || '—'}
+            </p>
+          )}
+          {stepDiagnostics?.toolPolicyDeadlock && (
+            <p>
+              <span className="text-rose-300">toolPolicyDeadlock</span>
+              {stepDiagnostics.toolPolicyDeadlockReason
+                ? `: ${stepDiagnostics.toolPolicyDeadlockReason}`
+                : ''}
+            </p>
+          )}
+        </div>
+      )}
 
       {viewMode === 'list' ? (
         <div className="flex-1 min-h-0 overflow-y-auto p-2 font-mono">

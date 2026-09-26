@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-from typing import Any, Dict, Iterable, List, Sequence, Set, Tuple
+from typing import Any, Dict, Iterable, List, Optional, Sequence, Set, Tuple
 
 PATCH_RECOVERY_MARKER = "=== PATCH RECOVERY ==="
 PATCH_RECOVERY_REMINDER_MARKER = "=== PATCH RECOVERY (blocked) ==="
@@ -38,9 +38,9 @@ def build_patch_recovery_nudge(paths: Iterable[str]) -> str:
         f"{PATCH_RECOVERY_MARKER}\n"
         f"apply_patch failed on: {plist}.\n"
         "Next tool call MUST be read_file on that path (fresh this step).\n"
-        "Then either apply_patch using verbatim old_text from that read_file output, "
-        "or write_file with the complete corrected file.\n"
-        "Do NOT retry apply_patch with the same old_text / preloaded context."
+        "Then apply_patch using verbatim old_text from that read_file output.\n"
+        "Do NOT retry apply_patch with the same old_text / preloaded context.\n"
+        "write_file cannot overwrite existing files until patch escalation allows it."
     )
 
 
@@ -142,13 +142,50 @@ def build_patch_fail_excerpt_nudge(path: str, file_content: str, old_text: str) 
     )
 
 
-def build_write_file_escalation_nudge(paths: Iterable[str]) -> str:
+def build_write_file_escalation_nudge(
+    paths: Iterable[str],
+    *,
+    overwrite_allowed: bool = True,
+) -> str:
     plist = ", ".join(f"`{normalize_recovery_path(p)}`" for p in paths if normalize_recovery_path(p))
     if not plist:
         plist = "(unknown path)"
+    if overwrite_allowed:
+        overwrite_line = (
+            f"write_file overwrite IS allowed for {plist} this step — "
+            "call read_file for the full file, then write_file with complete corrected content.\n"
+        )
+    else:
+        overwrite_line = (
+            "Use read_file then apply_patch with a different old_text — "
+            "write_file overwrite is not enabled this step.\n"
+        )
     return (
         f"{PATCH_RECOVERY_MARKER}\n"
         f"Identical apply_patch failed repeatedly on: {plist}.\n"
         "Do NOT retry the same apply_patch.\n"
-        "Call read_file for the full file, then write_file with the complete corrected content."
+        + overwrite_line
     )
+
+
+def compute_write_overwrite_allowed_paths(
+    pending: Iterable[str],
+    escalated: Iterable[str],
+    task: Optional[Dict[str, Any]] = None,
+) -> Set[str]:
+    """Paths where Developer may write_file over an existing file this step."""
+    out: Set[str] = set()
+    for raw in list(pending) + list(escalated):
+        p = normalize_recovery_path(raw)
+        if p:
+            out.add(p)
+    if isinstance(task, dict) and task.get("forcePatchNextDevStep"):
+        try:
+            from backend.services.file_blocker import resolve_dev_edit_target_path
+
+            target = normalize_recovery_path(resolve_dev_edit_target_path(task) or "")
+            if target:
+                out.add(target)
+        except Exception:
+            pass
+    return out

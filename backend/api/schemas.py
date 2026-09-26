@@ -113,6 +113,15 @@ class RefinementAuditApplyPayload(BaseModel):
     )
 
 
+class DuplicateAuditApplyPayload(BaseModel):
+    model_config = ConfigDict(populate_by_name=True)
+
+    apply_recommended: bool = Field(default=False, alias="applyRecommended")
+    duplicate_of_by_task_id: Optional[Dict[str, str]] = Field(
+        default=None, alias="duplicateOfByTaskId"
+    )
+
+
 class UpdateTaskPayload(BaseModel):
     task_id: Optional[str] = None
     title: Optional[str] = None
@@ -270,6 +279,7 @@ class WorkflowSettingsPayload(BaseModel):
     implementerStopOnLatchCount: Optional[int] = None
     useComposerDevStep: Optional[bool] = None
     implementerMaxLlmIterationsPerStep: Optional[int] = None
+    implementerSlimPrompt: Optional[str] = None
     implementerMaxDevStepWallSec: Optional[int] = None
     implementerMaxPreloadTokens: Optional[int] = None
     maxNeedsUserPerSprint: Optional[int] = None

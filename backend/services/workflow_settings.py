@@ -152,6 +152,7 @@ DEFAULT_WORKFLOW_SETTINGS: Dict[str, Any] = {
     "implementerStopOnLatch": True,
     "implementerStopOnLatchCount": 1,
     "useComposerDevStep": True,
+    "implementerSlimPrompt": "recovery_only",
     "implementerMaxLlmIterationsPerStep": 5,
     "implementerMaxDevStepWallSec": 180,
     "implementerMaxPreloadTokens": 4000,
