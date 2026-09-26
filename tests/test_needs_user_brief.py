@@ -510,6 +510,31 @@ def test_diagnosis_options_use_recommended_action_not_template():
     assert [o["id"] for o in task["needsUserOptions"]].count("other") == 1
 
 
+def test_lint_card_without_diagnosis_gets_specific_options():
+    task = {
+        "id": "T-WIDGET",
+        "title": "Fix Undefined Class 'Widget' Error in lib/main.dart",
+        "description": "Add missing Flutter import.",
+        "acceptanceCriteria": ["flutter analyze clean for main.dart"],
+        "lintSourceFile": "lib/main.dart",
+        "lastCommandDiagnostics": [
+            {
+                "file": "lib/main.dart",
+                "line": 5,
+                "message": "Undefined class 'Widget'",
+            }
+        ],
+        "lastStepOutcome": {
+            "exitReason": "tool_failure_stop",
+            "suggestedAction": "Add `import 'package:flutter/material.dart';` to lib/main.dart",
+        },
+    }
+    brief = build_needs_user_brief(task, kind="stuck_loop", raw_msg="Stuck on Widget error")
+    labels = " ".join(str(o.get("label") or "") for o in brief["options"]).lower()
+    assert "widget" in labels or "main.dart" in labels
+    assert "continue implementing" not in labels
+
+
 def test_phase_cycle_cap_with_lint_includes_fix_option():
     task = {
         "id": "T-CAP-LINT",

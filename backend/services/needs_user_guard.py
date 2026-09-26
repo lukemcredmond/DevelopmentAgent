@@ -196,7 +196,13 @@ def should_park_in_needs_user(
         "phase_cycle_cap",
         "product_choice",
     ):
-        return False, "lint_use_file_blocker"
+        if kind == "stuck_loop" and (
+            _text_rejection_escalation_allowed(task)
+            or brief_has_actionable_options(brief)
+        ):
+            pass
+        else:
+            return False, "lint_use_file_blocker"
     if not brief_has_actionable_options(brief):
         return False, "no_mcq_options"
     return True, ""
@@ -339,6 +345,25 @@ def reconcile_autonomous_needs_user_cards() -> Dict[str, Any]:
     return {"reconciled": reconciled, "refreshed": refreshed, "count": len(reconciled)}
 
 
+def _text_rejection_escalation_allowed(task: Dict[str, Any]) -> bool:
+    """Allow Needs User when repeated text-only refusals burned auto-sprint retries."""
+    if not isinstance(task, dict):
+        return False
+    bad = int(task.get("consecutiveBadExits") or 0)
+    if bad < 2:
+        return False
+    from backend.services.sprint_speed_gates import last_step_exit_reason
+
+    exit_r = last_step_exit_reason(task)
+    circuit = str(task.get("lastCircuitExitReason") or "").strip().lower()
+    return exit_r == "text_rejection_loop" or circuit == "text_rejection_loop"
+
+
+def _text_rejection_park_message(msg: str) -> bool:
+    lower = str(msg or "").lower()
+    return "text rejection loop" in lower or "refused tools" in lower or "text-only" in lower
+
+
 def should_escalate_to_needs_user(
     task: Dict[str, Any],
     msg: str,
@@ -351,7 +376,12 @@ def should_escalate_to_needs_user(
         return False, "empty_question"
 
     if stuck_is_tool_or_lint(task) and kind not in _USER_ONLY_ESCALATION_KINDS:
-        return False, "lint_use_file_blocker"
+        if kind == "stuck_loop" and (
+            _text_rejection_escalation_allowed(task) or _text_rejection_park_message(text)
+        ):
+            pass
+        else:
+            return False, "lint_use_file_blocker"
 
     latch_park = kind == "phase_cycle_cap" or bool(task.get("phaseCycleCapReached"))
 
@@ -589,6 +619,138 @@ def _exit_reason(task: Dict[str, Any]) -> str:
     return str(task.get("lastCircuitExitReason") or "").strip().lower()
 
 
+def _diagnosis_from_task_evidence(task: Dict[str, Any]) -> Dict[str, Any]:
+    """Deterministic problem/action from step outcome, lint, and diagnostics (no LLM)."""
+    outcome = task.get("lastStepOutcome") if isinstance(task.get("lastStepOutcome"), dict) else {}
+    step_diag = (
+        task.get("lastStepDiagnostics") if isinstance(task.get("lastStepDiagnostics"), dict) else {}
+    )
+    perf = step_diag.get("performanceSummary") if isinstance(step_diag.get("performanceSummary"), dict) else {}
+    bottleneck = str(perf.get("primaryBottleneck") or "").strip()
+    exit_r = _exit_reason(task)
+    lint_line = _first_lint_line(task)
+    failed_tool = _last_failed_tool(task)
+    snippet = str((outcome or {}).get("agentResultSnippet") or "").strip()
+    suggested = str((outcome or {}).get("suggestedAction") or "").strip()
+
+    try:
+        from backend.services.file_blocker import resolve_dev_edit_target_path
+
+        edit_target = str(resolve_dev_edit_target_path(task) or "").strip()
+    except Exception:
+        edit_target = ""
+
+    problem_parts: List[str] = []
+    if lint_line:
+        problem_parts.append(lint_line)
+    elif failed_tool:
+        problem_parts.append(failed_tool)
+    elif snippet:
+        problem_parts.append(snippet[:240])
+    elif exit_r:
+        problem_parts.append(f"Developer step ended: {exit_r.replace('_', ' ')}")
+    if bottleneck and bottleneck != "none":
+        problem_parts.append(f"Bottleneck: {bottleneck.replace('_', ' ')}")
+
+    problem = "; ".join(problem_parts)[:500]
+
+    action_parts: List[str] = []
+    if suggested and not looks_generic_needs_user_text(suggested):
+        action_parts.append(suggested)
+    if edit_target and lint_line:
+        action_parts.append(
+            f"Edit `{edit_target}` to fix the reported issue, then re-run analyze/tests."
+        )
+    elif edit_target and exit_r in ("read_only_no_edits", "tool_failure_stop", "patch_budget_exhausted"):
+        action_parts.append(
+            f"Implement the fix in `{edit_target}` with apply_patch or write_file."
+        )
+    if exit_r == "phase_cycle_cap":
+        action_parts.append(
+            "Split this card into smaller single-file tasks, or reset the Developer visit latch."
+        )
+    if not action_parts and problem:
+        action_parts.append(f"Unblock: {problem[:200]}")
+
+    recommended = " ".join(action_parts)[:500]
+    return {
+        "summary": problem[:200] if problem else "",
+        "problem": problem,
+        "recommendedAction": recommended,
+        "suggestedAgent": "dev",
+        "source": "evidence",
+    }
+
+
+def _ensure_evidence_diagnosis(task: Dict[str, Any]) -> None:
+    """Fill lastDiagnosis from lint/step evidence when PO diagnosis is missing or generic."""
+    if not isinstance(task, dict):
+        return
+    ld = task.get("lastDiagnosis") if isinstance(task.get("lastDiagnosis"), dict) else {}
+    problem = str(ld.get("problem") or "").strip()
+    if problem and not looks_generic_needs_user_text(problem):
+        return
+    inferred = _diagnosis_from_task_evidence(task)
+    if not str(inferred.get("problem") or "").strip():
+        return
+    merged = dict(ld)
+    merged.update(inferred)
+    task["lastDiagnosis"] = merged
+
+
+def _format_task_evidence_for_options(task: Dict[str, Any]) -> str:
+    """Compact evidence block for the options LLM prompt."""
+    lines: List[str] = []
+    outcome = task.get("lastStepOutcome") if isinstance(task.get("lastStepOutcome"), dict) else {}
+    if outcome:
+        for key in ("exitReason", "suggestedAction", "agentResultSnippet", "whyCardStayed"):
+            val = str(outcome.get(key) or "").strip()
+            if val:
+                lines.append(f"{key}: {val[:300]}")
+    step_diag = (
+        task.get("lastStepDiagnostics") if isinstance(task.get("lastStepDiagnostics"), dict) else {}
+    )
+    if step_diag:
+        perf = step_diag.get("performanceSummary")
+        if isinstance(perf, dict):
+            lines.append(f"performanceSummary: {perf}")
+        writes = step_diag.get("writesSucceeded")
+        if writes is not None:
+            lines.append(f"writesSucceeded: {writes}")
+    diagnostics = task.get("lastCommandDiagnostics") or []
+    if isinstance(diagnostics, list):
+        for i, d in enumerate(diagnostics[:5]):
+            if isinstance(d, dict):
+                path, line_s = _sanitize_diag_file(str(d.get("file") or ""), d.get("line"))
+                msg = str(d.get("message") or "").strip()[:160]
+                lines.append(f"lint[{i}]: {path}:{line_s} — {msg}")
+    try:
+        from backend.services.file_blocker import resolve_dev_edit_target_path
+
+        target = resolve_dev_edit_target_path(task)
+        if target:
+            lines.append(f"editTarget: {target}")
+    except Exception:
+        pass
+    return "\n".join(lines)[:4000]
+
+
+def finalize_needs_user_options(task: Dict[str, Any], *, try_llm: bool = True) -> None:
+    """Rebuild generic options from evidence; optionally refine with LLM."""
+    if not isinstance(task, dict):
+        return
+    _ensure_evidence_diagnosis(task)
+    if needs_user_options_look_generic(task.get("needsUserOptions"), task=task):
+        kind = str(task.get("needsUserKind") or "stuck_loop")
+        question = str(task.get("userQuestion") or "")
+        task["needsUserOptions"] = _build_needs_user_options(task, kind, question=question)
+    if try_llm:
+        try:
+            enrich_needs_user_options(task)
+        except Exception:
+            pass
+
+
 def _resolve_needs_user_kind(task: Dict[str, Any], kind: str, raw_msg: str) -> str:
     raw = str(raw_msg or "")
     if _looks_secret_ask(raw) or _looks_secret_ask(str(task.get("userQuestion") or "")):
@@ -634,6 +796,13 @@ _PHASE_CAP_ONLY_LABELS = frozenset(
         "split into smaller cards",
         "reset developer visit latch",
     }
+)
+_GENERIC_FALLBACK_OPTION_MARKERS = (
+    "continue implementing",
+    "with the current spec",
+    "proceed with the simplest option",
+    "send back to product owner to refine the spec",
+    "answer in my own words",
 )
 _VISIT_CAP_QUESTION_MARKERS = (
     "visit latch",
@@ -774,6 +943,10 @@ def needs_user_options_look_generic(
             or _last_failed_tool(task)
         )
         return has_evidence
+    if any(any(m in lab for m in _GENERIC_FALLBACK_OPTION_MARKERS) for lab in labels):
+        return True
+    if len(labels) == 2 and all("split" in lab for lab in labels):
+        return True
     return False
 
 
@@ -784,6 +957,7 @@ def _build_needs_user_options(
     question: str = "",
 ) -> List[Dict[str, str]]:
     """Evidence-based A/B/C/D + Other options for genuine user decisions."""
+    _ensure_evidence_diagnosis(task)
     title = str(task.get("title") or task.get("id") or "this card")
     diagnosis = task.get("lastDiagnosis") if isinstance(task.get("lastDiagnosis"), dict) else {}
     problem = str((diagnosis or {}).get("problem") or "").strip()
@@ -824,6 +998,56 @@ def _build_needs_user_options(
             f"Fix this lint/tool error first: {lint_line}",
             "dev",
         )
+
+    diagnostics = task.get("lastCommandDiagnostics") or []
+    if isinstance(diagnostics, list):
+        seen_lint: set[str] = set()
+        for d in diagnostics[1:4]:
+            if not isinstance(d, dict):
+                continue
+            path, line_s = _sanitize_diag_file(str(d.get("file") or ""), d.get("line"))
+            msg = str(d.get("message") or "").strip()
+            if msg.startswith("error") and "•" in msg:
+                inner = re.sub(r"^(?:error|warning|info)\s+[•\-]\s+", "", msg, flags=re.I)
+                inner = re.split(r"\s+[•\-]\s+", inner, maxsplit=1)[0].strip()
+                if inner:
+                    msg = inner
+            key = f"{path}:{line_s}:{msg[:80]}"
+            if key in seen_lint or not msg:
+                continue
+            seen_lint.add(key)
+            short_msg = _short_label(msg, 72) or msg[:72]
+            add(
+                f"Fix {path}:{line_s} — {short_msg}",
+                f"In `{path}` at line {line_s}, fix: {msg}. Then re-run analyze.",
+                "dev",
+            )
+
+    outcome = task.get("lastStepOutcome") if isinstance(task.get("lastStepOutcome"), dict) else {}
+    outcome_action = str((outcome or {}).get("suggestedAction") or "").strip()
+    if outcome_action and not looks_generic_needs_user_text(outcome_action):
+        add(outcome_action, outcome_action, "dev")
+
+    try:
+        from backend.services.file_blocker import resolve_dev_edit_target_path
+
+        edit_target = str(resolve_dev_edit_target_path(task) or "").strip()
+        if edit_target and not any(edit_target in str(c.get("label") or "") for c in collected):
+            title_lower = title.lower()
+            if "pubspec" in edit_target or "pubspec" in title_lower:
+                add(
+                    f"Set SDK constraint in {edit_target}",
+                    f"Update environment/sdk in `{edit_target}` to match the project, then run flutter pub get.",
+                    "dev",
+                )
+            elif edit_target.endswith(".dart"):
+                add(
+                    f"Patch `{edit_target}` for this card",
+                    f"Apply the fix in `{edit_target}` as described in the card title and lint output.",
+                    "dev",
+                )
+    except Exception:
+        pass
 
     if failed_tool:
         tool_name = failed_tool.split(":", 1)[0].strip() or "the last tool"
@@ -883,15 +1107,29 @@ def _build_needs_user_options(
     finalized = _finalize_options(collected)
     real = [o for o in finalized if o.get("id") != "other"]
     if len(real) < 2:
-        add(
-            f'Continue implementing "{title}" with the current spec',
-            f'Continue implementing "{title}" using the current description and acceptance criteria.',
-            "dev",
-        )
+        inferred = _diagnosis_from_task_evidence(task)
+        rec = str(inferred.get("recommendedAction") or "").strip()
+        prob = str(inferred.get("problem") or "").strip()
+        if rec and not looks_generic_needs_user_text(rec):
+            add(_short_label(rec, 120) or rec[:120], rec, "dev")
+        if prob and not looks_generic_needs_user_text(prob):
+            add(
+                _short_label(f"Address: {prob}", 120) or prob[:120],
+                f"Address this blocker: {prob}",
+                "dev",
+            )
+        finalized = _finalize_options(collected)
+        real = [o for o in finalized if o.get("id") != "other"]
+    if len(real) < 2:
         add(
             f'Split "{title}" into smaller focused cards',
             f"Split '{title}' into smaller focused cards.",
             "po",
+        )
+        add(
+            "Reset Developer visit latch and retry",
+            "Reset the phase cycle cap on this card and run Developer again.",
+            "dev",
         )
         finalized = _finalize_options(collected)
     return finalized
@@ -907,6 +1145,7 @@ def build_needs_user_brief(
 
     Does not call an LLM — uses diagnosis, lint, last step outcome, and spec gaps.
     """
+    _ensure_evidence_diagnosis(task)
     title = str(task.get("title") or task.get("id") or "this card")
     resolved_kind = _resolve_needs_user_kind(task, kind, raw_msg)
     diagnosis = task.get("lastDiagnosis") if isinstance(task.get("lastDiagnosis"), dict) else {}
@@ -1098,6 +1337,7 @@ def apply_needs_user_brief(task: Dict[str, Any], brief: Dict[str, Any]) -> None:
         task["needsUserOptions"] = options
     else:
         task.pop("needsUserOptions", None)
+    finalize_needs_user_options(task, try_llm=True)
 
 
 def _build_options_llm_prompt(task: Dict[str, Any], evidence: List[Dict[str, str]]) -> str:
@@ -1136,6 +1376,9 @@ def _build_options_llm_prompt(task: Dict[str, Any], evidence: List[Dict[str, str
         parts.append(f"Last failed tool: {failed}")
     if evidence_labels:
         parts.append("Evidence options already considered: " + "; ".join(evidence_labels[:4]))
+    evidence_block = _format_task_evidence_for_options(task)
+    if evidence_block:
+        parts.append("Step evidence:\n" + evidence_block)
     return "\n".join(parts)[:8000]
 
 
@@ -1144,13 +1387,13 @@ def _default_needs_user_options_chat(prompt: str) -> str:
 
     if os.environ.get("PYTEST_CURRENT_TEST"):
         return ""
-    from backend.agents.registry import agent_po
+    from backend.agents.registry import agent_dev
     from backend.services.llm_provider import build_provider, chat_config
 
     cfg = dict(chat_config())
-    cfg["timeoutSec"] = 20
+    cfg["timeoutSec"] = 25
     provider = build_provider(cfg)
-    model = str(getattr(agent_po, "model", "") or "qwen2.5-coder:14b")
+    model = str(getattr(agent_dev, "model", "") or "qwen2.5-coder:14b")
     result = provider.chat(
         model,
         [
@@ -1244,8 +1487,6 @@ def refresh_generic_needs_user_options(
     raw_msg = str(task.get("userQuestion") or task.get("needsUserReason") or "")
     brief = build_needs_user_brief(task, kind=kind, raw_msg=raw_msg)
     apply_needs_user_brief(task, brief)
-    if with_llm:
-        enrich_needs_user_options(task, chat_fn=chat_fn)
     return True
 
 

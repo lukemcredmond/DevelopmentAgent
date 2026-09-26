@@ -1066,6 +1066,7 @@ export interface LastStepDiagnostics {
   forcedToolMode?: boolean
   forcedToolModeEffective?: boolean
   cursorLikenessScore?: boolean
+  cursorLikenessScoreV2?: boolean
   cardToolFailures?: number
 }
 

@@ -145,6 +145,8 @@ def derive_agent_work_items(task: Dict[str, Any]) -> List[Dict[str, Any]]:
     has_verify = _has_verify_after_write(task) if has_write else _transcript_tool_success(
         task, {"run_command", "run_test"}
     )
+    if has_write and not has_verify and task.get("fixVerifyLintClean"):
+        has_verify = True
 
     outcome = task.get("lastStepOutcome") if isinstance(task.get("lastStepOutcome"), dict) else {}
     stop = str(outcome.get("stopReason") or outcome.get("exitReason") or "").lower()

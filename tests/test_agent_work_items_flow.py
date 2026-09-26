@@ -38,6 +38,17 @@ def test_derive_pending_then_done_after_write_and_verify():
     assert by2["verify:command"]["status"] == "done"
 
 
+def test_fix_verify_lint_clean_marks_verify_done():
+    initialize()
+    task = init_new_task({"id": "T-FV", "title": "Work", "description": "d", "status": "In Progress"})
+    task["files"] = [{"path": "pubspec.yaml", "action": "written"}]
+    task["fixVerifyLintClean"] = True
+    items = derive_agent_work_items(task)
+    by_id = {i["id"]: i for i in items}
+    assert by_id["write:implement"]["status"] == "done"
+    assert by_id["verify:command"]["status"] == "done"
+
+
 def test_blocked_fingerprint_adds_blocked_item():
     initialize()
     from backend import state

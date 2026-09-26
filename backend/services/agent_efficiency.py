@@ -141,7 +141,7 @@ def forced_tool_num_predict(ws: Optional[Dict[str, Any]] = None) -> int:
         from backend.services.workflow_settings import get_workflow_settings
 
         ws = get_workflow_settings()
-    return max(64, int(ws.get("forcedToolNumPredict") or 256))
+    return max(512, int(ws.get("forcedToolNumPredict") or 256))
 
 
 def single_model_name(ws: Optional[Dict[str, Any]] = None, *, fallback: str = "") -> str:

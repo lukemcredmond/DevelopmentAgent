@@ -1,6 +1,6 @@
 """Safety refusal recovery: early backup switch and synthetic read path."""
 
-from unittest.mock import MagicMock, patch
+from unittest.mock import patch
 
 from backend import state
 from backend.agents.scrum_agent import ScrumAgent
@@ -9,7 +9,7 @@ from backend.bootstrap import initialize
 from backend.services.step_diagnostics import start_step_trace
 
 
-def test_safety_refusal_triggers_backup_on_forced_patch():
+def test_safety_refusal_skips_backup_on_first_reject():
     initialize()
     agent = ScrumAgent(role="Developer", model="primary-model", system_prompt="dev")
     agent._forced_patch_step = True
@@ -19,24 +19,37 @@ def test_safety_refusal_triggers_backup_on_forced_patch():
 
     def fake_switch(**kwargs):
         switched["called"] = True
-        agent._mid_step_backup_switched = True
-        agent.model = "backup-model"
+        return True
+
+    content = "I'm sorry, but I can't assist with that request."
+    assert agent._is_safety_refusal(content) is True
+    with patch.object(agent, "_switch_dev_backup_model", side_effect=fake_switch):
+        agent._maybe_switch_backup_on_text_reject(
+            task_id="T-1",
+            plan_n=0,
+            text_n=1,
+            reason="first Developer text-only reject",
+        )
+    assert switched["called"] is False
+
+
+def test_non_safety_text_reject_can_switch_backup():
+    initialize()
+    agent = ScrumAgent(role="Developer", model="primary-model", system_prompt="dev")
+    switched = {"called": False}
+
+    def fake_switch(**kwargs):
+        switched["called"] = True
         return True
 
     with patch.object(agent, "_switch_dev_backup_model", side_effect=fake_switch):
-        content = "I'm sorry, but I can't assist with that request."
-        safety = agent._is_safety_refusal(content)
-        assert safety is True
-        if safety and agent._forced_patch_step:
-            agent._switch_dev_backup_model(
-                task_id="T-1",
-                plan_n=0,
-                text_n=1,
-                reason="safety refusal on forced-patch/slim recovery step",
-                log_label="Safety-refusal backup switch",
-            )
+        agent._maybe_switch_backup_on_text_reject(
+            task_id="T-1",
+            plan_n=0,
+            text_n=1,
+            reason="first Developer text-only reject",
+        )
     assert switched["called"] is True
-    assert agent.model == "backup-model"
 
 
 def test_synthetic_read_uses_resolved_path_not_diagnostic():

@@ -634,15 +634,29 @@ class StepDiagnosticsTracker:
             if self.ollama_calls
             else 0.0
         )
-        payload["cursorLikenessScore"] = bool(
-            writes_succeeded > 0 and native_rate >= 0.5 and duration_ms < 180_000
-        )
-        payload["performanceSummary"] = build_performance_summary(
+        perf = build_performance_summary(
             self,
             duration_ms=duration_ms,
             writes_succeeded=writes_succeeded,
             native_rate=native_rate,
             exit_reason=exit_reason if status == "complete" else None,
+        )
+        payload["performanceSummary"] = perf
+        ttfw = perf.get("timeToFirstWriteMs")
+        payload["cursorLikenessScore"] = bool(
+            writes_succeeded > 0 and native_rate >= 0.5 and duration_ms < 180_000
+        )
+        payload["cursorLikenessScoreV2"] = bool(
+            writes_succeeded > 0
+            and duration_ms < 180_000
+            and (
+                native_rate >= 0.5
+                or (
+                    bool(perf.get("markdownRecovery"))
+                    and ttfw is not None
+                    and int(ttfw) < 45_000
+                )
+            )
         )
         if failure_classes:
             payload["toolFailureClasses"] = failure_classes

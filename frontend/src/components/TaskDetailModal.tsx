@@ -1737,6 +1737,10 @@ export default function TaskDetailModal({
                     {safeTask.lastStepDiagnostics?.cursorLikenessScore && (
                       <> · cursor-like</>
                     )}
+                    {safeTask.lastStepDiagnostics?.cursorLikenessScoreV2 &&
+                      !safeTask.lastStepDiagnostics?.cursorLikenessScore && (
+                      <> · cursor-like (v2)</>
+                    )}
                   </p>
                 )}
                 {(safeTask.lastStepDiagnostics?.toolsUsed?.length ?? 0) > 0 && (

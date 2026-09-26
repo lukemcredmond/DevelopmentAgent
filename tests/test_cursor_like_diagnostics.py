@@ -45,6 +45,42 @@ def test_trace_cursor_likeness_fields():
     assert payload["cursorLikenessScore"] is True
 
 
+def test_trace_cursor_likeness_score_v2_markdown_fast_write():
+    trace = start_step_trace("T-CUR2", "SDK lint", "Developer", "In Progress")
+    started = trace.started_at
+    trace.tools_log.append(
+        {
+            "timestamp": started,
+            "toolName": "read_file",
+            "success": True,
+            "summary": "pubspec.yaml",
+        }
+    )
+    trace.tools_log.append(
+        {
+            "timestamp": started,
+            "toolName": "apply_patch",
+            "success": True,
+            "summary": "pubspec.yaml (replace 10 chars)",
+        }
+    )
+    trace.log_event("tool_calls_recovered_from_content", "read_file")
+    trace.log_ollama_call(
+        1,
+        duration_ms=100,
+        tool_calls=["read_file"],
+        prompt_tokens=4200,
+        native_tool_calls=False,
+    )
+    payload = trace._build_payload(
+        status="complete",
+        exit_reason="completed_with_writes",
+        ok=True,
+    )
+    assert payload["cursorLikenessScore"] is False
+    assert payload["cursorLikenessScoreV2"] is True
+
+
 def test_build_hint_text_rejection_loop():
     trace = start_step_trace("T-HINT", "Title", "Developer", "In Progress")
     hint = trace._build_hint("text_rejection_loop")

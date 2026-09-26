@@ -299,6 +299,11 @@ _PO_BACKLOG_JSON_REJECTION = (
     "`epics` array. Do not repeat the outline — convert it to epics + children JSON."
 )
 
+_DEV_NATIVE_TOOLS_HINT = (
+    "When tools are registered for this step, use native tool_calls only. "
+    "Do not emit markdown fences, XML, or JSON code blocks for tool invocations."
+)
+
 
 def po_execute_step_tools(
     registry_tools: list,
@@ -1887,6 +1892,31 @@ class ScrumAgent:
         except Exception:
             pass
         return False
+
+    def _revert_dev_backup_model(self, task_id: Optional[str], *, reason: str = "") -> bool:
+        """Restore primary Dev model when backup repeats safety refusals."""
+        if self.role != "Developer" or not getattr(self, "_mid_step_backup_switched", False):
+            return False
+        try:
+            from backend.services.backup_model import primary_model
+            from backend.services.step_diagnostics import log_event
+
+            primary = primary_model("dev")
+            if primary:
+                self.model = primary
+            self._mid_step_backup_switched = False
+            add_system_log(
+                self.role,
+                "warning",
+                f"Reverted to primary model {primary or '?'} — {reason[:120]}",
+            )
+            try:
+                log_event("backup_model_reverted", f"{primary} — {reason[:180]}")
+            except Exception:
+                pass
+            return True
+        except Exception:
+            return False
 
     def _maybe_switch_backup_on_forced_patch_refusal(
         self,
@@ -3687,6 +3717,8 @@ class ScrumAgent:
             {"role": "system", "content": self._build_system_content()},
             {"role": "user", "content": self._build_user_content(user_prompt)},
         ]
+        if self.role == "Developer" and tools:
+            messages.insert(1, {"role": "system", "content": _DEV_NATIVE_TOOLS_HINT})
         if session_task and should_resume_card_session(session_task, role=self.role):
             prior = load_card_session_messages(session_task)
             if prior:
@@ -4622,20 +4654,29 @@ class ScrumAgent:
                     safety_refusal = reject_label == "text-only" and self._is_safety_refusal(content)
                     dev_text_reject = reject_label == "text-only" and self.role == "Developer"
                     if dev_text_reject:
-                        self._maybe_switch_backup_on_text_reject(
-                            task_id=task_id,
-                            plan_n=plan_n,
-                            text_n=text_n,
-                            reason="first Developer text-only reject",
-                        )
-                    if safety_refusal and (forced_patch_step or slim_recovery):
-                        self._switch_dev_backup_model(
-                            task_id=task_id,
-                            plan_n=plan_n,
-                            text_n=text_n,
-                            reason="safety refusal on forced-patch/slim recovery step",
-                            log_label="Safety-refusal backup switch",
-                        )
+                        target = self._resolve_text_reject_target_path(task_id)
+                        if target and not getattr(self, "_synthetic_read_fallback_used", False):
+                            if forced_patch_step or slim_recovery or safety_refusal:
+                                self._synthetic_read_fallback_used = True
+                                if self._execute_synthetic_read_fallback(
+                                    messages,
+                                    task_id=task_id,
+                                    target=target,
+                                    tools_used=tools_used,
+                                ):
+                                    self._continue_after_synthetic_read(
+                                        messages,
+                                        target=target,
+                                        plan_rejection_message=_PLAN_REJECTION_MESSAGE,
+                                    )
+                                    continue
+                        if not safety_refusal and text_n == 1:
+                            self._maybe_switch_backup_on_text_reject(
+                                task_id=task_id,
+                                plan_n=plan_n,
+                                text_n=text_n,
+                                reason="first Developer text-only reject",
+                            )
                     forced_tool_threshold = 1 if dev_text_reject or forced_patch_step or safety_refusal else 3
                     if (
                         reject_label == "text-only"
@@ -4667,13 +4708,16 @@ class ScrumAgent:
                                 ),
                             }
                         )
-                    if safety_refusal and forced_patch_step:
-                        self._maybe_switch_backup_on_forced_patch_refusal(
-                            task_id=task_id,
-                            plan_n=plan_n,
+                    if safety_refusal and text_n >= 2:
+                        parked = self._try_park_text_rejection_loop(
+                            task_id,
                             text_n=text_n,
-                            reason="forced-patch safety refusal",
+                            content=content,
+                            tools_used=tools_used,
                         )
+                        if parked:
+                            pending_lesson = ("text_rejection_loop", set(tools_used), parked)
+                            return parked
                     if reject_label == "text-only" and content:
                         content_hash = hashlib.sha256(content.encode("utf-8", errors="replace")).hexdigest()[:16]
                         hashes = getattr(self, "_text_reject_hashes", {}) or {}
@@ -4687,12 +4731,18 @@ class ScrumAgent:
                                 )
                             except Exception:
                                 pass
-                            self._maybe_switch_backup_on_identical_text(
-                                task_id=task_id,
-                                plan_n=plan_n,
-                                text_n=text_n,
-                                reason=f"identical text apology hash={content_hash}",
-                            )
+                            if not safety_refusal:
+                                self._maybe_switch_backup_on_identical_text(
+                                    task_id=task_id,
+                                    plan_n=plan_n,
+                                    text_n=text_n,
+                                    reason=f"identical text apology hash={content_hash}",
+                                )
+                            elif getattr(self, "_mid_step_backup_switched", False):
+                                self._revert_dev_backup_model(
+                                    task_id,
+                                    reason="backup model repeated safety refusal",
+                                )
                             if getattr(self, "_forced_tool_mode", False):
                                 target = self._resolve_text_reject_target_path(task_id)
                                 if target and not getattr(self, "_synthetic_read_fallback_used", False):

@@ -74,7 +74,6 @@ from backend.services.needs_user_guard import (
     clear_needs_user_fields,
     dev_clarification_from_result,
     dev_explicit_needs_user,
-    enrich_needs_user_options,
     prefer_po_instruction_suffix,
     is_lint_wall_card,
     reroute_tool_blocker_to_dev,
@@ -1374,10 +1373,6 @@ def _try_move_to_needs_user(
     if not park_ok:
         return _reroute_tool_blocker_instead_of_needs_user(task_id, live, park_reason)
     apply_needs_user_brief(live, brief)
-    try:
-        enrich_needs_user_options(live)
-    except Exception:
-        pass
     activity_msg = str(brief.get("question") or msg)
     move_result = move_board_stage(
         task_id,
@@ -1762,6 +1757,19 @@ def _check_stuck_and_escalate(
                 "Stopping endless In Progress retries — split or escalate.",
             )
             add_system_log("System", "warning", f"{task_id}: {trip_reason}")
+            try:
+                from backend.services.sprint_speed_gates import last_step_exit_reason
+
+                exit_r = last_step_exit_reason(task)
+                if exit_r in ("text_rejection_loop", "llm_call_failed"):
+                    park_msg = (
+                        f"{trip_reason} — model or tools keep failing; pick a Needs User option "
+                        "or split the card."
+                    )
+                    if _try_move_to_needs_user(task_id, task, park_msg, kind="stuck_loop"):
+                        return
+            except Exception:
+                pass
             if lane_after == "Needs PO":
                 from backend.services.sprint_speed_gates import latch_needs_po_auto_skip
 
@@ -2259,6 +2267,14 @@ FORCE_PATCH_INSTRUCTION = (
 
 def _lint_fix_hint(task: Dict[str, Any]) -> str:
     """Concrete first diagnostic for Lint: / lintSourceFile cards."""
+    try:
+        from backend.services.lint_wall_recovery import build_missing_package_preflight_nudge
+
+        dep = build_missing_package_preflight_nudge(task)
+        if dep:
+            return dep
+    except Exception:
+        pass
     title = str(task.get("title") or "")
     is_lint = title.startswith("Lint: ") or bool(task.get("lintSourceFile"))
     if not is_lint and not stuck_is_tool_or_lint(task):
@@ -4873,6 +4889,21 @@ def _run_developer_step(active_task: Dict[str, Any], brief: str) -> None:
     from backend.services.sprint_speed_gates import maybe_unlatch_dev_for_forced_patch
 
     maybe_unlatch_dev_for_forced_patch(live_task)
+    live_task = find_task_by_id(task_id) or live_task
+    if live_task.get("phaseCycleCapReached"):
+        cap_reason = str(
+            live_task.get("phaseCycleCapReason")
+            or "Phase cycle cap reached — split the card or reset the Developer visit latch."
+        )
+        _handle_visit_cap_stall(
+            task_id,
+            live_task,
+            cap_reason,
+            title=title,
+            lane_before=lane_before,
+            brief=brief,
+        )
+        return
     visit, capped = begin_dev_step(live_task)
     if capped:
         result = (
@@ -6044,6 +6075,13 @@ def _recover_latched_dev_card(
     if not task_id:
         return
     lane_before = get_task_lane(task_id) or "In Progress"
+    if lane_before == "Done":
+        add_system_log(
+            "System",
+            "info",
+            f"{task_id}: skipping latched Dev recovery — card is Done",
+        )
+        return
     title = str(active_task.get("title") or task_id)
     park_msg = (
         "Phase cycle cap reached. Split the card or reset the Developer visit latch. "

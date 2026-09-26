@@ -98,6 +98,42 @@ def build_lint_wall_recovery_nudge(
     return ""
 
 
+_MISSING_PKG_URI_RE = re.compile(
+    r"Target of URI doesn't exist: 'package:([^/]+)/",
+    re.I,
+)
+_SKIP_PREFLIGHT_PACKAGES = frozenset(
+    {"flutter", "flutter_test", "flutter_localizations", "flutter_web_plugins"}
+)
+
+
+def detect_missing_pubspec_package(task: Dict[str, Any]) -> Optional[str]:
+    """Return pub package name when diagnostics show a missing package: URI."""
+    if not isinstance(task, dict):
+        return None
+    for line in _diag_lines(task):
+        match = _MISSING_PKG_URI_RE.search(line)
+        if not match:
+            continue
+        pkg = str(match.group(1) or "").strip().lower()
+        if pkg and pkg not in _SKIP_PREFLIGHT_PACKAGES:
+            return pkg
+    return None
+
+
+def build_missing_package_preflight_nudge(task: Dict[str, Any]) -> str:
+    pkg = detect_missing_pubspec_package(task)
+    if not pkg:
+        return ""
+    return (
+        f"{LINT_WALL_MARKER}\n"
+        f"Missing dependency `{pkg}`. Patch `pubspec.yaml` to add `{pkg}` under dependencies "
+        f"(with a compatible version), then run_command: flutter pub get "
+        "before editing lib/ Dart files.\n"
+        "Next tool call MUST be apply_patch on pubspec.yaml or run_command — no prose."
+    )
+
+
 def deterministic_lint_wall_patch(
     task: Dict[str, Any],
     path: str,

@@ -2,7 +2,9 @@
 
 from backend.services.lint_wall_recovery import (
     build_lint_wall_recovery_nudge,
+    build_missing_package_preflight_nudge,
     detect_lint_wall_pattern,
+    detect_missing_pubspec_package,
     deterministic_lint_wall_patch,
 )
 
@@ -73,3 +75,19 @@ def test_deterministic_pubspec_adds_flutter_lints():
     _, old, new = det
     assert "flutter_lints" in new
     assert old == "dev_dependencies:"
+
+
+def test_detect_missing_pubspec_package_from_drift_uri():
+    task = {
+        "lastCommandDiagnostics": [
+            {
+                "message": "Target of URI doesn't exist: 'package:drift/drift.dart'",
+                "file": "lib/database.dart",
+            }
+        ]
+    }
+    assert detect_missing_pubspec_package(task) == "drift"
+    nudge = build_missing_package_preflight_nudge(task)
+    assert "drift" in nudge
+    assert "pubspec.yaml" in nudge
+    assert "flutter pub get" in nudge

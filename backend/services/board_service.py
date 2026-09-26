@@ -110,7 +110,6 @@ def move_board_stage(
             from backend.services.needs_user_guard import (
                 apply_needs_user_brief,
                 build_needs_user_brief,
-                enrich_needs_user_options,
                 needs_user_options_look_generic,
                 should_park_in_needs_user,
             )
@@ -133,16 +132,8 @@ def move_board_stage(
             existing_opts = active_task.get("needsUserOptions")
             if not existing_opts and brief.get("options"):
                 apply_needs_user_brief(active_task, brief)
-                try:
-                    enrich_needs_user_options(active_task)
-                except Exception:
-                    pass
             elif needs_user_options_look_generic(existing_opts, task=active_task):
                 apply_needs_user_brief(active_task, brief)
-                try:
-                    enrich_needs_user_options(active_task)
-                except Exception:
-                    pass
         if (
             target_lane == "In Progress"
             and honor_dev_claim_gate
