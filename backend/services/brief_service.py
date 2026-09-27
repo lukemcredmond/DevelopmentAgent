@@ -132,28 +132,61 @@ def resolve_brief_for_sprint(client_brief: str) -> str:
     return client_brief
 
 
-def looks_like_usable_plan_outline(text: Optional[str]) -> bool:
-    """True when text looks like a markdown plan outline (not tool markup or max-iter failure)."""
-    from backend.services.llm_tool_recovery import looks_like_raw_tool_markup
+def looks_like_usable_plan_outline(
+    text: Optional[str],
+    *,
+    strict: bool = True,
+    brief: Optional[str] = None,
+) -> bool:
+    """True when text passes deterministic plan outline validation."""
+    from backend.services.plan_outline_quality import validate_plan_outline
 
     raw = str(text or "").strip()
-    if not raw or looks_like_raw_tool_markup(raw):
+    if not raw:
         return False
     lower = raw.lower()
     if raw.startswith("Max tool iterations") or "max tool iterations" in lower:
         return False
-    if raw.startswith("##") or "## summary" in lower or "## proposed epics" in lower:
-        return True
-    if "summary" in lower and ("epic" in lower or "approach" in lower):
-        return True
-    return False
+    return validate_plan_outline(raw, brief=brief, strict=strict).ok
 
 
 def set_project_plan_outline(outline: str, *, source: str = "user") -> None:
-    state.PROJECT_PLAN_OUTLINE = outline or ""
+    from backend.services.plan_outline_quality import validate_plan_outline
+
+    incoming = outline or ""
+    if incoming.strip() and source != "user":
+        validation = validate_plan_outline(
+            incoming,
+            strict=True,
+        )
+        if not validation.ok:
+            from backend.services.logs import add_system_log
+
+            msg = "; ".join(
+                i.message for i in validation.issues if i.severity == "fail"
+            )[:400]
+            add_system_log(
+                "Product Owner",
+                "error",
+                f"Plan outline not saved — quality check failed: {msg or 'invalid outline'}",
+            )
+            return
+    elif incoming.strip() and source == "user":
+        validation = validate_plan_outline(incoming, strict=False)
+        if not validation.ok:
+            from backend.services.logs import add_system_log
+
+            warns = [i.message for i in validation.issues if i.severity == "fail"]
+            if warns:
+                add_system_log(
+                    "Product Owner",
+                    "warning",
+                    "Plan saved with quality warnings: " + "; ".join(warns)[:350],
+                )
+    state.PROJECT_PLAN_OUTLINE = incoming
     save_current_project_state()
-    if outline and outline.strip():
-        record_brief_changelog(source, "Project plan outline updated", outline[:300])
+    if incoming.strip():
+        record_brief_changelog(source, "Project plan outline updated", incoming[:300])
 
 
 def patch_project_documents(

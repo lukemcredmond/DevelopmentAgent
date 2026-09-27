@@ -444,7 +444,9 @@ Persisted per project. Update via sidebar **Workflow** or `POST /api/workflow/se
 | maxLintFanoutCards | 8 | Max related lint follow-up cards spawned per fan-out (grouped by file) |
 | agentTools | `{}` | Opt-in per-agent tool allowlists; empty role → built-in defaults |
 | agentToolsAllowWritesInRefinement | Off | Keep write/run/git_commit available during refinement |
-| customTools | `[]` | Project-scoped user tools (shell / http / sql). Merged with **global** tools from `~/.allhands` (`global_custom_tools`); same name → project wins. Edit in **Tools → Custom tools**. |
+| customTools | `[]` | Project-scoped user tools (shell / http / sql / script). Merged with **global** tools from `~/.allhands` (`global_custom_tools`); same name → project wins. Edit in **Tools → Custom tools**. |
+| autoForgeUnknownTools | `false` | When true, invent names like `flutter_analyze` auto-register as project custom tools (heuristic). |
+| maxProjectCustomTools | `50` | Cap on project-scoped custom tool definitions. |
 | terminalTimeoutSec | 600 | Shell `run_command` timeout floor; long builds use remaining step time (up to 30 min) |
 
 #### Search and context
@@ -566,7 +568,8 @@ Add tools without code changes. Each entry has `name`, `description`, JSON Schem
 | Executor | Config | Behavior |
 |----------|--------|----------|
 | `sql` | `sql.connections`, `readOnly`, `maxRows` | In-process **SQLite** only (`sqlite:///…` relative to workspace). Read-only allows `SELECT` / `WITH`. |
-| `shell` | `shell.command` | Template with `{param}` placeholders (shell-quoted); runs via `run_command` policy |
+| `shell` | `shell.command`, optional `shellPostProcess` | Template with `{param}` placeholders (shell-quoted); optional `shellPostProcess.builtin` (`dart_analyze`, `tsc`, …) or `shellPostProcess.path` (workspace script reading stdin) |
+| `script` | `script.path`, `interpreter`, `timeoutSec` | Runs a workspace Python script; tool arguments are sent as JSON on stdin |
 | `http` | `http.url`, `http.method` | JSON body (POST) or query string (GET) |
 
 Example `query_sql` (also available as a **+ query_sql template** button in Workflow):
@@ -594,6 +597,8 @@ Example `query_sql` (also available as a **+ query_sql template** button in Work
 ```
 
 Custom tools appear in the agent’s Ollama `tools` list. If an allowlist is set for that agent, the custom name must be included on the list.
+
+**Agent-driven registration:** Developer and QA agents can call built-in **`register_custom_tool`** to validate and save a project custom tool (no Tool Lab modal). Settings: `autoForgeUnknownTools` (default off) auto-creates heuristics for names like `flutter_analyze` when the model invents an unknown tool; `maxProjectCustomTools` caps project entries (default 50). **`run_command` already structures Flutter/Dart analyze** output when the command contains `flutter analyze` — use a custom tool when you need a dedicated name, parameters, or extra post-processing.
 
 ### Kanban lanes
 
@@ -652,6 +657,7 @@ Shipped system and sprint-step instruction text lives in [backend/services/promp
 | read_file, list_dir | All | Read workspace |
 | write_file, apply_patch, delete_file | Dev, CR | Edit code (Dev only outside refinement by default) |
 | run_command | Dev, QA | Shell in workspace |
+| register_custom_tool | Dev, QA | Save a project custom tool (shell/script/http/sql) for later turns |
 | update_board, add_backlog_tasks, add_subtasks | PO, Dev | Kanban updates |
 | grep, glob_file_search, search_code | PO, Dev, CR | Find code |
 | semantic_search, graph_query | When enabled | Qdrant / Graphify |
@@ -662,7 +668,7 @@ Shipped system and sprint-step instruction text lives in [backend/services/promp
 
 Prefer **apply_patch** for edits to existing files; **write_file** for new files or full rewrites.
 
-**Unknown tools:** If the model invents a name (e.g. `flutter_analyze`), the **Unknown Tool Request** modal maps it to a real tool and can save a per-project alias. If it calls a **real** tool that is not on that agent/mode (e.g. `write_file` during refinement), the call fails with a Console warning — **do not** map `write_file` → `write_file`; that does not enable the tool. Built-in aliases (`create_file` → `write_file`, `Write` → `write_file`, `Bash` → `run_command`, …) live in [backend/services/tool_aliases.py](backend/services/tool_aliases.py).
+**Unknown tools:** If the model invents a name (e.g. `flutter_analyze`), the **Unknown Tool Request** modal maps it to a real tool and can save a per-project alias. With **`autoForgeUnknownTools`** enabled in workflow settings, matching names (e.g. flutter analyze) are auto-registered as project custom tools instead of opening the modal. Agents can also call **`register_custom_tool`** explicitly. If it calls a **real** tool that is not on that agent/mode (e.g. `write_file` during refinement), the call fails with a Console warning — **do not** map `write_file` → `write_file`; that does not enable the tool. Built-in aliases (`create_file` → `write_file`, `Write` → `write_file`, `Bash` → `run_command`, …) live in [backend/services/tool_aliases.py](backend/services/tool_aliases.py).
 
 ---
 
@@ -1298,8 +1304,8 @@ flowchart LR
 
 ### First code in ~30 minutes (checklist)
 
-1. Write the **brief** (auto-saves after edit) and run **Plan outline** — plan is persisted to the project DB.
-2. Edit **Proposed epics** in the Plan tab, then **Generate Features** — prefer small implementation children (`requiresDev: true`), not planning-only cards.
+1. Write the **brief** and run **Plan outline** — stored plan includes data model, flows, errors, testing, and **Epic details** (paste chat plans → **Normalize pasted plan**).
+2. **Generate Features** opens a **feature pack preview** (export `features-pack.md` for Cursor). **Approve & create cards** when quality looks good (`requireFeaturePackApproval` in Workflow → Gates).
 3. Workflow → Presets → **Fast first code** (efficiency high, phase model routing, local SLM + lean preload, rotation off, micro-steps off, **Dev phase graph** on, turn/iteration caps).
 4. **Claim** or move one small card to **In Progress** (≤3 AC). Use **Run In Progress** before full auto-sprint.
 5. Confirm sidebar **Ready for Dev** count &gt; 0. If only planning-only cards, Dev will explore tools without `apply_patch`.

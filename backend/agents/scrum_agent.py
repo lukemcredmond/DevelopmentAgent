@@ -277,6 +277,9 @@ _PO_BOARD_TOOLS = frozenset({"update_board", "add_backlog_tasks", "add_subtasks"
 _PO_READONLY_TOOLS = frozenset(
     {"list_dir", "grep", "glob_file_search", "read_file", "search_code", "semantic_search", "graph_query"}
 )
+_PO_OUTLINE_READONLY_TOOLS = frozenset(
+    {"list_dir", "grep", "glob_file_search", "read_file", "search_code"}
+)
 
 _PO_IDLE_REJECTION_MESSAGE = (
     "You are already in an active project step. Task Detail and the project brief are in the "
@@ -311,6 +314,7 @@ def po_execute_step_tools(
     role: str,
     task_id: Optional[str],
     json_only_split: bool = False,
+    plan_outline_no_tools: bool = False,
 ) -> tuple[list, bool]:
     """Resolve Ollama tool schemas for a PO execute_step call.
 
@@ -318,16 +322,29 @@ def po_execute_step_tools(
     PLANNING_BACKLOG (outline already in prompt — no workspace exploration) or
     PO card split (JSON array in content — avoids huge add_backlog_tasks schema).
     """
-    from backend.services.sprint_service import PLANNING_BACKLOG_TASK_ID, is_planning_task_id
+    from backend.services.sprint_service import (
+        PLANNING_BACKLOG_TASK_ID,
+        PLANNING_OUTLINE_TASK_ID,
+        is_planning_task_id,
+    )
 
     tools = list(registry_tools or [])
     if json_only_split and role == "Product Owner":
+        return [], True
+    if plan_outline_no_tools and role == "Product Owner":
         return [], True
     json_only_backlog = role == "Product Owner" and (task_id or "") == PLANNING_BACKLOG_TASK_ID
     if json_only_backlog:
         return [], True
     planning_step = is_planning_task_id(task_id)
-    if role == "Product Owner" and planning_step:
+    if role == "Product Owner" and (task_id or "") == PLANNING_OUTLINE_TASK_ID:
+        tools = [
+            t
+            for t in tools
+            if isinstance(t, dict)
+            and (t.get("function") or {}).get("name") in _PO_OUTLINE_READONLY_TOOLS
+        ]
+    elif role == "Product Owner" and planning_step:
         # Qwen (and similar) will dump XML tool tags if schemas are omitted.
         # Keep explore tools so native tool_calls work; XML in content is recovered.
         tools = [
@@ -369,7 +386,12 @@ def _po_rejection_system_message(content: str, task_id: Optional[str]) -> str:
     from backend.services.brief_service import looks_like_usable_plan_outline
     from backend.services.sprint_service import PLANNING_BACKLOG_TASK_ID
 
-    if (task_id or "") == PLANNING_BACKLOG_TASK_ID and looks_like_usable_plan_outline(content):
+    from backend.services.plan_outline_quality import looks_like_markdown_plan_attempt
+
+    if (task_id or "") == PLANNING_BACKLOG_TASK_ID and (
+        looks_like_usable_plan_outline(content, strict=False)
+        or looks_like_markdown_plan_attempt(content)
+    ):
         return _PO_BACKLOG_JSON_REJECTION
     lane = get_task_lane(task_id) if task_id else ""
     if lane == "Needs PO" and _looks_like_po_implementation_plan(content, task_id):
@@ -430,6 +452,7 @@ def _po_step_should_reject_text_only(
     from backend.services.brief_service import looks_like_usable_plan_outline
     from backend.services.feature_service import looks_like_usable_plan_epics
     from backend.services.llm_tool_recovery import looks_like_raw_tool_markup
+    from backend.services.plan_outline_quality import looks_like_markdown_plan_attempt
     from backend.services.sprint_service import (
         PLANNING_BACKLOG_TASK_ID,
         PLANNING_OUTLINE_TASK_ID,
@@ -438,7 +461,10 @@ def _po_step_should_reject_text_only(
 
     if looks_like_raw_tool_markup(content):
         return True
-    if (task_id or "") == PLANNING_OUTLINE_TASK_ID and looks_like_usable_plan_outline(content):
+    if (task_id or "") == PLANNING_OUTLINE_TASK_ID and (
+        looks_like_usable_plan_outline(content, strict=False)
+        or looks_like_markdown_plan_attempt(content)
+    ):
         return False
     if (task_id or "") in (PLANNING_BACKLOG_TASK_ID, PLANNING_TASK_ID) and looks_like_usable_plan_epics(
         content
@@ -2332,6 +2358,23 @@ class ScrumAgent:
                 f"ref={refuse_hash}). "
                 f"Manual edit or split may be required on {target}.{backup_hint}"
             )
+            if refusal_class == "safety_refusal":
+                try:
+                    from backend.services.board_service import move_board_stage
+                    from backend.services.step_diagnostics import log_event
+
+                    move_board_stage(str(task_id), "Blocked")
+                    log_event("safety_refusal_blocked", target[:160])
+                    stop_msg = (
+                        f"Blocked: model safety refusal on {target}. "
+                        "Use backup model, agent_file_tool.py, or split the card."
+                    )
+                    add_system_log(self.role, "warning", stop_msg)
+                    self._log_step_exit(stop_msg, "warning")
+                    self._finish_run(status="failed", error=stop_msg)
+                    return stop_msg
+                except Exception:
+                    pass
             parked, park_block = _try_move_to_needs_user_with_reason(
                 task_id,
                 board_task,
@@ -3908,6 +3951,8 @@ class ScrumAgent:
         max_iterations: int = 8,
         *,
         json_only_split: bool = False,
+        plan_outline_no_tools: bool = False,
+        plan_outline_phase: Optional[str] = None,
         max_step_duration_sec: Optional[int] = None,
     ) -> str:
         from backend.agents.registry import configure_agent_tools
@@ -3923,6 +3968,7 @@ class ScrumAgent:
             role=self.role,
             task_id=task_id_for_tools,
             json_only_split=json_only_split,
+            plan_outline_no_tools=plan_outline_no_tools,
         )
         if json_only_backlog:
             if json_only_split:
@@ -3931,6 +3977,19 @@ class ScrumAgent:
                     "info",
                     "PO split — JSON-only step, no tools.",
                 )
+            elif plan_outline_no_tools:
+                if (plan_outline_phase or "").strip().lower() == "refine":
+                    add_system_log(
+                        self.role,
+                        "info",
+                        "Plan outline refine — markdown-only step, no tools.",
+                    )
+                else:
+                    add_system_log(
+                        self.role,
+                        "info",
+                        "Plan outline write — markdown-only step, no tools.",
+                    )
             else:
                 add_system_log(
                     self.role,
@@ -3950,13 +4009,20 @@ class ScrumAgent:
         self._logged_ctx_clamp = False
         self._po_num_predict_bumped = False
         self._step_num_predict = None
+        self._plan_outline_no_tools = bool(plan_outline_no_tools)
+        self._plan_outline_partial_parts: list[str] = []
+        self._po_outline_cap_continues = 0
         ws = get_workflow_settings()
         if self.role == "Product Owner":
             from backend.services.po_clarification import PO_NUM_PREDICT_DEFAULT
             from backend.services.sampling import sampling_options_for_role
+            from backend.services.workflow_settings import plan_outline_num_predict
 
-            po_opts = sampling_options_for_role(self.role, ws=ws)
-            self._step_num_predict = int(po_opts.get("num_predict") or PO_NUM_PREDICT_DEFAULT)
+            if plan_outline_no_tools:
+                self._step_num_predict = plan_outline_num_predict(ws)
+            else:
+                po_opts = sampling_options_for_role(self.role, ws=ws)
+                self._step_num_predict = int(po_opts.get("num_predict") or PO_NUM_PREDICT_DEFAULT)
         elif self.role == "Developer":
             from backend.services.agent_efficiency import dev_num_predict_default
 
@@ -4684,19 +4750,69 @@ class ScrumAgent:
 
                 if self.role == "Product Owner" and task_id:
                     from backend.services.po_clarification import (
+                        PLAN_OUTLINE_MAX_CAP_CONTINUES,
+                        PLAN_OUTLINE_TRUNCATED_RETRY_MESSAGE,
                         PO_NUM_PREDICT_BUMP,
                         PO_TRUNCATED_RETRY_MESSAGE,
                         PO_TRUNCATED_STOP,
                         po_turn_hit_generation_cap,
                     )
+                    from backend.services.workflow_settings import plan_outline_num_predict
 
                     usage = getattr(self, "_last_token_usage", None) or {}
-                    if po_turn_hit_generation_cap(
+                    outline_step = bool(getattr(self, "_plan_outline_no_tools", False))
+                    hit_cap = po_turn_hit_generation_cap(
                         eval_tokens=int(usage.get("evalTokens") or 0),
                         num_predict=getattr(self, "_step_num_predict", None),
                         tool_names=tool_call_names,
                         content=message.content or "",
-                    ):
+                    )
+                    if hit_cap and outline_step:
+                        partial = (message.content or "").strip()
+                        if partial:
+                            self._plan_outline_partial_parts.append(partial)
+                        continues = int(getattr(self, "_po_outline_cap_continues", 0) or 0)
+                        if continues < PLAN_OUTLINE_MAX_CAP_CONTINUES:
+                            self._po_outline_cap_continues = continues + 1
+                            target = plan_outline_num_predict(get_workflow_settings())
+                            current = int(getattr(self, "_step_num_predict", 0) or 0)
+                            self._step_num_predict = max(current, target)
+                            if partial:
+                                messages.append({"role": "assistant", "content": partial})
+                            messages.append(
+                                {
+                                    "role": "system",
+                                    "content": PLAN_OUTLINE_TRUNCATED_RETRY_MESSAGE,
+                                }
+                            )
+                            add_system_log(
+                                self.role,
+                                "warning",
+                                f"Plan outline hit num_predict cap — continuing markdown "
+                                f"({self._po_outline_cap_continues}/{PLAN_OUTLINE_MAX_CAP_CONTINUES}), "
+                                f"num_predict={self._step_num_predict}",
+                            )
+                            log_event(
+                                "plan_outline_cap_continue",
+                                f"continue={self._po_outline_cap_continues}",
+                            )
+                            continue
+                        merged = "".join(self._plan_outline_partial_parts)
+                        if merged.strip():
+                            message.content = merged
+                            self._plan_outline_partial_parts = []
+                            hit_cap = False
+                        else:
+                            add_system_log(self.role, "warning", PO_TRUNCATED_STOP)
+                            self._log_step_exit(PO_TRUNCATED_STOP, "warning")
+                            self._finish_run(status="failed", error=PO_TRUNCATED_STOP)
+                            pending_lesson = (
+                                "po_generation_truncated",
+                                set(tools_used),
+                                PO_TRUNCATED_STOP,
+                            )
+                            return PO_TRUNCATED_STOP
+                    elif hit_cap:
                         if not getattr(self, "_po_num_predict_bumped", False):
                             self._po_num_predict_bumped = True
                             current = int(getattr(self, "_step_num_predict", 0) or 0)
@@ -4801,6 +4917,12 @@ class ScrumAgent:
                     continue
 
                 content = unwrap_llm_text((message.content or "")).strip()
+                if getattr(self, "_plan_outline_no_tools", False):
+                    parts = list(getattr(self, "_plan_outline_partial_parts", None) or [])
+                    if parts:
+                        tail = content
+                        content = ("".join(parts) + tail).strip()
+                        self._plan_outline_partial_parts = []
                 echo_hit = detect_tool_output_echo(content, messages) if content else None
                 if echo_hit and echo_hit.is_echo:
                     self._consecutive_echo_count = int(getattr(self, "_consecutive_echo_count", 0)) + 1
@@ -4886,17 +5008,24 @@ class ScrumAgent:
                     and content
                     and _looks_like_po_work_product(content)
                 ):
-                    po_done = self._maybe_finish_po_clarification(task_id, content, tools_used)
-                    if po_done:
-                        if task_id:
-                            record_task_transcript(
-                                task_id,
-                                "assistant",
-                                content,
-                                agent=self.role,
-                            )
-                        pending_lesson = ("po_clarified", set(tools_used), po_done)
-                        return po_done
+                    from backend.services.sprint_service import is_planning_task_id
+
+                    if is_planning_task_id(task_id):
+                        pass
+                    else:
+                        po_done = self._maybe_finish_po_clarification(
+                            task_id, content, tools_used
+                        )
+                        if po_done:
+                            if task_id:
+                                record_task_transcript(
+                                    task_id,
+                                    "assistant",
+                                    content,
+                                    agent=self.role,
+                                )
+                            pending_lesson = ("po_clarified", set(tools_used), po_done)
+                            return po_done
 
                 if content and _dev_step_needs_more_tools(tools_used, task_id):
                     if task_id and is_task_done(task_id) and not state.ALLOW_DONE_RETRY:
@@ -5351,14 +5480,23 @@ class ScrumAgent:
                         "warning",
                         f"Step ended after tools ({tool_list}) with no write_file or apply_patch",
                     )
-                exit_reason = "completed_with_writes" if write_tools else "completed_text_only"
+                if write_tools and not self._step_had_successful_write():
+                    exit_reason = "tool_failure_stop"
+                elif write_tools:
+                    exit_reason = "completed_with_writes"
+                else:
+                    exit_reason = "completed_text_only"
                 add_system_log(
                     self.role,
                     "info",
                     f"Step exit: {exit_reason} tools=[{', '.join(sorted(tools_used)) or 'none'}]",
                 )
-                if write_tools:
+                if exit_reason == "completed_with_writes":
                     self._mark_force_patch_next_dev_step("completed_with_writes")
+                elif write_tools:
+                    self._finish_run(status="failed", error="Write tools ran but no file changed.")
+                    pending_lesson = (exit_reason, set(tools_used), content or "")
+                    return content or "Patch did not apply."
                 self._finish_run(status="completed")
                 pending_lesson = (exit_reason, set(tools_used), content or "")
                 return content or "Task completed."

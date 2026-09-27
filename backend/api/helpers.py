@@ -53,6 +53,7 @@ def build_state_response(*, include_files: bool = True) -> dict:
         "brief": state.PROJECT_BRIEF,
         "originalBrief": getattr(state, "PROJECT_ORIGINAL_BRIEF", "") or "",
         "projectPlanOutline": state.PROJECT_PLAN_OUTLINE,
+        "pendingFeaturePack": getattr(state, "PENDING_FEATURE_PACK", None),
         "workspaceDir": state.WORKSPACE_DIR,
         "skillsDir": state.SKILLS_DIR,
         "board": state.SHARED_BOARD,

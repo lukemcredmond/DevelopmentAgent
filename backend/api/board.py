@@ -94,6 +94,8 @@ def reset_dev_latch_route(task_id: str):
         if not task:
             raise HTTPException(status_code=404, detail="Task not found")
         normalize_task(task)
+        prior_dev_visits = int(task.get("devStepCount") or 0)
+        had_cap = bool(task.get("phaseCycleCapReached"))
         reset_dev_cycle_latch(task)
         task.pop("needsUserKind", None)
         task.pop("userQuestion", None)
@@ -114,8 +116,18 @@ def reset_dev_latch_route(task_id: str):
             "Developer visit latch reset",
         )
         add_system_log("System", "success", f"Reset Developer visit latch on {task_id}")
+        warning = None
+        if had_cap and prior_dev_visits >= 8 and not task.get("splitSuperseded"):
+            warning = (
+                "Latch reset without splitting the card. If scope is still broad, "
+                "split into smaller cards first or you may hit the visit cap again."
+            )
+            add_system_log("System", "warning", warning)
         save_current_project_state()
-    return build_state_response()
+    response = build_state_response()
+    if warning:
+        response["resetLatchWarning"] = warning
+    return response
 
 
 @router.post("/api/board/clear-tasks")

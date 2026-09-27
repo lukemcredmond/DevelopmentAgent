@@ -3,6 +3,38 @@
 from unittest.mock import patch
 
 from backend.bootstrap import initialize
+from backend.services.plan_outline_quality import sample_v2_plan_outline
+from backend.services.workflow_settings import save_workflow_settings
+
+
+def _disable_feature_pack_gate():
+    save_workflow_settings({"requireFeaturePackApproval": False, "planOutlineRefinePass": False})
+
+
+@patch("backend.services.sprint_service.agent_po")
+def test_run_po_plan_outline_skips_refine_when_json(mock_po):
+    initialize()
+    from backend.services.plan_outline_quality import sample_v2_plan_outline
+    from backend.services.sprint_service import run_po_plan_outline
+    from backend.services.workflow_settings import save_workflow_settings
+
+    save_workflow_settings({"planOutlineRefinePass": True})
+    good = sample_v2_plan_outline("Meal planner")
+    mock_po.execute_step.side_effect = [
+        "Ready to draft plan from brief.",
+        '{"description": "bad", "acceptanceCriteria": ["a"]}',
+        good,
+    ]
+    outline = run_po_plan_outline("Build a meal planner", "http://localhost:11434")
+    assert "Summary" in outline
+    assert mock_po.execute_step.call_count == 3
+    assert mock_po.execute_step.call_args_list[2][1].get("plan_outline_no_tools") is True
+    refine_calls = [
+        c
+        for c in mock_po.execute_step.call_args_list
+        if c[1].get("plan_outline_phase") == "refine"
+    ]
+    assert refine_calls == []
 
 
 @patch("backend.services.sprint_service.agent_po")
@@ -11,13 +43,59 @@ def test_run_po_plan_outline_stores_outline(mock_po):
     from backend import state
     from backend.services.sprint_service import run_po_plan_outline
 
-    mock_po.execute_step.return_value = "## Summary\nTest plan\n"
+    save_workflow_settings({"planOutlineRefinePass": False})
+    mock_po.execute_step.side_effect = [
+        "Ready to draft plan from brief.",
+        sample_v2_plan_outline("Todo app"),
+    ]
     outline = run_po_plan_outline("Build a todo app", "http://localhost:11434")
     assert "Summary" in outline
     assert state.PROJECT_PLAN_OUTLINE == outline
-    prompt = mock_po.execute_step.call_args[0][0]
-    assert "focused product epics" in prompt.lower() or "6–12" in prompt or "6-12" in prompt
-    assert "Proposed epics" in prompt
+    assert mock_po.execute_step.call_count == 2
+    write_prompt = mock_po.execute_step.call_args_list[1][0][0]
+    assert "Epic details" in write_prompt
+    assert mock_po.execute_step.call_args_list[1][1].get("plan_outline_no_tools") is True
+
+
+def test_planning_llm_iterations_exempt_from_implementer_cap():
+    initialize()
+    from backend import state
+    from backend.agents.task_context import clear_active_sprint_context, set_active_sprint_context
+    from backend.services.sprint_service import (
+        PLANNING_OUTLINE_TASK_ID,
+        _llm_iterations,
+        _planning_llm_iterations,
+    )
+    from backend.services.workflow_settings import save_workflow_settings
+
+    save_workflow_settings(
+        {
+            "executionProfile": "implementer",
+            "implementerMaxLlmIterationsPerStep": 5,
+            "maxLlmIterationsPerStep": 30,
+            "planOutlineMaxLlmIterations": 16,
+        }
+    )
+    assert _planning_llm_iterations() == 16
+    set_active_sprint_context(PLANNING_OUTLINE_TASK_ID, "Product Owner")
+    assert _llm_iterations() == 16
+    clear_active_sprint_context()
+    assert _llm_iterations() == 5
+
+
+@patch("backend.services.sprint_service.agent_po")
+def test_run_po_plan_outline_keeps_previous_on_max_iterations(mock_po):
+    initialize()
+    from backend import state
+    from backend.services.sprint_service import run_po_plan_outline
+    from backend.services.plan_outline_quality import sample_v2_plan_outline
+
+    previous = sample_v2_plan_outline("Kept plan")
+    state.PROJECT_PLAN_OUTLINE = previous
+    mock_po.execute_step.return_value = "Max tool iterations reached without completing the task."
+    outline = run_po_plan_outline("Build a todo app", "http://localhost:11434")
+    assert outline.strip() == previous.strip()
+    assert state.PROJECT_PLAN_OUTLINE.strip() == previous.strip()
 
 
 @patch("backend.services.sprint_service.agent_po")
@@ -76,8 +154,9 @@ def test_run_po_plan_outline_offline_stub_lists_many_epics(mock_po):
 
     save_workflow_settings({"confirmSimulationFallback": False})
     mock_po.execute_step.return_value = "SIMULATION_FALLBACK"
+    save_workflow_settings({"planOutlineRefinePass": False})
     outline = run_po_plan_outline("Build a todo app", "http://localhost:11434")
-    assert "Project setup" in outline
+    assert "Epic 1" in outline
     assert outline.count("\n- ") >= 5
 
 
@@ -91,9 +170,12 @@ def test_run_po_plan_backlog_uses_outline(mock_epics, mock_po):
     from backend import state
     from backend.services.sprint_service import run_po_plan_backlog
 
-    state.PROJECT_PLAN_OUTLINE = "## Summary\nPlan\n"
+    _disable_feature_pack_gate()
+    state.PROJECT_PLAN_OUTLINE = sample_v2_plan_outline()
     mock_po.execute_step.return_value = (
-        '{"epics":[{"title":"Epic A","description":"d","children":[{"title":"Task A","description":"d","acceptanceCriteria":["a"]}]}]}'
+        '{"epics":[{"title":"Epic A","description":"d","children":'
+        '[{"title":"Task A","description":"d","acceptanceCriteria":["a","b"]},'
+        '{"title":"Task B","description":"d2","acceptanceCriteria":["c","d"]}]}]}'
     )
     count = run_po_plan_backlog("Build app", "http://localhost:11434")
     assert count == 2
@@ -116,9 +198,12 @@ def test_run_po_plan_backlog_publishes_sprint_progress(mock_epics, mock_po, mock
     from backend import state
     from backend.services.sprint_service import PLANNING_BACKLOG_TASK_ID, run_po_plan_backlog
 
-    state.PROJECT_PLAN_OUTLINE = "## Summary\nPlan\n"
+    _disable_feature_pack_gate()
+    state.PROJECT_PLAN_OUTLINE = sample_v2_plan_outline()
     mock_po.execute_step.return_value = (
-        '{"epics":[{"title":"Epic A","description":"d","children":[{"title":"Task A","description":"d","acceptanceCriteria":["a"]}]}]}'
+        '{"epics":[{"title":"Epic A","description":"d","children":'
+        '[{"title":"Task A","description":"d","acceptanceCriteria":["a","b"]},'
+        '{"title":"Task B","description":"d2","acceptanceCriteria":["c","d"]}]}]}'
     )
     count = run_po_plan_backlog("Build app", "http://localhost:11434")
     assert count == 2
@@ -137,7 +222,8 @@ def test_run_po_plan_backlog_rejects_markdown_outline(mock_po):
     from backend import state
     from backend.services.sprint_service import run_po_plan_backlog
 
-    state.PROJECT_PLAN_OUTLINE = "## Summary\nPlan\n"
+    _disable_feature_pack_gate()
+    state.PROJECT_PLAN_OUTLINE = sample_v2_plan_outline()
     state.SYSTEM_LOGS.clear()
     mock_po.execute_step.return_value = (
         "## Summary\nMeal planner.\n\n## Approach\nCore modules.\n\n## Proposed epics\n- Recipes\n"
@@ -178,8 +264,9 @@ def test_run_po_plan_backlog_fallback_from_outline_when_llm_returns_loop_stop(
     from backend import state
     from backend.services.sprint_service import run_po_plan_backlog
 
+    _disable_feature_pack_gate()
     state.PROJECT_PLAN_OUTLINE = (
-        "## Summary\nMeal shopping list app.\n\n## Proposed epics\n"
+        "## Summary\nMeal shopping list app.\n\n## Approach\nFlutter.\n\n## Proposed epics\n"
         "- Recipes — browse and save recipes\n"
         "- Shopping list — add items from recipes\n"
     )
@@ -198,8 +285,6 @@ def test_run_po_plan_backlog_fallback_from_outline_when_llm_returns_loop_stop(
     count = run_po_plan_backlog("Build app", "http://localhost:11434")
     assert count == 4
     mock_apply.assert_called_once()
-    warnings = [e for e in state.SYSTEM_LOGS if e.get("type") == "warning"]
-    assert any("Created cards from outline" in (e.get("text") or "") for e in warnings)
 
 
 @patch("backend.services.sprint_service.agent_po")

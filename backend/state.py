@@ -63,6 +63,9 @@ REFINEMENT_MODE: bool = False
 
 PROJECT_PLAN_OUTLINE: str = ""
 
+# Preview feature pack awaiting user approve (epics JSON + enriched preview).
+PENDING_FEATURE_PACK: Optional[Dict[str, Any]] = None
+
 # User-injected workspace-wide command/test output (shared across agents; not tied to one card).
 PROJECT_TOOL_EVIDENCE: List[Dict[str, Any]] = []
 

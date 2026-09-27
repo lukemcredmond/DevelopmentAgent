@@ -3458,9 +3458,21 @@ def _audit_dev_files_written(task: Dict[str, Any], lane_before: str, task_id: st
     move_board_stage(task_id, "In Progress")
 
 
+def _planning_llm_iterations() -> int:
+    """Iteration budget for PO planning steps (not subject to implementer cap)."""
+    ws = get_workflow_settings()
+    dedicated = int(ws.get("planOutlineMaxLlmIterations") or 0)
+    if dedicated > 0:
+        return max(4, dedicated)
+    return max(4, int(ws.get("maxLlmIterationsPerStep", 8)))
+
+
 def _llm_iterations(task: Optional[Dict[str, Any]] = None) -> int:
     ws = get_workflow_settings()
     from backend.services.workflow_settings import get_execution_profile
+
+    if is_planning_task_id(state.ACTIVE_SPRINT_TASK_ID):
+        return _planning_llm_iterations()
 
     base = int(ws.get("maxLlmIterationsPerStep", 8))
     if get_execution_profile(ws) == "implementer":
@@ -3550,10 +3562,15 @@ def _simulate_qa(active_task: Dict[str, Any]) -> None:
 
 def _po_backlog_output_is_markdown_outline(po_output: str) -> bool:
     from backend.services.feature_service import looks_like_usable_plan_epics
+    from backend.services.plan_outline_quality import looks_like_markdown_plan_attempt
 
     if not po_output or not str(po_output).strip():
         return False
-    return looks_like_usable_plan_outline(po_output) and not looks_like_usable_plan_epics(po_output)
+    if looks_like_usable_plan_epics(po_output):
+        return False
+    return looks_like_markdown_plan_attempt(po_output) or looks_like_usable_plan_outline(
+        po_output, strict=False
+    )
 
 
 def _append_po_backlog_from_output(po_output: str, existing: set[str]) -> int:
@@ -3585,16 +3602,18 @@ def _try_fallback_epics_from_outline(outline_text: str, existing_set: set[str]) 
     add_system_log(
         "Product Owner",
         "warning",
-        "Created cards from outline — LLM did not return valid epics JSON.",
+        "Built feature pack from outline — LLM did not return valid epics JSON.",
     )
-    return _append_po_backlog_from_output(fallback_json, existing_set)
+    return _finish_po_plan_backlog(fallback_json, outline_text, existing_set)
 
 
 def _finish_po_plan_backlog(po_output: str, outline_text: str, existing_set: set[str]) -> int:
+    from backend.services.feature_pack_service import (
+        build_feature_pack_preview,
+        resolve_epics_json_string,
+        set_pending_feature_pack,
+    )
     from backend.services.feature_service import looks_like_usable_plan_epics
-
-    if po_output and looks_like_usable_plan_epics(po_output):
-        return _append_po_backlog_from_output(po_output, existing_set)
 
     if po_output and _po_backlog_output_is_markdown_outline(po_output):
         add_system_log(
@@ -3605,18 +3624,78 @@ def _finish_po_plan_backlog(po_output: str, outline_text: str, existing_set: set
         )
         return 0
 
-    count = _try_fallback_epics_from_outline(outline_text, existing_set)
-    if count > 0:
-        return count
+    epics_json, source = resolve_epics_json_string(po_output, outline_text)
+    if not epics_json:
+        count = _try_fallback_epics_from_outline(outline_text, existing_set)
+        if count > 0:
+            return count
+        if po_output and looks_like_usable_plan_epics(po_output):
+            epics_json = po_output
+            source = "llm"
+        elif po_output:
+            return _append_po_backlog_from_output(po_output, existing_set)
+        else:
+            return 0
 
-    if po_output:
-        return _append_po_backlog_from_output(po_output, existing_set)
-    return 0
+    ws = get_workflow_settings()
+    if ws.get("requireFeaturePackApproval", True):
+        preview = build_feature_pack_preview(
+            epics_json,
+            outline_text=outline_text,
+            source=source,
+        )
+        set_pending_feature_pack(preview)
+        child_n = int((preview.get("stats") or {}).get("childCount") or 0)
+        add_system_log(
+            "Product Owner",
+            "info",
+            f"Feature pack preview ready ({child_n} child card(s)) — review, export, then Approve.",
+        )
+        return child_n
+
+    return _append_po_backlog_from_output(epics_json, existing_set)
+
+
+def _plan_outline_is_ready(outline: str, brief_text: str) -> bool:
+    if not outline or _is_llm_call_failed(outline) or _result_is_max_iterations(outline):
+        return False
+    return looks_like_usable_plan_outline(outline, brief=brief_text)
+
+
+def _plan_outline_wrong_modality(outline: str) -> bool:
+    """True when output is not a markdown plan attempt (JSON echo, truncation stop, empty)."""
+    from backend.services.plan_outline_quality import looks_like_markdown_plan_attempt
+    from backend.services.po_clarification import PO_TRUNCATED_STOP
+
+    text = str(outline or "").strip()
+    if not text or text == PO_TRUNCATED_STOP:
+        return True
+    return not looks_like_markdown_plan_attempt(text)
+
+
+def _plan_outline_failure_return(previous_outline: str, publish_empty: bool = False) -> str:
+    kept = (previous_outline or "").strip()
+    if kept:
+        add_system_log(
+            "Product Owner",
+            "warning",
+            "Plan outline retry failed — keeping your previous saved plan.",
+        )
+        publish_event("plan_chunk", {"phase": "done", "outline": kept})
+        return kept
+    publish_event("plan_chunk", {"phase": "done", "outline": "" if publish_empty else ""})
+    return ""
 
 
 def run_po_plan_outline(brief: str, ollama_url: str) -> str:
     """Generate a markdown plan outline (phase 1) without creating backlog cards."""
     from backend.services.events import publish_event
+    from backend.services.plan_outline_prompt import (
+        build_plan_outline_explore_prompt,
+        build_plan_outline_refine_prompt,
+        build_plan_outline_write_prompt,
+    )
+    from backend.services.plan_outline_quality import sample_v2_plan_outline, validate_plan_outline
     from backend.services.prompt_budget import truncate_brief
 
     brief = resolve_brief_for_sprint(brief)
@@ -3625,35 +3704,93 @@ def run_po_plan_outline(brief: str, ollama_url: str) -> str:
     ws = get_workflow_settings()
     num_ctx = int(ws.get("numCtx") or 8192)
     brief_text = truncate_brief(brief, num_ctx)
+    previous_outline = str(state.PROJECT_PLAN_OUTLINE or "")
     publish_event("plan_chunk", {"phase": "start"})
     add_system_log("Product Owner", "info", "Generating project plan outline…")
 
+    guidance = po_planning_guidance_block()
+    dod = build_dod_block()
+    explore_iters = max(1, min(5, int(ws.get("planOutlineExploreMaxIterations") or 3)))
+    write_iters = _planning_llm_iterations()
+
+    explore_notes = ""
     outline = ""
     try:
         set_active_sprint_context(PLANNING_OUTLINE_TASK_ID, "Product Owner")
-        outline = agent_po.execute_step(
-            "Produce a concise markdown project plan ONLY — no JSON, no code, no XML tool tags.\n"
-            "If you need to inspect the workspace, use native tool calls (list_dir, glob_file_search, read_file), "
-            "then reply with the markdown plan.\n"
-            "Sections: ## Summary, ## Approach, ## Risks, ## Open questions, ## Proposed epics.\n"
-            f"{po_planning_guidance_block()}"
-            + (
-                "Under ## Proposed epics, list 6–12 product epics (one line each).\n"
-                if is_local_slm_profile()
-                else "Under ## Proposed epics, list many concrete product epics as a bullet list "
-                "(prefer 6–12 for a non-trivial brief). Each bullet: one line with capability + why. "
-                "Do not collapse the brief into a few audit/meta mega-epics.\n"
-            )
-            + f"{build_dod_block()}\nProject brief:\n{brief_text}",
-            max_iterations=max(4, _llm_iterations()),
+        explore_result = agent_po.execute_step(
+            build_plan_outline_explore_prompt(
+                brief_text,
+                planning_guidance=guidance,
+                dod_block=dod,
+            ),
+            max_iterations=explore_iters,
         )
+        if explore_result and not _result_is_max_iterations(explore_result) and not _is_llm_call_failed(
+            explore_result
+        ):
+            if _plan_outline_is_ready(explore_result, brief_text):
+                outline = explore_result
+            else:
+                explore_notes = explore_result.strip()[:4000]
     finally:
         clear_active_sprint_context()
 
-    if _is_llm_call_failed(outline) or _result_is_max_iterations(outline):
+    if not _plan_outline_is_ready(outline, brief_text):
+        try:
+            set_active_sprint_context(PLANNING_OUTLINE_TASK_ID, "Product Owner")
+            written = agent_po.execute_step(
+                build_plan_outline_write_prompt(
+                    brief_text,
+                    planning_guidance=guidance,
+                    dod_block=dod,
+                    explore_notes=explore_notes,
+                ),
+                max_iterations=write_iters,
+                plan_outline_no_tools=True,
+            )
+        finally:
+            clear_active_sprint_context()
+        if written and not _is_llm_call_failed(written):
+            outline = written
+
+    if outline and _plan_outline_wrong_modality(outline):
+        add_system_log(
+            "Product Owner",
+            "warning",
+            "Plan outline write was not markdown — retrying once with stricter instructions.",
+        )
+        retry_notes = (
+            (explore_notes + "\n\n") if explore_notes else ""
+        ) + (
+            "Previous output was invalid (JSON task spec or truncated). "
+            "Output the complete markdown plan only — required ## sections, no JSON."
+        )
+        try:
+            set_active_sprint_context(PLANNING_OUTLINE_TASK_ID, "Product Owner")
+            rewritten = agent_po.execute_step(
+                build_plan_outline_write_prompt(
+                    brief_text,
+                    planning_guidance=guidance,
+                    dod_block=dod,
+                    explore_notes=retry_notes.strip(),
+                ),
+                max_iterations=write_iters,
+                plan_outline_no_tools=True,
+            )
+        finally:
+            clear_active_sprint_context()
+        if rewritten and not _is_llm_call_failed(rewritten):
+            outline = rewritten
+
+    from backend.services.po_clarification import PO_TRUNCATED_STOP
+
+    if (
+        _is_llm_call_failed(outline)
+        or _result_is_max_iterations(outline)
+        or str(outline or "").strip() == PO_TRUNCATED_STOP
+    ):
         _log_llm_call_failed(outline or "Max tool iterations reached.", "Plan outline failed —")
-        publish_event("plan_chunk", {"phase": "done", "outline": ""})
-        return ""
+        return _plan_outline_failure_return(previous_outline)
 
     if outline == "SIMULATION_FALLBACK":
         from backend.services.simulation_gate import (
@@ -3676,22 +3813,39 @@ def run_po_plan_outline(brief: str, ollama_url: str) -> str:
         if try_defer_simulation(prop):
             outline = ""
         else:
-            outline = (
-                "## Summary\nOffline plan stub.\n\n## Approach\nScaffold core modules first.\n\n"
-                "## Risks\nUnknown integration points.\n\n## Open questions\n(none)\n\n"
-                "## Proposed epics\n"
-                "- Project setup — workspace, tooling, and base deps so other slices can build\n"
-                "- Core data model — entities and persistence for the main domain\n"
-                "- Primary list / browse UI — user can view the main collection\n"
-                "- Create & edit flows — add and update items with validation\n"
-                "- Detail / summary view — inspect a single item or period\n"
-                "- Export or sharing — take work out of the app (list, print, or share)\n"
-            )
+            outline = sample_v2_plan_outline("Offline plan stub.")
 
-    if outline and not looks_like_usable_plan_outline(outline):
-        _log_llm_call_failed(outline[:400], "Plan outline failed — model returned tool markup instead of markdown.")
-        publish_event("plan_chunk", {"phase": "done", "outline": ""})
-        return ""
+    validation = validate_plan_outline(outline, brief=brief_text, strict=True) if outline else None
+    if (
+        outline
+        and validation
+        and not validation.ok
+        and ws.get("planOutlineRefinePass", True)
+        and not _plan_outline_wrong_modality(outline)
+    ):
+        issues_text = "\n".join(f"- [{i.severity}] {i.message}" for i in validation.issues)
+        try:
+            set_active_sprint_context(PLANNING_OUTLINE_TASK_ID, "Product Owner")
+            refined = agent_po.execute_step(
+                build_plan_outline_refine_prompt(outline, issues_text),
+                max_iterations=_planning_llm_iterations(),
+                plan_outline_no_tools=True,
+                plan_outline_phase="refine",
+            )
+        finally:
+            clear_active_sprint_context()
+        if refined and not _is_llm_call_failed(refined):
+            outline = refined
+            validation = validate_plan_outline(outline, brief=brief_text, strict=True)
+
+    if outline and not looks_like_usable_plan_outline(outline, brief=brief_text):
+        fail_msg = (
+            "; ".join(i.message for i in validation.issues if i.severity == "fail")[:350]
+            if validation
+            else outline[:400]
+        )
+        _log_llm_call_failed(fail_msg, "Plan outline failed — quality check:")
+        return _plan_outline_failure_return(previous_outline)
 
     if outline:
         set_project_plan_outline(outline, source="po_plan_outline")
@@ -3736,9 +3890,13 @@ def run_po_plan_backlog(brief: str, ollama_url: str, outline: Optional[str] = No
             "The full approved plan outline is included below — convert it directly to JSON.\n"
             f"{po_planning_guidance_block()}"
             "Convert the approved plan outline into Features (epics) with smallest developer-ready child cards.\n"
+            "When ## Epic details has **Suggested child cards**, emit one JSON child per suggested card "
+            "(same titles). Fill description, scope (from epic Scope bullets), testPlan (from Test notes), "
+            "userStory, and 2–3 testable acceptanceCriteria per child (from AC hints).\n"
             "Reply with ONLY a JSON object of this shape:\n"
             '{"epics":[{"title":"...","description":"...","children":['
             '{"title":"...","description":"...","acceptanceCriteria":["..."],'
+            '"optional scope":"...","optional testPlan":"...","optional userStory":"...",'
             '"optional blockedBy":[],"optional priority":100,'
             '"optional workType":"implementation","optional requiresDev":true,"optional requiresQa":true}'
             "]}]}\n"

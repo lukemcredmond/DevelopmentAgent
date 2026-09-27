@@ -1,17 +1,29 @@
-"""User-defined custom tools (shell / http / sql) registered onto agent registries."""
+"""User-defined custom tools (shell / http / sql / script) registered onto agent registries."""
 
 from __future__ import annotations
 
 import json
+import os
 import re
 import shlex
 import sqlite3
+import subprocess
 import urllib.error
 import urllib.request
 from typing import Any, Callable, Dict, List, Optional, Set
 from urllib.parse import unquote, urlparse
 
 from backend.agents.tools import Tool
+
+MAX_CUSTOM_TOOL_OUTPUT_CHARS = 50_000
+
+_DESTRUCTIVE_SHELL_MARKERS = (
+    "rm -rf",
+    "rm -fr",
+    "mkfs.",
+    "dd if=",
+    ":(){ :|:& };:",
+)
 
 _CUSTOM_CANONICAL_NAMES: Set[str] = set()
 
@@ -137,12 +149,176 @@ def execute_sql_tool(tool_def: Dict[str, Any], **kwargs: Any) -> str:
         return f"Error executing SQL: {e}"
 
 
+def resolve_workspace_relative_path(rel_path: str) -> Optional[str]:
+    """Resolve a workspace-relative path; reject traversal and paths outside WORKSPACE_DIR."""
+    from backend import state
+
+    rel = (rel_path or "").strip().replace("\\", "/")
+    if not rel or rel.startswith("/") or ".." in rel.split("/"):
+        return None
+    ws = os.path.normpath(state.WORKSPACE_DIR or ".")
+    abs_path = os.path.normpath(os.path.join(ws, rel))
+    if abs_path != ws and not abs_path.startswith(ws + os.sep):
+        return None
+    return abs_path
+
+
+def _shell_post_process_cfg(tool_def: Dict[str, Any]) -> Optional[Dict[str, Any]]:
+    top = tool_def.get("shellPostProcess")
+    if isinstance(top, dict) and top:
+        return top
+    shell_cfg = tool_def.get("shell") if isinstance(tool_def.get("shell"), dict) else {}
+    nested = shell_cfg.get("postProcess")
+    if isinstance(nested, dict) and nested:
+        return nested
+    return None
+
+
+def _diagnostics_by_builtin(builtin: str, output: str) -> List[Dict[str, Any]]:
+    from backend.services.diagnostics_parser import (
+        parse_dart_analyze,
+        parse_eslint_output,
+        parse_generic,
+        parse_pytest_failures,
+        parse_tsc_output,
+    )
+
+    key = (builtin or "").strip().lower().replace("-", "_")
+    out = output or ""
+    if key in ("dart_analyze", "flutter_analyze"):
+        return parse_dart_analyze(out)
+    if key == "tsc":
+        return parse_tsc_output(out)
+    if key == "eslint":
+        return parse_eslint_output(out)
+    if key == "pytest":
+        return parse_pytest_failures(out)
+    if key == "generic":
+        return parse_generic(out)
+    return parse_dart_analyze(out) + parse_generic(out)
+
+
+def _run_workspace_script_pipe(
+    script_rel: str,
+    *,
+    stdin_text: str,
+    interpreter: str = "python3",
+    timeout_sec: int = 120,
+) -> str:
+    path = resolve_workspace_relative_path(script_rel)
+    if not path or not os.path.isfile(path):
+        return f"Error: post-process script not found at '{script_rel}'"
+    try:
+        proc = subprocess.run(
+            [interpreter or "python3", path],
+            input=(stdin_text or "").encode("utf-8"),
+            capture_output=True,
+            timeout=max(5, int(timeout_sec)),
+            cwd=os.path.dirname(path) or ".",
+        )
+    except subprocess.TimeoutExpired:
+        return f"Error: script timed out after {timeout_sec}s"
+    except Exception as e:
+        return f"Error running script: {e}"
+    combined = (proc.stdout or b"").decode("utf-8", errors="replace")
+    if proc.stderr:
+        err = proc.stderr.decode("utf-8", errors="replace")
+        if err.strip():
+            combined = (combined + "\n" + err).strip()
+    if len(combined) > MAX_CUSTOM_TOOL_OUTPUT_CHARS:
+        combined = combined[:MAX_CUSTOM_TOOL_OUTPUT_CHARS] + "\n…(truncated)"
+    if proc.returncode != 0 and not combined.strip():
+        return f"Error: script exit {proc.returncode}"
+    return combined or f"(script exit {proc.returncode}, no output)"
+
+
+def _apply_shell_post_process(command: str, raw_output: str, post_cfg: Dict[str, Any]) -> str:
+    from backend.agents.tool_outcomes import classify_run_command_outcome
+    from backend.services.command_result import CommandResult, format_command_result_for_agent
+    from backend.services.diagnostics_parser import summarize_diagnostics
+
+    script_cfg = post_cfg.get("script") if isinstance(post_cfg.get("script"), dict) else {}
+    script_path = post_cfg.get("path") or script_cfg.get("path")
+    if script_path:
+        processed = _run_workspace_script_pipe(
+            str(script_path),
+            stdin_text=raw_output,
+            interpreter=str(script_cfg.get("interpreter") or post_cfg.get("interpreter") or "python3"),
+            timeout_sec=int(script_cfg.get("timeoutSec") or post_cfg.get("timeoutSec") or 120),
+        )
+        if processed.startswith("Error:"):
+            return processed
+        raw_output = processed
+
+    builtin = post_cfg.get("builtin")
+    if builtin:
+        findings = _diagnostics_by_builtin(str(builtin), raw_output)
+        outcome = classify_run_command_outcome(command, 0, raw_output, findings)
+        summary = summarize_diagnostics(findings)
+        result = CommandResult(
+            command=command,
+            exit_code=0,
+            stdout=raw_output,
+            stderr="",
+            duration_ms=0,
+            outcome=outcome,
+            diagnostics=findings,
+            summary=summary,
+        )
+        return format_command_result_for_agent(result)
+
+    if len(raw_output) > MAX_CUSTOM_TOOL_OUTPUT_CHARS:
+        raw_output = raw_output[:MAX_CUSTOM_TOOL_OUTPUT_CHARS] + "\n…(truncated)"
+    return raw_output
+
+
+def execute_script_tool(tool_def: Dict[str, Any], **kwargs: Any) -> str:
+    script_cfg = tool_def.get("script") if isinstance(tool_def.get("script"), dict) else {}
+    rel = str(script_cfg.get("path") or "").strip()
+    path = resolve_workspace_relative_path(rel)
+    if not path or not os.path.isfile(path):
+        return f"Error: script not found at '{rel or '(empty path)'}'"
+    interpreter = str(script_cfg.get("interpreter") or "python3")
+    timeout = int(script_cfg.get("timeoutSec") or 120)
+    from backend import state
+
+    try:
+        proc = subprocess.run(
+            [interpreter, path],
+            input=json.dumps(kwargs, default=str).encode("utf-8"),
+            capture_output=True,
+            timeout=max(5, timeout),
+            cwd=state.WORKSPACE_DIR or ".",
+        )
+    except subprocess.TimeoutExpired:
+        return f"Error: script timed out after {timeout}s"
+    except Exception as e:
+        return f"Error running script: {e}"
+    out = (proc.stdout or b"").decode("utf-8", errors="replace")
+    err = (proc.stderr or b"").decode("utf-8", errors="replace")
+    if err.strip() and proc.returncode != 0:
+        out = (out + "\n" + err).strip() if out.strip() else err.strip()
+    if len(out) > MAX_CUSTOM_TOOL_OUTPUT_CHARS:
+        out = out[:MAX_CUSTOM_TOOL_OUTPUT_CHARS] + "\n…(truncated)"
+    if proc.returncode != 0 and not out:
+        return f"Error: script exit {proc.returncode}"
+    return out or f"(script exit {proc.returncode}, no output)"
+
+
 def execute_shell_tool(tool_def: Dict[str, Any], **kwargs: Any) -> str:
     shell_cfg = tool_def.get("shell") if isinstance(tool_def.get("shell"), dict) else {}
     template = str(shell_cfg.get("command") or "").strip()
     if not template:
         return "Error: custom tool shell.command is empty"
     command = _format_shell_command(template, kwargs)
+    post_cfg = _shell_post_process_cfg(tool_def)
+    if post_cfg:
+        from backend.services.command_result import run_workspace_command
+
+        result = run_workspace_command(command)
+        combined = result.combined_output
+        return _apply_shell_post_process(command, combined, post_cfg)
+
     from backend.workspace.files import run_agent_command
 
     return str(run_agent_command(command, background=False))
@@ -201,7 +377,14 @@ def execute_custom_tool(tool_def: Dict[str, Any], **kwargs: Any) -> str:
         return execute_http_tool(tool_def, **kwargs)
     if executor == "shell":
         return execute_shell_tool(tool_def, **kwargs)
+    if executor == "script":
+        return execute_script_tool(tool_def, **kwargs)
     return f"Error: Unknown custom tool executor '{executor}'"
+
+
+def shell_command_is_safe(template: str) -> bool:
+    lower = (template or "").lower()
+    return not any(marker in lower for marker in _DESTRUCTIVE_SHELL_MARKERS)
 
 
 def _make_executor(tool_def: Dict[str, Any]) -> Callable[..., str]:
@@ -224,6 +407,11 @@ def normalize_custom_tool_def(raw: Dict[str, Any]) -> Optional[Dict[str, Any]]:
     if not isinstance(agents, list):
         agents = ["Developer"]
     agents = [str(a) for a in agents]
+    shell_raw = raw.get("shell") if isinstance(raw.get("shell"), dict) else {}
+    shell_post = raw.get("shellPostProcess")
+    if not isinstance(shell_post, dict):
+        shell_post = shell_raw.get("postProcess") if isinstance(shell_raw.get("postProcess"), dict) else {}
+    script_raw = raw.get("script") if isinstance(raw.get("script"), dict) else {}
     return {
         "id": str(raw.get("id") or name),
         "name": name,
@@ -231,9 +419,11 @@ def normalize_custom_tool_def(raw: Dict[str, Any]) -> Optional[Dict[str, Any]]:
         "parameters": params,
         "agents": agents,
         "executor": str(raw.get("executor") or "shell").lower(),
-        "shell": raw.get("shell") if isinstance(raw.get("shell"), dict) else {},
+        "shell": shell_raw,
+        "shellPostProcess": shell_post if isinstance(shell_post, dict) else {},
         "http": raw.get("http") if isinstance(raw.get("http"), dict) else {},
         "sql": raw.get("sql") if isinstance(raw.get("sql"), dict) else {},
+        "script": script_raw,
     }
 
 

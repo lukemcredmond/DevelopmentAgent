@@ -114,6 +114,30 @@ class ToolRegistry:
                 )
                 return msg
 
+            forged = None
+            try:
+                from backend.services.tool_forge_service import try_auto_forge_unknown_tool
+
+                forged = try_auto_forge_unknown_tool(
+                    original_name,
+                    arguments,
+                    agent_role=state.ACTIVE_SPRINT_AGENT,
+                )
+            except Exception:
+                forged = None
+            if forged and forged.get("ok"):
+                tool_name = str(forged.get("name") or original_name)
+                resolved_name, resolved_args, _ = resolve_tool_call(tool_name, arguments)
+                if resolved_name in self._tools:
+                    try:
+                        return self._tools[resolved_name].execute(**resolved_args)
+                    except Exception as e:
+                        return f"Error executing tool '{resolved_name}': {str(e)}"
+                return (
+                    f"Auto-registered custom tool '{tool_name}'. "
+                    "Call it again with the same arguments."
+                )
+
             queue_pending_tool(
                 original_name,
                 arguments,

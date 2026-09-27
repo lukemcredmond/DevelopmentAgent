@@ -363,11 +363,26 @@ def needs_po_should_skip_auto(
 ) -> bool:
     if not isinstance(task, dict):
         return False
+    if ws is None:
+        from backend.services.workflow_settings import get_workflow_settings
+
+        ws = get_workflow_settings()
     if needs_po_shadows_in_progress(task):
         return True
     if task.get("phaseCycleCapReached"):
         return True
     if task.get("poAutoSkip"):
+        meta = task.get("meta") or {}
+        if ws.get("planRunSkipPoWhenActionable") and (
+            meta.get("mvpLastRun") or meta.get("mvpFrozen")
+        ):
+            try:
+                from backend.services.po_clarification import task_has_ready_spec
+
+                if task_has_ready_spec(task):
+                    return False
+            except Exception:
+                pass
         return True
     if empty_gen_should_skip(task):
         return True

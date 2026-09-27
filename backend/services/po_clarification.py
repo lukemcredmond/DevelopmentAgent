@@ -27,6 +27,12 @@ PO_TRUNCATED_RETRY_MESSAGE = (
     '{"description": "...", "acceptanceCriteria": ["..."]} '
     "and call update_board to In Progress. Do not write a long essay."
 )
+PLAN_OUTLINE_TRUNCATED_RETRY_MESSAGE = (
+    "Your markdown plan was cut off at the token limit. Continue exactly where you left off. "
+    "Output markdown only — no JSON, no task specs with description/acceptanceCriteria. "
+    "Do not repeat ## sections already completed; append the remainder of the plan."
+)
+PLAN_OUTLINE_MAX_CAP_CONTINUES = 3
 PO_TRUNCATED_STOP = (
     "Stopped: PO generation truncated without clarification JSON or update_board."
 )

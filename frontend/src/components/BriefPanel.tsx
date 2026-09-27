@@ -1,5 +1,17 @@
-import { memo, useEffect, useState } from 'react'
+import { memo, useCallback, useEffect, useState } from 'react'
+import { validatePlanOutline } from '../api/client'
+import type { PlanOutlineValidation } from '../types'
 import { SettingHint } from './SettingHint'
+
+function normalizePastedPlanClient(text: string): string {
+  const raw = text.trim()
+  if (!raw) return raw
+  const planMatch = raw.match(/^#\s*plan\b.*$/im)
+  if (planMatch?.index != null) return raw.slice(planMatch.index).trim()
+  const summaryMatch = raw.match(/^##\s*summary\s*$/im)
+  if (summaryMatch?.index != null) return raw.slice(summaryMatch.index).trim()
+  return raw
+}
 
 const BRIEF_OPEN_KEY = 'allhands-brief-open'
 const BRIEF_TAB_KEY = 'allhands-brief-tab'
@@ -48,6 +60,8 @@ interface BriefPanelProps {
   planTabFocusKey?: string
   onGenerateBacklog?: () => void
   generateBacklogDisabled?: boolean
+  onReviewFeaturePack?: () => void
+  hasFeaturePackPreview?: boolean
   /** Controlled open state (optional). */
   open?: boolean
   onOpenChange?: (open: boolean) => void
@@ -66,6 +80,8 @@ export default memo(function BriefPanel({
   planTabFocusKey,
   onGenerateBacklog,
   generateBacklogDisabled = false,
+  onReviewFeaturePack,
+  hasFeaturePackPreview = false,
   open: openProp,
   onOpenChange,
 }: BriefPanelProps) {
@@ -77,6 +93,26 @@ export default memo(function BriefPanel({
     else setOpenInternal(value)
   }
   const [tab, setTab] = useState<BriefTab>(readBriefTab)
+  const [planValidation, setPlanValidation] = useState<PlanOutlineValidation | null>(null)
+
+  const refreshPlanValidation = useCallback(async () => {
+    if (!planOutline.trim()) {
+      setPlanValidation(null)
+      return
+    }
+    try {
+      const v = await validatePlanOutline(planOutline)
+      setPlanValidation(v)
+    } catch {
+      setPlanValidation(null)
+    }
+  }, [planOutline])
+
+  useEffect(() => {
+    if (tab !== 'plan') return
+    const t = window.setTimeout(() => void refreshPlanValidation(), 600)
+    return () => window.clearTimeout(t)
+  }, [tab, planOutline, refreshPlanValidation])
 
   useEffect(() => {
     writeBriefOpen(open)
@@ -187,9 +223,27 @@ export default memo(function BriefPanel({
           ) : (
             <>
               <p className="text-[11px] text-cat-overlay leading-relaxed">
-                Plan outline is markdown only (no cards). Generate Features turns that outline into
-                epics and child cards on the board.
+                Handoff-grade markdown (data model, flows, epic details). Paste chat plans here, then
+                Normalize. Generate Features builds a preview you can export before Approve.
               </p>
+              {planValidation && (
+                <div
+                  className={`text-[11px] rounded-lg px-3 py-2 border ${
+                    planValidation.ok
+                      ? 'border-emerald-500/30 bg-emerald-950/20 text-emerald-100'
+                      : 'border-amber-500/30 bg-amber-950/20 text-amber-100'
+                  }`}
+                >
+                  Plan quality score: {planValidation.score}
+                  {planValidation.issues?.length > 0 && (
+                    <ul className="mt-1 list-disc pl-4 text-[10px] opacity-90">
+                      {planValidation.issues.slice(0, 5).map((issue) => (
+                        <li key={issue.code + issue.message}>{issue.message}</li>
+                      ))}
+                    </ul>
+                  )}
+                </div>
+              )}
               <textarea
                 value={planOutline}
                 onChange={(e) => onPlanOutlineChange?.(e.target.value)}
@@ -198,24 +252,48 @@ export default memo(function BriefPanel({
                 className="w-full min-h-[180px] bg-cat-base border border-cat-surface1 rounded-lg p-3 text-sm text-white focus:outline-none focus:border-violet-500 resize-y font-mono"
                 placeholder="Run Plan outline from the sidebar — markdown plan streams here…"
               />
-              {onGenerateBacklog && (
-                <div className="flex items-center gap-1">
+              <div className="flex flex-wrap items-center gap-2">
+                <button
+                  type="button"
+                  disabled={!planOutline.trim() || planOutlineStreaming}
+                  onClick={() => onPlanOutlineChange?.(normalizePastedPlanClient(planOutline))}
+                  className="text-xs bg-cat-surface1 hover:bg-cat-surface2 text-white py-2 px-3 rounded-lg"
+                >
+                  Normalize pasted plan
+                </button>
+                {onGenerateBacklog && (
+                  <>
+                    <button
+                      type="button"
+                      disabled={
+                        generateBacklogDisabled ||
+                        planOutlineStreaming ||
+                        planBacklogActive ||
+                        !planOutline.trim()
+                      }
+                      onClick={onGenerateBacklog}
+                      className="text-xs bg-violet-700 hover:bg-violet-600 disabled:opacity-50 text-white font-medium py-2 px-3 rounded-lg transition-colors flex items-center gap-1.5"
+                    >
+                      {planBacklogActive ? (
+                        <i className="fa-solid fa-spinner animate-spin" />
+                      ) : (
+                        <i className="fa-solid fa-layer-group" />
+                      )}
+                      {planBacklogActive ? 'Generating Features…' : 'Generate Features from plan'}
+                    </button>
+                    <SettingHint hint="Creates a reviewable feature pack (export markdown/JSON) before cards hit the board when approval is on." />
+                  </>
+                )}
+                {hasFeaturePackPreview && onReviewFeaturePack && (
                   <button
                     type="button"
-                    disabled={generateBacklogDisabled || planOutlineStreaming || planBacklogActive || !planOutline.trim()}
-                    onClick={onGenerateBacklog}
-                    className="text-xs bg-violet-700 hover:bg-violet-600 disabled:opacity-50 text-white font-medium py-2 px-3 rounded-lg transition-colors flex items-center gap-1.5"
+                    onClick={onReviewFeaturePack}
+                    className="text-xs bg-indigo-700 hover:bg-indigo-600 text-white font-medium py-2 px-3 rounded-lg"
                   >
-                    {planBacklogActive ? (
-                      <i className="fa-solid fa-spinner animate-spin" />
-                    ) : (
-                      <i className="fa-solid fa-layer-group" />
-                    )}
-                    {planBacklogActive ? 'Generating Features…' : 'Generate Features from plan'}
+                    Review feature pack
                   </button>
-                  <SettingHint hint="Turns this outline into Features-lane epics and small child cards. Does not start coding." />
-                </div>
-              )}
+                )}
+              </div>
             </>
           )}
         </div>

@@ -10,6 +10,11 @@ from backend.config import MAX_SPRINT_STEPS
 logger = logging.getLogger(__name__)
 
 DEFAULT_WORKFLOW_SETTINGS: Dict[str, Any] = {
+    "requireFeaturePackApproval": True,
+    "planOutlineRefinePass": True,
+    "planOutlineMaxLlmIterations": 16,
+    "planOutlineExploreMaxIterations": 3,
+    "planOutlineNumPredict": 4096,
     "requireBacklogApproval": False,
     "requireCodeReview": False,
     "requireToolApproval": False,
@@ -64,7 +69,7 @@ DEFAULT_WORKFLOW_SETTINGS: Dict[str, Any] = {
     "maxDevStepsPerCard": 8,
     # Optional: run independent In Progress cards concurrently (workspace write-locked).
     "enableParallelIndependentCards": False,
-    "maxParallelDevCards": 2,
+    "maxParallelDevCards": 1,
     "requireWorkspaceStructure": True,
     "autoScaffoldOnStructureGap": True,
     # Block lane advance when written files contain TODO/stub/placeholder content.
@@ -79,6 +84,7 @@ DEFAULT_WORKFLOW_SETTINGS: Dict[str, Any] = {
     "commandAllowlist": [
         "flutter analyze",
         "dart analyze",
+        "python3 tools/agent_file_tool.py",
         "npm test",
         "npm run lint",
         "npm create vite",
@@ -96,8 +102,10 @@ DEFAULT_WORKFLOW_SETTINGS: Dict[str, Any] = {
     # Opt-in per-agent tool allowlists (empty/missing → built-in defaults).
     "agentTools": {},
     "agentToolsAllowWritesInRefinement": False,
-    # User-defined tools: name/schema + shell|http|sql executor.
+    # User-defined tools: name/schema + shell|http|sql|script executor.
     "customTools": [],
+    "autoForgeUnknownTools": False,
+    "maxProjectCustomTools": 50,
     "definitionOfDone": [],
     "maxSprintSteps": MAX_SPRINT_STEPS,
     "autoSprintSessionRefreshEnabled": True,
@@ -150,12 +158,12 @@ DEFAULT_WORKFLOW_SETTINGS: Dict[str, Any] = {
     "implementerRelaxGatesOnAutoSprint": True,
     "implementerRelaxGatesAlways": True,
     "implementerStopOnLatch": True,
-    "implementerStopOnLatchCount": 1,
+    "implementerStopOnLatchCount": 4,
     "useComposerDevStep": True,
     "implementerSlimPrompt": "recovery_only",
     "implementerMaxLlmIterationsPerStep": 5,
     "implementerMaxDevStepWallSec": 180,
-    "implementerMaxPreloadTokens": 4000,
+    "implementerMaxPreloadTokens": 2500,
     "maxNeedsUserPerSprint": 2,
     "needsUserCooldownSteps": 3,
     "enableWebSearch": False,
@@ -169,7 +177,7 @@ DEFAULT_WORKFLOW_SETTINGS: Dict[str, Any] = {
     "llmApiKey": "",
     "embedProvider": "ollama",
     "embedBaseUrl": "http://localhost:11434",
-    "ollamaNumCtx": 32768,
+    "ollamaNumCtx": 12288,
     # Optional per-role override map {po,dev,cr,qa}; unset roles use sensible defaults.
     "ollamaNumCtxByRole": {},
     # When true, clamp num_ctx to what the inference host's VRAM can actually hold.
@@ -405,6 +413,13 @@ def migrate_performance_settings(settings: Dict[str, Any]) -> Dict[str, Any]:
             1,
         )
     return out
+
+
+def plan_outline_num_predict(ws: Dict[str, Any] | None = None) -> int:
+    """Decode budget for markdown-only plan outline write/refine steps."""
+    settings = ws if ws is not None else get_workflow_settings()
+    n = int(settings.get("planOutlineNumPredict") or 4096)
+    return max(1024, min(8192, n))
 
 
 def get_workflow_settings(project_id: str | None = None) -> Dict[str, Any]:

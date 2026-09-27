@@ -50,6 +50,9 @@ def load_project_into_state(project_id: str) -> bool:
                     state.PROJECT_PLAN_OUTLINE = sidecar_plan
                     hydrated_plan_from_sidecar = True
     state.WORKSPACE_DIR = proj["workspace_dir"]
+    from backend.services.feature_pack_service import load_pending_feature_pack_from_disk
+
+    state.PENDING_FEATURE_PACK = load_pending_feature_pack_from_disk()
     state.SHARED_BOARD = normalize_board_lanes(proj["board_state"])
     normalize_board_tasks()
     dedupe_board_tasks()

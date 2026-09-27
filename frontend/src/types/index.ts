@@ -502,15 +502,25 @@ export interface CustomToolDef {
   description: string
   parameters: Record<string, unknown>
   agents: string[]
-  executor: 'shell' | 'http' | 'sql'
+  executor: 'shell' | 'http' | 'sql' | 'script'
   scope?: 'project' | 'global'
-  shell?: { command?: string }
+  shell?: { command?: string; postProcess?: ShellPostProcessDef }
+  shellPostProcess?: ShellPostProcessDef
+  script?: { path?: string; interpreter?: string; timeoutSec?: number; argsTemplate?: string }
   http?: { url?: string; method?: string; headers?: Record<string, string>; timeoutSec?: number }
   sql?: {
     connections?: Record<string, string>
     readOnly?: boolean
     maxRows?: number
   }
+}
+
+export interface ShellPostProcessDef {
+  builtin?: string
+  path?: string
+  interpreter?: string
+  timeoutSec?: number
+  script?: { path?: string; interpreter?: string; timeoutSec?: number }
 }
 
 export interface ToolsCatalogResponse {
@@ -522,7 +532,52 @@ export interface ToolsCatalogResponse {
   agentToolsAllowWritesInRefinement: boolean
 }
 
+export interface PlanOutlineIssue {
+  code: string
+  severity: 'fail' | 'warn' | string
+  message: string
+}
+
+export interface PlanOutlineValidation {
+  ok: boolean
+  score: number
+  issues: PlanOutlineIssue[]
+  epicBulletCount?: number
+  epicDetailCount?: number
+}
+
+export interface FeaturePackChildPreview {
+  title: string
+  description?: string
+  acceptanceCriteria?: string[]
+  specReadiness?: { ok: boolean; missing?: string[]; warnings?: string[] }
+}
+
+export interface FeaturePackEpicPreview {
+  title: string
+  description?: string
+  children?: FeaturePackChildPreview[]
+}
+
+export interface FeaturePackPreview {
+  ok?: boolean
+  status?: string
+  epics?: FeaturePackEpicPreview[]
+  issues?: PlanOutlineIssue[]
+  stats?: {
+    epicCount?: number
+    childCount?: number
+    childrenSpecOk?: number
+    source?: string
+  }
+  epicsJson?: string
+}
+
 export interface WorkflowSettings {
+  requireFeaturePackApproval?: boolean
+  planOutlineRefinePass?: boolean
+  planOutlineMaxLlmIterations?: number
+  planOutlineExploreMaxIterations?: number
   requireBacklogApproval: boolean
   requireCodeReview: boolean
   requireDevVerification?: boolean
@@ -1268,6 +1323,7 @@ export interface AppState {
   brief: string
   originalBrief?: string
   projectPlanOutline?: string
+  pendingFeaturePack?: FeaturePackPreview | null
   workspaceDir: string
   skillsDir: string
   board: Board
@@ -1423,6 +1479,8 @@ export interface MoveTaskPayload {
 }
 
 export interface WorkflowSettingsPayload {
+  requireFeaturePackApproval?: boolean
+  planOutlineRefinePass?: boolean
   requireBacklogApproval?: boolean
   requireCodeReview?: boolean
   requireDevVerification?: boolean
@@ -1939,6 +1997,10 @@ export const AGENT_LABELS: Record<AgentId, string> = {
 }
 
 export const DEFAULT_WORKFLOW_SETTINGS: WorkflowSettings = {
+  requireFeaturePackApproval: true,
+  planOutlineRefinePass: true,
+  planOutlineMaxLlmIterations: 16,
+  planOutlineExploreMaxIterations: 3,
   requireBacklogApproval: false,
   requireCodeReview: false,
   requireDevVerification: false,

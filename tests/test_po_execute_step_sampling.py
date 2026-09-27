@@ -49,6 +49,7 @@ def test_po_execute_step_sets_num_predict_from_sampling():
             "maxToolFailuresPerStep": 5,
             "maxAgentStepDurationSec": 30,
             "maxToolCallsPerStep": 80,
+            "poNumPredictOverride": True,
             "samplingByRole": {"po": {"num_predict": 4096}},
         },
     ), patch.object(agent_po, "_chat", side_effect=fake_chat), patch(
@@ -201,3 +202,162 @@ def test_po_planning_explore_then_markdown_plan():
     assert chat_calls["count"] >= 2
     assert "Summary" in (result or "")
     assert not str(result).startswith("Max tool iterations")
+
+
+def test_po_plan_outline_write_uses_plan_outline_num_predict():
+    initialize()
+    state.ACTIVE_SPRINT_TASK_ID = PLANNING_OUTLINE_TASK_ID
+    state.ACTIVE_SPRINT_AGENT = "Product Owner"
+
+    def fake_chat(*args, **kwargs):
+        return _FakeResponse("## Summary\nPlan\n\n## Approach\nStack.\n\n## Proposed epics\n- A\n")
+
+    try:
+        with patch(
+            "backend.agents.scrum_agent.get_workflow_settings",
+            return_value={
+                "maxToolFailuresPerStep": 5,
+                "maxAgentStepDurationSec": 30,
+                "maxToolCallsPerStep": 80,
+                "planOutlineNumPredict": 5120,
+            },
+        ), patch.object(agent_po, "_chat", side_effect=fake_chat), patch(
+            "backend.agents.registry.configure_agent_tools"
+        ), patch(
+            "backend.storage.memory_engine.resolve_embed_model", return_value="embed"
+        ), patch.object(
+            agent_po, "_build_system_content", return_value="sys"
+        ), patch.object(
+            agent_po, "_build_user_content", return_value="user"
+        ):
+            agent_po.execute_step(
+                "Write markdown plan",
+                max_iterations=1,
+                plan_outline_no_tools=True,
+            )
+    finally:
+        state.ACTIVE_SPRINT_TASK_ID = None
+        state.ACTIVE_SPRINT_AGENT = None
+
+    assert agent_po._step_num_predict == 5120
+
+
+def test_planning_outline_json_does_not_exit_po_clarified():
+    initialize()
+    state.ACTIVE_SPRINT_TASK_ID = PLANNING_OUTLINE_TASK_ID
+    state.ACTIVE_SPRINT_AGENT = "Product Owner"
+    json_body = (
+        '{"description": "Task spec echo", "acceptanceCriteria": ["User can log in"]}'
+    )
+    po_clarified_logs: list[str] = []
+
+    def fake_chat(*args, **kwargs):
+        return _FakeResponse(json_body)
+
+    def capture_log(role, level, message):
+        if "po_clarified" in str(message):
+            po_clarified_logs.append(str(message))
+
+    try:
+        with patch(
+            "backend.agents.scrum_agent.get_workflow_settings",
+            return_value={
+                "maxToolFailuresPerStep": 5,
+                "maxAgentStepDurationSec": 30,
+                "maxToolCallsPerStep": 80,
+                "planOutlineNumPredict": 4096,
+            },
+        ), patch.object(agent_po, "_chat", side_effect=fake_chat), patch(
+            "backend.agents.registry.configure_agent_tools"
+        ), patch(
+            "backend.storage.memory_engine.resolve_embed_model", return_value="embed"
+        ), patch.object(
+            agent_po, "_build_system_content", return_value="sys"
+        ), patch.object(
+            agent_po, "_build_user_content", return_value="user"
+        ), patch(
+            "backend.agents.scrum_agent.add_system_log", side_effect=capture_log
+        ), patch.object(
+            agent_po,
+            "_maybe_finish_po_clarification",
+            side_effect=AssertionError("should not run for PLANNING_OUTLINE"),
+        ):
+            result = agent_po.execute_step(
+                "Write markdown plan",
+                max_iterations=1,
+                plan_outline_no_tools=True,
+            )
+    finally:
+        state.ACTIVE_SPRINT_TASK_ID = None
+        state.ACTIVE_SPRINT_AGENT = None
+
+    assert json_body in (result or "")
+    assert not po_clarified_logs
+
+
+def test_plan_outline_cap_uses_markdown_continue_message():
+    initialize()
+    state.ACTIVE_SPRINT_TASK_ID = PLANNING_OUTLINE_TASK_ID
+    state.ACTIVE_SPRINT_AGENT = "Product Owner"
+    chat_calls = {"n": 0}
+    cap_logs: list[str] = []
+
+    def capture_log(role, level, message):
+        if "Plan outline hit num_predict cap" in str(message):
+            cap_logs.append(str(message))
+
+    def fake_chat(*args, **kwargs):
+        chat_calls["n"] += 1
+        agent_po._last_token_usage = {
+            "promptTokens": 100,
+            "evalTokens": 4096,
+            "totalTokens": 4196,
+            "tokensReported": True,
+            "numPredict": 4096,
+            "doneReason": "length",
+        }
+        if chat_calls["n"] == 1:
+            return _FakeResponse("## Summary\nPartial plan cut off")
+        return _FakeResponse("## Approach\nDone.\n\n## Proposed epics\n- Epic\n")
+
+    cap_calls = {"n": 0}
+
+    def fake_hit_cap(**kwargs):
+        cap_calls["n"] += 1
+        return cap_calls["n"] == 1
+
+    try:
+        with patch(
+            "backend.agents.scrum_agent.get_workflow_settings",
+            return_value={
+                "maxToolFailuresPerStep": 5,
+                "maxAgentStepDurationSec": 30,
+                "maxToolCallsPerStep": 80,
+                "planOutlineNumPredict": 4096,
+            },
+        ), patch.object(agent_po, "_chat", side_effect=fake_chat), patch(
+            "backend.services.po_clarification.po_turn_hit_generation_cap",
+            side_effect=fake_hit_cap,
+        ), patch(
+            "backend.agents.registry.configure_agent_tools"
+        ), patch(
+            "backend.storage.memory_engine.resolve_embed_model", return_value="embed"
+        ), patch(
+            "backend.agents.scrum_agent.add_system_log", side_effect=capture_log
+        ), patch.object(
+            agent_po, "_build_system_content", return_value="sys"
+        ), patch.object(
+            agent_po, "_build_user_content", return_value="user"
+        ):
+            agent_po.execute_step(
+                "Write markdown plan",
+                max_iterations=3,
+                plan_outline_no_tools=True,
+            )
+    finally:
+        state.ACTIVE_SPRINT_TASK_ID = None
+        state.ACTIVE_SPRINT_AGENT = None
+
+    assert cap_logs
+    assert chat_calls["n"] >= 2
+    assert not any("clarification JSON" in log for log in cap_logs)

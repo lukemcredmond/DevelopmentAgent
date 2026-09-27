@@ -9,6 +9,7 @@ from backend.agents.scrum_agent import (
     _po_step_should_reject_text_only,
     po_execute_step_tools,
 )
+from backend.services.plan_outline_quality import sample_v2_plan_outline
 from backend.services.sprint_service import PLANNING_BACKLOG_TASK_ID, PLANNING_OUTLINE_TASK_ID
 
 
@@ -50,10 +51,7 @@ def test_po_accepts_json_after_tools():
 
 def test_po_planning_accepts_markdown_after_explore_tools():
     state.ACTIVE_SPRINT_AGENT = "Product Owner"
-    plan = (
-        "## Summary\nA meal planner app.\n\n## Approach\nScaffold core modules first.\n\n"
-        "## Proposed epics\n- Recipes — browse and save recipes\n"
-    )
+    plan = sample_v2_plan_outline("A meal planner app.")
     try:
         assert not _po_step_should_reject_text_only(
             plan, {"list_dir", "read_file"}, PLANNING_OUTLINE_TASK_ID

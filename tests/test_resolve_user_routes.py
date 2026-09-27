@@ -78,10 +78,12 @@ def test_reset_dev_latch_route():
     client = TestClient(app)
     resp = client.post("/api/tasks/T-LATCH/reset-dev-latch")
     assert resp.status_code == 200
-    board = resp.json()["board"]
+    body = resp.json()
+    board = body["board"]
     live = next(t for t in board.get("In Progress", []) if t["id"] == "T-LATCH")
     assert live.get("phaseCycleCapReached") is False
     assert live.get("devStepCount") == 0
+    assert body.get("resetLatchWarning")
 
 
 def test_resolve_user_reset_latch_clears_cap():

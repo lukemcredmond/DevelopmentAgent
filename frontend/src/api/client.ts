@@ -481,6 +481,27 @@ export async function triggerPlanBacklog(
   })
 }
 
+export async function validatePlanOutline(outline?: string): Promise<import('../types').PlanOutlineValidation> {
+  return request('/api/plan/validate', {
+    method: 'POST',
+    body: JSON.stringify(outline != null ? { outline } : {}),
+  })
+}
+
+export async function approveFeaturePack(): Promise<AppState> {
+  return request<AppState>('/api/plan/backlog/approve', { method: 'POST' })
+}
+
+export function exportFeaturesPackUrl(format: 'md' | 'json'): string {
+  return `/api/plan/features-export?format=${format}`
+}
+
+export async function fetchFeaturesPackMarkdown(): Promise<string> {
+  const res = await fetch(exportFeaturesPackUrl('md'))
+  if (!res.ok) throw new Error('Export failed')
+  return res.text()
+}
+
 export async function triggerStep(payload: BriefPayload): Promise<AppState> {
   return request<AppState>('/api/step', {
     method: 'POST',

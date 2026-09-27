@@ -725,6 +725,64 @@ tool_run_command = Tool(
     func=lambda command, background=False: run_agent_command(command, background=bool(background)),
 )
 
+
+def _tool_register_custom_tool(**kwargs: Any) -> str:
+    from backend.services.tool_forge_service import register_custom_tool_from_agent
+
+    return register_custom_tool_from_agent(**kwargs)
+
+
+tool_register_custom = Tool(
+    name="register_custom_tool",
+    description=(
+        "Register a project custom tool (shell, script, http, or sql) so it can be called by name on later turns. "
+        "Use when run_command output is awkward or the model needs a dedicated tool schema. "
+        "For shell tools, optional shellPostProcess.builtin (dart_analyze, tsc, eslint, pytest, generic) "
+        "structures lint output. For script executor, write a workspace Python file first, then set script.path."
+    ),
+    parameters={
+        "type": "object",
+        "properties": {
+            "name": {"type": "string", "description": "Unique tool name (identifier)"},
+            "description": {"type": "string"},
+            "parameters": {"type": "object", "description": "JSON Schema for tool arguments"},
+            "agents": {
+                "type": "array",
+                "items": {"type": "string"},
+                "description": "Agent roles, e.g. Developer, QA Tester",
+            },
+            "executor": {
+                "type": "string",
+                "enum": ["shell", "script", "http", "sql"],
+            },
+            "shell": {"type": "object", "properties": {"command": {"type": "string"}}},
+            "shellPostProcess": {
+                "type": "object",
+                "properties": {
+                    "builtin": {"type": "string"},
+                    "path": {"type": "string"},
+                },
+            },
+            "script": {
+                "type": "object",
+                "properties": {
+                    "path": {"type": "string"},
+                    "interpreter": {"type": "string"},
+                    "timeoutSec": {"type": "integer"},
+                },
+            },
+            "http": {"type": "object"},
+            "sql": {"type": "object"},
+            "tool_def": {
+                "type": "object",
+                "description": "Alternative: full tool definition object",
+            },
+        },
+        "required": ["name", "executor"],
+    },
+    func=_tool_register_custom_tool,
+)
+
 def configure_agent_tools(ws: dict | None = None) -> None:
     """Register agent tools based on workflow settings (reduces schema bloat)."""
     from backend.services.custom_tools import custom_tools_for_agent
@@ -780,6 +838,7 @@ def configure_agent_tools(ws: dict | None = None) -> None:
                     "update_board",
                     "add_subtasks",
                     "run_command",
+                    "register_custom_tool",
                     "grep",
                     "glob_file_search",
                     "search_code",
@@ -813,6 +872,7 @@ def configure_agent_tools(ws: dict | None = None) -> None:
             "list_dir",
             "run_test",
             "run_command",
+            "register_custom_tool",
             "grep",
             "glob_file_search",
             "search_code",
@@ -904,6 +964,7 @@ BUILTIN_TOOL_CATALOG: dict[str, Tool] = {
     "git_commit": tool_git_commit,
     "git_init": tool_git_init,
     "run_command": tool_run_command,
+    "register_custom_tool": tool_register_custom,
 }
 
 configure_agent_tools()

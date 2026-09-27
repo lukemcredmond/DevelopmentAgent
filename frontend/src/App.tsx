@@ -45,6 +45,7 @@ import {
   splitTask,
   triggerPlanOutline,
   triggerPlanBacklog,
+  fetchFeaturesPackMarkdown,
   triggerStep,
   updateConfig,
   updateTask,
@@ -58,6 +59,7 @@ import ActivityPanel from './components/ActivityPanel'
 import SprintReportsPanel from './components/SprintReportsPanel'
 import AgentConsole from './components/AgentConsole'
 import BriefPanel, { readBriefOpen } from './components/BriefPanel'
+import FeatureReviewModal from './components/FeatureReviewModal'
 import ChatPanel, { type ChatUiMessage } from './components/ChatPanel'
 import DoneAuditModal from './components/DoneAuditModal'
 import RefinementAuditModal from './components/RefinementAuditModal'
@@ -241,6 +243,7 @@ export default function App() {
 
   const [planRunActive, setPlanRunActive] = useState(false)
   const [planBacklogActive, setPlanBacklogActive] = useState(false)
+  const [featureReviewOpen, setFeatureReviewOpen] = useState(false)
   /** Long agent HTTP (Plan / Step / Plan & Run) — progress chrome only; does not set global loading. */
   const [sprintBusy, setSprintBusy] = useState(false)
 
@@ -856,13 +859,15 @@ export default function App() {
         setBottomPanelHeight(220)
       }
       try {
-        handleState(
-          await triggerPlanBacklog({
-            brief: state.brief,
-            ollama_url: llmCallUrl,
-            outline: planOutline,
-          }),
-        )
+        const next = await triggerPlanBacklog({
+          brief: state.brief,
+          ollama_url: llmCallUrl,
+          outline: planOutline,
+        })
+        handleState(next)
+        if (next.pendingFeaturePack?.epics?.length) {
+          setFeatureReviewOpen(true)
+        }
       } finally {
         setPlanBacklogActive(false)
       }
@@ -1946,6 +1951,17 @@ export default function App() {
           }
           onGenerateBacklog={handleGenerateBacklog}
           generateBacklogDisabled={orchestratedActive || !brief.trim()}
+          hasFeaturePackPreview={Boolean(state.pendingFeaturePack?.epics?.length)}
+          onReviewFeaturePack={() => setFeatureReviewOpen(true)}
+        />
+
+        <FeatureReviewModal
+          open={featureReviewOpen}
+          pack={state.pendingFeaturePack}
+          onClose={() => setFeatureReviewOpen(false)}
+          onApproved={() => void refresh()}
+          onRegenerate={handleGenerateBacklog}
+          exportMarkdown={fetchFeaturesPackMarkdown}
         />
 
         <KanbanToggleBar

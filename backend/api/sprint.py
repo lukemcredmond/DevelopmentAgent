@@ -1,4 +1,5 @@
 from fastapi import APIRouter, HTTPException
+from fastapi.responses import PlainTextResponse, Response
 
 from backend import state
 from backend.api.helpers import build_state_response
@@ -60,6 +61,85 @@ def trigger_po_plan_outline(payload: BriefPayload):
 def trigger_po_plan_backlog(payload: PlanBacklogPayload):
     run_po_plan_backlog(payload.brief, _chat_url(payload.ollama_url), outline=payload.outline)
     return build_state_response()
+
+
+class PlanValidatePayload(BaseModel):
+    outline: str | None = None
+
+
+@router.post("/api/plan/validate")
+def validate_plan_outline_route(payload: PlanValidatePayload | None = None):
+    from backend.services.plan_outline_quality import validate_plan_outline
+
+    outline = (payload.outline if payload else None) or state.PROJECT_PLAN_OUTLINE or ""
+    return validate_plan_outline(outline, brief=state.PROJECT_BRIEF, strict=False).to_dict()
+
+
+class PlanBacklogPreviewPayload(BaseModel):
+    brief: str = ""
+    ollama_url: str = "http://localhost:11434"
+    outline: str | None = None
+
+
+@router.post("/api/plan/backlog/preview")
+def preview_plan_backlog_route(payload: PlanBacklogPreviewPayload):
+    from backend.agents.task_context import coerce_task_text
+    from backend.services.feature_pack_service import (
+        get_pending_feature_pack,
+        outline_fingerprint,
+        preview_plan_backlog_from_outputs,
+        set_pending_feature_pack,
+    )
+    from backend.services.feature_service import build_epics_json_from_plan_outline
+
+    outline_text = coerce_task_text(payload.outline or state.PROJECT_PLAN_OUTLINE or "").strip()
+    if not outline_text:
+        raise HTTPException(status_code=400, detail="No plan outline")
+    fp = outline_fingerprint(outline_text)
+    existing = get_pending_feature_pack()
+    if (
+        existing
+        and existing.get("epicsJson")
+        and existing.get("outlineFingerprint") == fp
+    ):
+        preview = existing
+    else:
+        po_output = build_epics_json_from_plan_outline(outline_text)
+        preview = preview_plan_backlog_from_outputs(po_output, outline_text)
+        set_pending_feature_pack(preview)
+    return {**build_state_response(), "featurePackPreview": preview}
+
+
+@router.post("/api/plan/backlog/approve")
+def approve_plan_backlog_route():
+    from backend.services.feature_pack_service import approve_pending_feature_pack
+
+    result = approve_pending_feature_pack()
+    if not result.get("ok"):
+        raise HTTPException(status_code=400, detail=result.get("error") or "Approve failed")
+    return build_state_response()
+
+
+@router.get("/api/plan/features-export")
+def export_features_pack_route(format: str = "md"):
+    from backend.services.feature_pack_service import (
+        build_features_export_json,
+        build_features_export_markdown,
+        get_pending_feature_pack,
+    )
+
+    if not get_pending_feature_pack():
+        raise HTTPException(status_code=404, detail="No feature pack to export")
+    if format.lower() == "json":
+        return Response(
+            content=build_features_export_json(),
+            media_type="application/json",
+            headers={"Content-Disposition": 'attachment; filename="features-pack.json"'},
+        )
+    return PlainTextResponse(
+        build_features_export_markdown(),
+        headers={"Content-Disposition": 'attachment; filename="features-pack.md"'},
+    )
 
 
 @router.post("/api/step")

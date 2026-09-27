@@ -3,6 +3,7 @@
 from backend import state
 from backend.services.backup_model import dev_backup_model_allowed
 from backend.services.sprint_service import (
+    _implementer_latch_counts_for_pause,
     _latched_card_skip_auto_sprint,
     _needs_user_cap_reached,
 )
@@ -24,6 +25,14 @@ def test_latched_card_skip_after_failed_park_or_recovery():
     assert _latched_card_skip_auto_sprint({**base, "parkFailed": True}) is True
     assert _latched_card_skip_auto_sprint({**base, "poAutoSkip": True}) is True
     assert _latched_card_skip_auto_sprint({**base, "latchedRecoveryAttempted": True}) is True
+
+
+def test_implementer_latch_pause_ignores_frozen_features_and_done():
+    latched = {"id": "T1", "phaseCycleCapReached": True, "poAutoSkip": True}
+    frozen = {**latched, "meta": {"mvpFrozen": True}}
+    assert _implementer_latch_counts_for_pause(latched, "In Progress") is True
+    assert _implementer_latch_counts_for_pause(frozen, "Features") is False
+    assert _implementer_latch_counts_for_pause(latched, "Done") is False
 
 
 def test_dev_backup_rejects_ornith_and_accepts_coder():

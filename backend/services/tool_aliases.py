@@ -32,6 +32,7 @@ CANONICAL_TOOL_NAMES: Set[str] = {
     "git_diff",
     "git_commit",
     "git_init",
+    "register_custom_tool",
 }
 
 BUILTIN_TOOL_ALIASES: Dict[str, str] = {

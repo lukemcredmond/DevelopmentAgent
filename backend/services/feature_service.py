@@ -484,6 +484,9 @@ def _normalize_plan_child(raw: Dict[str, Any]) -> Dict[str, Any]:
         "title": str(raw.get("title") or "Untitled task").strip(),
         "description": str(raw.get("description") or "").strip(),
         "acceptanceCriteria": [str(c) for c in ac if c],
+        "scope": raw.get("scope"),
+        "testPlan": raw.get("testPlan") or raw.get("test_plan"),
+        "userStory": raw.get("userStory") or raw.get("user_story"),
         "blockedBy": list(raw.get("blockedBy") or raw.get("blocked_by") or [])
         if isinstance(raw.get("blockedBy") or raw.get("blocked_by"), list)
         else [],
@@ -530,6 +533,95 @@ def looks_like_usable_plan_epics(text: Optional[str]) -> bool:
     return isinstance(epics, list) and any(isinstance(e, dict) for e in epics)
 
 
+def _parse_epic_detail_sections(outline: str) -> Dict[str, Dict[str, Any]]:
+    """Parse ## Epic details / ### Epic: <title> blocks from a plan outline."""
+    import re
+
+    text = str(outline or "").strip()
+    if not text:
+        return {}
+    match = re.search(r"(?im)^##\s*epic\s+details\s*$", text)
+    if not match:
+        return {}
+    section = text[match.end() :]
+    blocks = re.split(r"(?im)^###\s*epic\s*:\s*", section)
+    details: Dict[str, Dict[str, Any]] = {}
+    for chunk in blocks[1:]:
+        lines = chunk.strip().splitlines()
+        if not lines:
+            continue
+        title = lines[0].strip()
+        body = "\n".join(lines[1:])
+        scope: List[str] = []
+        out_of_scope: List[str] = []
+        child_hints: List[str] = []
+        ac_hints: List[str] = []
+        test_notes: List[str] = []
+        current: Optional[str] = None
+        for line in body.splitlines():
+            stripped = line.strip()
+            lower = stripped.lower()
+            if lower.startswith("**scope**"):
+                current = "scope"
+                continue
+            if lower.startswith("**out of scope**"):
+                current = "out"
+                continue
+            if "ac hint" in lower:
+                current = "ac"
+                continue
+            if "test note" in lower:
+                current = "test"
+                continue
+            if "suggested child" in lower:
+                current = "children"
+                for quoted in re.findall(r'"([^"]+)"', stripped):
+                    hint = quoted.strip()
+                    if hint:
+                        child_hints.append(hint)
+                continue
+            bullet = re.match(r"^[-*]\s+(.+)$", stripped)
+            if not bullet:
+                continue
+            val = bullet.group(1).strip()
+            if current == "children" and val.startswith("**"):
+                for quoted in re.findall(r'"([^"]+)"', val):
+                    hint = quoted.strip()
+                    if hint:
+                        child_hints.append(hint)
+                continue
+            if current == "scope":
+                scope.append(val)
+            elif current == "out":
+                out_of_scope.append(val)
+            elif current == "children":
+                child_hints.append(val)
+            elif current == "ac":
+                ac_hints.append(val)
+            elif current == "test":
+                test_notes.append(val)
+        key = title.lower()
+        details[key] = {
+            "title": title,
+            "scope": scope,
+            "outOfScope": out_of_scope,
+            "childHints": child_hints,
+            "acHints": ac_hints,
+            "testNotes": test_notes,
+        }
+    return details
+
+
+def _match_epic_detail(title: str, details: Dict[str, Dict[str, Any]]) -> Optional[Dict[str, Any]]:
+    key = title.lower().strip()
+    if key in details:
+        return details[key]
+    for dkey, block in details.items():
+        if key in dkey or dkey in key:
+            return block
+    return None
+
+
 def _parse_proposed_epic_bullets(outline: str) -> List[str]:
     """Extract bullet lines from the ## Proposed epics section of a plan outline."""
     import re
@@ -559,7 +651,7 @@ def _parse_proposed_epic_bullets(outline: str) -> List[str]:
 
 
 def build_epics_json_from_plan_outline(outline: str) -> str:
-    """Build epics JSON from Proposed epics bullets when LLM output is unusable."""
+    """Build epics JSON from Proposed epics + Epic details when LLM output is unusable."""
     import json
     import re
 
@@ -567,35 +659,60 @@ def build_epics_json_from_plan_outline(outline: str) -> str:
     if not bullets:
         return ""
 
+    detail_map = _parse_epic_detail_sections(outline)
     epics: List[Dict[str, Any]] = []
     for bullet in bullets:
         parts = re.split(r"\s*[—–-]\s*|\s*:\s*", bullet, maxsplit=1)
-        title = (parts[0] or "Untitled epic").strip()
+        title = re.sub(r"\*\*", "", (parts[0] or "Untitled epic")).strip()
         description = parts[1].strip() if len(parts) > 1 else bullet
-        children = [
-            {
-                "title": f"Implement {title} — core flow",
-                "description": f"Deliver the primary user-facing capability for {title}.",
-                "acceptanceCriteria": [
-                    f"User can access {title} end-to-end",
-                    "Happy path covered by tests or manual check",
-                ],
-                "workType": "implementation",
-                "requiresDev": True,
-                "requiresQa": True,
-            },
-            {
-                "title": f"Implement {title} — edge cases and polish",
-                "description": f"Handle validation, empty states, and errors for {title}.",
-                "acceptanceCriteria": [
-                    "Invalid input shows clear feedback",
-                    "Empty state is usable",
-                ],
-                "workType": "implementation",
-                "requiresDev": True,
-                "requiresQa": True,
-            },
-        ]
+        detail = _match_epic_detail(title, detail_map)
+        children: List[Dict[str, Any]] = []
+        if detail and detail.get("childHints"):
+            scope_text = "\n".join(f"- {s}" for s in detail.get("scope") or [])
+            ac_hints = list(detail.get("acHints") or [])
+            test_note = "; ".join(detail.get("testNotes") or [])
+            for idx, hint in enumerate(detail["childHints"]):
+                ac_pair = ac_hints[idx * 2 : idx * 2 + 2]
+                if len(ac_pair) < 2:
+                    ac_pair = (ac_pair + [f"{hint} behaves correctly on happy path"])[:2]
+                children.append(
+                    {
+                        "title": hint,
+                        "description": f"{hint} for {title}.",
+                        "scope": scope_text or description,
+                        "testPlan": test_note or f"Verify {hint} manually or via flutter test",
+                        "userStory": f"As a user I want {hint.lower()} so that {title} works.",
+                        "acceptanceCriteria": ac_pair,
+                        "workType": "implementation",
+                        "requiresDev": True,
+                        "requiresQa": True,
+                    }
+                )
+        if not children:
+            children = [
+                {
+                    "title": f"Implement {title} — core flow",
+                    "description": f"Deliver the primary user-facing capability for {title}.",
+                    "acceptanceCriteria": [
+                        f"User can access {title} end-to-end",
+                        "Happy path covered by tests or manual check",
+                    ],
+                    "workType": "implementation",
+                    "requiresDev": True,
+                    "requiresQa": True,
+                },
+                {
+                    "title": f"Implement {title} — edge cases and polish",
+                    "description": f"Handle validation, empty states, and errors for {title}.",
+                    "acceptanceCriteria": [
+                        "Invalid input shows clear feedback",
+                        "Empty state is usable",
+                    ],
+                    "workType": "implementation",
+                    "requiresDev": True,
+                    "requiresQa": True,
+                },
+            ]
         epics.append({"title": title, "description": description, "children": children})
     return json.dumps({"epics": epics})
 

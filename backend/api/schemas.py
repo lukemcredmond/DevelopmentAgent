@@ -214,6 +214,11 @@ class SplitBatchPayload(BaseModel):
 
 
 class WorkflowSettingsPayload(BaseModel):
+    requireFeaturePackApproval: Optional[bool] = None
+    planOutlineRefinePass: Optional[bool] = None
+    planOutlineMaxLlmIterations: Optional[int] = None
+    planOutlineExploreMaxIterations: Optional[int] = None
+    planOutlineNumPredict: Optional[int] = None
     requireBacklogApproval: Optional[bool] = None
     requireCodeReview: Optional[bool] = None
     requireDevVerification: Optional[bool] = None

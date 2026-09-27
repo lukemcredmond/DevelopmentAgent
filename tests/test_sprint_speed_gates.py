@@ -89,6 +89,22 @@ def test_partial_writes_without_lane_progress_keep_bad_streak():
     assert task["lastCircuitExitReason"] == "completed_with_writes_no_advance"
 
 
+def test_needs_po_poautoskip_bypass_for_mvp_ready_spec(monkeypatch):
+    task = {
+        "id": "MVP-PERSIST-DB",
+        "poAutoSkip": True,
+        "meta": {"mvpLastRun": True},
+        "description": "spec",
+        "acceptanceCriteria": ["ac1"],
+    }
+    ws = {"planRunSkipPoWhenActionable": True}
+    monkeypatch.setattr(
+        "backend.services.po_clarification.task_has_ready_spec",
+        lambda _t: True,
+    )
+    assert gates.needs_po_should_skip_auto(task, ws) is False
+
+
 def test_needs_po_skip_after_circuit_and_latch():
     task: dict = {}
     ws = {

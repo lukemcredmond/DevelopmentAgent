@@ -603,6 +603,24 @@ export default function WorkflowPanel({
       <label className="flex items-center gap-2 text-[11px] text-cat-subtext cursor-pointer">
         <input
           type="checkbox"
+          checked={settings.requireFeaturePackApproval ?? true}
+          onChange={(e) => onSettingsChange({ requireFeaturePackApproval: e.target.checked })}
+        />
+        Require feature pack approval
+        <SettingHint hint="Generate Features stores a preview first — export markdown/JSON, then Approve before cards hit the board." />
+      </label>
+      <label className="flex items-center gap-2 text-[11px] text-cat-subtext cursor-pointer">
+        <input
+          type="checkbox"
+          checked={settings.planOutlineRefinePass ?? true}
+          onChange={(e) => onSettingsChange({ planOutlineRefinePass: e.target.checked })}
+        />
+        Plan outline auto-refine pass
+        <SettingHint hint="When the first plan draft fails the quality rubric, run one LLM pass to fix structure only." />
+      </label>
+      <label className="flex items-center gap-2 text-[11px] text-cat-subtext cursor-pointer">
+        <input
+          type="checkbox"
           checked={settings.requireBacklogApproval}
           onChange={(e) => onSettingsChange({ requireBacklogApproval: e.target.checked })}
         />
