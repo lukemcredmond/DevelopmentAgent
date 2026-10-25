@@ -10,12 +10,20 @@ from backend.services.patch_recovery import (
     build_patch_recovery_nudge,
     build_patch_recovery_reminder,
     failed_apply_patch_paths,
+    is_read_guard_patch_failure,
     paths_needing_read_before_patch,
 )
 
 
 def _res(ok: bool):
     return SimpleNamespace(success=ok)
+
+
+def test_is_read_guard_patch_failure():
+    assert is_read_guard_patch_failure(
+        "Error: apply_patch requires read_file on 'lib/main.dart' in this step first."
+    )
+    assert not is_read_guard_patch_failure("Error: old_text not found in 'lib/main.dart'")
 
 
 def test_failed_apply_patch_paths_and_nudge():

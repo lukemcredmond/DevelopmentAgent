@@ -117,3 +117,86 @@ def test_resolve_user_reset_latch_clears_cap():
     live = next(t for t in board.get("In Progress", []) if t["id"] == "T-RESET")
     assert live.get("phaseCycleCapReached") is False
     assert live.get("devStepCount") == 0
+
+
+def test_reset_sprint_stalls_route():
+    initialize()
+    from fastapi.testclient import TestClient
+    from backend.main import app
+
+    for lane in (
+        "Backlog",
+        "In Progress",
+        "Needs User",
+        "Needs PO",
+        "Refinement",
+        "QA",
+        "Done",
+        "Code Review",
+        "Pending Approval",
+        "Blocked",
+    ):
+        state.SHARED_BOARD.setdefault(lane, [])
+
+    ip = init_new_task(
+        {
+            "id": "T-STALL-IP",
+            "title": "Stuck dev",
+            "description": "x",
+            "status": "In Progress",
+            "phaseCycleCapReached": True,
+            "poAutoSkip": True,
+            "consecutiveBadExits": 5,
+            "stuckLoops": 3,
+            "devStepCount": 12,
+        }
+    )
+    ip["lastStepProgress"] = {"devPhaseGraph": {"cycle": 13}}
+    np = init_new_task(
+        {
+            "id": "T-STALL-NP",
+            "title": "Stuck po",
+            "description": "y",
+            "status": "Needs PO",
+            "poAutoSkip": True,
+            "consecutiveBadExits": 4,
+            "circuitBreakerPoRetryUsed": True,
+            "splitAttemptedOnStuck": True,
+        }
+    )
+    nu = init_new_task(
+        {
+            "id": "T-STALL-NU",
+            "title": "Stuck user",
+            "description": "z",
+            "status": "Needs User",
+            "latchedRecoveryAttempted": True,
+            "consecutiveBadExits": 2,
+        }
+    )
+    state.SHARED_BOARD["In Progress"] = [ip]
+    state.SHARED_BOARD["Needs PO"] = [np]
+    state.SHARED_BOARD["Needs User"] = [nu]
+
+    client = TestClient(app)
+    resp = client.post("/api/board/reset-sprint-stalls")
+    assert resp.status_code == 200
+    body = resp.json()
+    assert body.get("resetCount") == 3
+
+    live_ip = next(t for t in body["board"]["In Progress"] if t["id"] == "T-STALL-IP")
+    assert live_ip.get("phaseCycleCapReached") is False
+    assert live_ip.get("poAutoSkip") is False
+    assert live_ip.get("consecutiveBadExits") == 0
+    assert live_ip.get("stuckLoops") == 0
+    assert live_ip.get("devStepCount") == 0
+    assert live_ip["lastStepProgress"]["devPhaseGraph"]["cycle"] == 0
+
+    live_np = next(t for t in body["board"]["Needs PO"] if t["id"] == "T-STALL-NP")
+    assert live_np.get("poAutoSkip") is False
+    assert live_np.get("circuitBreakerPoRetryUsed") is None
+    assert live_np.get("splitAttemptedOnStuck") is None
+
+    live_nu = next(t for t in body["board"]["Needs User"] if t["id"] == "T-STALL-NU")
+    assert live_nu.get("latchedRecoveryAttempted") is False
+    assert live_nu.get("consecutiveBadExits") == 0

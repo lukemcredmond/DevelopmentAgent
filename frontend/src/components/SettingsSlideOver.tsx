@@ -1,5 +1,12 @@
 import { useCallback, useEffect, useState } from 'react'
-import { checkOllamaHealth, downloadSupportBundle, fetchConsoleLogTail, testLlmModel } from '../api/client'
+import {
+  checkOllamaHealth,
+  downloadSupportBundle,
+  fetchConsoleLogTail,
+  fetchDevModelAssessment,
+  testLlmModel,
+} from '../api/client'
+import type { DevModelAssessmentResponse } from '../types'
 import type { AgentId, AppState, ConfigPayload, WorkflowSettings } from '../types'
 import { AGENT_LABELS, DEFAULT_WORKFLOW_SETTINGS } from '../types'
 import { isAutoLlmToolHealthOnPick, runAndPersistLlmProbeAll } from '../lib/toolHealthLlm'
@@ -135,6 +142,9 @@ export default function SettingsSlideOver({
   const [llmHealthStatus, setLlmHealthStatus] = useState<string | null>(null)
   const [llmTestRunning, setLlmTestRunning] = useState(false)
   const [modelSlotStatus, setModelSlotStatus] = useState<Record<string, string>>({})
+  const [devModelAssessment, setDevModelAssessment] = useState<DevModelAssessmentResponse | null>(
+    null,
+  )
   const [apiTokenInput, setApiTokenInput] = useState('')
   const [supportCopyStatus, setSupportCopyStatus] = useState<string | null>(null)
 
@@ -156,6 +166,16 @@ export default function SettingsSlideOver({
       setApiTokenInput('')
     }
   }, [open])
+
+  useEffect(() => {
+    if (!open || !devModel.trim()) {
+      setDevModelAssessment(null)
+      return
+    }
+    void fetchDevModelAssessment(devModel.trim())
+      .then((data) => setDevModelAssessment(data))
+      .catch(() => setDevModelAssessment(null))
+  }, [open, devModel])
 
   // Re-hydrate role model fields from server state when Settings opens / project changes.
   useEffect(() => {
@@ -709,6 +729,20 @@ export default function SettingsSlideOver({
                         {primaryStatus}
                       </p>
                     )}
+                    {label === 'DEV' &&
+                      devModelAssessment?.assessment?.level &&
+                      devModelAssessment.assessment.level !== 'ok' &&
+                      (devModelAssessment.assessment.reasons?.length ?? 0) > 0 && (
+                        <p
+                          className={`text-[10px] text-right leading-tight ${
+                            devModelAssessment.assessment.level === 'block'
+                              ? 'text-rose-300'
+                              : 'text-amber-300'
+                          }`}
+                        >
+                          Benchmark: {devModelAssessment.assessment.reasons?.join('; ')}
+                        </p>
+                      )}
                     <div className="flex items-center justify-between gap-2 pl-0.5">
                       <span className="text-[9px] text-cat-overlay shrink-0 inline-flex items-center">
                         Backup (stuck)
@@ -756,7 +790,10 @@ export default function SettingsSlideOver({
               <InstalledModelsPanel
                 ollamaUrl={ollamaUrl}
                 focusedRole={modelFocus}
+                currentDevModel={devModel}
                 provider={state.workflowSettings?.llmProvider || 'ollama'}
+                sprintRunning={sprintRunning}
+                onApplyDevModel={(name) => assignModel('dev', name)}
                 onPickModel={(name) => {
                   const role =
                     modelFocus === 'PO'

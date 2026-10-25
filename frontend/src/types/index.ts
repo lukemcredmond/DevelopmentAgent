@@ -36,6 +36,29 @@ export interface TaskDecision {
   detail?: string
 }
 
+export interface ArchitectureAlternative {
+  name: string
+  rejectedBecause: string
+}
+
+export interface ArchitectureDecision {
+  id: string
+  topic: string
+  title: string
+  status: 'accepted' | 'superseded' | 'proposed'
+  createdAt: string
+  updatedAt: string
+  author: string
+  context: string
+  decision: string
+  alternatives: ArchitectureAlternative[]
+  consequences?: string
+  relatedFiles?: string[]
+  supersedesId?: string
+  changeNote?: string
+  supersededByChangeNote?: string
+}
+
 export interface TaskTranscriptEntry {
   timestamp: string
   role: string
@@ -235,6 +258,8 @@ export interface Task {
   status: BoardLane | string
   files?: (TaskFile | string)[]
   decisions?: TaskDecision[]
+  architectureDecisions?: ArchitectureDecision[]
+  architectureMarkdownPath?: string
   decisionsTruncated?: boolean
   transcript?: TaskTranscriptEntry[]
   transcriptTruncated?: boolean
@@ -369,10 +394,21 @@ export interface FeatureRollupDecision {
   childTitle?: string
 }
 
+export interface FeatureRollupArchitectureDecision {
+  id: string
+  topic: string
+  title: string
+  decision: string
+  timestamp?: string
+  childTaskId?: string
+  childTitle?: string
+}
+
 export interface FeatureRollup {
   children: FeatureRollupChild[]
   files: string[]
   recentDecisions: FeatureRollupDecision[]
+  recentArchitectureDecisions?: FeatureRollupArchitectureDecision[]
 }
 
 export interface FeatureHistoryEntry {
@@ -648,6 +684,7 @@ export interface WorkflowSettings {
   enableWorkspaceRulesInject?: boolean
   workspaceRulesMaxChars?: number
   implementerRelaxGatesOnAutoSprint?: boolean
+  implementerRequireAnalyzeClean?: boolean
   implementerStopOnLatch?: boolean
   implementerStopOnLatchCount?: number
   implementerSlimPrompt?: 'always' | 'recovery_only' | 'never'
@@ -679,6 +716,9 @@ export interface WorkflowSettings {
   ollamaNumCtxAdaptiveStart?: number
   ollamaNumCtxAdaptiveStep?: number
   ollamaKeepAlive?: string
+  ollamaThinkDefault?: boolean
+  ollamaThinkPlanOutlineWrite?: boolean
+  ollamaThinkByRole?: Record<string, boolean>
   ollamaRequestTimeoutSec?: number
   ollamaEmptyGenerationTimeoutSec?: number
   modelTestTimeoutSec?: number
@@ -705,6 +745,8 @@ export interface WorkflowSettings {
   enableContextRewind?: boolean
   contextRewindTurns?: number
   enableLlmDecisionTrace?: boolean
+  enableAdrPostStepExtract?: boolean
+  adrPostStepExtractMaxPerStep?: number
   enableLlmModelRationale?: boolean
   toolOutputEchoStopAfter?: number
   enableStepLessonMemory?: boolean
@@ -755,6 +797,8 @@ export interface WorkflowSettings {
   enableDevPhaseGraph?: boolean
   devExploreMaxTools?: number
     devExploreForcePatchInStep?: boolean
+    devExploreForcePatchAfterReadBatch?: boolean
+    singleModelRespectPhaseRouting?: boolean
     poNumPredictOverride?: boolean
   devPatchMaxTools?: number
   devVerifyMaxTools?: number
@@ -914,6 +958,7 @@ export interface AgentRunState {
   devPhaseGraph?: DevPhaseGraphSnapshot | null
   /** Live LLM token stream during generation (truncated server-side). */
   streamingText?: string | null
+  streamingThinkingText?: string | null
 }
 
 export interface DevPhaseCycleHistoryEntry {
@@ -989,6 +1034,8 @@ export interface SprintWorkBreakdown {
   runnableNeedsPo: number
   latchedSkipCount: number
   skipReasons: string[]
+  devPrecheckSkipSteps?: number
+  zeroTokenDevSteps?: number
   pingPongDeprioritizedCount?: number
   pingPongDeprioritizedTasks?: { taskId: string; title: string }[]
 }
@@ -1017,6 +1064,16 @@ export interface SprintReportMove {
   at?: string
 }
 
+export interface SprintReportThroughput {
+  doneDelta?: number
+  needsPoDelta?: number
+  donePerHour?: number
+  stepsRun?: number
+  dartLocDelta?: number
+  workspaceLocEnd?: { dartLines?: number; sourceLines?: number; dartFiles?: number }
+  status?: string
+}
+
 export interface SprintReport {
   startedAt?: string
   endedAt?: string | null
@@ -1032,6 +1089,9 @@ export interface SprintReport {
   laneCountsStart?: Record<string, number>
   laneCountsEnd?: Record<string, number>
   pingPongByTask?: Record<string, SprintReportPingPongTask>
+  workspaceLocStart?: { dartLines?: number; sourceLines?: number; dartFiles?: number }
+  workspaceLocEnd?: { dartLines?: number; sourceLines?: number; dartFiles?: number }
+  throughput?: SprintReportThroughput
 }
 
 export interface CardWorkProgress {
@@ -1178,6 +1238,26 @@ export interface LastStepDiagnostics {
   }
   toolPolicyDeadlock?: boolean
   toolPolicyDeadlockReason?: string
+  resolvedEditTarget?: string
+  backupSwitchOutcome?: string
+  textRejectContentHash?: string
+  textRejectContentHashCount?: number
+  primaryBottleneck?: string
+  writesSucceeded?: number
+}
+
+export interface DevModelAssessment {
+  level: 'ok' | 'warn' | 'block'
+  reasons?: string[]
+  bestModel?: string
+  row?: ModelBenchmarkRow | null
+}
+
+export interface DevModelAssessmentResponse {
+  devModel: string
+  assessment: DevModelAssessment
+  bestModel?: string
+  row?: ModelBenchmarkRow | null
 }
 
 export interface ActiveStepDiagnostics {
@@ -1545,6 +1625,7 @@ export interface WorkflowSettingsPayload {
   enableWorkspaceRulesInject?: boolean
   workspaceRulesMaxChars?: number
   implementerRelaxGatesOnAutoSprint?: boolean
+  implementerRequireAnalyzeClean?: boolean
   implementerStopOnLatch?: boolean
   implementerStopOnLatchCount?: number
   implementerSlimPrompt?: 'always' | 'recovery_only' | 'never'
@@ -1576,6 +1657,9 @@ export interface WorkflowSettingsPayload {
   ollamaNumCtxAdaptiveStart?: number
   ollamaNumCtxAdaptiveStep?: number
   ollamaKeepAlive?: string
+  ollamaThinkDefault?: boolean
+  ollamaThinkPlanOutlineWrite?: boolean
+  ollamaThinkByRole?: Record<string, boolean>
   ollamaRequestTimeoutSec?: number
   ollamaEmptyGenerationTimeoutSec?: number
   modelTestTimeoutSec?: number
@@ -1602,6 +1686,8 @@ export interface WorkflowSettingsPayload {
   enableContextRewind?: boolean
   contextRewindTurns?: number
   enableLlmDecisionTrace?: boolean
+  enableAdrPostStepExtract?: boolean
+  adrPostStepExtractMaxPerStep?: number
   enableLlmModelRationale?: boolean
   toolOutputEchoStopAfter?: number
   enableStepLessonMemory?: boolean
@@ -1653,6 +1739,8 @@ export interface WorkflowSettingsPayload {
   enableDevPhaseGraph?: boolean
   devExploreMaxTools?: number
     devExploreForcePatchInStep?: boolean
+    devExploreForcePatchAfterReadBatch?: boolean
+    singleModelRespectPhaseRouting?: boolean
     poNumPredictOverride?: boolean
   devPatchMaxTools?: number
   devVerifyMaxTools?: number
@@ -1737,6 +1825,58 @@ export interface LlmAgentModelTestResult extends Partial<LlmModelTestResponse> {
   slot: 'primary' | 'backup'
   model: string
   status: LlmAgentModelTestStatus
+}
+
+export type ModelBenchmarkTier = 'good' | 'warn' | 'bad' | 'unknown'
+
+export interface ModelBenchmarkRow {
+  model: string
+  status: 'pending' | 'running' | 'done' | 'failed'
+  loadOk?: boolean | null
+  toolScore?: number | null
+  toolTier?: ModelBenchmarkTier
+  toolPassRate?: number | null
+  toolSummary?: { pass?: number; fail?: number; skip?: number; total?: number }
+  codeScore?: number | null
+  codeTier?: ModelBenchmarkTier
+  codePassRate?: number | null
+  nativeToolCallRate?: number | null
+  evalSummary?: Record<string, unknown>
+  overallScore?: number | null
+  wallClockSec?: number | null
+  error?: string | null
+}
+
+export interface ModelBenchmarkJob {
+  runId?: string | null
+  status: 'idle' | 'running' | 'done' | 'cancelled' | 'blocked'
+  startedAt?: string
+  total?: number
+  completed?: number
+  currentModel?: string | null
+  phase?: 'idle' | 'loading' | 'tools' | 'coding'
+  codingTaskIndex?: number
+  codingTaskTotal?: number
+  results?: ModelBenchmarkRow[]
+  bestModel?: string | null
+  cancelRequested?: boolean
+  elapsedMs?: number
+  error?: string
+  fromPersisted?: boolean
+  url?: string
+  canResume?: boolean
+  doneCount?: number
+  remainingCount?: number
+  lastStatus?: string | null
+  resume?: boolean
+  resumedFromRunId?: string | null
+  storageUrl?: string
+}
+
+export interface ModelBenchmarkBackupFile {
+  filename: string
+  sizeBytes: number
+  modifiedAt: number
 }
 
 export interface LlmAgentModelTestJob {
@@ -1824,6 +1964,10 @@ export interface SprintRollupRecentStep {
   toolPolicyDeadlock?: boolean
   durationMs?: number
   endedAt?: string
+  resolvedEditTarget?: string
+  backupSwitchOutcome?: string
+  primaryBottleneck?: string
+  nativeToolCallRate?: number | null
 }
 
 export interface SprintDiagnosticsRollup {
@@ -1845,6 +1989,13 @@ export interface SprintDiagnosticsRollup {
   recentSteps?: SprintRollupRecentStep[]
   duplicateClusterCount?: number
   duplicateExtraCount?: number
+  devPrecheckSkipSteps?: number
+  zeroTokenDevSteps?: number
+  writesAttempted?: number
+  writesSucceeded?: number
+  writesPerStep?: number
+  visitCapLatchStepRate?: number
+  workspaceLoc?: { dartLines?: number; sourceLines?: number; dartFiles?: number }
 }
 
 export interface BoardDuplicateAuditMember {
@@ -2065,12 +2216,13 @@ export const DEFAULT_WORKFLOW_SETTINGS: WorkflowSettings = {
   enableWorkspaceRulesInject: true,
   workspaceRulesMaxChars: 12000,
   implementerRelaxGatesOnAutoSprint: true,
+  implementerRequireAnalyzeClean: true,
   implementerStopOnLatch: true,
   implementerStopOnLatchCount: 1,
   implementerSlimPrompt: 'recovery_only',
   useComposerDevStep: true,
   implementerMaxLlmIterationsPerStep: 5,
-  implementerMaxDevStepWallSec: 180,
+  implementerMaxDevStepWallSec: 600,
   implementerMaxPreloadTokens: 4000,
   maxNeedsUserPerSprint: 2,
   needsUserCooldownSteps: 3,
@@ -2091,6 +2243,9 @@ export const DEFAULT_WORKFLOW_SETTINGS: WorkflowSettings = {
   ollamaNumCtxAdaptiveStart: 6144,
   ollamaNumCtxAdaptiveStep: 8192,
   ollamaKeepAlive: '30m',
+  ollamaThinkDefault: false,
+  ollamaThinkPlanOutlineWrite: false,
+  ollamaThinkByRole: {},
   ollamaRequestTimeoutSec: 900,
   ollamaEmptyGenerationTimeoutSec: 90,
   modelTestTimeoutSec: 600,
@@ -2117,6 +2272,8 @@ export const DEFAULT_WORKFLOW_SETTINGS: WorkflowSettings = {
   enableContextRewind: true,
   contextRewindTurns: 1,
   enableLlmDecisionTrace: false,
+  enableAdrPostStepExtract: true,
+  adrPostStepExtractMaxPerStep: 1,
   enableLlmModelRationale: false,
   toolOutputEchoStopAfter: 2,
   enableStepLessonMemory: true,
@@ -2164,6 +2321,8 @@ export const DEFAULT_WORKFLOW_SETTINGS: WorkflowSettings = {
   maxToolsPerLlmTurn: 3,
   devExploreMaxTools: 8,
   devExploreForcePatchInStep: true,
+  devExploreForcePatchAfterReadBatch: true,
+  singleModelRespectPhaseRouting: true,
   poNumPredictOverride: false,
   devPatchMaxTools: 12,
   devVerifyMaxTools: 2,

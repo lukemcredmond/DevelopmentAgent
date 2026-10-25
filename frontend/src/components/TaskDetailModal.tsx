@@ -179,6 +179,20 @@ interface TaskDetailModalProps {
   /** Open PO chat pinned to this card with a seeded rewrite prompt for the description. */
   onClarifyWithPo?: (task: Task) => void
   onSplit?: (taskId: string) => void | Promise<void>
+  onResetDevLatch?: (taskId: string) => void | Promise<void>
+  onAddArchitectureDecision?: (
+    taskId: string,
+    payload: {
+      topic: string
+      title: string
+      context: string
+      decision: string
+      alternatives: Array<{ name: string; rejectedBecause: string }>
+      consequences?: string
+      supersedesId?: string
+      changeNote?: string
+    },
+  ) => void | Promise<void>
   onInjectToolEvidence?: (
     taskId: string,
     payload: {
@@ -355,6 +369,8 @@ export default function TaskDetailModal({
   onDiscussWithAgent,
   onClarifyWithPo,
   onSplit,
+  onResetDevLatch,
+  onAddArchitectureDecision,
   onInjectToolEvidence,
   defaultInjectCommand = '',
   onRelatedTaskClick,
@@ -398,6 +414,14 @@ export default function TaskDetailModal({
   const [showAllTranscript, setShowAllTranscript] = useState(false)
   const [showFailuresOnly, setShowFailuresOnly] = useState(false)
   const [splitting, setSplitting] = useState(false)
+  const [resettingLatch, setResettingLatch] = useState(false)
+  const [adrTopic, setAdrTopic] = useState('')
+  const [adrTitle, setAdrTitle] = useState('')
+  const [adrContext, setAdrContext] = useState('')
+  const [adrDecision, setAdrDecision] = useState('')
+  const [adrAltName, setAdrAltName] = useState('')
+  const [adrAltRejected, setAdrAltRejected] = useState('')
+  const [adrSaving, setAdrSaving] = useState(false)
   const [diagnosing, setDiagnosing] = useState(false)
   const [retrying, setRetrying] = useState(false)
   const [showPriorAnswers, setShowPriorAnswers] = useState(false)
@@ -501,6 +525,11 @@ export default function TaskDetailModal({
   const rollupChildren = featureRollup?.children ?? []
   const rollupFiles = featureRollup?.files ?? []
   const rollupDecisions = featureRollup?.recentDecisions ?? []
+  const rollupArchitecture = featureRollup?.recentArchitectureDecisions ?? []
+  const architectureDecisions = [...(safeTask.architectureDecisions ?? [])].sort((a, b) =>
+    String(b.updatedAt || b.createdAt).localeCompare(String(a.updatedAt || a.createdAt)),
+  )
+  const acceptedAdrs = architectureDecisions.filter((a) => a.status === 'accepted')
   const parentFeatureId = safeTask.featureId
   const isFeatureEpic = safeTask.workType === 'feature' || taskLane === 'Features'
   const diagnosis = safeTask.lastDiagnosis
@@ -1738,6 +1767,43 @@ export default function TaskDetailModal({
                       : ''}
                   </p>
                 )}
+                {(safeTask.lastStepDiagnostics?.resolvedEditTarget ||
+                  safeTask.lastStepDiagnostics?.backupSwitchOutcome ||
+                  safeTask.lastStepDiagnostics?.textRejectContentHash ||
+                  safeTask.lastStepDiagnostics?.primaryBottleneck) && (
+                  <p className="break-all text-[10px]">
+                    {safeTask.lastStepDiagnostics.resolvedEditTarget && (
+                      <>
+                        <span className="text-cat-overlay">editTarget:</span>{' '}
+                        {safeTask.lastStepDiagnostics.resolvedEditTarget}
+                        {' · '}
+                      </>
+                    )}
+                    {safeTask.lastStepDiagnostics.backupSwitchOutcome && (
+                      <>
+                        <span className="text-cat-overlay">backup:</span>{' '}
+                        {safeTask.lastStepDiagnostics.backupSwitchOutcome}
+                        {' · '}
+                      </>
+                    )}
+                    {safeTask.lastStepDiagnostics.textRejectContentHash && (
+                      <>
+                        <span className="text-cat-overlay">textReject:</span>{' '}
+                        {safeTask.lastStepDiagnostics.textRejectContentHash}
+                        {safeTask.lastStepDiagnostics.textRejectContentHashCount != null
+                          ? ` ×${safeTask.lastStepDiagnostics.textRejectContentHashCount}`
+                          : ''}
+                        {' · '}
+                      </>
+                    )}
+                    {safeTask.lastStepDiagnostics.primaryBottleneck && (
+                      <>
+                        <span className="text-cat-overlay">bottleneck:</span>{' '}
+                        {safeTask.lastStepDiagnostics.primaryBottleneck}
+                      </>
+                    )}
+                  </p>
+                )}
                 {(typeof safeTask.lastStepDiagnostics?.promptTokensAtFirstCall === 'number' ||
                   typeof safeTask.lastStepDiagnostics?.nativeToolCallRate === 'number' ||
                   typeof safeTask.lastStepOutcome?.cardToolFailures === 'number') && (
@@ -2015,9 +2081,38 @@ export default function TaskDetailModal({
             </CollapsibleSection>
           )}
 
+          {isFeatureEpic && rollupArchitecture.length > 0 && (
+            <CollapsibleSection
+              title="Rolled-up architecture"
+              badge={rollupArchitecture.length}
+              defaultOpen={rollupArchitecture.length <= 6}
+            >
+              <div className="space-y-1.5 max-h-48 overflow-y-auto">
+                {rollupArchitecture.map((d, idx) => (
+                  <div
+                    key={`${d.id}-${idx}`}
+                    className="text-[11px] bg-cat-base border border-emerald-500/30 rounded px-2 py-1.5"
+                  >
+                    <p className="text-emerald-200 font-semibold">{d.title}</p>
+                    <p className="text-white mt-0.5">{d.decision}</p>
+                    {d.childTaskId && (
+                      <button
+                        type="button"
+                        onClick={() => onRelatedTaskClick?.(d.childTaskId!)}
+                        className="text-[10px] text-indigo-300 font-mono mt-0.5 hover:underline"
+                      >
+                        {d.childTitle || d.childTaskId}
+                      </button>
+                    )}
+                  </div>
+                ))}
+              </div>
+            </CollapsibleSection>
+          )}
+
           {isFeatureEpic && rollupDecisions.length > 0 && (
             <CollapsibleSection
-              title="Rolled-up Decisions"
+              title="Rolled-up activity log"
               badge={rollupDecisions.length}
               defaultOpen={rollupDecisions.length <= 8}
             >
@@ -2221,6 +2316,30 @@ export default function TaskDetailModal({
                   className="w-full bg-indigo-600/40 hover:bg-indigo-600/60 disabled:opacity-50 text-indigo-100 text-xs py-2 px-3 rounded-lg border border-indigo-500/30"
                 >
                   {injecting ? 'Injecting…' : 'Inject & continue'}
+                </button>
+              </div>
+            )}
+
+          {onResetDevLatch &&
+            taskLane !== 'Done' &&
+            (task.phaseCycleCapReached || task.poAutoSkip) && (
+              <div className="space-y-1">
+                <p className="text-[10px] text-cat-overlay leading-relaxed">
+                  Clears Developer visit cap, circuit-breaker counters, and PO auto-skip so Auto
+                  Sprint can pick this card again. Prefer splitting if scope is still too large.
+                </p>
+                <button
+                  type="button"
+                  disabled={resettingLatch || sprintRunning}
+                  onClick={() => {
+                    setResettingLatch(true)
+                    void Promise.resolve(onResetDevLatch(task.id)).finally(() =>
+                      setResettingLatch(false),
+                    )
+                  }}
+                  className="w-full bg-rose-950/40 hover:bg-rose-950/60 disabled:opacity-50 text-rose-200 text-xs py-2 px-3 rounded-lg border border-rose-500/30"
+                >
+                  {resettingLatch ? 'Resetting latch…' : 'Reset Developer visit latch'}
                 </button>
               </div>
             )}
@@ -2429,7 +2548,142 @@ export default function TaskDetailModal({
             )
           })()}
 
-          <CollapsibleSection title="Agent Decisions" badge={decisions.length} defaultOpen={decisions.length <= 10}>
+          <CollapsibleSection
+            title="Architecture decisions"
+            badge={acceptedAdrs.length}
+            defaultOpen={acceptedAdrs.length > 0 && acceptedAdrs.length <= 6}
+          >
+            <p className="text-[10px] text-cat-overlay mb-2 leading-relaxed">
+              Design rationale: why this approach was chosen over alternatives, and how it evolved.
+              Synced to{' '}
+              <span className="font-mono text-emerald-300/90">
+                {safeTask.architectureMarkdownPath || `docs/tasks/.../architecture.md`}
+              </span>
+            </p>
+            <div className="space-y-2 max-h-56 overflow-y-auto mb-3">
+              {architectureDecisions.length === 0 ? (
+                <p className="text-[11px] text-cat-overlay italic">None yet</p>
+              ) : (
+                architectureDecisions.map((adr) => (
+                  <div
+                    key={adr.id}
+                    className={`border rounded-lg p-2 text-[11px] ${
+                      adr.status === 'superseded'
+                        ? 'border-cat-surface1 opacity-70'
+                        : 'border-emerald-500/40 bg-emerald-950/15'
+                    }`}
+                  >
+                    <div className="flex justify-between gap-2 text-[10px] text-cat-overlay mb-1">
+                      <span className="text-emerald-200 font-semibold">{adr.title}</span>
+                      <span>{adr.status}</span>
+                    </div>
+                    {adr.context && (
+                      <p className="text-cat-subtext text-[10px] mb-1">{adr.context}</p>
+                    )}
+                    <p className="text-white">{adr.decision}</p>
+                    {(adr.alternatives ?? []).length > 0 && (
+                      <ul className="mt-1 text-[10px] text-cat-subtext list-disc pl-4">
+                        {adr.alternatives.map((alt, i) => (
+                          <li key={i}>
+                            <span className="text-cat-text">{alt.name}</span>
+                            {alt.rejectedBecause ? ` — ${alt.rejectedBecause}` : ''}
+                          </li>
+                        ))}
+                      </ul>
+                    )}
+                    {adr.changeNote && (
+                      <p className="text-[10px] text-amber-200/90 mt-1">Change: {adr.changeNote}</p>
+                    )}
+                    {adr.supersedesId && (
+                      <p className="text-[10px] font-mono text-cat-overlay mt-0.5">
+                        Supersedes {adr.supersedesId}
+                      </p>
+                    )}
+                  </div>
+                ))
+              )}
+            </div>
+            {onAddArchitectureDecision && (
+              <div className="space-y-1.5 border-t border-cat-surface1 pt-2">
+                <p className="text-[10px] text-cat-overlay font-semibold">Add ADR manually</p>
+                <input
+                  value={adrTopic}
+                  onChange={(e) => setAdrTopic(e.target.value)}
+                  placeholder="topic slug (e.g. state-management)"
+                  className="w-full bg-cat-base border border-cat-surface1 rounded px-2 py-1 text-[11px]"
+                />
+                <input
+                  value={adrTitle}
+                  onChange={(e) => setAdrTitle(e.target.value)}
+                  placeholder="Title"
+                  className="w-full bg-cat-base border border-cat-surface1 rounded px-2 py-1 text-[11px]"
+                />
+                <textarea
+                  value={adrContext}
+                  onChange={(e) => setAdrContext(e.target.value)}
+                  placeholder="Context / constraints"
+                  rows={2}
+                  className="w-full bg-cat-base border border-cat-surface1 rounded px-2 py-1 text-[11px]"
+                />
+                <textarea
+                  value={adrDecision}
+                  onChange={(e) => setAdrDecision(e.target.value)}
+                  placeholder="Decision (what we chose)"
+                  rows={2}
+                  className="w-full bg-cat-base border border-cat-surface1 rounded px-2 py-1 text-[11px]"
+                />
+                <input
+                  value={adrAltName}
+                  onChange={(e) => setAdrAltName(e.target.value)}
+                  placeholder="Rejected alternative"
+                  className="w-full bg-cat-base border border-cat-surface1 rounded px-2 py-1 text-[11px]"
+                />
+                <input
+                  value={adrAltRejected}
+                  onChange={(e) => setAdrAltRejected(e.target.value)}
+                  placeholder="Why rejected"
+                  className="w-full bg-cat-base border border-cat-surface1 rounded px-2 py-1 text-[11px]"
+                />
+                <button
+                  type="button"
+                  disabled={
+                    adrSaving ||
+                    !adrTopic.trim() ||
+                    !adrTitle.trim() ||
+                    !adrDecision.trim() ||
+                    !adrAltName.trim()
+                  }
+                  onClick={() => {
+                    setAdrSaving(true)
+                    void Promise.resolve(
+                      onAddArchitectureDecision(task.id, {
+                        topic: adrTopic.trim(),
+                        title: adrTitle.trim(),
+                        context: adrContext.trim(),
+                        decision: adrDecision.trim(),
+                        alternatives: [
+                          {
+                            name: adrAltName.trim(),
+                            rejectedBecause: adrAltRejected.trim() || 'Not selected for this card.',
+                          },
+                        ],
+                      }),
+                    ).finally(() => setAdrSaving(false))
+                  }}
+                  className="w-full bg-emerald-950/40 hover:bg-emerald-950/60 disabled:opacity-50 text-emerald-200 text-xs py-2 rounded-lg border border-emerald-500/30"
+                >
+                  {adrSaving ? 'Saving…' : 'Save architecture decision'}
+                </button>
+              </div>
+            )}
+          </CollapsibleSection>
+
+          <CollapsibleSection
+            title="Activity log"
+            badge={decisions.length}
+            defaultOpen={decisions.length <= 10}
+          >
+            <p className="text-[10px] text-cat-overlay mb-2">Tool runs and system events (not design ADRs).</p>
             <div className="overflow-y-auto space-y-2 max-h-40 pr-1">
               {decisions.length === 0 ? (
                 <p className="text-[11px] text-cat-overlay italic">None yet</p>
@@ -2486,7 +2740,7 @@ export default function TaskDetailModal({
                 <span className="font-bold uppercase text-rose-300 mr-2">
                   {totalFailureCount} tool failure{totalFailureCount === 1 ? '' : 's'}
                 </span>
-                Red entries below show failed read/write/run commands. Check Agent Decisions for
+                Red entries below show failed read/write/run commands. Check Activity log for
                 summaries.
               </div>
             )}

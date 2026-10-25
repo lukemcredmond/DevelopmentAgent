@@ -11,6 +11,7 @@ from backend.services.task_docs import (
     TASKS_PREFIX,
     legacy_spec_markdown_path,
     migrate_legacy_task_docs,
+    task_architecture_markdown_path,
     task_spec_markdown_path,
 )
 from backend.services.task_qa_markdown import humanize_field
@@ -184,6 +185,8 @@ def build_task_spec_markdown(task: Dict[str, Any]) -> str:
     if qa_path:
         lines.append(f"- Working notes: `{qa_path}`")
     lines.append(f"- This spec: `{task_spec_markdown_path(task_id)}`")
+    arch_path = str(task.get("architectureMarkdownPath") or task_architecture_markdown_path(task_id))
+    lines.append(f"- Architecture decisions: `{arch_path}`")
     lines.append("")
 
     text = "\n".join(lines)

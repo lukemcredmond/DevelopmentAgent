@@ -135,6 +135,23 @@ class DuplicateAuditApplyPayload(BaseModel):
     )
 
 
+class ArchitectureAlternativePayload(BaseModel):
+    name: str
+    rejectedBecause: str = ""
+
+
+class ArchitectureDecisionPayload(BaseModel):
+    topic: str
+    title: str
+    context: str = ""
+    decision: str
+    alternatives: List[ArchitectureAlternativePayload] = Field(default_factory=list)
+    consequences: Optional[str] = None
+    relatedFiles: Optional[List[str]] = None
+    supersedesId: Optional[str] = None
+    changeNote: Optional[str] = None
+
+
 class UpdateTaskPayload(BaseModel):
     task_id: Optional[str] = None
     title: Optional[str] = None
@@ -293,6 +310,7 @@ class WorkflowSettingsPayload(BaseModel):
     workspaceRulesMaxChars: Optional[int] = None
     implementerRelaxGatesOnAutoSprint: Optional[bool] = None
     implementerRelaxGatesAlways: Optional[bool] = None
+    implementerRequireAnalyzeClean: Optional[bool] = None
     implementerStopOnLatch: Optional[bool] = None
     implementerStopOnLatchCount: Optional[int] = None
     useComposerDevStep: Optional[bool] = None
@@ -360,10 +378,17 @@ class WorkflowSettingsPayload(BaseModel):
     contextRewindTurns: Optional[int] = None
     enableLlmDecisionTrace: Optional[bool] = None
     enableLlmModelRationale: Optional[bool] = None
+    enableAdrPostStepExtract: Optional[bool] = None
+    adrPostStepExtractMaxPerStep: Optional[int] = None
     toolOutputEchoStopAfter: Optional[int] = None
     enableDevPhaseGraph: Optional[bool] = None
     devExploreMaxTools: Optional[int] = None
     devExploreForcePatchInStep: Optional[bool] = None
+    devExploreForcePatchAfterReadBatch: Optional[bool] = None
+    singleModelRespectPhaseRouting: Optional[bool] = None
+    ollamaThinkDefault: Optional[bool] = None
+    ollamaThinkPlanOutlineWrite: Optional[bool] = None
+    ollamaThinkByRole: Optional[Dict[str, bool]] = None
     poNumPredictOverride: Optional[bool] = None
     devPatchMaxTools: Optional[int] = None
     devVerifyMaxTools: Optional[int] = None
@@ -443,6 +468,29 @@ class LlmModelBatchTestPayload(BaseModel):
     url: Optional[str] = None
     models: Optional[Dict[str, str]] = None
     backupModels: Optional[Dict[str, str]] = None
+
+
+class ModelBenchmarkPayload(BaseModel):
+    model_config = ConfigDict(populate_by_name=True)
+
+    url: Optional[str] = None
+    models: Optional[List[str]] = None
+    agent: str = "dev"
+    resume: bool = False
+
+
+class ModelBenchmarkImportPayload(BaseModel):
+    model_config = ConfigDict(populate_by_name=True)
+
+    url: Optional[str] = None
+    snapshot: Dict[str, Any]
+
+
+class ModelBenchmarkRestoreBackupPayload(BaseModel):
+    model_config = ConfigDict(populate_by_name=True)
+
+    url: Optional[str] = None
+    filename: str
 
 
 class DiagnoseTaskPayload(BaseModel):

@@ -449,6 +449,8 @@ def test_failed_park_does_not_claim_success():
 
 
 def test_reconcile_broken_phase_cap_without_options():
+    from unittest.mock import patch
+
     initialize()
     from backend import state
     from backend.agents.task_context import get_task_lane, init_new_task
@@ -476,10 +478,46 @@ def test_reconcile_broken_phase_cap_without_options():
         "QA": [],
         "Done": [],
     }
+    with patch("backend.services.sprint_service._run_stuck_auto_split", return_value=False):
+        result = reconcile_autonomous_needs_user_cards()
+    assert "T-NU-CAP-BROKEN" in result.get("recovered", [])
+    assert result["count"] == 0
+    assert get_task_lane("T-NU-CAP-BROKEN") == "Needs User"
+    assert task.get("poAutoSkip") is True
+
+
+def test_reconcile_keeps_text_rejection_park():
+    initialize()
+    from backend import state
+    from backend.agents.task_context import get_task_lane, init_new_task
+    from backend.services.needs_user_guard import reconcile_autonomous_needs_user_cards
+
+    task = init_new_task(
+        {
+            "id": "T-NU-TEXT",
+            "title": "Polish offline",
+            "description": "d",
+            "status": "Needs User",
+            "acceptanceCriteria": ["Works offline"],
+            "lastCommandDiagnostics": [{"file": "lib/main.dart", "line": 1, "message": "error x"}],
+            "lastStepOutcome": {"exitReason": "text_rejection_loop"},
+            "needsUserReason": "Developer returned text-only or safety refusals instead of apply_patch.",
+            "userQuestion": 'Model refused tools on "Polish offline". Split the card or choose how to proceed?',
+        }
+    )
+    task["needsUserKind"] = "stuck_loop"
+    state.SHARED_BOARD = {
+        "Backlog": [],
+        "In Progress": [],
+        "Needs PO": [],
+        "Needs User": [task],
+        "QA": [],
+        "Done": [],
+    }
     result = reconcile_autonomous_needs_user_cards()
-    assert result["count"] == 1
-    assert get_task_lane("T-NU-CAP-BROKEN") == "In Progress"
-    assert not task.get("userQuestion")
+    assert result["count"] == 0
+    assert "T-NU-TEXT" not in result.get("reconciled", [])
+    assert get_task_lane("T-NU-TEXT") == "Needs User"
 
 
 def test_diagnosis_options_use_recommended_action_not_template():

@@ -6,6 +6,24 @@ from typing import Any, Dict, Iterable, List, Optional, Sequence, Set, Tuple
 
 PATCH_RECOVERY_MARKER = "=== PATCH RECOVERY ==="
 PATCH_RECOVERY_REMINDER_MARKER = "=== PATCH RECOVERY (blocked) ==="
+TINY_WRITE_FILE_MAX_CHARS = 512
+TINY_WRITE_FILE_MIN_CHARS = 80
+
+_READ_GUARD_MARKERS = (
+    "requires read_file on",
+    "read_file on",
+    "call read_file",
+)
+
+
+def is_read_guard_patch_failure(tool_output: str) -> bool:
+    """True when apply_patch failed because STEP_FILE_READS lacks a fresh read_file."""
+    lower = str(tool_output or "").lower()
+    if "requires read_file" in lower:
+        return True
+    if "in this step first" in lower and "read_file" in lower:
+        return True
+    return any(m in lower for m in _READ_GUARD_MARKERS) and "this step" in lower
 
 
 def normalize_recovery_path(path: str) -> str:
@@ -28,6 +46,16 @@ def failed_apply_patch_paths(
             seen.add(path)
             paths.append(path)
     return paths
+
+
+def build_out_of_scope_patch_nudge(*, target: str, wrong_path: str) -> str:
+    target_norm = normalize_recovery_path(target)
+    wrong_norm = normalize_recovery_path(wrong_path)
+    return (
+        f"{PATCH_RECOVERY_MARKER}\n"
+        f"apply_patch on `{wrong_norm}` is out of scope for this card.\n"
+        f"EDIT TARGET is `{target_norm}`. Call read_file on that path, then apply_patch."
+    )
 
 
 def build_patch_recovery_nudge(paths: Iterable[str]) -> str:
@@ -142,6 +170,35 @@ def build_patch_fail_excerpt_nudge(path: str, file_content: str, old_text: str) 
     )
 
 
+def is_tiny_existing_write_file_attempt(
+    path: str,
+    content: str,
+    *,
+    file_exists: bool,
+) -> bool:
+    """True when the model tried write_file on an existing path with stub-sized content."""
+    if not file_exists:
+        return False
+    if not normalize_recovery_path(path):
+        return False
+    text = str(content or "")
+    if not text.strip():
+        return False
+    n = len(text)
+    return TINY_WRITE_FILE_MIN_CHARS <= n < TINY_WRITE_FILE_MAX_CHARS
+
+
+def build_tiny_write_file_recovery_nudge(path: str) -> str:
+    path_norm = normalize_recovery_path(path)
+    return (
+        f"{PATCH_RECOVERY_MARKER}\n"
+        f"write_file on existing `{path_norm}` was too small (under {TINY_WRITE_FILE_MAX_CHARS} chars) "
+        "and likely truncated.\n"
+        "Next: read_file on that path for full content, then write_file with the complete file "
+        "(overwrite allowed this step) or apply_patch with a real old_text span."
+    )
+
+
 def build_write_file_escalation_nudge(
     paths: Iterable[str],
     *,
@@ -163,6 +220,7 @@ def build_write_file_escalation_nudge(
     return (
         f"{PATCH_RECOVERY_MARKER}\n"
         f"Identical apply_patch failed repeatedly on: {plist}.\n"
+        "rewrite_strategy: read_file full file then write_file overwrite (escalation).\n"
         "Do NOT retry the same apply_patch.\n"
         + overwrite_line
     )

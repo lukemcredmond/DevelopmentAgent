@@ -27,6 +27,20 @@ _DESTRUCTIVE_SHELL_MARKERS = (
 
 _CUSTOM_CANONICAL_NAMES: Set[str] = set()
 
+FLUTTER_VERIFY_PRESET: Dict[str, Any] = {
+    "id": "flutter_verify",
+    "name": "flutter_verify",
+    "description": (
+        "Resolve dependencies and run dart analyze --fatal-infos in the workspace "
+        "(Flutter/Dart projects)."
+    ),
+    "parameters": {"type": "object", "properties": {}, "required": []},
+    "agents": ["Developer", "QA Tester"],
+    "executor": "shell",
+    "shell": {"command": "flutter pub get && dart analyze --fatal-infos"},
+    "shellPostProcess": {"builtin": "dart_analyze"},
+}
+
 QUERY_SQL_PRESET: Dict[str, Any] = {
     "id": "query_sql",
     "name": "query_sql",
@@ -496,6 +510,33 @@ def merged_custom_tool_defs(settings: Optional[Dict[str, Any]] = None) -> List[D
     for d in list_project_custom_tool_defs(settings):
         by_name[d["name"]] = {**d, "scope": "project"}
     return list(by_name.values())
+
+
+def maybe_warn_flutter_smoke_custom_tools(settings: Optional[Dict[str, Any]] = None) -> None:
+    """Log when a Flutter workspace has custom tools but no flutter_verify preset."""
+    try:
+        from backend.services.file_blocker import workspace_looks_like_flutter_dart
+        from backend.services.logs import add_system_log
+
+        if not workspace_looks_like_flutter_dart():
+            return
+        defs = list_project_custom_tool_defs(settings)
+        if not defs:
+            return
+        names = {str(d.get("name") or "").lower() for d in defs}
+        if "flutter_verify" in names:
+            return
+        useful = [n for n in names if any(k in n for k in ("verify", "analyze", "flutter", "dart"))]
+        if useful:
+            return
+        add_system_log(
+            "System",
+            "warning",
+            "Flutter workspace: register custom tool flutter_verify (FLUTTER_VERIFY_PRESET) "
+            "instead of smoke-only echo tools.",
+        )
+    except Exception:
+        pass
 
 
 def build_custom_tools(settings: Optional[Dict[str, Any]] = None) -> List[Tool]:

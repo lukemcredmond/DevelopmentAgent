@@ -8,8 +8,12 @@ from backend.bootstrap import initialize
 from backend.services.board_service import move_board_stage
 from backend.services.file_blocker import (
     BLOCKED_BY_KIND_FILE_FIX,
+    dev_edit_path_allowed_for_tool,
+    dev_read_path_allowed_for_tool,
     orchestrate_file_blocker,
     reconcile_file_blockers_from_board,
+    resolve_dev_edit_target_path,
+    validate_dev_edit_target_path,
 )
 from backend.services.workflow_settings import save_workflow_settings
 
@@ -143,3 +147,137 @@ def test_reconcile_groups_needs_user_lint_pile():
     assert result["blocked"] >= 2
     blocked_count = len(state.SHARED_BOARD.get("Blocked") or [])
     assert blocked_count >= 2
+
+
+def test_resolve_dev_edit_target_lib_main_without_extension():
+    task = {
+        "title": "Scaffold polish — analyzer clean on lib/main and app entry",
+        "description": "",
+    }
+    path = resolve_dev_edit_target_path(task)
+    assert path == "lib/main.dart"
+    assert task.get("lintSourceFile") == "lib/main.dart"
+
+
+def test_resolve_dev_edit_target_prefers_code_over_readme(tmp_path):
+    initialize()
+    state.WORKSPACE_DIR = str(tmp_path)
+    lib = tmp_path / "lib"
+    lib.mkdir(parents=True)
+    (lib / "app.dart").write_text("// app\n", encoding="utf-8")
+    (tmp_path / "README.md").write_text("# app\n", encoding="utf-8")
+    task = {
+        "title": "Polish feature",
+        "description": "",
+        "scaffoldedFiles": ["README.md", "lib/app.dart"],
+    }
+    path = resolve_dev_edit_target_path(task)
+    assert path == "lib/app.dart"
+    assert task.get("lintSourceFile") == "lib/app.dart"
+
+
+def test_resolve_dev_edit_target_scaffold_offline_uses_main_dart(tmp_path):
+    initialize()
+    state.WORKSPACE_DIR = str(tmp_path)
+    lib = tmp_path / "lib"
+    lib.mkdir(parents=True)
+    (lib / "main.dart").write_text("void main() {}\n", encoding="utf-8")
+    (tmp_path / "README.md").write_text("# app\n", encoding="utf-8")
+    task = {
+        "title": "Scaffold polish — offline persistence edge cases",
+        "description": "",
+        "scaffoldedFiles": ["README.md"],
+    }
+    path = resolve_dev_edit_target_path(task)
+    assert path == "lib/main.dart"
+    assert task.get("lintSourceFile") == "lib/main.dart"
+
+
+def test_flutter_workspace_rejects_billing_py_read(tmp_path):
+    initialize()
+    state.WORKSPACE_DIR = str(tmp_path)
+    (tmp_path / "pubspec.yaml").write_text(
+        "name: meal\nenvironment:\n  sdk: '>=3.0.0 <4.0.0'\ndependencies:\n  flutter:\n    sdk: flutter\n",
+        encoding="utf-8",
+    )
+    task = {
+        "title": "Navigation — MealLibraryScreen route",
+        "description": "Wire MealLibraryScreen in router",
+        "lintSourceFile": "lib/main.dart",
+    }
+    assert not validate_dev_edit_target_path("app/billing.py")
+    ok, err = dev_read_path_allowed_for_tool(task, "app/billing.py")
+    assert not ok
+    assert "Dart scope" in err
+    ok_main, _ = dev_read_path_allowed_for_tool(task, "lib/main.dart")
+    assert ok_main
+
+
+def test_integration_card_allows_multi_file_edits(tmp_path):
+    initialize()
+    state.WORKSPACE_DIR = str(tmp_path)
+    (tmp_path / "pubspec.yaml").write_text("name: x\n", encoding="utf-8")
+    lib = tmp_path / "lib"
+    lib.mkdir(parents=True)
+    (lib / "main.dart").write_text("void main() {}\n", encoding="utf-8")
+    task = {
+        "title": "Repo integration",
+        "lintSourceFile": "lib/main.dart",
+        "integrationEditPaths": ["lib/main.dart", "pubspec.yaml"],
+    }
+    ok_main, _ = dev_edit_path_allowed_for_tool(task, "lib/main.dart")
+    ok_pub, _ = dev_edit_path_allowed_for_tool(task, "pubspec.yaml")
+    assert ok_main and ok_pub
+
+
+def test_fix_card_gets_multi_path_write_paths():
+    from backend.services.file_blocker import _create_fix_card_payload
+
+    touching = [
+        (
+            "In Progress",
+            {
+                "lintSourceFile": "lib/main.dart",
+                "writePaths": ["lib/main.dart"],
+            },
+        ),
+        (
+            "In Progress",
+            {
+                "lintSourceFile": "lib/screens/a.dart",
+                "writePaths": ["lib/screens/a.dart"],
+            },
+        ),
+    ]
+    card = _create_fix_card_payload(
+        "lib/main.dart",
+        [{"file": "lib/main.dart", "line": 1, "message": "e", "severity": "error"}],
+        "SRC-1",
+        touching=touching,
+    )
+    paths = card.get("writePaths") or []
+    assert "lib/main.dart" in paths
+    assert "lib/screens/a.dart" in paths
+    assert card.get("integrationEditPaths")
+
+
+def test_resolve_prefers_shopping_screen_over_main_scaffold(tmp_path):
+    initialize()
+    state.WORKSPACE_DIR = str(tmp_path)
+    (tmp_path / "pubspec.yaml").write_text(
+        "dependencies:\n  flutter:\n    sdk: flutter\n",
+        encoding="utf-8",
+    )
+    lib = tmp_path / "lib"
+    screens = lib / "screens"
+    screens.mkdir(parents=True)
+    (lib / "main.dart").write_text("void main() {}\n", encoding="utf-8")
+    (screens / "shopping_list_screen.dart").write_text("// s\n", encoding="utf-8")
+    task = {
+        "title": "Shopping list — empty state polish",
+        "description": "scaffold offline edge",
+        "scaffoldedFiles": ["README.md"],
+    }
+    path = resolve_dev_edit_target_path(task)
+    assert path == "lib/screens/shopping_list_screen.dart"
+    assert task.get("lintSourceFile") == "lib/screens/shopping_list_screen.dart"

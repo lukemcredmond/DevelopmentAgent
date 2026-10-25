@@ -1,14 +1,34 @@
+import json
 import time
 from typing import Any, Dict, List, Optional
 
 import requests
-from fastapi import APIRouter, Query
-from fastapi.responses import StreamingResponse
+from fastapi import APIRouter, HTTPException, Query
+from fastapi.responses import Response, StreamingResponse
 
 from backend import state
-from backend.api.schemas import LlmModelBatchTestPayload, LlmModelTestPayload
+from backend.api.schemas import (
+    LlmModelBatchTestPayload,
+    LlmModelTestPayload,
+    ModelBenchmarkImportPayload,
+    ModelBenchmarkPayload,
+    ModelBenchmarkRestoreBackupPayload,
+)
 from backend.services.llm_debug_log import clear_llm_log, get_llm_logs
 from backend.services.llm_provider import get_chat_provider
+from backend.services.model_benchmark_backup import (
+    list_benchmark_backups,
+    load_backup_file,
+)
+from backend.services.model_benchmark_runner import (
+    benchmark_blocked_reason,
+    cancel_benchmark,
+    export_benchmark_snapshot,
+    get_benchmark_snapshot,
+    import_benchmark_snapshot,
+    is_benchmark_running,
+    start_model_benchmark,
+)
 from backend.services.model_test_runner import (
     build_test_provider,
     build_test_slots,
@@ -86,6 +106,87 @@ def test_agent_models(payload: LlmModelBatchTestPayload):
 @router.get("/api/llm/test-agent-models/status")
 def test_agent_models_status():
     return get_job_snapshot()
+
+
+@router.post("/api/llm/benchmark-models")
+def post_benchmark_models(payload: ModelBenchmarkPayload):
+    block = benchmark_blocked_reason()
+    if block:
+        raise HTTPException(status_code=409, detail=block)
+    agent = str(payload.agent or "dev").strip().lower()
+    if agent not in ("po", "dev", "cr", "qa"):
+        raise HTTPException(status_code=400, detail=f"Unknown agent: {agent}")
+    result = start_model_benchmark(
+        payload.models,
+        url=payload.url,
+        agent_id=agent,
+        resume=bool(payload.resume),
+    )
+    if result.get("status") == "blocked":
+        raise HTTPException(status_code=409, detail=str(result.get("error") or "blocked"))
+    return result
+
+
+@router.get("/api/llm/benchmark-models/status")
+def get_benchmark_models_status():
+    return get_benchmark_snapshot()
+
+
+@router.get("/api/llm/dev-model-assessment")
+def get_dev_model_assessment(model: Optional[str] = Query(None)):
+    from backend.services.dev_model_benchmark_guard import dev_model_assessment_payload
+
+    return dev_model_assessment_payload(model)
+
+
+@router.post("/api/llm/benchmark-models/cancel")
+def post_benchmark_models_cancel():
+    return cancel_benchmark()
+
+
+@router.get("/api/llm/benchmark-models/export")
+def get_benchmark_models_export(url: Optional[str] = None):
+    data = export_benchmark_snapshot(url)
+    results = data.get("results") if isinstance(data.get("results"), list) else []
+    if not results:
+        raise HTTPException(status_code=404, detail="No benchmark data to export")
+    body = json.dumps(data, indent=2, default=str)
+    return Response(
+        content=body,
+        media_type="application/json",
+        headers={"Content-Disposition": 'attachment; filename="benchmark-export.json"'},
+    )
+
+
+@router.post("/api/llm/benchmark-models/import")
+def post_benchmark_models_import(payload: ModelBenchmarkImportPayload):
+    if is_benchmark_running():
+        raise HTTPException(status_code=409, detail="Benchmark is running")
+    result = import_benchmark_snapshot(payload.snapshot, url=payload.url)
+    if result.get("status") == "blocked":
+        raise HTTPException(status_code=400, detail=str(result.get("error") or "import failed"))
+    return result
+
+
+@router.get("/api/llm/benchmark-models/backups")
+def get_benchmark_models_backups(url: Optional[str] = None):
+    from backend.services.model_benchmark_runner import resolve_benchmark_url
+
+    storage_url = resolve_benchmark_url(url)
+    return {"url": storage_url, "backups": list_benchmark_backups(storage_url)}
+
+
+@router.post("/api/llm/benchmark-models/restore-backup")
+def post_benchmark_models_restore_backup(payload: ModelBenchmarkRestoreBackupPayload):
+    if is_benchmark_running():
+        raise HTTPException(status_code=409, detail="Benchmark is running")
+    snapshot = load_backup_file(payload.filename)
+    if not snapshot:
+        raise HTTPException(status_code=404, detail="Backup file not found")
+    result = import_benchmark_snapshot(snapshot, url=payload.url)
+    if result.get("status") == "blocked":
+        raise HTTPException(status_code=400, detail=str(result.get("error") or "restore failed"))
+    return result
 
 
 @router.get("/api/ollama/logs")

@@ -211,6 +211,16 @@ def cancel_auto_sprint():
     return {"ok": True, "sprintCancel": True, "sprintCancelIntent": "cancelled"}
 
 
+@router.post("/api/sprint/workspace-repair")
+def trigger_workspace_repair():
+    from backend.services.workspace_repair import run_workspace_repair
+
+    report = run_workspace_repair()
+    response = build_state_response()
+    response["workspaceRepair"] = report
+    return response
+
+
 @router.post("/api/workflow/settings")
 def update_workflow_settings(payload: WorkflowSettingsPayload):
     with state.STATE_LOCK:

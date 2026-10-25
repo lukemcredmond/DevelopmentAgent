@@ -25,7 +25,10 @@ _STACK_CATALOG: List[Dict[str, Any]] = [
         "recommendedSkills": [],
         "exampleCommands": ["flutter pub get", "flutter analyze", "flutter test", "flutter run"],
         "agentsWithTools": ["dev", "qa"],
-        "notes": "Flutter SDK must be on PATH. QA auto-runs flutter analyze when pubspec.yaml exists.",
+        "notes": (
+            "Flutter SDK must be on PATH. QA auto-runs flutter analyze when pubspec.yaml exists. "
+            "Register custom tool flutter_verify (FLUTTER_VERIFY_PRESET) for structured verify output."
+        ),
     },
     {
         "id": "web",

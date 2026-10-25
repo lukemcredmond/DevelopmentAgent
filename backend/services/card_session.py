@@ -147,7 +147,7 @@ def maybe_summarize_before_prune(
         return
     try:
         from backend.services.context_compress import resolve_context_compress_model
-        from backend.services.llm_provider import get_chat_provider
+        from backend.services.llm_provider import get_chat_provider, ollama_aux_chat_options
 
         model = resolve_context_compress_model(agent_role)
         provider = get_chat_provider()
@@ -159,7 +159,7 @@ def maybe_summarize_before_prune(
         resp = provider.chat(
             model,
             [{"role": "user", "content": prompt[:16000]}],
-            options={"num_predict": 800, "temperature": 0.2},
+            options=ollama_aux_chat_options(num_predict=800, temperature=0.2),
         )
         summary = (resp.message.content or "").strip() if resp and resp.message else ""
         if not summary:

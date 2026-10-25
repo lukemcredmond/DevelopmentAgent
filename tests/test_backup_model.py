@@ -2,11 +2,16 @@
 
 from __future__ import annotations
 
+from unittest.mock import patch
+
 from backend.bootstrap import initialize
 from backend.agents.task_context import init_new_task
 from backend.services.backup_model import (
     apply_model_for_step,
     arm_backup_for_agent,
+    dev_backup_model_allowed,
+    pick_coder_dev_backup_model,
+    repair_invalid_dev_backup_at_sprint_start,
     should_arm_from_exit_reason,
 )
 from backend.services.workflow_settings import reset_workflow_settings, save_workflow_settings
@@ -173,3 +178,21 @@ def test_defaults_and_ui_markers():
     )
     assert "enableBackupModelOnStuck" in wf
     assert "backupModelStuckSteps" in wf
+
+
+def test_repair_invalid_dev_backup_at_sprint_start():
+    from backend import state
+
+    from backend.services.workflow_settings import reset_workflow_settings, save_workflow_settings
+
+    initialize()
+    reset_workflow_settings()
+    save_workflow_settings({"autoRepairInvalidDevBackup": True})
+    state.BACKUP_MODELS = {**state.BACKUP_MODELS, "dev": "qwen3.5:latest"}
+    assert dev_backup_model_allowed("qwen3.5:latest")[0] is False
+    pick = pick_coder_dev_backup_model()
+    assert pick and dev_backup_model_allowed(pick)[0]
+    with patch("backend.services.project_service.save_current_project_state") as save:
+        assert repair_invalid_dev_backup_at_sprint_start() is True
+        save.assert_called_once()
+    assert state.BACKUP_MODELS.get("dev") == pick

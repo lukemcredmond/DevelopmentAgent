@@ -28,6 +28,7 @@ from backend.api.schemas import (
     SplitBatchPayload,
     SplitTaskPayload,
     DiagnoseTaskPayload,
+    ArchitectureDecisionPayload,
     UpdateTaskPayload,
 )
 from backend.services.board_lanes import normalize_board_lanes
@@ -146,9 +147,13 @@ def clear_board_tasks():
 
 @router.post("/api/board/reset-sprint-stalls")
 def reset_sprint_stalls():
-    """Clear stall/circuit/latch counters on In Progress and Needs PO cards."""
+    """Clear stall/circuit/latch counters on stuck board cards."""
     from backend.agents.agent_run import get_active_run
-    from backend.services.sprint_speed_gates import reset_dev_cycle_latch
+    from backend.services.sprint_speed_gates import (
+        clear_sprint_stall_fields,
+        task_needs_sprint_stall_reset,
+    )
+    from backend.services.workflow_settings import get_workflow_settings
 
     with state.STATE_LOCK:
         if get_active_run() is not None:
@@ -156,27 +161,15 @@ def reset_sprint_stalls():
                 status_code=409,
                 detail="Cannot reset stalls while an agent sprint step is running.",
             )
+        ws = get_workflow_settings()
         reset_count = 0
-        for lane in ("In Progress", "Needs PO", "Blocked"):
+        for lane in ("In Progress", "Needs PO", "Blocked", "Needs User"):
             for task in state.SHARED_BOARD.get(lane) or []:
                 if not isinstance(task, dict):
                     continue
-                if not (
-                    task.get("forcePatchNextDevStep")
-                    or int(task.get("consecutiveNoWriteStall") or 0) > 0
-                    or task.get("phaseCycleCapReached")
-                    or task.get("poAutoSkip")
-                    or int(task.get("identicalPatchFailCount") or 0) > 0
-                ):
+                if not task_needs_sprint_stall_reset(task, ws):
                     continue
-                reset_dev_cycle_latch(task)
-                task.pop("circuitBreakerPoRetryUsed", None)
-                task.pop("circuitBreakerParked", None)
-                from backend.services.needs_user_guard import clear_needs_user_reason_hash
-
-                clear_needs_user_reason_hash(task)
-                task.pop("devDeferredUntilStep", None)
-                task.pop("lastRefusalDiagnosis", None)
+                clear_sprint_stall_fields(task)
                 reset_count += 1
         add_system_log(
             "System",
@@ -185,6 +178,30 @@ def reset_sprint_stalls():
         )
         save_current_project_state(force_board=True)
     return {**build_state_response(), "resetCount": reset_count}
+
+
+@router.post("/api/tasks/{task_id}/architecture-decisions")
+def add_architecture_decision(task_id: str, payload: ArchitectureDecisionPayload):
+    """Add or supersede an architecture decision record on a card."""
+    from backend.services.architecture_decisions import append_architecture_decision
+
+    with state.STATE_LOCK:
+        task = find_task_by_id(task_id)
+        if not task:
+            raise HTTPException(status_code=404, detail="Task not found")
+        body = payload.model_dump(exclude_none=True)
+        record, err = append_architecture_decision(task_id, body, author="User")
+        if err:
+            raise HTTPException(status_code=400, detail=err)
+        record_task_decision(
+            task_id,
+            "User",
+            "architecture",
+            f"ADR: {record.get('title', payload.title)}",
+            detail=str(record.get("decision", ""))[:500],
+        )
+        save_current_project_state(force_board=True)
+    return {**build_state_response(), "architectureDecision": record}
 
 
 @router.post("/api/tasks/manual")

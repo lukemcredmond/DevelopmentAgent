@@ -12,6 +12,22 @@ def is_auto_sprint_active() -> bool:
     return bool(getattr(state, "AUTO_SPRINT_ACTIVE", False))
 
 
+def implementer_require_ac_checklist_for_done(ws: Optional[Dict[str, Any]] = None) -> bool:
+    if ws is None:
+        ws = get_workflow_settings()
+    if get_execution_profile(ws) != "implementer":
+        return False
+    return bool(ws.get("implementerRequireAcChecklistForDone", True))
+
+
+def implementer_require_analyze_clean(ws: Optional[Dict[str, Any]] = None) -> bool:
+    if ws is None:
+        ws = get_workflow_settings()
+    if get_execution_profile(ws) != "implementer":
+        return False
+    return bool(ws.get("implementerRequireAnalyzeClean", True))
+
+
 def implementer_gate_relaxation_active(ws: Optional[Dict[str, Any]] = None) -> bool:
     """Soften delivery gates when implementer profile is active."""
     if ws is None:

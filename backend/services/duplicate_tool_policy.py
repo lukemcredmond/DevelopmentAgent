@@ -241,6 +241,11 @@ def duplicate_loop_should_hard_stop(
     return identical_prior_successes >= limit
 
 
+def tool_loop_deadlock_read_threshold() -> int:
+    """Identical in-step read_file successes (before the next call) that signal deadlock."""
+    return 2
+
+
 def format_duplicate_loop_breaker(
     tool_name: str,
     arguments: Dict[str, Any],

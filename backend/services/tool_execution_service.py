@@ -27,10 +27,12 @@ from backend.agents.tool_outcomes import (
     format_tool_transcript_content,
     is_tool_failure,
     parse_run_command_exit,
+    run_command_tool_success,
     run_command_status_label,
     sanitize_tool_args_for_log,
     summarize_tool_args,
 )
+from backend.services.workflow_settings import get_workflow_settings
 from backend.services.events import publish_event
 from backend.services.logs import add_system_log
 from backend.services.tool_approval import request_tool_approval, tool_requires_approval
@@ -46,6 +48,20 @@ def _next_seq(run_id: str) -> int:
     seq = _RUN_SEQ.get(run_id, 0) + 1
     _RUN_SEQ[run_id] = seq
     return seq
+
+
+def _tool_invocation_success(
+    tool_name: str,
+    tool_output: str,
+    arguments: Dict[str, Any],
+) -> bool:
+    if tool_name == "run_command":
+        return run_command_tool_success(
+            str(arguments.get("command") or ""),
+            tool_output or "",
+            get_workflow_settings(),
+        )
+    return not is_tool_failure(tool_name, tool_output or "")
 
 
 def _tool_log_setting_key(project_id: str) -> str:
@@ -655,20 +671,50 @@ def execute_tool(
         if (
             source == "agent"
             and agent_role == "Developer"
-            and tool_name in ("apply_patch", "write_file")
+            and tool_name in ("apply_patch", "write_file", "read_file")
             and task_id
         ):
             from backend.agents.task_context import find_task_by_id
-            from backend.services.file_blocker import dev_edit_path_allowed_for_tool
+            from backend.services.file_blocker import (
+                dev_edit_path_allowed_for_tool,
+                dev_read_path_allowed_for_tool,
+                normalize_file_path,
+                resolve_dev_edit_target_path,
+            )
 
             board_task = find_task_by_id(task_id)
             if board_task:
                 edit_path = str(arguments.get("path") or "")
-                allowed, scope_err = dev_edit_path_allowed_for_tool(board_task, edit_path)
+                if tool_name == "read_file":
+                    allowed, scope_err = dev_read_path_allowed_for_tool(board_task, edit_path)
+                else:
+                    allowed, scope_err = dev_edit_path_allowed_for_tool(board_task, edit_path)
                 if not allowed:
                     tool_output = scope_err
                     success = False
                     scope_blocked = True
+                elif tool_name == "read_file" and allowed:
+                    try:
+                        from backend.services.step_diagnostics import get_active_trace, log_event
+
+                        if get_active_trace():
+                            target = normalize_file_path(
+                                resolve_dev_edit_target_path(board_task) or ""
+                            )
+                            norm = normalize_file_path(edit_path)
+                            if target and norm and target != norm:
+                                log_event(
+                                    "dev_read_path_mismatch",
+                                    f"read={norm} target={target}"[:240],
+                                )
+                            if (
+                                norm.endswith(".py")
+                                or norm.startswith("app/")
+                                or "billing.py" in norm.lower()
+                            ):
+                                log_event("dev_off_scope_read", norm[:240])
+                    except Exception:
+                        pass
 
         if source == "agent" and not scope_blocked:
             from backend.services.tool_cache import (
@@ -684,7 +730,9 @@ def execute_tool(
                     cached_cmd = check_run_command_cache(cmd, arguments)
                     if cached_cmd:
                         tool_output = cached_cmd
-                        success = not is_tool_failure(tool_name, tool_output)
+                        success = _tool_invocation_success(
+                            tool_name, tool_output, arguments
+                        )
                         from_cache = True
                     else:
                         # Identical successful non-lint commands (e.g. flutter --version)
@@ -752,10 +800,14 @@ def execute_tool(
                     success = False
                 else:
                     tool_output = agent.registry.invoke(tool_name, arguments)
-                    success = not is_tool_failure(tool_name, tool_output)
+                    success = _tool_invocation_success(
+                        tool_name, tool_output, arguments
+                    )
             else:
                 tool_output = agent.registry.invoke(tool_name, arguments)
-                success = not is_tool_failure(tool_name, tool_output)
+                success = _tool_invocation_success(
+                    tool_name, tool_output, arguments
+                )
 
             if source == "agent" and success:
                 from backend.services.tool_cache import (

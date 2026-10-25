@@ -392,7 +392,12 @@ def test_visit_cap_batch_selects_only_phase_cycle_cap():
         "Code Review": [],
         "Blocked": [],
     }
-    from backend.services.sprint_service import visit_cap_needs_user_task_ids, split_visit_cap_batch
+    from backend.services.sprint_service import (
+        split_visit_cap_batch,
+        visit_cap_in_progress_task_ids,
+        visit_cap_needs_user_task_ids,
+        visit_cap_splittable_task_ids,
+    )
 
     assert visit_cap_needs_user_task_ids() == ["T-CAP"]
     assert visit_cap_needs_user_task_ids(["T-CAP", "T-ASK"]) == ["T-CAP"]
@@ -426,3 +431,47 @@ def test_visit_cap_batch_selects_only_phase_cycle_cap():
     split_mock.assert_called_once()
     assert results and results[0]["taskId"] == "T-DRAIN"
     assert task.get("pendingSplit") is None
+
+
+def test_visit_cap_in_progress_included_in_splittable_ids():
+    initialize()
+    reset_workflow_settings()
+    latched = init_new_task(
+        {"id": "T-IP", "title": "Stuck core", "description": "d", "status": "In Progress"}
+    )
+    latched["phaseCycleCapReached"] = True
+    state.SHARED_BOARD = {
+        "Backlog": [],
+        "In Progress": [latched],
+        "Needs PO": [],
+        "Needs User": [],
+        "QA": [],
+        "Done": [],
+        "Features": [],
+        "Refinement": [],
+        "Code Review": [],
+        "Blocked": [],
+    }
+    from backend.services.sprint_service import (
+        visit_cap_in_progress_task_ids,
+        visit_cap_splittable_task_ids,
+    )
+
+    assert visit_cap_in_progress_task_ids() == ["T-IP"]
+    assert visit_cap_splittable_task_ids() == ["T-IP"]
+
+
+def test_should_attempt_stuck_auto_split_retries_visit_cap_after_failed_split():
+    initialize()
+    reset_workflow_settings()
+    from backend.services.sprint_service import _should_attempt_stuck_auto_split
+    from backend.services.workflow_settings import get_workflow_settings
+
+    task = {
+        "phaseCycleCapReached": True,
+        "splitAttemptedOnStuck": True,
+    }
+    ws = get_workflow_settings()
+    assert _should_attempt_stuck_auto_split(task, ws) is True
+    task["visitCapSplitRetried"] = True
+    assert _should_attempt_stuck_auto_split(task, ws) is False

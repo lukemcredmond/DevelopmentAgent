@@ -79,6 +79,13 @@ DEFAULT_HEALTH_TIMEOUT_SEC = 5.0
 MIN_LMSTUDIO_LOAD_CONTEXT = 4096
 
 
+def ollama_aux_chat_options(**extra: Any) -> Dict[str, Any]:
+    """Options for non-agent Ollama calls (compress, probes, tests) — reasoning off by default."""
+    opts: Dict[str, Any] = dict(extra)
+    opts["think"] = False
+    return opts
+
+
 class LlmProvider:
     provider_id: str = PROVIDER_OLLAMA
     capabilities: ProviderCapabilities = ProviderCapabilities()
@@ -1177,6 +1184,7 @@ def consume_chat_stream(
     eval_timeout_sec: Optional[float] = None,
     cancel_check: Optional[Any] = None,
     on_token: Optional[Any] = None,
+    on_thinking: Optional[Any] = None,
 ) -> ChatResult:
     """Fold a provider stream into one ChatResult; abort if generation stays silent.
 
@@ -1248,7 +1256,10 @@ def consume_chat_stream(
                 if on_token is not None and callable(on_token):
                     on_token(piece)
             if msg and getattr(msg, "thinking", None):
-                thinking_parts.append(str(msg.thinking))
+                piece = str(msg.thinking)
+                thinking_parts.append(piece)
+                if on_thinking is not None and callable(on_thinking):
+                    on_thinking(piece)
             if msg and msg.tool_calls:
                 tool_calls = list(msg.tool_calls)
                 eval_started_at = None

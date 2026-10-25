@@ -126,7 +126,7 @@ def test_apply_recovery_produces_valid_ollama_message():
     payload = {"name": "read_file", "arguments": {"path": "lib/main.dart"}}
     text = f"'''{json.dumps(payload)}'''"
     msg = OllamaMessage(role="assistant", content=text)
-    names, updated = apply_tool_call_recovery(msg, {"read_file", "apply_patch"})
+    names, updated, _source = apply_tool_call_recovery(msg, {"read_file", "apply_patch"})
     assert names == ["read_file"]
     OllamaMessage.model_validate(updated.model_dump())
     hist = assistant_message_to_chat_dict(updated)

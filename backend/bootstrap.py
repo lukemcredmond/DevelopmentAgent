@@ -36,6 +36,14 @@ def load_project_into_state(project_id: str) -> bool:
         if not is_placeholder_brief(state.PROJECT_BRIEF):
             original = state.PROJECT_BRIEF
     state.PROJECT_ORIGINAL_BRIEF = original
+    try:
+        from backend.services.brief_service import repair_brief_from_original_on_load
+
+        if repair_brief_from_original_on_load():
+            proj = dict(proj)
+            proj["brief"] = state.PROJECT_BRIEF
+    except Exception:
+        pass
     state.PROJECT_PLAN_OUTLINE = proj.get("plan_outline") or ""
     hydrated_plan_from_sidecar = False
     if not str(state.PROJECT_PLAN_OUTLINE or "").strip():

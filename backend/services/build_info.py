@@ -33,6 +33,21 @@ RECOVERY_FEATURES: List[str] = [
     "sprint_ping_pong_detector",
     "support_bundle_sprint_rollup",
     "dev_defer_soft_queue",
+    "flutter_dev_path_scope",
+    "forced_patch_in_step_seed",
+    "visit_cap_sprint_skip",
+    "patch_escalation_backup",
+    "dev_ops_model_hints",
+    "dev_backup_auto_repair",
+    "dev_card_lint_recovery",
+    "primary_bottleneck_rollup",
+    "run_command_nonzero_exit_gate",
+    "implementer_done_ac_analyze_gates",
+    "integration_edit_paths",
+    "semantic_hit_workspace_filter",
+    "brief_original_repair_on_load",
+    "integration_step_budget",
+    "flutter_verify_preset",
 ]
 
 

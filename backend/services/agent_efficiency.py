@@ -37,8 +37,11 @@ def phase_model_routing_enabled(ws: Optional[Dict[str, Any]] = None) -> bool:
 
         ws = get_workflow_settings()
     if single_model_mode_active(ws):
-        # Routing between an explore model and a patch model is pure reload cost when
-        # only one model fits in VRAM at a time.
+        if bool(ws.get("singleModelRespectPhaseRouting")):
+            explore = str(ws.get("devExploreModel") or "").strip()
+            patch = str(ws.get("devPatchModel") or "").strip()
+            if explore and patch and explore != patch:
+                return bool(ws.get("enablePhaseModelRouting", True))
         return False
     if "enablePhaseModelRouting" in ws:
         return bool(ws.get("enablePhaseModelRouting"))
@@ -199,6 +202,7 @@ def effective_role_model(
     phase: Optional[str] = None,
     backup_model: Optional[str] = None,
     ws: Optional[Dict[str, Any]] = None,
+    defer_patch_routing: bool = False,
 ) -> Tuple[str, str]:
     """Resolve the model name used for this agent step/turn."""
     return resolve_step_model(
@@ -207,6 +211,7 @@ def effective_role_model(
         primary_model=primary_model,
         backup_model=backup_model,
         ws=ws,
+        defer_patch_routing=defer_patch_routing,
     )
 
 
@@ -217,6 +222,7 @@ def resolve_step_model(
     primary_model: str,
     backup_model: Optional[str] = None,
     ws: Optional[Dict[str, Any]] = None,
+    defer_patch_routing: bool = False,
 ) -> Tuple[str, str]:
     """
     Return (model_name, reason) for this LLM turn.
@@ -231,7 +237,11 @@ def resolve_step_model(
         ws = get_workflow_settings()
     primary = (primary_model or "").strip() or "qwen2.5-coder:14b"
 
-    if single_model_mode_active(ws):
+    if single_model_mode_active(ws) and not (
+        role == "Developer"
+        and phase_model_routing_enabled(ws)
+        and str(phase or "").strip()
+    ):
         # One model for every role and phase: a lane change must never cost a reload.
         chosen = single_model_name(ws, fallback=primary)
         if chosen != primary:
@@ -278,6 +288,8 @@ def resolve_step_model(
     ph = str(phase or "explore").strip().lower()
     if ph in ("explore", ""):
         return explore, "phase_explore"
+    if defer_patch_routing:
+        return primary, "phase_patch_deferred_recovery"
     # patch / verify / done / stuck → stronger coder (keep warm for verify)
     return patch, f"phase_{ph or 'patch'}"
 
@@ -294,6 +306,8 @@ def _is_heavy_general_model(model: str) -> bool:
     m = (model or "").strip().lower()
     if not m or _is_coder_model(m):
         return False
+    if "mimo" in m and "instruct" not in m:
+        return True
     return any(
         tok in m
         for tok in (

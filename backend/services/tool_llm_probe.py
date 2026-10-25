@@ -133,9 +133,9 @@ def run_llm_tool_probe(
     ]
     tools = [schema]
     ws = get_workflow_settings()
-    options = {
-        "temperature": 0.1,
-    }
+    from backend.services.llm_provider import ollama_aux_chat_options
+
+    options = ollama_aux_chat_options(temperature=0.1)
     provider = agent._get_provider() if chat_fn is None else None
     if provider is not None and provider.capabilities.num_ctx:
         options["num_ctx"] = int(ws.get("ollamaNumCtx", 32768))
@@ -164,7 +164,7 @@ def run_llm_tool_probe(
         else:
             llm_content = str(getattr(message, "content", None) or "")[:2000]
         allowed = {tool_name}
-        _, message = apply_tool_call_recovery(message, allowed)
+        _, message, _source = apply_tool_call_recovery(message, allowed)
         called_name, called_args = _extract_first_tool_call(message)
     except Exception as exc:
         duration_ms = int((time.time() - started) * 1000)

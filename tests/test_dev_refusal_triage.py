@@ -91,6 +91,27 @@ def test_maybe_triage_on_text_rejection_outcome():
     assert maybe_run_dev_refusal_triage("T-TRI", agent_result="Stopped: text rejection loop") is True
 
 
+def test_maybe_triage_when_lane_needs_user():
+    initialize()
+    task = init_new_task(
+        {
+            "id": "T-NU-TRI",
+            "title": "Card",
+            "description": "d",
+            "scope": "s",
+            "testPlan": "t",
+            "status": "Needs User",
+            "lastStepOutcome": {"exitReason": "text_rejection_loop"},
+        }
+    )
+    state.SHARED_BOARD.clear()
+    for lane in ("Backlog", "In Progress", "Needs User", "Needs PO", "QA", "Done"):
+        state.SHARED_BOARD[lane] = []
+    state.SHARED_BOARD["Needs User"] = [task]
+    state.SPRINT_PROGRESS_STEP = 3
+    assert maybe_run_dev_refusal_triage("T-NU-TRI", agent_result="text-only") is True
+
+
 def test_safety_refusal_bypasses_same_reason_hash():
     task = {
         "id": "T-HASH",

@@ -44,6 +44,16 @@ def explore_force_patch_in_step_enabled(ws: Optional[Dict[str, Any]] = None) -> 
         return bool(ws.get("devExploreForcePatchInStep"))
     return True
 
+
+def explore_force_patch_after_read_batch_enabled(ws: Optional[Dict[str, Any]] = None) -> bool:
+    if ws is None:
+        from backend.services.workflow_settings import get_workflow_settings
+
+        ws = get_workflow_settings()
+    if "devExploreForcePatchAfterReadBatch" in ws:
+        return bool(ws.get("devExploreForcePatchAfterReadBatch"))
+    return True
+
 DONE_STATUS = (
     "Verify budget finished for this step (not board Done). "
     "Another step may restart at Explore if the card stays In Progress."
@@ -383,7 +393,9 @@ class DevPhaseGraph:
             self.prior_summary = self.prior_summary or "cycle_cap"
             return
         if force_patch:
-            self.start_forced_patch(in_step=False)
+            # In-step forced patch: explore-only batches must not exit as
+            # explore_budget_exhausted before at least one write attempt.
+            self.start_forced_patch(in_step=True)
             self.explore_max = 0
 
     @staticmethod
@@ -507,10 +519,29 @@ class DevPhaseGraph:
         elif saw_verify and self.write_succeeded:
             self.phase = "verify"
 
-        # Explore budget exhausted → nudge once; optionally force Patch in-step.
+        explore_tool_names = [n for n, _ in tools if n in EXPLORE_TOOLS]
+        pure_explore_batch = bool(tools) and len(explore_tool_names) == len(tools)
+
         nudged_this_batch = False
         if (
-            self.phase == "explore"
+            pure_explore_batch
+            and len(explore_tool_names) >= 3
+            and self.phase == "explore"
+            and not self.write_succeeded
+            and not self.forced_patch
+            and self.explore_count >= len(explore_tool_names)
+            and explore_force_patch_after_read_batch_enabled()
+            and explore_force_patch_in_step_enabled()
+        ):
+            self.start_forced_patch(in_step=True)
+            action.nudge = EXPLORE_NUDGE
+            action.phase_changed = True
+            nudged_this_batch = True
+
+        # Explore budget exhausted → nudge once; optionally force Patch in-step.
+        if (
+            not nudged_this_batch
+            and self.phase == "explore"
             and not self.write_succeeded
             and not self.forced_patch
             and self.explore_count >= self.explore_max

@@ -260,12 +260,13 @@ def defer_dev_card(task_id: str, diagnosis: Dict[str, Any]) -> bool:
             f"{diagnosis.get('cause')}. Split or add file-level acceptance criteria."
         )
         increment_po_round_trips(task_id)
+        live.pop("poAutoSkip", None)
+        live.pop("poAutoSkipReason", None)
         move_board_stage(task_id, "Needs PO")
-        latch_needs_po_auto_skip(live, reason=po_msg[:300])
         add_system_log(
             "System",
             "warning",
-            f"{task_id}: refusal triage → Needs PO ({diagnosis.get('cause')})",
+            f"{task_id}: refusal triage → Needs PO ({diagnosis.get('cause')}) — PO queue",
         )
     else:
         latch_needs_po_auto_skip(
@@ -332,7 +333,7 @@ def maybe_run_dev_refusal_triage(
     if dev_deferred_active(live):
         return False
     lane = get_task_lane(task_id) or ""
-    if lane not in ("In Progress", "Needs PO"):
+    if lane not in ("In Progress", "Needs PO", "Needs User"):
         return False
 
     from backend.services.sprint_speed_gates import last_step_exit_reason

@@ -285,9 +285,16 @@ def _guarded_update_board(
                 blocked, reason = subtask_gate_blocks_advance(task)
                 if blocked:
                     return f"Error: {reason}"
-                blocked, reason = dev_gate_blocks_advance(task)
+                blocked, reason = dev_gate_blocks_advance(
+                    task,
+                    advance_target=target_upper,
+                )
                 if blocked:
                     return f"Error: {reason}"
+                if target_upper == "Done":
+                    blocked, reason = qa_gate_blocks_done(task)
+                    if blocked:
+                        return f"Error: {reason}"
                 from backend.services.focus_slice import should_block_lane_advance_for_focus
 
                 if should_block_lane_advance_for_focus(task):
@@ -516,6 +523,81 @@ tool_web_search = Tool(
         "required": ["query"],
     },
     func=lambda query, max_results=5: web_search(query, max_results=int(max_results) if max_results else 5),
+)
+
+def _tool_record_architecture_decision(
+    task_id: str,
+    topic: str,
+    title: str,
+    context: str,
+    decision: str,
+    alternatives: Any,
+    consequences: str = "",
+    related_files: Any = None,
+    supersedes_id: str = "",
+    change_note: str = "",
+    **_extra: Any,
+) -> str:
+    from backend.services.architecture_decisions import tool_record_architecture_decision
+
+    return tool_record_architecture_decision(
+        task_id,
+        topic,
+        title,
+        context,
+        decision,
+        alternatives,
+        consequences=consequences,
+        related_files=related_files,
+        supersedes_id=supersedes_id,
+        change_note=change_note,
+    )
+
+
+tool_record_architecture_decision = Tool(
+    name="record_architecture_decision",
+    description=(
+        "Record an architecture decision on this card: context, chosen approach, and alternatives "
+        "you rejected (with why). Use after meaningful design choices — not for routine reads. "
+        "To change an earlier choice, set supersedes_id to the prior ADR id and change_note."
+    ),
+    parameters={
+        "type": "object",
+        "properties": {
+            "task_id": {"type": "string"},
+            "topic": {
+                "type": "string",
+                "description": "Short slug, e.g. meal-list-state",
+            },
+            "title": {"type": "string"},
+            "context": {"type": "string"},
+            "decision": {"type": "string"},
+            "alternatives": {
+                "type": "array",
+                "items": {
+                    "type": "object",
+                    "properties": {
+                        "name": {"type": "string"},
+                        "rejectedBecause": {"type": "string"},
+                    },
+                    "required": ["name", "rejectedBecause"],
+                },
+                "minItems": 1,
+            },
+            "consequences": {"type": "string"},
+            "related_files": {
+                "type": "array",
+                "items": {"type": "string"},
+            },
+            "supersedes_id": {"type": "string"},
+            "change_note": {
+                "type": "string",
+                "description": "Required when superseding a prior ADR on this topic.",
+            },
+        },
+        "required": ["task_id", "topic", "title", "context", "decision", "alternatives"],
+    },
+    func=_tool_record_architecture_decision,
 )
 
 tool_board = Tool(
@@ -807,6 +889,7 @@ def configure_agent_tools(ws: dict | None = None) -> None:
                 "update_board",
                 "add_backlog_tasks",
                 "add_subtasks",
+                "record_architecture_decision",
                 "grep",
                 "glob_file_search",
             ]
@@ -827,6 +910,7 @@ def configure_agent_tools(ws: dict | None = None) -> None:
                     "search_code",
                     "git_status",
                     "git_diff",
+                    "record_architecture_decision",
                 ]
             else:
                 names = [
@@ -837,6 +921,7 @@ def configure_agent_tools(ws: dict | None = None) -> None:
                     "delete_file",
                     "update_board",
                     "add_subtasks",
+                    "record_architecture_decision",
                     "run_command",
                     "register_custom_tool",
                     "grep",
@@ -931,6 +1016,12 @@ def configure_agent_tools(ws: dict | None = None) -> None:
             )
     if mcp_count:
         add_system_log("System", "info", f"Re-attached {mcp_count} MCP tool(s) to agents")
+    try:
+        from backend.services.custom_tools import maybe_warn_flutter_smoke_custom_tools
+
+        maybe_warn_flutter_smoke_custom_tools(settings)
+    except Exception:
+        pass
 
 
 def configure_agent_prompts(ws: dict | None = None) -> None:
@@ -965,6 +1056,7 @@ BUILTIN_TOOL_CATALOG: dict[str, Tool] = {
     "git_init": tool_git_init,
     "run_command": tool_run_command,
     "register_custom_tool": tool_register_custom,
+    "record_architecture_decision": tool_record_architecture_decision,
 }
 
 configure_agent_tools()

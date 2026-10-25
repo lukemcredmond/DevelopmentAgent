@@ -45,6 +45,14 @@ DEFAULT_WORKFLOW_SETTINGS: Dict[str, Any] = {
     "lintFanoutThreshold": 6,
     "enableBackupModelOnStuck": True,
     "backupModelStuckSteps": 2,
+    # Replace non-coder Dev backup (e.g. chat models) with a coder preset at sprint start.
+    "autoRepairInvalidDevBackup": True,
+    # Treat run_command with non-zero exit (analyze/test findings) as tool failure.
+    "runCommandFailOnNonZeroExit": True,
+    # When implementer gates are relaxed, still block Done if AC checklist incomplete.
+    "implementerRequireAcChecklistForDone": True,
+    "integrationStepBudgetMultiplier": 2.0,
+    "maxPoLlmSkipPerTask": 12,
     # After backup attempts fail at maxStuckSteps: one PO auto-split before Needs PO.
     "enableSplitOnStuck": True,
     # Block In Progress → QA/CR when step exit is unhealthy (ollama_fallback, max_iterations, …).
@@ -157,12 +165,13 @@ DEFAULT_WORKFLOW_SETTINGS: Dict[str, Any] = {
     # Soften completeness/CR/QA gates during implementer auto-sprint.
     "implementerRelaxGatesOnAutoSprint": True,
     "implementerRelaxGatesAlways": True,
+    "implementerRequireAnalyzeClean": True,
     "implementerStopOnLatch": True,
     "implementerStopOnLatchCount": 4,
     "useComposerDevStep": True,
     "implementerSlimPrompt": "recovery_only",
     "implementerMaxLlmIterationsPerStep": 5,
-    "implementerMaxDevStepWallSec": 180,
+    "implementerMaxDevStepWallSec": 600,
     "implementerMaxPreloadTokens": 2500,
     "maxNeedsUserPerSprint": 2,
     "needsUserCooldownSteps": 3,
@@ -197,6 +206,11 @@ DEFAULT_WORKFLOW_SETTINGS: Dict[str, Any] = {
     "ollamaNumCtxAdaptiveStart": 6144,
     "ollamaNumCtxAdaptiveStep": 8192,
     "ollamaKeepAlive": "30m",
+    # Ollama native reasoning channel (separate from UI "thinking" run status).
+    # Agent paths default off; PO plan outline write/refine can opt in via ollamaThinkPlanOutlineWrite.
+    "ollamaThinkDefault": False,
+    "ollamaThinkPlanOutlineWrite": False,
+    "ollamaThinkByRole": {},
     "warmModelOnSprintStart": True,
     "devNumPredictDefault": 2048,
     "devEvalTimeoutSec": 60,
@@ -243,6 +257,8 @@ DEFAULT_WORKFLOW_SETTINGS: Dict[str, Any] = {
     "contextRewindTurns": 1,
     "enableLlmDecisionTrace": False,
     "enableLlmModelRationale": False,
+    "enableAdrPostStepExtract": True,
+    "adrPostStepExtractMaxPerStep": 1,
     "toolOutputEchoStopAfter": 2,
     # Dev Explore → Patch → Verify phase graph (cuts open-ended read_file thrash).
     # Budgets sized so a multi-file change is reachable; the total tool-call cap and
@@ -251,6 +267,10 @@ DEFAULT_WORKFLOW_SETTINGS: Dict[str, Any] = {
     "devExploreMaxTools": 2,
     # When explore budget is hit, transition to Patch in the same step (block further reads).
     "devExploreForcePatchInStep": True,
+    # After an explore-only tool batch (reads), force Patch in-step without waiting for explore_max.
+    "devExploreForcePatchAfterReadBatch": True,
+    # When singleModelMode is on, still route Dev explore vs patch if explore/patch models differ.
+    "singleModelRespectPhaseRouting": True,
     "poNumPredictOverride": False,
     "devPatchMaxTools": 12,
     "devVerifyMaxTools": 8,
@@ -420,6 +440,30 @@ def plan_outline_num_predict(ws: Dict[str, Any] | None = None) -> int:
     settings = ws if ws is not None else get_workflow_settings()
     n = int(settings.get("planOutlineNumPredict") or 4096)
     return max(1024, min(8192, n))
+
+
+def resolve_ollama_think(
+    role: str,
+    *,
+    plan_outline_no_tools: bool = False,
+    plan_outline_phase: str | None = None,
+    ws: Dict[str, Any] | None = None,
+) -> bool:
+    """Whether to pass think=True to Ollama for this agent chat turn."""
+    if ws is None:
+        ws = get_workflow_settings()
+    if plan_outline_no_tools and bool(ws.get("ollamaThinkPlanOutlineWrite")):
+        phase = str(plan_outline_phase or "write").strip().lower()
+        if phase in ("write", "refine", ""):
+            return True
+        return False
+    from backend.services.prompt_budget import normalize_role_key
+
+    role_key = normalize_role_key(role) or ""
+    by_role = ws.get("ollamaThinkByRole")
+    if isinstance(by_role, dict) and role_key and role_key in by_role:
+        return bool(by_role.get(role_key))
+    return bool(ws.get("ollamaThinkDefault"))
 
 
 def get_workflow_settings(project_id: str | None = None) -> Dict[str, Any]:

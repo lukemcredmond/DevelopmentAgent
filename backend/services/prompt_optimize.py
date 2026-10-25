@@ -258,13 +258,13 @@ def try_gepa_optimize(
         f"Recent step scores:\n{summary}\n"
     )
     try:
-        from backend.services.llm_provider import get_chat_provider
+        from backend.services.llm_provider import get_chat_provider, ollama_aux_chat_options
 
         provider = get_chat_provider()
         resp = provider.chat(
             model,
             [{"role": "user", "content": prompt}],
-            options={"temperature": 0.3, "num_predict": 800},
+            options=ollama_aux_chat_options(temperature=0.3, num_predict=800),
         )
         content = ""
         if isinstance(resp, dict):

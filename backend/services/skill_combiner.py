@@ -202,7 +202,7 @@ def _merge_with_llm(
         f"{corpus}"
     )
 
-    from backend.services.llm_provider import get_chat_provider
+    from backend.services.llm_provider import get_chat_provider, ollama_aux_chat_options
 
     provider = get_chat_provider(override_url=ollama_url)
     provider.timeout_sec = timeout
@@ -212,7 +212,7 @@ def _merge_with_llm(
             {"role": "system", "content": system},
             {"role": "user", "content": user},
         ],
-        options={"temperature": 0.2, "num_predict": 4096},
+        options=ollama_aux_chat_options(temperature=0.2, num_predict=4096),
     )
     content = (resp.message.content or "").strip() if resp and resp.message else ""
     if not content:

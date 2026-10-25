@@ -53,6 +53,41 @@ PO_EPIC_DECOMPOSITION_GUIDANCE = (
 )
 
 
+def repair_brief_from_original_on_load() -> bool:
+    """Sync PROJECT_BRIEF from PROJECT_ORIGINAL_BRIEF when brief is stale or placeholder."""
+    original = (getattr(state, "PROJECT_ORIGINAL_BRIEF", None) or "").strip()
+    if not original or is_placeholder_brief(original):
+        return False
+    brief = (state.PROJECT_BRIEF or "").strip()
+    if not brief or is_placeholder_brief(brief):
+        state.PROJECT_BRIEF = original
+        from backend.services.logs import add_system_log
+
+        add_system_log("System", "info", "Repaired project brief from original_brief on load.")
+        return True
+    try:
+        from backend.services.workspace_structure_audit import audit_workspace_structure
+
+        audit = audit_workspace_structure()
+        stack = str(audit.get("stack") or "")
+        brief_lower = brief.lower()
+        orig_lower = original.lower()
+        if stack == "flutter" and "flutter" in orig_lower:
+            if "python" in brief_lower or "fastapi" in brief_lower or "node" in brief_lower:
+                state.PROJECT_BRIEF = original
+                from backend.services.logs import add_system_log
+
+                add_system_log(
+                    "System",
+                    "info",
+                    "Repaired project brief (stack mismatch) from original_brief.",
+                )
+                return True
+    except Exception:
+        pass
+    return False
+
+
 def is_placeholder_brief(text: str) -> bool:
     """True for empty or dummy sprint/API payloads that must not replace a real brief."""
     incoming = (text or "").strip()

@@ -261,3 +261,103 @@ def try_deterministic_missing_pubspec_fix(
         f"{'ok' if get_ok else 'failed'} — {summary}",
     )
     return f"Added `{pkg}` to pubspec.yaml and ran flutter pub get ({'ok' if get_ok else 'check logs'})."
+
+
+_MIN_MAIN_DART_SCAFFOLD = """import 'package:flutter/material.dart';
+
+void main() {
+  runApp(const MyApp());
+}
+
+class MyApp extends StatelessWidget {
+  const MyApp({super.key});
+
+  @override
+  Widget build(BuildContext context) {
+    return const MaterialApp(
+      home: Scaffold(
+        body: Center(child: Text('App')),
+      ),
+    );
+  }
+}
+"""
+
+
+def try_deterministic_main_dart_scaffold_fix(
+    task: Dict[str, Any],
+    *,
+    task_id: Optional[str] = None,
+) -> Optional[str]:
+    """
+    Forced Patch preflight: ensure lib/main.dart exists and has a material import when
+    the card targets main.dart. Returns a short log summary when work was done.
+    """
+    from backend.services.file_blocker import resolve_dev_edit_target_path
+    from backend.services.sprint_speed_gates import should_force_patch_next_dev_step
+
+    if not isinstance(task, dict) or not should_force_patch_next_dev_step(task):
+        return None
+    target = str(resolve_dev_edit_target_path(task) or "").replace("\\", "/")
+    if target != "lib/main.dart":
+        return None
+    from backend import state
+
+    root = getattr(state, "WORKSPACE_DIR", None) or ""
+    if not root:
+        return None
+    main_path = os.path.join(root, "lib", "main.dart")
+    from backend.agents.registry import agent_dev
+    from backend.services.step_diagnostics import get_active_trace, log_event
+    from backend.services.tool_execution_service import execute_tool
+
+    agent_id = str(getattr(agent_dev, "agent_id", None) or "dev")
+    if not os.path.isfile(main_path):
+        patch_result = execute_tool(
+            agent_id,
+            "write_file",
+            {"path": "lib/main.dart", "content": _MIN_MAIN_DART_SCAFFOLD},
+            task_id=task_id,
+            source="agent",
+            skip_approval=True,
+        )
+        if not bool(getattr(patch_result, "success", False)):
+            return None
+        trace = get_active_trace()
+        if trace:
+            trace.note_forced_tool_mode_effective()
+        log_event("deterministic_main_dart_fix", "created lib/main.dart")
+        add_system_log("Developer", "info", "Deterministic scaffold: wrote lib/main.dart")
+        return "Created `lib/main.dart` scaffold for analyzer-clean entry."
+    try:
+        with open(main_path, encoding="utf-8", errors="replace") as fh:
+            content = fh.read()
+    except OSError:
+        return None
+    stub_task = dict(task)
+    stub_task["lintSourceFile"] = "lib/main.dart"
+    if "package:flutter/material.dart" not in content:
+        stub_task.setdefault(
+            "lastCommandDiagnostics",
+            [{"message": "Undefined class 'Widget'"}],
+        )
+    det = deterministic_lint_wall_patch(stub_task, "lib/main.dart", content)
+    if not det:
+        return None
+    det_path, old_text, new_text = det
+    patch_result = execute_tool(
+        agent_id,
+        "apply_patch",
+        {"path": det_path, "old_text": old_text, "new_text": new_text},
+        task_id=task_id,
+        source="agent",
+        skip_approval=True,
+    )
+    if not bool(getattr(patch_result, "success", False)):
+        return None
+    trace = get_active_trace()
+    if trace:
+        trace.note_forced_tool_mode_effective()
+    log_event("deterministic_main_dart_fix", det_path)
+    add_system_log("Developer", "info", f"Deterministic main.dart fix on {det_path}")
+    return f"Patched `{det_path}` for analyzer-clean main entry."

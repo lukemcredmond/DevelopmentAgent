@@ -3,6 +3,7 @@ import {
   applyBoardDuplicateAudit,
   fetchBoardDuplicateAudit,
   fetchSprintDiagnosticsRollup,
+  repairWorkspace,
 } from '../api/client'
 import type {
   AppState,
@@ -64,6 +65,8 @@ export default function SprintDiagnosticsPanel({
   const [dupReport, setDupReport] = useState<BoardDuplicateAuditReport | null>(null)
   const [loading, setLoading] = useState(false)
   const [applying, setApplying] = useState(false)
+  const [repairing, setRepairing] = useState(false)
+  const [repairSummary, setRepairSummary] = useState<string | null>(null)
   const [error, setError] = useState<string | null>(null)
 
   const refresh = useCallback(async () => {
@@ -94,6 +97,33 @@ export default function SprintDiagnosticsPanel({
     const id = window.setInterval(() => void refresh(), ms)
     return () => window.clearInterval(id)
   }, [active, sprintRunning, refresh])
+
+  const handleRepairWorkspace = () => {
+    if (
+      !window.confirm(
+        'Run flutter analyze (or project lint), reopen Done/QA cards with findings on their files, and create lint follow-up cards?',
+      )
+    ) {
+      return
+    }
+    setRepairing(true)
+    setRepairSummary(null)
+    void repairWorkspace()
+      .then((data) => {
+        onStateUpdate?.(data)
+        const r = data.workspaceRepair
+        if (r?.ok) {
+          setRepairSummary(
+            `Analyze: ${r.findings ?? 0} finding(s), reopened ${r.cardsReopened?.length ?? 0}, lint cards ${r.lintCardsCreated?.length ?? 0}`,
+          )
+        } else {
+          setError(r?.error ?? 'Workspace repair failed')
+        }
+        return refresh()
+      })
+      .catch((e) => setError(e instanceof Error ? e.message : 'Repair failed'))
+      .finally(() => setRepairing(false))
+  }
 
   const handleApplyRecommended = () => {
     if (
@@ -133,9 +163,19 @@ export default function SprintDiagnosticsPanel({
         >
           {loading ? 'Loading…' : 'Refresh'}
         </button>
+        <button
+          type="button"
+          onClick={handleRepairWorkspace}
+          disabled={repairing || sprintRunning}
+          className="text-[10px] px-2 py-0.5 rounded border border-amber-500/40 text-amber-200 hover:bg-amber-500/10 disabled:opacity-50"
+          title="Run project analyze and reopen broken Done cards"
+        >
+          {repairing ? 'Repairing…' : 'Repair workspace (analyze)'}
+        </button>
       </div>
 
       {error && <p className="text-[10px] text-rose-400">{error}</p>}
+      {repairSummary && <p className="text-[10px] text-emerald-300">{repairSummary}</p>}
 
       {rollup && (
         <div className="grid gap-3 sm:grid-cols-2">
@@ -157,9 +197,46 @@ export default function SprintDiagnosticsPanel({
               <span className="text-amber-200">{rollup.duplicateClusterCount ?? 0}</span> clusters,{' '}
               {rollup.duplicateExtraCount ?? 0} extras
             </p>
+            <p>
+              Writes / step: {rollup.writesPerStep ?? 0} ({rollup.writesSucceeded ?? 0} ok)
+              · visit-cap steps: {((rollup.visitCapLatchStepRate ?? 0) * 100).toFixed(0)}%
+            </p>
+            {rollup.workspaceLoc?.dartLines != null && (
+              <p>
+                Workspace: {rollup.workspaceLoc.dartLines} dart LOC (
+                {rollup.workspaceLoc.dartFiles ?? 0} files)
+              </p>
+            )}
           </div>
           <CountTable title="exitReason" rows={exitRows} />
           <CountTable title="textRefusalClass" rows={refusalRows} />
+          {(rollup.recentSteps?.length ?? 0) > 0 && (
+            <div className="sm:col-span-2 text-[10px] font-mono text-cat-subtext space-y-1">
+              <div className="text-[10px] font-semibold uppercase text-cat-subtext">
+                Recent Dev failures
+              </div>
+              <ul className="space-y-1 max-h-32 overflow-y-auto">
+                {(rollup.recentSteps ?? [])
+                  .filter(
+                    (s) =>
+                      s.exitReason === 'text_rejection_loop' ||
+                      s.primaryBottleneck === 'text_rejection_loop' ||
+                      (s.backupSwitchOutcome?.startsWith('blocked:') ?? false) ||
+                      (typeof s.nativeToolCallRate === 'number' && s.nativeToolCallRate === 0),
+                  )
+                  .slice(0, 8)
+                  .map((s) => (
+                    <li key={`${s.taskId}-${s.endedAt}`} className="text-cat-overlay leading-snug">
+                      <span className="text-white">{s.taskTitle ?? s.taskId}</span>
+                      {s.exitReason ? ` · ${s.exitReason}` : ''}
+                      {s.resolvedEditTarget ? ` · ${s.resolvedEditTarget}` : ''}
+                      {s.backupSwitchOutcome ? ` · ${s.backupSwitchOutcome}` : ''}
+                      {s.primaryBottleneck ? ` · ${s.primaryBottleneck}` : ''}
+                    </li>
+                  ))}
+              </ul>
+            </div>
+          )}
           <div className="text-[10px] font-mono text-cat-subtext">
             <span className="text-cat-overlay">toolPolicyDeadlock:</span>{' '}
             yes {rollup.toolPolicyDeadlock?.true ?? 0} / no{' '}

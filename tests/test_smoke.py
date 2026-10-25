@@ -465,7 +465,17 @@ def test_run_command_findings_not_tool_failure():
     )
     assert classify_run_command("flutter analyze", analyze_output) == "lint_findings"
     assert not is_run_command_failure(analyze_output)
-    assert not is_tool_failure("run_command", analyze_output)
+    assert is_tool_failure(
+        "run_command",
+        analyze_output,
+        command="flutter analyze",
+    )
+    assert not is_tool_failure(
+        "run_command",
+        analyze_output,
+        command="flutter analyze",
+        ws={"runCommandFailOnNonZeroExit": False},
+    )
     assert run_command_status_label(analyze_output, True, "flutter analyze").startswith("Findings")
 
     blocked = "[failed exit 1]\n(no output)"

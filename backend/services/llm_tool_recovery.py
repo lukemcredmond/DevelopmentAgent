@@ -143,14 +143,14 @@ def assistant_message_to_chat_dict(message: Any) -> Dict[str, Any]:
 def apply_tool_call_recovery(
     message: Any,
     allowed_tool_names: Iterable[str],
-) -> Tuple[List[str], Any]:
+) -> Tuple[List[str], Any, str]:
     """
     Normalize native tool args; recover tool_calls from content/thinking when missing.
-    Returns (tool names, message) — message may be replaced via model_copy.
+    Returns (tool names, message, recovery_source) — message may be replaced via model_copy.
     """
-    message, names, _source = normalize_assistant_message(message, allowed_tool_names)
+    message, names, source = normalize_assistant_message(message, allowed_tool_names)
     if not names:
-        return [], message
+        return [], message, source or ""
 
     model_copy = getattr(message, "model_copy", None)
     if callable(model_copy):
@@ -158,4 +158,4 @@ def apply_tool_call_recovery(
         if ollama_calls:
             message = message.model_copy(update={"tool_calls": ollama_calls})
 
-    return names, message
+    return names, message, source or ""

@@ -107,6 +107,11 @@ FIX_VERIFY_ROUND: Optional[int] = None
 FIX_VERIFY_MAX_ROUNDS: Optional[int] = None
 FIX_VERIFY_LINT_CLEAN: bool = False
 
+# Set by workspace repair (manual analyze).
+WORKSPACE_ANALYZE_CLEAN: Optional[bool] = None
+WORKSPACE_ANALYZE_FINDINGS: int = 0
+WORKSPACE_ANALYZE_DETAIL: str = ""
+
 # Dev focus micro-step prompt rotation (set per sprint step in sprint_service).
 SPRINT_PROMPT_ROTATION_ENABLED: bool = False
 SPRINT_PROMPT_ROTATION_BLOCKS: List[str] = []

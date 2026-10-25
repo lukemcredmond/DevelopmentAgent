@@ -200,7 +200,7 @@ class TestApplyToolCallRecoveryCompat:
     def test_recover_from_content(self):
         payload = {"name": "read_file", "arguments": {"path": "lib/main.dart"}}
         msg = ProviderMessage(role="assistant", content=json.dumps(payload))
-        names, updated = apply_tool_call_recovery(msg, ALLOWED)
+        names, updated, _source = apply_tool_call_recovery(msg, ALLOWED)
         assert names == ["read_file"]
         assert updated.tool_calls is not None
 
@@ -213,7 +213,7 @@ class TestApplyToolCallRecoveryCompat:
 
         payload = {"name": "read_file", "arguments": {"path": "lib/main.dart"}}
         msg = OllamaMessage(role="assistant", content=json.dumps(payload))
-        names, updated = apply_tool_call_recovery(msg, ALLOWED)
+        names, updated, _source = apply_tool_call_recovery(msg, ALLOWED)
         assert names == ["read_file"]
         OllamaMessage.model_validate(updated.model_dump())
 

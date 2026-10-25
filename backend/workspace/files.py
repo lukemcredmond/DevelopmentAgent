@@ -551,16 +551,39 @@ def maybe_auto_format_after_edit(safe_path: str) -> Optional[str]:
         return f"Auto-format skipped: {exc}"
 
 
-def seed_focus_preloaded_reads(task: Dict[str, Any], *, max_files: int = 2) -> List[str]:
-    """Seed STEP_FILE_READS for up to max_files task paths (implementer fast-path)."""
+def _task_declared_file_paths(task: Dict[str, Any]) -> List[str]:
+    """Paths explicitly listed on the card (not semantic / prompt-only preload)."""
+    ordered: List[str] = []
+    seen: set = set()
+
+    def _add(raw: str) -> None:
+        p = str(raw or "").strip().replace("\\", "/")
+        if not p or p in seen:
+            return
+        seen.add(p)
+        ordered.append(p)
+
+    try:
+        from backend.services.file_blocker import resolve_dev_edit_target_path
+
+        target = str(resolve_dev_edit_target_path(task) or "").strip()
+        if target:
+            _add(target)
+    except Exception:
+        pass
+    for key in ("writePaths", "scaffoldedFiles", "files"):
+        for item in task.get(key) or []:
+            if isinstance(item, str):
+                _add(item)
+            elif isinstance(item, dict) and item.get("path"):
+                _add(str(item["path"]))
+    return ordered
+
+
+def seed_focus_preloaded_reads(task: Dict[str, Any], *, max_files: int = 4) -> List[str]:
+    """Seed STEP_FILE_READS for card-declared paths (edit target + task file list)."""
     seeded: List[str] = []
-    paths: List[str] = []
-    for f in task.get("files") or []:
-        if isinstance(f, str) and f.strip():
-            paths.append(f.strip())
-        elif isinstance(f, dict) and f.get("path"):
-            paths.append(str(f["path"]))
-    for raw_path in paths[:max_files]:
+    for raw_path in _task_declared_file_paths(task)[: max(1, int(max_files))]:
         content = read_workspace_file(raw_path)
         if content and not content.startswith("Error:"):
             record_step_file_read(raw_path, content)

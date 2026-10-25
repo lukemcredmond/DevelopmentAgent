@@ -10,6 +10,7 @@ from backend.bootstrap import initialize
 from backend.services.patch_recovery import (
     build_write_file_escalation_nudge,
     compute_write_overwrite_allowed_paths,
+    is_tiny_existing_write_file_attempt,
 )
 from backend.services.tool_execution_service import ToolExecutionResult
 
@@ -28,6 +29,29 @@ def test_compute_write_overwrite_includes_escalated_and_force_patch():
     assert "lib/pending.dart" in allowed
     assert "lib/esc.dart" in allowed
     assert "lib/target.dart" in allowed
+
+
+def test_tiny_write_file_on_existing_path_detected():
+    assert is_tiny_existing_write_file_attempt(
+        "lib/screens/shopping_list_screen.dart",
+        "x" * 400,
+        file_exists=True,
+    )
+    assert not is_tiny_existing_write_file_attempt(
+        "lib/new.dart",
+        "short",
+        file_exists=False,
+    )
+    assert not is_tiny_existing_write_file_attempt(
+        "lib/big.dart",
+        "x" * 600,
+        file_exists=True,
+    )
+    assert not is_tiny_existing_write_file_attempt(
+        "lib/foo.dart",
+        "new content",
+        file_exists=True,
+    )
 
 
 def test_escalation_nudge_promises_overwrite():
@@ -111,7 +135,7 @@ def test_write_file_blocked_without_escalation(tmp_path):
 
     call = MagicMock()
     call.function.name = "write_file"
-    call.function.arguments = {"path": "lib/foo.dart", "content": "y"}
+    call.function.arguments = {"path": "lib/foo.dart"}
 
     with patch("backend.agents.scrum_agent.execute_tool") as exec_mock, patch(
         "backend.agents.scrum_agent.finish_run"
@@ -134,3 +158,60 @@ def test_write_file_blocked_without_escalation(tmp_path):
     exec_mock.assert_not_called()
     assert result.success is False
     assert "write_file blocked" in result.tool_output
+
+
+def test_write_file_redirects_to_apply_patch_when_content_provided(tmp_path):
+    initialize()
+    state.WORKSPACE_DIR = str(tmp_path)
+    lib = tmp_path / "lib"
+    lib.mkdir()
+    (lib / "foo.dart").write_text("old content", encoding="utf-8")
+
+    agent = ScrumAgent.__new__(ScrumAgent)
+    agent.role = "Developer"
+    agent._publish_work_progress = MagicMock()
+    agent._log_step_exit = MagicMock()
+    agent._patch_write_overwrite_paths = set()
+
+    call = MagicMock()
+    call.function.name = "write_file"
+    call.function.arguments = {"path": "lib/foo.dart", "content": "new content"}
+
+    fake_result = ToolExecutionResult(
+        tool_name="apply_patch",
+        arguments={"path": "lib/foo.dart", "old_text": "old content", "new_text": "new content"},
+        safe_args={},
+        tool_output="ok",
+        success=True,
+        duration_ms=1,
+        timestamp="",
+        agent="Developer",
+        agent_id="dev",
+        task_id="T-REDIR",
+        source="agent",
+        run_id="r1",
+    )
+
+    with patch("backend.agents.scrum_agent.execute_tool", return_value=fake_result) as exec_mock, patch(
+        "backend.agents.scrum_agent.finish_run"
+    ), patch("backend.agents.scrum_agent.add_system_log"), patch(
+        "backend.agents.scrum_agent.find_task_by_id", return_value={"id": "T-REDIR"}
+    ):
+        name, args, result, early = ScrumAgent._execute_single_tool_call(
+            agent,
+            call,
+            task_id="T-REDIR",
+            agent_id="dev",
+            run_id="r1",
+            user_prompt="go",
+            failed_tool_keys=[],
+            successful_tool_keys=[],
+            total_failures=[0],
+            max_tool_failures=5,
+        )
+
+    exec_mock.assert_called_once()
+    assert name == "apply_patch"
+    assert args.get("old_text") == "old content"
+    assert args.get("new_text") == "new content"
+    assert result.success is True

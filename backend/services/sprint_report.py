@@ -30,6 +30,9 @@ def lane_counts(board: Optional[Dict[str, Any]] = None) -> Dict[str, int]:
 
 
 def _empty_report() -> Dict[str, Any]:
+    from backend.services.sprint_throughput import workspace_loc_snapshot
+
+    loc = workspace_loc_snapshot()
     return {
         "startedAt": _now(),
         "endedAt": None,
@@ -44,6 +47,8 @@ def _empty_report() -> Dict[str, Any]:
         "needsUserOut": 0,
         "laneCountsStart": lane_counts(),
         "laneCountsEnd": lane_counts(),
+        "workspaceLocStart": loc,
+        "workspaceLocEnd": loc,
     }
 
 
@@ -80,6 +85,12 @@ def apply_rollups(report: Dict[str, Any]) -> Dict[str, Any]:
         from backend.services.sprint_ping_pong import compute_ping_pong_by_task
 
         report["pingPongByTask"] = compute_ping_pong_by_task(moves)
+    except Exception:
+        pass
+    try:
+        from backend.services.sprint_throughput import sprint_report_throughput
+
+        report["throughput"] = sprint_report_throughput(report)
     except Exception:
         pass
     return report
@@ -163,6 +174,12 @@ def finalize_sprint_report(steps: int, status: str = "completed") -> Dict[str, A
     report["status"] = str(status or "completed")
     report["stepsRun"] = int(steps or 0)
     report["laneCountsEnd"] = lane_counts()
+    try:
+        from backend.services.sprint_throughput import workspace_loc_snapshot
+
+        report["workspaceLocEnd"] = workspace_loc_snapshot()
+    except Exception:
+        pass
     apply_rollups(report)
     finished = dict(report)
     history = [finished, *list_sprint_reports()]

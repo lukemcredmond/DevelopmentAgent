@@ -87,6 +87,15 @@ def dev_backup_model_allowed(backup: str) -> tuple[bool, str]:
     return True, ""
 
 
+def warn_dev_model_benchmark_at_sprint_start() -> None:
+    try:
+        from backend.services.dev_model_benchmark_guard import warn_dev_model_benchmark_mismatch
+
+        warn_dev_model_benchmark_mismatch()
+    except Exception:
+        pass
+
+
 def warn_invalid_dev_backup_at_sprint_start() -> None:
     """Log once per sprint when configured Dev backup is not coder-shaped."""
     backup = backup_model("dev")
@@ -101,6 +110,118 @@ def warn_invalid_dev_backup_at_sprint_start() -> None:
         f"Dev backup model '{backup}' will not be used ({reason}). "
         "Configure a coder model (e.g. qwen2.5-coder) in Settings → Models.",
     )
+
+
+def pick_coder_dev_backup_model() -> str:
+    """Choose a Developer backup that passes dev_backup_model_allowed."""
+    ws = get_workflow_settings()
+    candidates: list[str] = []
+    for raw in (
+        ws.get("discordModelPresetFast"),
+        ws.get("discordModelPresetQuality"),
+        "qwen2.5-coder:7b",
+        "qwen2.5-coder:14b",
+        "qwen2.5-coder:latest",
+    ):
+        name = str(raw or "").strip()
+        if name and name not in candidates:
+            candidates.append(name)
+    try:
+        from backend.services.model_benchmark_runner import get_benchmark_snapshot
+
+        snap = get_benchmark_snapshot()
+        rows = snap.get("results") if isinstance(snap.get("results"), list) else []
+        scored: list[tuple[int, str]] = []
+        for row in rows:
+            if not isinstance(row, dict) or row.get("loadOk") is False:
+                continue
+            model = str(row.get("model") or "").strip()
+            if not model:
+                continue
+            ok, _ = dev_backup_model_allowed(model)
+            if not ok:
+                continue
+            tool = int(row.get("toolScore") or 0)
+            scored.append((tool, model))
+        scored.sort(key=lambda x: (-x[0], x[1]))
+        for _, model in scored[:6]:
+            if model not in candidates:
+                candidates.append(model)
+    except Exception:
+        pass
+    for model in candidates:
+        if dev_backup_model_allowed(model)[0]:
+            return model
+    return ""
+
+
+def repair_invalid_dev_backup_at_sprint_start() -> bool:
+    """When Dev backup is not coder-shaped, auto-set a coder backup and persist."""
+    ws = get_workflow_settings()
+    if ws.get("autoRepairInvalidDevBackup") is False:
+        return False
+    current = backup_model("dev")
+    if current and dev_backup_model_allowed(current)[0]:
+        return False
+    replacement = pick_coder_dev_backup_model()
+    if not replacement:
+        return False
+    backups = dict(getattr(state, "BACKUP_MODELS", {}) or {})
+    backups["dev"] = replacement
+    state.BACKUP_MODELS = backups
+    try:
+        from backend.agents.registry import agent_dev
+
+        if getattr(agent_dev, "model", "") == current and current:
+            pass
+    except Exception:
+        pass
+    reason = "no_backup" if not current else dev_backup_model_allowed(current)[1]
+    add_system_log(
+        "System",
+        "success",
+        f"Dev backup auto-repaired: `{current or '(empty)'}` → `{replacement}` ({reason}).",
+    )
+    try:
+        from backend.services.project_service import save_current_project_state
+
+        save_current_project_state()
+    except Exception:
+        pass
+    return True
+
+
+def log_dev_ops_model_hints_at_sprint_start() -> None:
+    """Ops hints: benchmark-best Dev primary and coder-shaped backup."""
+    dev = str(primary_model("dev") or "").strip()
+    if not dev:
+        return
+    backup = backup_model("dev")
+    if backup:
+        ok, reason = dev_backup_model_allowed(backup)
+        if not ok and reason == "not_coder_model":
+            add_system_log(
+                "System",
+                "warning",
+                "Dev backup is not a coder model — mid-step backup switch during patch loops "
+                "will stay blocked until you set a coder backup in Settings → Models.",
+            )
+    lower = dev.lower()
+    if "mimo" in lower or "maternion" in lower:
+        try:
+            from backend.services.dev_model_benchmark_guard import assess_dev_model
+
+            assessment = assess_dev_model(dev)
+            best = str(assessment.best_model or "").strip()
+            if best and best != dev and assessment.level in ("warn", "block"):
+                add_system_log(
+                    "System",
+                    "warning",
+                    f"Ops: benchmark recommends Dev primary `{best}` (current: `{dev}`). "
+                    "Use Settings → Models → Apply best Dev, then save the project.",
+                )
+        except Exception:
+            pass
 
 
 def clear_backup_remaining(task: Dict[str, Any], agent_key: Optional[str] = None) -> None:

@@ -907,6 +907,17 @@ def _record_last_step_outcome(
     _finalize_step_diagnostics_if_traced(task_id)
     if task and isinstance(state.LAST_STEP_DIAGNOSTICS, dict):
         diag = state.LAST_STEP_DIAGNOSTICS
+        perf = diag.get("performanceSummary") if isinstance(diag.get("performanceSummary"), dict) else {}
+        native_rate = diag.get("nativeToolCallRate")
+        if native_rate is None:
+            ollama_calls = diag.get("ollamaCalls") or []
+            if ollama_calls:
+                native_n = sum(
+                    1
+                    for c in ollama_calls
+                    if isinstance(c, dict) and (c.get("toolCalls") or [])
+                )
+                native_rate = native_n / max(1, len(ollama_calls))
         task["lastStepDiagnostics"] = {
             "exitReason": diag.get("exitReason"),
             "durationMs": diag.get("durationMs"),
@@ -921,6 +932,13 @@ def _record_last_step_outcome(
             or len(diag.get("ollamaCalls") or []),
             "fixVerifyLintClean": diag.get("fixVerifyLintClean"),
             "writesSucceeded": diag.get("writesSucceeded"),
+            "nativeToolCallRate": native_rate,
+            "textRefusalClass": diag.get("textRefusalClass"),
+            "resolvedEditTarget": diag.get("resolvedEditTarget"),
+            "backupSwitchOutcome": diag.get("backupSwitchOutcome"),
+            "textRejectContentHash": diag.get("textRejectContentHash"),
+            "textRejectContentHashCount": diag.get("textRejectContentHashCount"),
+            "primaryBottleneck": perf.get("primaryBottleneck") or diag.get("primaryBottleneck"),
         }
         try:
             from backend.services.sprint_speed_gates import record_consecutive_bad_exit
@@ -1124,6 +1142,8 @@ def apply_backlog_from_po_response(response: str, task_id: str) -> int:
     if not new_tasks:
         return 0
     parent = find_task_by_id(task_id) or {}
+    from backend.services.po_task_paths import stamp_write_paths_on_po_task
+
     for child in new_tasks:
         for field in ("scope", "outOfScope", "testPlan", "userStory"):
             if not child.get(field) and parent.get(field):
@@ -1131,6 +1151,7 @@ def apply_backlog_from_po_response(response: str, task_id: str) -> int:
         child.setdefault("workType", "implementation")
         child.setdefault("requiresDev", True)
         child.setdefault("requiresQa", True)
+        stamp_write_paths_on_po_task(child, parent=parent if isinstance(parent, dict) else None)
     append_backlog_tasks(new_tasks, split_from_task_id=task_id)
     add_system_log(
         "Product Owner",
@@ -1247,6 +1268,46 @@ def _latched_card_skip_auto_sprint(task: Dict[str, Any]) -> bool:
     return False
 
 
+def _dev_step_blocked_latched(task: Dict[str, Any]) -> bool:
+    """True when Developer must not run (visit cap latched / auto-sprint skip)."""
+    if not isinstance(task, dict):
+        return False
+    if _latched_card_skip_auto_sprint(task):
+        return True
+    if task.get("phaseCycleCapReached"):
+        if (
+            task.get("forcePatchNextDevStep")
+            and is_lint_wall_card(task)
+            and int(task.get("lintUnlatchCount") or 0) < 1
+        ):
+            return False
+        return True
+    return False
+
+
+def _move_phase_cap_to_blocked(
+    task_id: str,
+    task: Dict[str, Any],
+    reason: str,
+) -> None:
+    """Free In Progress when Needs User park failed for a visit-capped card."""
+    from backend.services.board_service import move_board_stage
+    from backend.services.needs_user_guard import apply_needs_user_brief, build_needs_user_brief
+
+    lane = get_task_lane(task_id) or ""
+    if lane not in ("In Progress", "Needs PO", "Needs Dev"):
+        return
+    brief = build_needs_user_brief(task, kind="phase_cycle_cap", raw_msg=reason)
+    apply_needs_user_brief(task, brief)
+    task["blockedReason"] = str(reason or "")[:500]
+    move_board_stage(task_id, "Blocked")
+    add_system_log(
+        "System",
+        "warning",
+        f"{task_id}: phase-cycle-cap park failed — moved to Blocked (split or reset latch)",
+    )
+
+
 def _count_implementer_latched_skip_cards() -> int:
     """Cards latched and marked to skip auto-sprint recovery churn."""
     count = 0
@@ -1256,6 +1317,37 @@ def _count_implementer_latched_skip_cards() -> int:
                 if isinstance(task, dict) and _latched_card_skip_auto_sprint(task):
                     count += 1
     return count
+
+
+def _attempt_implementer_latch_recovery_batch() -> int:
+    """Try backup + auto-split on latched skip cards before pausing auto sprint."""
+    from backend.services.needs_user_guard import autonomous_recover_latched_task
+
+    attempted = 0
+    with state.STATE_LOCK:
+        snapshot = [
+            dict(t)
+            for tasks in (state.SHARED_BOARD or {}).values()
+            for t in (tasks or [])
+            if isinstance(t, dict) and _latched_card_skip_auto_sprint(t)
+        ]
+    for task in snapshot:
+        tid = str(task.get("id") or "")
+        if not tid:
+            continue
+        live = find_task_by_id(tid)
+        if not live:
+            continue
+        autonomous_recover_latched_task(live)
+        attempted += 1
+    if attempted:
+        try:
+            from backend.services.project_service import save_current_project_state
+
+            save_current_project_state()
+        except Exception:
+            pass
+    return attempted
 
 
 def _implementer_auto_sprint_should_pause_on_latch(ws: Optional[Dict[str, Any]] = None) -> bool:
@@ -1270,6 +1362,8 @@ def _implementer_auto_sprint_should_pause_on_latch(ws: Optional[Dict[str, Any]] 
     if _count_implementer_latched_skip_cards() < threshold:
         return False
     if _in_progress_dev_runnable():
+        return False
+    if has_sprint_work():
         return False
     return True
 
@@ -1368,6 +1462,7 @@ def _handle_visit_cap_stall(
                 live["poAutoSkip"] = True
                 if park_block:
                     live["lastParkBlockReason"] = park_block
+                _move_phase_cap_to_blocked(task_id, live, reason)
         _record_dev_precheck_skip(
             task_id,
             title,
@@ -1670,6 +1765,37 @@ def visit_cap_needs_user_task_ids(task_ids: Optional[List[str]] = None) -> List[
     return found
 
 
+def visit_cap_in_progress_task_ids(task_ids: Optional[List[str]] = None) -> List[str]:
+    """In Progress cards latched on Developer visit cap (still selectable for churn)."""
+    wanted = {str(tid).strip() for tid in (task_ids or []) if str(tid).strip()}
+    found: List[str] = []
+    for task in state.SHARED_BOARD.get("In Progress") or []:
+        if not isinstance(task, dict):
+            continue
+        if not task.get("phaseCycleCapReached"):
+            continue
+        tid = str(task.get("id") or "")
+        if not tid:
+            continue
+        if wanted and tid not in wanted:
+            continue
+        found.append(tid)
+    return found
+
+
+def visit_cap_splittable_task_ids(task_ids: Optional[List[str]] = None) -> List[str]:
+    """Union of Needs User visit-cap cards and latched In Progress cards."""
+    nu = visit_cap_needs_user_task_ids(task_ids)
+    ip = visit_cap_in_progress_task_ids(task_ids)
+    out: List[str] = []
+    seen: set[str] = set()
+    for tid in nu + ip:
+        if tid not in seen:
+            seen.add(tid)
+            out.append(tid)
+    return out
+
+
 def split_visit_cap_batch(
     ollama_url: str = "",
     guidance: str = "",
@@ -1678,7 +1804,7 @@ def split_visit_cap_batch(
     """Split Needs User visit-cap cards now, or queue until the current step ends."""
     from backend.agents.agent_run import get_active_run
 
-    ids = visit_cap_needs_user_task_ids(task_ids)
+    ids = visit_cap_splittable_task_ids(task_ids)
     url = _split_ollama_url(ollama_url)
     active = get_active_run() is not None
     results: List[Dict[str, Any]] = []
@@ -1721,15 +1847,17 @@ def _stuck_auto_split_guidance(task: Dict[str, Any]) -> str:
 def _should_attempt_stuck_auto_split(task: Dict[str, Any], ws: Dict[str, Any]) -> bool:
     if not ws.get("enableSplitOnStuck", True):
         return False
-    if task.get("splitAttemptedOnStuck"):
-        return False
     if task.get("pendingSplit"):
         return False
     from backend.services.sprint_speed_gates import last_step_exit_reason, stuck_is_explore_without_write
 
     # Visit-cap latch: split even for lint/tool fanout (unlatched lint still skips below).
     if task.get("phaseCycleCapReached"):
+        if task.get("visitCapSplitRetried"):
+            return False
         return True
+    if task.get("splitAttemptedOnStuck"):
+        return False
     if stuck_is_tool_or_lint(task):
         return False
     if task.get("forcePatchAttempted"):
@@ -1744,6 +1872,8 @@ def _should_attempt_stuck_auto_split(task: Dict[str, Any], ws: Dict[str, Any]) -
 
 def _run_stuck_auto_split(task_id: str, task: Dict[str, Any], max_stuck: int) -> bool:
     """Attempt PO auto-split. Return True if the parent was superseded."""
+    if task.get("phaseCycleCapReached") and task.get("splitAttemptedOnStuck"):
+        task["visitCapSplitRetried"] = True
     task["splitAttemptedOnStuck"] = True
     record_task_decision(
         task_id,
@@ -2950,12 +3080,57 @@ def _qa_step_passed(
     return False, "No successful test evidence in this QA step"
 
 
+def _implementer_analyze_clean_blocks(task: Dict[str, Any]) -> tuple[bool, str]:
+    if task.get("fixVerifyLintClean") is False:
+        return True, "Analyze/lint not clean on this card — fix before Done."
+    if getattr(state, "WORKSPACE_ANALYZE_CLEAN", None) is False:
+        detail = str(getattr(state, "WORKSPACE_ANALYZE_DETAIL", "") or "")[:200]
+        return (
+            True,
+            "Workspace analyze is not clean — run Repair workspace or fix lint. " + detail,
+        )
+    return False, ""
+
+
+def ac_checklist_blocks_done(
+    task: Dict[str, Any],
+    ws: Optional[Dict[str, Any]] = None,
+) -> tuple[bool, str]:
+    """Return (blocked, reason) when acceptance criteria are not all checked."""
+    normalize_task(task)
+    settings = ws if ws is not None else get_workflow_settings()
+    if not settings.get("requireAcChecklistForDone", True):
+        return False, ""
+    acs = [str(c).strip() for c in (task.get("acceptanceCriteria") or []) if str(c).strip()]
+    if not acs:
+        return False, ""
+    checks = task.get("acChecklist")
+    if not isinstance(checks, list):
+        checks = []
+    while len(checks) < len(acs):
+        checks.append(False)
+    checks = checks[: len(acs)]
+    task["acChecklist"] = [bool(x) for x in checks]
+    unchecked = sum(1 for c in task["acChecklist"] if not c)
+    if unchecked:
+        return (
+            True,
+            f"Acceptance criteria unchecked ({unchecked}/{len(acs)}) — "
+            "check all ACs in the card (or set qaEvidence.userOverride).",
+        )
+    return False, ""
+
+
 def qa_gate_blocks_done(task: Dict[str, Any]) -> tuple[bool, str]:
     """Return (blocked, reason) when agent tries update_board → Done from QA."""
     normalize_task(task)
     ws = get_workflow_settings()
     try:
-        from backend.services.implementer_profile import implementer_gate_relaxation_active
+        from backend.services.implementer_profile import (
+            implementer_gate_relaxation_active,
+            implementer_require_ac_checklist_for_done,
+            implementer_require_analyze_clean,
+        )
 
         if implementer_gate_relaxation_active(ws):
             from backend.services.card_ledger import oracle_blocks_done
@@ -2963,6 +3138,14 @@ def qa_gate_blocks_done(task: Dict[str, Any]) -> tuple[bool, str]:
             blocked, reason = oracle_blocks_done(task)
             if blocked:
                 return True, reason
+            if implementer_require_ac_checklist_for_done(ws):
+                blocked_ac, ac_reason = ac_checklist_blocks_done(task, ws)
+                if blocked_ac:
+                    return True, ac_reason
+            if implementer_require_analyze_clean(ws):
+                blocked_an, an_reason = _implementer_analyze_clean_blocks(task)
+                if blocked_an:
+                    return True, an_reason
             return False, ""
     except Exception:
         pass
@@ -2983,25 +3166,9 @@ def qa_gate_blocks_done(task: Dict[str, Any]) -> tuple[bool, str]:
         diagnostics = task.get("lastCommandDiagnostics") or []
         if diagnostics:
             return True, f"Unresolved lint ({len(diagnostics)} issues) — fix before Done."
-    ws = get_workflow_settings()
-    if ws.get("requireAcChecklistForDone", True):
-        acs = [str(c).strip() for c in (task.get("acceptanceCriteria") or []) if str(c).strip()]
-        if acs:
-            checks = task.get("acChecklist")
-            if not isinstance(checks, list):
-                checks = []
-            # Pad/truncate alignment
-            while len(checks) < len(acs):
-                checks.append(False)
-            checks = checks[: len(acs)]
-            task["acChecklist"] = [bool(x) for x in checks]
-            unchecked = sum(1 for c in task["acChecklist"] if not c)
-            if unchecked:
-                return (
-                    True,
-                    f"Acceptance criteria unchecked ({unchecked}/{len(acs)}) — "
-                    "check all ACs in the card (or set qaEvidence.userOverride).",
-                )
+    blocked_ac, ac_reason = ac_checklist_blocks_done(task, ws)
+    if blocked_ac:
+        return True, ac_reason
     from backend.services.card_ledger import oracle_blocks_done
 
     blocked, reason = oracle_blocks_done(task)
@@ -3145,7 +3312,11 @@ def _dev_has_verification(task: Dict[str, Any], step_started: str) -> bool:
     return _dev_verification_status(task, step_started) != "none"
 
 
-def dev_gate_blocks_advance(task: Dict[str, Any]) -> tuple[bool, str]:
+def dev_gate_blocks_advance(
+    task: Dict[str, Any],
+    *,
+    advance_target: str = "",
+) -> tuple[bool, str]:
     """Block dev board advance when no writes, structure gaps, subtasks pending, or lint unresolved."""
     ws = get_workflow_settings()
     try:
@@ -3199,10 +3370,24 @@ def dev_gate_blocks_advance(task: Dict[str, Any]) -> tuple[bool, str]:
         return False, ""
     if relaxed:
         from backend.services.card_ledger import oracle_blocks_done
+        from backend.services.implementer_profile import (
+            implementer_require_ac_checklist_for_done,
+            implementer_require_analyze_clean,
+        )
 
         blocked_oracle, oracle_reason = oracle_blocks_done(task)
         if blocked_oracle:
             return True, oracle_reason
+        target = str(advance_target or "").strip()
+        if target == "Done":
+            if implementer_require_ac_checklist_for_done(ws):
+                blocked_ac, ac_reason = ac_checklist_blocks_done(task, ws)
+                if blocked_ac:
+                    return True, ac_reason
+            if implementer_require_analyze_clean(ws):
+                blocked_an, an_reason = _implementer_analyze_clean_blocks(task)
+                if blocked_an:
+                    return True, an_reason
         return False, ""
     if not ws.get("requireCleanLint"):
         return False, ""
@@ -4992,9 +5177,12 @@ def _run_po_clarification(active_task: Dict[str, Any], brief: str) -> None:
                 last_exit = last_step_exit_reason(task_for_prompt) or "none"
                 live = find_task_by_id(task_id) or task_for_prompt
                 force_patch = bool((live or {}).get("forcePatchNextDevStep"))
+                from backend.services.po_clarification import record_po_llm_skipped
+
+                skip_n = record_po_llm_skipped(task_id)
                 _log_ev(
                     "po_llm_skipped",
-                    f"spec present; last_exit={last_exit}; forcePatch={force_patch}",
+                    f"spec present; last_exit={last_exit}; forcePatch={force_patch}; skip={skip_n}",
                 )
             except Exception:
                 pass
@@ -5157,19 +5345,57 @@ def _run_developer_step(active_task: Dict[str, Any], brief: str) -> None:
     task_id = active_task["id"]
     lane_before = get_task_lane(task_id) or "In Progress"
     title = str(active_task.get("title", task_id))
-    if lane_before == "Needs PO":
+    live_for_lane = find_task_by_id(task_id) or active_task
+    from backend.services.sprint_speed_gates import should_force_patch_next_dev_step
+
+    force_patch_recovery = bool(
+        isinstance(live_for_lane, dict)
+        and (
+            live_for_lane.get("forcePatchNextDevStep")
+            or should_force_patch_next_dev_step(live_for_lane)
+        )
+    )
+    if lane_before == "Needs PO" and not force_patch_recovery:
         add_system_log(
             "System",
             "warning",
             f"{task_id}: skipping Developer — card is in Needs PO (no begin_dev_step)",
         )
-        live = find_task_by_id(task_id) or active_task
+        live = live_for_lane
         if live.get("phaseCycleCapReached"):
             _recover_latched_dev_card(dict(live), brief)
         return
+    if lane_before == "Needs PO" and force_patch_recovery:
+        add_system_log(
+            "System",
+            "info",
+            f"{task_id}: Needs PO — running one Forced Patch Developer recovery visit",
+        )
+        try:
+            from backend.services.board_service import move_board_stage
+
+            move_board_stage(task_id, "In Progress")
+            lane_before = "In Progress"
+        except Exception:
+            pass
     step_started = _mark_sprint_step_start()
     set_active_sprint_context(task_id, "Developer")
     live_task = find_task_by_id(task_id) or active_task
+    try:
+        from backend.services.dev_card_recovery import auto_unstick_high_churn_dev_card
+
+        auto_unstick_high_churn_dev_card(task_id)
+        live_task = find_task_by_id(task_id) or live_task
+    except Exception:
+        pass
+    if _dev_step_blocked_latched(live_task) and not _forced_patch_retry_allowed(live_task):
+        cap_reason = str(
+            live_task.get("phaseCycleCapReason")
+            or "Phase cycle cap latched — split the card or reset the Developer visit latch."
+        )
+        add_system_log("System", "warning", f"{task_id}: skipping Developer — {cap_reason[:200]}")
+        _record_dev_precheck_skip(task_id, title, lane_before, reason=cap_reason)
+        return
     if live_task.get("forcePatchNextDevStep"):
         live_task["consecutiveNoWriteStall"] = 0
         live_task.pop("lastNextWorkNoWrite", None)
@@ -5287,6 +5513,12 @@ def _run_developer_step(active_task: Dict[str, Any], brief: str) -> None:
             _recover_latched_dev_card(dict(live), brief)
         return
     try:
+        from backend.services.po_task_paths import ensure_dev_write_paths_before_step
+
+        ensure_dev_write_paths_before_step(task_id)
+    except Exception:
+        pass
+    try:
         from backend.services.backup_model import apply_model_for_step
 
         model_in_use = apply_model_for_step(
@@ -5357,6 +5589,14 @@ def _run_developer_step(active_task: Dict[str, Any], brief: str) -> None:
                 "autonomous_suffix": _autonomous_instruction_suffix(),
             },
         )
+        try:
+            from backend.services.po_task_paths import build_edit_target_system_block
+
+            edit_block = build_edit_target_system_block(find_task_by_id(task_id) or active_task)
+            if edit_block:
+                instructions = instructions + "\n\n" + edit_block
+        except Exception:
+            pass
         from backend.services.workflow_settings import get_execution_profile
 
         if get_execution_profile() == "implementer":
@@ -5378,14 +5618,14 @@ def _run_developer_step(active_task: Dict[str, Any], brief: str) -> None:
         if not prompt:
             prompt = _inject_sprint_context(active_task, brief, "Developer", instructions)
         try:
-            from backend.services.workflow_settings import get_execution_profile
+            from backend.services.file_blocker import resolve_dev_edit_target_path
             from backend.workspace.files import seed_focus_preloaded_reads
 
-            if get_execution_profile() == "implementer":
-                seeded = seed_focus_preloaded_reads(
-                    find_task_by_id(task_id) or active_task,
-                    max_files=2,
-                )
+            live_seed = find_task_by_id(task_id) or active_task
+            if isinstance(live_seed, dict) and (
+                resolve_dev_edit_target_path(live_seed) or live_seed.get("writePaths")
+            ):
+                seeded = seed_focus_preloaded_reads(live_seed, max_files=4)
                 if seeded:
                     add_system_log(
                         "Developer",
@@ -5423,17 +5663,23 @@ def _run_developer_step(active_task: Dict[str, Any], brief: str) -> None:
         else:
             try:
                 from backend.services.sprint_speed_gates import should_force_patch_next_dev_step
-                from backend.services.lint_wall_recovery import try_deterministic_missing_pubspec_fix
+                from backend.services.lint_wall_recovery import (
+                    try_deterministic_main_dart_scaffold_fix,
+                    try_deterministic_missing_pubspec_fix,
+                )
 
                 if (
                     get_execution_profile() == "implementer"
                     and should_force_patch_next_dev_step(live_pre)
                 ):
-                    det_msg = try_deterministic_missing_pubspec_fix(
-                        live_pre, task_id=task_id
-                    )
-                    if det_msg:
-                        add_system_log("Developer", "info", det_msg)
+                    for det_fn in (
+                        try_deterministic_missing_pubspec_fix,
+                        try_deterministic_main_dart_scaffold_fix,
+                    ):
+                        det_msg = det_fn(live_pre, task_id=task_id)
+                        if det_msg:
+                            add_system_log("Developer", "info", det_msg)
+                            break
             except Exception:
                 pass
             result = run_fix_verify_loop(
@@ -5443,9 +5689,15 @@ def _run_developer_step(active_task: Dict[str, Any], brief: str) -> None:
                 max_iterations=iters,
             )
         try:
+            from backend.services.implementer_profile import implementer_require_analyze_clean
             from backend.services.system_auto_verify import maybe_run_system_auto_verify
 
-            maybe_run_system_auto_verify(task_id, find_task_by_id(task_id) or active_task)
+            live_verify = find_task_by_id(task_id) or active_task
+            maybe_run_system_auto_verify(
+                task_id,
+                live_verify,
+                allow_without_writes=implementer_require_analyze_clean(),
+            )
         except Exception:
             pass
         # Auto-extend outside STATE_LOCK (extend runs another LLM loop).
@@ -5641,6 +5893,21 @@ def _run_developer_step(active_task: Dict[str, Any], brief: str) -> None:
             except Exception:
                 pass
             try:
+                from backend.services.architecture_decisions import (
+                    maybe_extract_architecture_decisions,
+                )
+
+                live_adr = find_task_by_id(task_id)
+                exit_r = None
+                if live_adr and isinstance(live_adr.get("lastStepOutcome"), dict):
+                    exit_r = live_adr["lastStepOutcome"].get("exitReason")
+                maybe_extract_architecture_decisions(
+                    task_id,
+                    exit_reason=str(exit_r or result or ""),
+                )
+            except Exception:
+                pass
+            try:
                 from backend.services.dev_refusal_triage import maybe_run_dev_refusal_triage
 
                 maybe_run_dev_refusal_triage(task_id, agent_result=result)
@@ -5693,13 +5960,11 @@ def _run_developer_step(active_task: Dict[str, Any], brief: str) -> None:
 
                 fresh = find_task_by_id(task_id)
                 if fresh and last_step_exit_reason(fresh) == "duplicate_tool":
-                    apply_read_only_no_edits_outcome(fresh)
-                    add_system_log(
-                        "Developer",
-                        "warning",
-                        f"'{fresh.get('title', task_id)}': duplicate tool loop — "
-                        "staying In Progress for a Forced Patch turn",
+                    from backend.services.dev_tool_loop_recovery import (
+                        recover_dev_tool_loop_deadlock,
                     )
+
+                    recover_dev_tool_loop_deadlock(task_id)
             except Exception:
                 pass
             try:
@@ -6113,14 +6378,26 @@ def _log_idle_dependency_status() -> None:
             "info",
             f"{len(blocked_lane)} card(s) in Blocked waiting on deps.",
         )
-        t = blocked_lane[0]
-        normalize_task(t)
-        status = format_dependency_block_status(t)
-        add_system_log(
-            "System",
-            "info",
-            f"Blocked — waiting on dependencies for {t.get('id')}: {status}",
-        )
+        for t in blocked_lane[:5]:
+            normalize_task(t)
+            status = format_dependency_block_status(t)
+            issues = detect_blocked_by_issues(t)
+            cycle_note = ""
+            if issues.get("cycle"):
+                path = " → ".join(str(p) for p in (issues.get("cyclePath") or [])[:6])
+                cycle_note = f" cycle={path or t.get('id')}"
+            add_system_log(
+                "System",
+                "info",
+                f"Blocked — {t.get('id')}: {status}{cycle_note}",
+            )
+        ready = [t for t in blocked_lane if task_dependencies_met(t)]
+        if ready:
+            add_system_log(
+                "System",
+                "info",
+                f"{len(ready)} Blocked card(s) have all deps Done — will release on next sync.",
+            )
         return
     blocked = [t for t in state.SHARED_BOARD.get("Backlog", []) if not task_dependencies_met(t)]
     if not blocked:
@@ -6133,6 +6410,30 @@ def _log_idle_dependency_status() -> None:
         "info",
         f"Backlog blocked — waiting on dependencies for {t.get('id')}: {status}",
     )
+
+
+def _first_runnable_needs_dev(board: Optional[Dict[str, Any]] = None) -> Optional[Dict[str, Any]]:
+    """Oldest claimable card in the Needs Dev lane (custom / legacy queue)."""
+    from backend.agents.task_context import is_backlog_claimable
+
+    board = board if board is not None else state.SHARED_BOARD
+    for task in board.get("Needs Dev") or []:
+        if not isinstance(task, dict):
+            continue
+        if task.get("phaseCycleCapReached") or task.get("poAutoSkip"):
+            continue
+        if is_backlog_claimable(task):
+            return task
+    return None
+
+
+def _blocked_deps_met_pending_release(board: Optional[Dict[str, Any]] = None) -> bool:
+    """Blocked parents whose dependencies are Done — sync_blocked_lane should release them."""
+    board = board if board is not None else state.SHARED_BOARD
+    for task in board.get("Blocked") or []:
+        if isinstance(task, dict) and task_dependencies_met(task):
+            return True
+    return False
 
 
 def _first_runnable_needs_po(board: Optional[Dict[str, Any]] = None) -> Optional[Dict[str, Any]]:
@@ -6186,10 +6487,8 @@ def _in_progress_pending_recovery(board: Optional[Dict[str, Any]] = None) -> Lis
         if isinstance(task, dict)
         and not task.get("latchedRecoveryAttempted")
         and not _latched_card_skip_auto_sprint(task)
-        and (
-            task.get("phaseCycleCapReached")
-            or no_write_stall_should_park(task)
-        )
+        and no_write_stall_should_park(task)
+        and not task.get("phaseCycleCapReached")
         and not (
             str(task.get("id") or "") in runnable_ids
             and task.get("forcePatchNextDevStep")
@@ -6269,6 +6568,8 @@ def has_sprint_work(board: Optional[Dict[str, Any]] = None) -> bool:
         or _in_progress_pending_recovery(board)
         or _needs_po_pending_park(board)
         or _first_runnable_needs_po(board)
+        or _first_runnable_needs_dev(board)
+        or _blocked_deps_met_pending_release(board)
     ):
         return True
     ws = get_workflow_settings()
@@ -6393,6 +6694,10 @@ def summarize_sprint_work(board: Optional[Dict[str, Any]] = None) -> Dict[str, A
                     parts.append(f"{skip_np_phase} Needs PO phase cap")
                 if parts:
                     reasons.append("; ".join(parts))
+                if skip_np_po_auto:
+                    reasons.append(
+                        "Clear poAutoSkip: Reset sprint stalls or fix PO queue on Needs PO cards"
+                    )
             if latched_skip and ws.get("implementerStopOnLatch", True):
                 reasons.append(f"{latched_skip} latched card(s) trigger implementerStopOnLatch")
     ping_pong_summary: Dict[str, Any] = {}
@@ -6403,6 +6708,21 @@ def summarize_sprint_work(board: Optional[Dict[str, Any]] = None) -> Dict[str, A
     except Exception:
         ping_pong_summary = {}
 
+    dev_precheck_skip_steps = 0
+    zero_token_dev_steps = 0
+    try:
+        from backend.services.sprint_diagnostics_rollup import build_sprint_diagnostics_rollup
+
+        rollup = build_sprint_diagnostics_rollup(limit=30, since_hours=24)
+        dev_precheck_skip_steps = int(rollup.get("devPrecheckSkipSteps") or 0)
+        zero_token_dev_steps = int(rollup.get("zeroTokenDevSteps") or 0)
+        if dev_precheck_skip_steps > 0:
+            reasons.append(
+                f"{dev_precheck_skip_steps} recent Developer precheck skip(s) (0 LLM tokens — latched or capped)"
+            )
+    except Exception:
+        pass
+
     return {
         "hasWork": has_work,
         "totalCards": total_cards,
@@ -6412,6 +6732,8 @@ def summarize_sprint_work(board: Optional[Dict[str, Any]] = None) -> Dict[str, A
         "runnableNeedsPo": 1 if runnable_needs_po else 0,
         "latchedSkipCount": latched_skip,
         "skipReasons": reasons,
+        "devPrecheckSkipSteps": dev_precheck_skip_steps,
+        "zeroTokenDevSteps": zero_token_dev_steps,
         **ping_pong_summary,
     }
 
@@ -6688,6 +7010,7 @@ def _recover_latched_dev_card(
                 "Stopped: phase cycle cap reached. Auto-split did not supersede the parent; "
                 "staying In Progress (not Needs User)."
             )
+            _move_phase_cap_to_blocked(task_id, task, result)
             if not quiet:
                 _ensure_step_trace(task_id, title, "System", lane_before)
                 state.LAST_AGENT_STEP_RESULT = result
@@ -6727,6 +7050,7 @@ def _recover_latched_dev_card(
                 f"{task_id}: phase-cycle-cap park did not move to Needs User — "
                 f"{park_block or 'unknown'} — skipping Auto Sprint PO/Dev on this card",
             )
+            _move_phase_cap_to_blocked(task_id, task, park_msg)
         else:
             task.pop("parkFailed", None)
         if not quiet:
@@ -6755,8 +7079,24 @@ def _select_sprint_step_handler() -> Tuple[Optional[str], Optional[Dict[str, Any
 
     profile = get_execution_profile()
     needs_po_task = _first_runnable_needs_po()
-    runnable = _sorted_in_progress_dev_runnable()
+    needs_dev_task = _first_runnable_needs_dev()
+    runnable = [
+        t
+        for t in _sorted_in_progress_dev_runnable()
+        if not _dev_step_blocked_latched(t)
+    ]
     pending_recovery = _in_progress_pending_recovery()
+
+    def _claim_needs_dev_lane() -> Optional[Tuple[str, Dict[str, Any]]]:
+        if not needs_dev_task:
+            return None
+        tid = str(needs_dev_task.get("id") or "")
+        if not tid:
+            return None
+        move_board_stage(tid, "In Progress")
+        record_task_decision(tid, "Developer", "claim", "Claimed from Needs Dev")
+        claimed = find_task_by_id(tid) or needs_dev_task
+        return "dev", dict(claimed)
 
     def _idle_recovery() -> Tuple[Optional[str], Optional[Dict[str, Any]]]:
         handler, active = _select_downstream_sprint_handler()
@@ -6781,6 +7121,9 @@ def _select_sprint_step_handler() -> Tuple[Optional[str], Optional[Dict[str, Any
             return "dev", dict(runnable[0])
         if pending_recovery:
             return "dev_recovery", dict(pending_recovery[0])
+        claimed_nd = _claim_needs_dev_lane()
+        if claimed_nd:
+            return claimed_nd
         handler, active = _idle_recovery()
         if handler not in (None, "idle"):
             return handler, active
@@ -6801,6 +7144,9 @@ def _select_sprint_step_handler() -> Tuple[Optional[str], Optional[Dict[str, Any
         return "dev", dict(runnable[0])
     if pending_recovery:
         return "dev_recovery", dict(pending_recovery[0])
+    claimed_nd = _claim_needs_dev_lane()
+    if claimed_nd:
+        return claimed_nd
     return _idle_recovery()
 
 
@@ -7236,9 +7582,27 @@ def _run_auto_sprint_body(
     log_backlog_preflight_warnings()
     ws = get_workflow_settings()
     try:
-        from backend.services.backup_model import warn_invalid_dev_backup_at_sprint_start
+        from backend.services.backup_model import (
+            log_dev_ops_model_hints_at_sprint_start,
+            repair_invalid_dev_backup_at_sprint_start,
+            warn_dev_model_benchmark_at_sprint_start,
+            warn_invalid_dev_backup_at_sprint_start,
+        )
 
+        repair_invalid_dev_backup_at_sprint_start()
         warn_invalid_dev_backup_at_sprint_start()
+        log_dev_ops_model_hints_at_sprint_start()
+        warn_dev_model_benchmark_at_sprint_start()
+        from backend.services.dev_model_benchmark_guard import dev_benchmark_blocks_sprint
+
+        block_msg = dev_benchmark_blocks_sprint()
+        if block_msg:
+            add_system_log("System", "error", f"Sprint not started — {block_msg}")
+            return {
+                "status": "failed",
+                "error": block_msg,
+                "steps": 0,
+            }
     except Exception:
         pass
     limit = max_steps if max_steps is not None else int(ws.get("maxSprintSteps", 20))
@@ -7409,6 +7773,15 @@ def _run_auto_sprint_body(
             )
             break
         if _implementer_auto_sprint_should_pause_on_latch(ws):
+            recovered = _attempt_implementer_latch_recovery_batch()
+            if recovered:
+                add_system_log(
+                    "System",
+                    "info",
+                    f"Auto sprint latch recovery — attempted autonomous recover on {recovered} card(s).",
+                )
+            if not _implementer_auto_sprint_should_pause_on_latch(ws):
+                continue
             status = "implementer_latch_pause"
             add_system_log(
                 "System",
@@ -7444,6 +7817,7 @@ def _run_auto_sprint_body(
             "retry_watchdog",
             "session_refresh",
             "simulation_pending",
+            "implementer_latch_pause",
         )
         and not saw_ollama
     ):

@@ -83,6 +83,51 @@ def test_latched_card_first_recovery_parks_without_developer():
     assert task["devStepCount"] == 13
 
 
+def test_latched_po_autoskip_in_progress_skips_developer_prefers_po():
+    initialize()
+    reset_workflow_settings()
+    save_workflow_settings(
+        {
+            "enableSplitOnStuck": False,
+            "maxStuckSteps": 1,
+            "maxPoRoundTrips": 5,
+            "pauseSprintOnNeedsUser": False,
+        }
+    )
+    _empty_board()
+    latched = init_new_task(
+        {
+            "id": "T-IP-LATCH",
+            "title": "Capped polish",
+            "description": "d",
+            "status": "In Progress",
+        }
+    )
+    latched["phaseCycleCapReached"] = True
+    latched["devStepCount"] = 13
+    latched["poAutoSkip"] = True
+    latched["latchedRecoveryAttempted"] = True
+    po_task = init_new_task(
+        {
+            "id": "T-PO-NEXT",
+            "title": "Next feature",
+            "description": "Implement lib/foo.dart",
+            "status": "Needs PO",
+            "acceptanceCriteria": ["ac1"],
+            "scope": "foo",
+            "testPlan": "test",
+        }
+    )
+    state.SHARED_BOARD["In Progress"] = [latched]
+    state.SHARED_BOARD["Needs PO"] = [po_task]
+
+    with patch("backend.services.sprint_service._run_developer_step") as developer:
+        with patch("backend.services.sprint_service._run_po_clarification") as po:
+            run_sprint_step("brief", "http://localhost:11434")
+    developer.assert_not_called()
+    po.assert_called_once()
+
+
 def test_latched_needs_po_card_is_parked_not_clarified():
     initialize()
     reset_workflow_settings()

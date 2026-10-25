@@ -211,6 +211,10 @@ function mapAgentRun(raw: Record<string, unknown>): AgentRunState {
       raw.streamingText != null || raw.streaming_text != null
         ? String(raw.streamingText ?? raw.streaming_text)
         : null,
+    streamingThinkingText:
+      raw.streamingThinkingText != null || raw.streaming_thinking_text != null
+        ? String(raw.streamingThinkingText ?? raw.streaming_thinking_text)
+        : null,
     devPhaseGraph: mapDevPhaseGraph(raw.devPhaseGraph ?? raw.dev_phase_graph),
   }
 }
@@ -1296,7 +1300,11 @@ export function useAutoSprint(
         resumeKickRef.current = true
       } else if (data.pendingSimulation?.id || sprintStatus === 'simulation_pending') {
         setAutoSprintPaused(true)
-      } else if (sprintStatus === 'idle' || nextBreakdown?.hasWork === false) {
+      } else if (
+        sprintStatus === 'idle' ||
+        sprintStatus === 'implementer_latch_pause' ||
+        nextBreakdown?.hasWork === false
+      ) {
         setAutoSprintPaused(true)
       } else if (sprintStatus === 'retry_watchdog') {
         if (!sprintHasActionableWork(nextBoard, workflowSettings, nextBreakdown)) {

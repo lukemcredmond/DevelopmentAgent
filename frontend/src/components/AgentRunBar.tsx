@@ -275,6 +275,19 @@ export default function AgentRunBar({
           {intent}
         </p>
       )}
+      {activeRun?.streamingThinkingText && isRunning && (
+        <details className="mx-4 mb-1 text-[10px] text-cat-subtext" open={false}>
+          <summary className="cursor-pointer text-violet-300/90 select-none">
+            Reasoning…
+          </summary>
+          <p
+            className="mt-1 text-violet-100/80 max-h-20 overflow-y-auto whitespace-pre-wrap break-words border-l border-violet-500/40 pl-2"
+            data-testid="llm-thinking-stream-preview"
+          >
+            {activeRun.streamingThinkingText}
+          </p>
+        </details>
+      )}
       {activeRun?.streamingText && isRunning && (
         <p
           className="mx-4 mb-1 text-[10px] text-indigo-100/90 max-h-16 overflow-y-auto whitespace-pre-wrap break-words"

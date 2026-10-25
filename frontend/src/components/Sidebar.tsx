@@ -48,6 +48,7 @@ interface SidebarProps {
   onClaimReadyCards?: () => void
   claimableBacklogCount?: number
   onEscalateNeedsUserToPo?: () => void
+  onResetSprintStalls?: () => void
   onSplitVisitCapCards?: () => void
   onReconcileFileBlockers?: () => void
   onClearAllTasks: () => void
@@ -110,9 +111,21 @@ function formatSprintBlockedBanner(
       ? `Sprint blocked — backend sees no runnable work (${reasons}). Reset latch or clear stall counters on stuck cards.`
       : 'Sprint blocked — cards on the board but auto-sprint filters them out. Reset latch or split stuck cards.'
   }
-  return breakdown.skipReasons?.length
-    ? `No sprint work — ${breakdown.skipReasons.slice(0, 2).join('; ')}`
-    : `No sprint work — ${breakdown.totalCards} card(s) on board but none are runnable.`
+  const reasons = breakdown.skipReasons?.slice(0, 3).join('; ')
+  const precheck =
+    (breakdown.devPrecheckSkipSteps ?? 0) > 0
+      ? ` ${breakdown.devPrecheckSkipSteps} dev precheck skip(s) (0 tokens).`
+      : ''
+  if (reasons) {
+    const hint = breakdown.skipReasons?.some((r) => r.includes('poAutoSkip') || r.includes('auto-skip'))
+      ? ' Use Reset sprint stalls to clear poAutoSkip and circuit counters.'
+      : ''
+    return `No sprint work — ${reasons}${precheck}${hint}`
+  }
+  if (precheck) {
+    return `No sprint work —${precheck} Split visit-capped cards or reset latch.`
+  }
+  return `No sprint work — ${breakdown.totalCards} card(s) on board but none are runnable.`
 }
 
 export default memo(function Sidebar({
@@ -143,6 +156,7 @@ export default memo(function Sidebar({
   onClaimReadyCards,
   claimableBacklogCount = 0,
   onEscalateNeedsUserToPo,
+  onResetSprintStalls,
   onSplitVisitCapCards,
   onReconcileFileBlockers,
   onClearAllTasks,
@@ -498,6 +512,24 @@ export default memo(function Sidebar({
                 <p className="text-[9px] text-rose-300/90 leading-snug">
                   {formatSprintBlockedBanner(sprintWorkBreakdown, boardHasSprintWork)}
                 </p>
+              )}
+            {onResetSprintStalls &&
+              sprintWorkBreakdown &&
+              !sprintWorkBreakdown.hasWork &&
+              (sprintWorkBreakdown.totalCards ?? 0) > 0 && (
+                <button
+                  type="button"
+                  onClick={onResetSprintStalls}
+                  disabled={sprintRunning}
+                  title={
+                    sprintRunning
+                      ? 'Wait for the current sprint step to finish'
+                      : 'Clear visit-cap latches and circuit-breaker counters on stuck cards'
+                  }
+                  className="w-full bg-rose-950/30 hover:bg-rose-950/50 disabled:opacity-50 text-rose-200 text-[11px] py-1.5 px-2 rounded-lg border border-rose-500/30"
+                >
+                  Clear stall counters
+                </button>
               )}
             {(notifications.needsUser ?? 0) > 0 && onEscalateNeedsUserToPo && (
               <button

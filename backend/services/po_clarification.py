@@ -234,6 +234,29 @@ def po_skip_churn_should_block(task: Optional[Dict[str, Any]]) -> tuple[bool, st
     )
 
 
+def record_po_llm_skipped(task_id: str) -> int:
+    """Increment per-card PO LLM skip counter (deterministic Needs PO exit)."""
+    task = find_task_by_id(task_id)
+    if not task:
+        return 0
+    count = int(task.get("poLlmSkippedCount") or 0) + 1
+    task["poLlmSkippedCount"] = count
+    return count
+
+
+def po_llm_skip_cap_reached(
+    task: Optional[Dict[str, Any]],
+    ws: Optional[Dict[str, Any]] = None,
+) -> bool:
+    if not isinstance(task, dict):
+        return False
+    from backend.services.workflow_settings import get_workflow_settings
+
+    settings = ws if ws is not None else get_workflow_settings()
+    cap = max(1, int(settings.get("maxPoLlmSkipPerTask") or 12))
+    return int(task.get("poLlmSkippedCount") or 0) >= cap
+
+
 def should_move_off_needs_po_without_llm(task: Optional[Dict[str, Any]]) -> bool:
     """True when the card already has a spec and only needs update_board back to Dev."""
     blocked, _ = po_skip_churn_should_block(task)
@@ -241,6 +264,14 @@ def should_move_off_needs_po_without_llm(task: Optional[Dict[str, Any]]) -> bool
         return False
     if not task_has_ready_spec(task):
         return False
+    from backend.services.workflow_settings import get_workflow_settings
+
+    ws = get_workflow_settings()
+    if po_llm_skip_cap_reached(task, ws):
+        from backend.services.task_spec_validation import dev_claim_blocked
+
+        if not dev_claim_blocked(task, ws):
+            return True
     if int(task.get("identicalPoClarificationCount") or 0) >= 1:
         return True
     from backend.services.sprint_speed_gates import (
@@ -281,6 +312,10 @@ def move_off_needs_po(task_id: str) -> Optional[str]:
     if not task:
         return None
     _ensure_dev_claim_fields(task)
+    from backend.services.po_task_paths import maybe_queue_oversize_split, stamp_write_paths_on_po_task
+
+    stamp_write_paths_on_po_task(task)
+    maybe_queue_oversize_split(task)
     from backend.services.workflow_settings import get_workflow_settings
 
     ws = get_workflow_settings()

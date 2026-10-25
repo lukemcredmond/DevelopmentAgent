@@ -368,6 +368,9 @@ def _enrich_task_from_po(raw: Dict[str, Any]) -> Dict[str, Any]:
             task.setdefault("requiresDev", True)
             task.setdefault("requiresQa", True)
     task.setdefault("createdBy", "po")
+    from backend.services.po_task_paths import stamp_write_paths_on_po_task
+
+    stamp_write_paths_on_po_task(task)
     return task
 
 

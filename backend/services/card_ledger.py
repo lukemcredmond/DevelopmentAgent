@@ -627,5 +627,11 @@ def maybe_record_tool_oracle(
     tid = str(task.get("id") or "")
     if not tid:
         return
+    from backend.agents.tool_outcomes import classify_run_command
+
     snippet = (tool_output or "").replace("\n", " ")[:500]
-    write_oracle(tid, passed=bool(success), detail=f"{name} {cmd[:80]} {snippet}".strip())
+    passed = bool(success)
+    if name == "run_command":
+        outcome = classify_run_command(str((arguments or {}).get("command") or ""), tool_output or "")
+        passed = passed and outcome == "ok"
+    write_oracle(tid, passed=passed, detail=f"{name} {cmd[:80]} {snippet}".strip())

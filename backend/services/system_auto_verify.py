@@ -18,7 +18,12 @@ def system_auto_verify_enabled(ws: Optional[Dict[str, Any]] = None) -> bool:
     return bool(ws.get("enableSystemAutoVerify", True))
 
 
-def maybe_run_system_auto_verify(task_id: str, task: Dict[str, Any]) -> bool:
+def maybe_run_system_auto_verify(
+    task_id: str,
+    task: Dict[str, Any],
+    *,
+    allow_without_writes: bool = False,
+) -> bool:
     """Run project lint after writes when enabled. Returns True if verify ran."""
     if not system_auto_verify_enabled():
         return False
@@ -26,8 +31,18 @@ def maybe_run_system_auto_verify(task_id: str, task: Dict[str, Any]) -> bool:
     if not trace:
         return False
     tools_log = getattr(trace, "tools_log", None) or []
-    if not _write_tools_succeeded(tools_log):
+    wrote = _write_tools_succeeded(tools_log)
+    if not wrote and not allow_without_writes:
         return False
+    if not wrote and allow_without_writes:
+        advanced = any(
+            isinstance(t, dict)
+            and t.get("toolName") == "update_board"
+            and t.get("success")
+            for t in tools_log
+        )
+        if not advanced:
+            return False
     from backend.services.duplicate_tool_policy import tools_log_has_verify
 
     if tools_log_has_verify(tools_log):

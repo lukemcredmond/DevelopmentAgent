@@ -22,9 +22,18 @@ def run_composer_dev_step(
     One bounded Dev turn: optional deterministic fix, single execute_step, optional lint verify.
     """
     ws = get_workflow_settings()
-    wall_sec = max(30, int(ws.get("implementerMaxDevStepWallSec") or 180))
+    wall_sec = max(30, int(ws.get("implementerMaxDevStepWallSec") or 600))
+    mult = 1.0
+    if (task.get("integrationEditPaths") or []) or str(task.get("workType") or "").lower() == "integration":
+        try:
+            mult = float(ws.get("integrationStepBudgetMultiplier") or 2.0)
+        except (TypeError, ValueError):
+            mult = 2.0
+        mult = max(1.0, min(mult, 4.0))
+        wall_sec = max(30, int(wall_sec * mult))
     started = time.monotonic()
     tid = task_id or str(task.get("id") or "")
+    max_iterations = max(1, int(max_iterations * mult))
 
     try:
         from backend import state as _state
@@ -35,12 +44,20 @@ def run_composer_dev_step(
 
     try:
         from backend.services.sprint_speed_gates import should_force_patch_next_dev_step
-        from backend.services.lint_wall_recovery import try_deterministic_missing_pubspec_fix
+        from backend.services.lint_wall_recovery import (
+            try_deterministic_main_dart_scaffold_fix,
+            try_deterministic_missing_pubspec_fix,
+        )
 
         if should_force_patch_next_dev_step(task):
-            det = try_deterministic_missing_pubspec_fix(task, task_id=tid or None)
-            if det:
-                add_system_log("Developer", "info", det)
+            for det_fn in (
+                try_deterministic_missing_pubspec_fix,
+                try_deterministic_main_dart_scaffold_fix,
+            ):
+                det = det_fn(task, task_id=tid or None)
+                if det:
+                    add_system_log("Developer", "info", det)
+                    break
     except Exception:
         pass
 

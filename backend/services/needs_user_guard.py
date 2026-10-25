@@ -259,8 +259,90 @@ def reroute_tool_blocker_to_dev(
     return True
 
 
+def _is_autonomous_text_rejection_park(task: Dict[str, Any]) -> bool:
+    """True when Needs User was an intentional text-only / tool refusal park."""
+    if not isinstance(task, dict):
+        return False
+    outcome = task.get("lastStepOutcome") if isinstance(task.get("lastStepOutcome"), dict) else {}
+    exit_r = str(outcome.get("exitReason") or task.get("lastCircuitExitReason") or "").strip().lower()
+    if exit_r == "text_rejection_loop":
+        return True
+    blob = " ".join(
+        [
+            str(task.get("needsUserReason") or ""),
+            str(task.get("userQuestion") or ""),
+            str(task.get("needsUserAction") or ""),
+        ]
+    ).lower()
+    if "text-only" in blob or "refused tools" in blob or "text rejection loop" in blob:
+        return True
+    return False
+
+
+def should_autonomous_latch_recovery(task: Dict[str, Any]) -> bool:
+    """Visit-cap / broken phase-cap parks should auto-split, not reconcile to In Progress."""
+    if not isinstance(task, dict):
+        return False
+    kind = str(task.get("needsUserKind") or "")
+    if task.get("phaseCycleCapReached"):
+        return True
+    if kind == "phase_cycle_cap" and not task.get("needsUserOptions"):
+        return True
+    return False
+
+
+def autonomous_recover_latched_task(task: Dict[str, Any]) -> bool:
+    """Arm dev backup and attempt PO auto-split instead of yanking card back to Dev."""
+    task_id = str(task.get("id") or "")
+    if not task_id:
+        return False
+    from backend.services.workflow_settings import get_workflow_settings
+
+    ws = get_workflow_settings()
+    if ws.get("enableBackupModelOnStuck", True):
+        try:
+            from backend.services.backup_model import arm_backup_for_agent
+
+            arm_backup_for_agent(
+                "dev",
+                task,
+                reason="latched autonomous recovery",
+                force=True,
+            )
+        except Exception:
+            pass
+    try:
+        from backend.services.sprint_service import _run_stuck_auto_split
+
+        max_stuck = int(ws.get("maxStuckSteps", 3))
+        if _run_stuck_auto_split(task_id, task, max_stuck):
+            return True
+    except Exception:
+        pass
+    try:
+        from backend.services.sprint_speed_gates import latch_needs_po_auto_skip
+
+        task["poAutoSkip"] = True
+        latch_needs_po_auto_skip(
+            task,
+            reason="autonomous recover: auto-split did not supersede parent",
+        )
+        from backend.services.logs import add_system_log
+
+        add_system_log(
+            "System",
+            "warning",
+            f"{task_id}: latch recovery — auto-split did not supersede; card skipped for sprint",
+        )
+    except Exception:
+        pass
+    return False
+
+
 def should_reconcile_needs_user_task(task: Dict[str, Any]) -> bool:
     if not isinstance(task, dict):
+        return False
+    if _is_autonomous_text_rejection_park(task):
         return False
     kind = str(task.get("needsUserKind") or "")
     if kind in _AUTONOMOUS_KINDS:
@@ -337,6 +419,7 @@ def reconcile_needs_user_task_to_dev(
 def reconcile_autonomous_needs_user_cards() -> Dict[str, Any]:
     """Scan Needs User lane and reroute autonomous lint/tool/explore cards to Dev."""
     reconciled: List[str] = []
+    recovered: List[str] = []
     refreshed: List[str] = []
     with state.STATE_LOCK:
         tasks = list(state.SHARED_BOARD.get("Needs User") or [])
@@ -345,6 +428,11 @@ def reconcile_autonomous_needs_user_cards() -> Dict[str, Any]:
             continue
         task_id = str(task.get("id") or "")
         if should_reconcile_needs_user_task(task):
+            if should_autonomous_latch_recovery(task):
+                if task_id:
+                    autonomous_recover_latched_task(task)
+                    recovered.append(task_id)
+                continue
             if task_id and reconcile_needs_user_task_to_dev(task, source="autonomous"):
                 reconciled.append(task_id)
             continue
@@ -357,7 +445,12 @@ def reconcile_autonomous_needs_user_cards() -> Dict[str, Any]:
             save_current_project_state()
         except Exception:
             pass
-    return {"reconciled": reconciled, "refreshed": refreshed, "count": len(reconciled)}
+    return {
+        "reconciled": reconciled,
+        "recovered": recovered,
+        "refreshed": refreshed,
+        "count": len(reconciled),
+    }
 
 
 def _text_rejection_escalation_allowed(task: Dict[str, Any]) -> bool:
@@ -1499,6 +1592,8 @@ def _default_needs_user_options_chat(prompt: str) -> str:
     cfg["timeoutSec"] = 25
     provider = build_provider(cfg)
     model = str(getattr(agent_dev, "model", "") or "qwen2.5-coder:14b")
+    from backend.services.llm_provider import ollama_aux_chat_options
+
     result = provider.chat(
         model,
         [
@@ -1508,7 +1603,7 @@ def _default_needs_user_options_chat(prompt: str) -> str:
             },
             {"role": "user", "content": prompt},
         ],
-        options={"num_predict": 512, "temperature": 0.2},
+        options=ollama_aux_chat_options(num_predict=512, temperature=0.2),
     )
     message = getattr(result, "message", None)
     content = getattr(message, "content", None) if message is not None else None

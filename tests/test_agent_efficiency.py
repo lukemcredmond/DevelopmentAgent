@@ -171,6 +171,25 @@ def test_resolve_step_model_routes_qwen3_primary_to_coder_patch():
     assert pr == "phase_patch"
 
 
+def test_resolve_step_model_defers_patch_during_recovery():
+    ws = {
+        "singleModelMode": "off",
+        "enablePhaseModelRouting": True,
+        "devExploreModel": "qwen2.5-coder:7b",
+        "devPatchModel": "qwen2.5-coder:14b",
+    }
+    primary = "maternion/mimo-v2.6:9b"
+    model, reason = resolve_step_model(
+        role="Developer",
+        phase="patch",
+        primary_model=primary,
+        ws=ws,
+        defer_patch_routing=True,
+    )
+    assert model == primary
+    assert reason == "phase_patch_deferred_recovery"
+
+
 def test_max_tools_per_llm_turn_by_phase():
     ws = {"agentEfficiencyMode": "high", "maxToolsPerLlmTurn": 3}
     assert max_tools_per_llm_turn(phase="explore", ws=ws) == 3

@@ -404,13 +404,14 @@ def build_feature_rollup(feature_id: str) -> Dict[str, Any]:
 
     feature = find_feature_by_id(feature_id)
     if not feature:
-        return {"children": [], "files": [], "recentDecisions": []}
+        return {"children": [], "files": [], "recentDecisions": [], "recentArchitectureDecisions": []}
 
     normalize_task(feature)
     children_out: List[Dict[str, Any]] = []
     file_paths: List[str] = []
     seen_files: set[str] = set()
     decisions_out: List[Dict[str, Any]] = []
+    architecture_out: List[Dict[str, Any]] = []
 
     def _add_file(path: str) -> None:
         if path and path not in seen_files:
@@ -433,6 +434,22 @@ def build_feature_rollup(feature_id: str) -> Dict[str, Any]:
                     "childTitle": str(feature.get("title") or ""),
                 }
             )
+    from backend.services.architecture_decisions import get_architecture_decisions
+
+    for adr in get_architecture_decisions(feature):
+        if adr.get("status") != "accepted":
+            continue
+        architecture_out.append(
+            {
+                "id": str(adr.get("id") or ""),
+                "topic": str(adr.get("topic") or ""),
+                "title": str(adr.get("title") or "")[:200],
+                "decision": str(adr.get("decision") or "")[:400],
+                "timestamp": str(adr.get("updatedAt") or adr.get("createdAt") or ""),
+                "childTaskId": "",
+                "childTitle": str(feature.get("title") or ""),
+            }
+        )
 
     for child_id in feature.get("childTaskIds") or []:
         cid = str(child_id)
@@ -467,12 +484,28 @@ def build_feature_rollup(feature_id: str) -> Dict[str, Any]:
                         "childTitle": str(child.get("title") or cid),
                     }
                 )
+        for adr in get_architecture_decisions(child):
+            if adr.get("status") != "accepted":
+                continue
+            architecture_out.append(
+                {
+                    "id": str(adr.get("id") or ""),
+                    "topic": str(adr.get("topic") or ""),
+                    "title": str(adr.get("title") or "")[:200],
+                    "decision": str(adr.get("decision") or "")[:400],
+                    "timestamp": str(adr.get("updatedAt") or adr.get("createdAt") or ""),
+                    "childTaskId": cid,
+                    "childTitle": str(child.get("title") or cid),
+                }
+            )
 
     decisions_out.sort(key=lambda x: x.get("timestamp") or "", reverse=True)
+    architecture_out.sort(key=lambda x: x.get("timestamp") or "", reverse=True)
     return {
         "children": children_out,
         "files": file_paths[:40],
         "recentDecisions": decisions_out[:20],
+        "recentArchitectureDecisions": architecture_out[:20],
     }
 
 

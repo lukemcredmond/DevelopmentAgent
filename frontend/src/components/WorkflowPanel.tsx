@@ -518,6 +518,17 @@ export default function WorkflowPanel({
         <label className="flex items-center gap-2 text-[11px] text-cat-subtext cursor-pointer">
           <input
             type="checkbox"
+            checked={settings.devExploreForcePatchAfterReadBatch !== false}
+            onChange={(e) =>
+              onSettingsChange({ devExploreForcePatchAfterReadBatch: e.target.checked })
+            }
+          />
+          Force Patch after first explore-only read batch
+          <SettingHint hint="After read_file/grep/list_dir tools run once with no writes, start forced Patch in the same step (reduces read loops before apply_patch)." />
+        </label>
+        <label className="flex items-center gap-2 text-[11px] text-cat-subtext cursor-pointer">
+          <input
+            type="checkbox"
             checked={(settings.agentEfficiencyMode ?? 'high') === 'high'}
             onChange={(e) =>
               onSettingsChange({ agentEfficiencyMode: e.target.checked ? 'high' : 'standard' })
@@ -534,6 +545,17 @@ export default function WorkflowPanel({
           />
           Phase model routing (Explore small → Patch strong)
           <SettingHint hint="Dev Explore uses a smaller/faster Ollama model; Patch/Verify use the primary coder. Empty Explore model falls back to Dev backup or 7B preset." />
+        </label>
+        <label className="flex items-center gap-2 text-[11px] text-cat-subtext cursor-pointer pl-5">
+          <input
+            type="checkbox"
+            checked={settings.singleModelRespectPhaseRouting !== false}
+            onChange={(e) =>
+              onSettingsChange({ singleModelRespectPhaseRouting: e.target.checked })
+            }
+          />
+          Single-model mode: still route Explore vs Patch when models differ
+          <SettingHint hint="When single-model mode is on, use devExploreModel for Explore and devPatchModel for Patch if both are set and different (may reload models on phase change)." />
         </label>
         {showSingleModelVramHint && (
           <p className="text-[10px] text-amber-300 leading-relaxed pl-5 -mt-1">
@@ -1417,6 +1439,31 @@ export default function WorkflowPanel({
           />
           Pause auto-sprint when a latched card cannot park (implementerStopOnLatch)
         </label>
+        <label className="flex items-center gap-2 text-[11px] text-cat-subtext cursor-pointer pl-5">
+          <input
+            type="checkbox"
+            checked={settings.implementerRequireAnalyzeClean !== false}
+            onChange={(e) =>
+              onSettingsChange({ implementerRequireAnalyzeClean: e.target.checked })
+            }
+          />
+          Require clean analyze before Done (implementerRequireAnalyzeClean)
+        </label>
+        <label className="flex items-center gap-2 text-[11px] text-cat-subtext pl-5">
+          <span className="shrink-0 w-36">Dev step wall (sec)</span>
+          <NumberSettingInput
+            value={settings.implementerMaxDevStepWallSec ?? 600}
+            min={60}
+            max={3600}
+            onCommit={(implementerMaxDevStepWallSec) =>
+              onSettingsChange({ implementerMaxDevStepWallSec })
+            }
+            className="flex-1 bg-cat-mantle border border-cat-surface0 rounded px-1 py-0.5 text-[11px] text-white"
+          />
+        </label>
+        <p className="text-[10px] text-cat-overlay/80 leading-relaxed pl-5">
+          Composer dev step wall — local Ollama often needs 600s (10 min) for read → patch → verify.
+        </p>
         <p className="text-[10px] text-cat-overlay/80 leading-relaxed pl-5">
           Saved to project file when you change profile.
         </p>
@@ -2177,6 +2224,16 @@ export default function WorkflowPanel({
         Keeps model loaded between sprint iterations (e.g. 30m). Reduces reload latency.
       </p>
 
+      <label className="flex items-center gap-2 text-[11px] text-cat-subtext cursor-pointer">
+        <input
+          type="checkbox"
+          checked={settings.ollamaThinkPlanOutlineWrite === true}
+          onChange={(e) => onSettingsChange({ ollamaThinkPlanOutlineWrite: e.target.checked })}
+        />
+        Ollama reasoning on PO plan outline write/refine
+        <SettingHint hint="Passes think=true to Ollama only for markdown plan outline write/refine steps (not explore or backlog JSON). Agent sprint/Dev stays think=false unless ollamaThinkByRole overrides." />
+      </label>
+
       <p className="text-[10px] text-cat-overlay leading-relaxed">
         When conversation exceeds the prune threshold (top of Workflow), oldest tool messages are
         dropped before each LLM call.
@@ -2713,8 +2770,29 @@ export default function WorkflowPanel({
               })
             }
           />
-          Record server-side decision trace on Flow LLM nodes
-          <SettingHint hint="No extra Ollama call — explains text reject, echo, tool recovery, and tool_calls outcomes." />
+          Record server-side decision trace on Flow LLM nodes (debug — not architecture ADRs)
+          <SettingHint hint="No extra Ollama call — explains text reject, echo, tool recovery, and tool_calls outcomes. Distinct from per-card Architecture decisions." />
+        </label>
+        <label className="flex items-center gap-2 text-[11px] text-cat-subtext cursor-pointer">
+          <input
+            type="checkbox"
+            checked={settings.enableAdrPostStepExtract !== false}
+            onChange={(e) => onSettingsChange({ enableAdrPostStepExtract: e.target.checked })}
+          />
+          Auto-extract architecture decisions after Dev writes
+          <SettingHint hint="One JSON-only LLM call per Dev step with file writes; records ADRs with alternatives when possible." />
+        </label>
+        <label className="text-[11px] text-cat-subtext block pl-4">
+          <span className="text-[10px] text-cat-overlay">Max ADRs per Dev step (0–2)</span>
+          <NumberSettingInput
+            value={settings.adrPostStepExtractMaxPerStep ?? 1}
+            min={0}
+            max={2}
+            onCommit={(adrPostStepExtractMaxPerStep) =>
+              onSettingsChange({ adrPostStepExtractMaxPerStep })
+            }
+            className="w-full bg-cat-base border border-cat-surface1 rounded p-1 text-white mt-0.5"
+          />
         </label>
         {(settings.enableLlmDecisionTrace ?? false) && (
           <>

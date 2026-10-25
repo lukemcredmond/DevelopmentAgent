@@ -157,14 +157,16 @@ def probe_model(
             notes["contextLength"] = context
 
     try:
+        from backend.services.llm_provider import ollama_aux_chat_options
+
         result = provider.chat(
             model,
             [{"role": "user", "content": "Reply with OK."}],
-            options={
-                "temperature": 0,
-                "num_predict": PROBE_MAX_TOKENS,
-                "num_ctx": PROBE_CONTEXT_LENGTH,
-            },
+            options=ollama_aux_chat_options(
+                temperature=0,
+                num_predict=PROBE_MAX_TOKENS,
+                num_ctx=PROBE_CONTEXT_LENGTH,
+            ),
         )
         content = str(getattr(getattr(result, "message", None), "content", "") or "").strip()
         return {

@@ -12,6 +12,7 @@ from ollama._types import Message
 from backend import state
 from backend.agents.agent_run import (
     append_streaming_text,
+    append_streaming_thinking,
     finish_run,
     get_active_run,
     start_run,
@@ -52,6 +53,7 @@ ChatMessage = Union[Mapping[str, Any], Message]
 SAME_ARGS_FAILURE_LIMIT = 3
 PATH_TOOL_SAME_ARGS_FAILURE_LIMIT = 2
 PATH_TOOL_NAMES = frozenset({"read_file", "list_dir", "grep", "glob_file_search", "apply_patch", "write_file"})
+_SYNTHETIC_READ_CONTINUE = "__SYNTHETIC_READ_CONTINUE__"
 
 
 def _task_ac_description_text(task: Optional[Dict[str, Any]]) -> str:
@@ -1330,7 +1332,14 @@ class ScrumAgent:
         if keep_alive and provider.capabilities.keep_alive:
             opts["keep_alive"] = str(keep_alive)
         if getattr(provider, "provider_id", None) == "ollama":
-            opts["think"] = False
+            from backend.services.workflow_settings import resolve_ollama_think
+
+            opts["think"] = resolve_ollama_think(
+                self.role,
+                plan_outline_no_tools=bool(getattr(self, "_plan_outline_no_tools", False)),
+                plan_outline_phase=getattr(self, "_plan_outline_phase", None),
+                ws=ws,
+            )
         if self.role == "Product Owner":
             cap = getattr(self, "_step_num_predict", None)
             if cap is not None:
@@ -1365,6 +1374,7 @@ class ScrumAgent:
                 "num_predict": opts.get("num_predict", getattr(self, "_step_num_predict", None)),
                 "num_ctx": opts.get("num_ctx"),
                 "keep_alive": opts.get("keep_alive"),
+                "think": opts.get("think"),
             }
             record_sampling_snapshot(snap)
         except Exception:
@@ -1520,11 +1530,15 @@ class ScrumAgent:
                 eval_timeout = (
                     dev_eval_timeout_sec() if self.role == "Developer" else None
                 )
-                update_run(clear_streaming_text=True)
+                update_run(clear_streaming_text=True, clear_streaming_thinking_text=True)
 
                 def _on_token(piece: str) -> None:
                     append_streaming_text(piece)
 
+                def _on_thinking(piece: str) -> None:
+                    append_streaming_thinking(piece)
+
+                stream_preview = self.role in ("Developer", "Product Owner")
                 try:
                     result = consume_chat_stream(
                         raw,
@@ -1535,7 +1549,8 @@ class ScrumAgent:
                             getattr(_state, "SPRINT_CANCEL", False)
                             or getattr(_state, "DEV_STEP_INTERRUPTED", False)
                         ),
-                        on_token=_on_token if self.role == "Developer" else None,
+                        on_token=_on_token if stream_preview else None,
+                        on_thinking=_on_thinking if stream_preview else None,
                     )
                 except Exception as stream_exc:
                     from backend.services.llm_provider import RunawayGenerationAborted
@@ -1932,11 +1947,13 @@ class ScrumAgent:
             backup = backup_model("dev")
             primary = primary_model("dev")
             if not backup or backup == primary or backup == str(self.model or ""):
+                self._note_backup_switch_outcome("skipped:no_backup")
                 return False
             from backend.services.backup_model import dev_backup_model_allowed
 
             allowed, block = dev_backup_model_allowed(backup)
             if not allowed:
+                self._note_backup_switch_outcome(f"blocked:{block}")
                 try:
                     log_event("backup_model_switch_blocked", f"{backup} — {block}")
                 except Exception:
@@ -1972,10 +1989,52 @@ class ScrumAgent:
                     log_event("backup_model_switched", f"{backup} — {reason[:180]}")
                 except Exception:
                     pass
+                self._note_backup_switch_outcome("switched")
                 return True
         except Exception:
             pass
         return False
+
+    def _note_backup_switch_outcome(self, outcome: str) -> None:
+        try:
+            from backend.services.step_diagnostics import get_active_trace
+
+            trace = get_active_trace()
+            if trace:
+                trace.note_backup_switch_outcome(str(outcome or "").strip())
+        except Exception:
+            pass
+
+    def _text_rejection_park_allowed(self, task_id: Optional[str]) -> bool:
+        """When force-patch is latched, require a backup attempt before Needs User park."""
+        if not task_id:
+            return True
+        board_task = find_task_by_id(str(task_id))
+        if not board_task or not board_task.get("forcePatchNextDevStep"):
+            return True
+        try:
+            from backend.services.backup_model import backup_model, dev_backup_model_allowed, primary_model
+            from backend.services.step_diagnostics import get_active_trace
+            from backend.services.workflow_settings import get_workflow_settings
+
+            if not get_workflow_settings().get("enableBackupModelOnStuck", True):
+                return True
+            backup = backup_model("dev")
+            primary = primary_model("dev")
+            if not backup or backup == primary:
+                return True
+            allowed, _block = dev_backup_model_allowed(backup)
+            if not allowed:
+                return True
+            if getattr(self, "_mid_step_backup_switched", False):
+                return True
+            trace = get_active_trace()
+            outcome = str(getattr(trace, "backup_switch_outcome", "") or "") if trace else ""
+            if outcome.startswith("blocked:") or outcome == "switched":
+                return True
+            return False
+        except Exception:
+            return True
 
     def _revert_dev_backup_model(self, task_id: Optional[str], *, reason: str = "") -> bool:
         """Restore primary Dev model when backup repeats safety refusals."""
@@ -2040,6 +2099,23 @@ class ScrumAgent:
             text_n=text_n,
             reason=reason,
             log_label="Text-reject backup switch",
+        )
+
+    def _maybe_switch_backup_on_first_refusal(
+        self,
+        *,
+        task_id: Optional[str],
+        plan_n: int,
+        text_n: int,
+        reason: str,
+    ) -> bool:
+        """Switch backup on first safety/meta refusal (local models often refuse once)."""
+        return self._switch_dev_backup_model(
+            task_id=task_id,
+            plan_n=plan_n,
+            text_n=text_n,
+            reason=reason,
+            log_label="Refusal backup switch",
         )
 
     def _maybe_switch_backup_on_identical_text(
@@ -2205,6 +2281,81 @@ class ScrumAgent:
         messages.append({"role": "system", "content": plan_rejection_message})
         return True
 
+    def _maybe_signal_tool_loop_deadlock(
+        self,
+        task_id: Optional[str],
+        *,
+        tool_name: str = "",
+        same_success: int = 0,
+        premature_board: bool = False,
+    ) -> None:
+        if self.role != "Developer" or not task_id:
+            return
+        if premature_board:
+            self._premature_board_blocked_step = True
+        from backend.services.dev_tool_loop_recovery import (
+            arm_task_for_tool_loop_recovery,
+            dev_tool_loop_deadlock_active,
+        )
+        from backend.services.duplicate_tool_policy import tool_loop_deadlock_read_threshold
+
+        dup_success = same_success if tool_name == "read_file" else 0
+        if tool_name == "read_file" and dup_success < tool_loop_deadlock_read_threshold():
+            return
+        if not dev_tool_loop_deadlock_active(
+            duplicate_read_same_success=dup_success,
+            premature_board_blocked=bool(self._premature_board_blocked_step),
+        ):
+            return
+        if getattr(self, "_tool_loop_deadlock_signaled", False):
+            return
+        self._tool_loop_deadlock_signaled = True
+        self._pending_tool_loop_recovery_inject = True
+        live = find_task_by_id(str(task_id))
+        if live:
+            arm_task_for_tool_loop_recovery(live)
+        try:
+            from backend.services.step_diagnostics import log_event
+
+            log_event("tool_loop_deadlock_recovery", tool_name or "premature_board")
+        except Exception:
+            pass
+
+    def _inject_tool_loop_deadlock_recovery(
+        self,
+        messages: List[Dict[str, Any]],
+        task_id: Optional[str],
+    ) -> None:
+        if not getattr(self, "_pending_tool_loop_recovery_inject", False):
+            return
+        self._pending_tool_loop_recovery_inject = False
+        from backend.services.agent_efficiency import forced_tool_num_predict
+        from backend.services.dev_tool_loop_recovery import persist_edit_target_on_task
+
+        self._forced_tool_mode = True
+        self._step_num_predict = forced_tool_num_predict()
+        target = ""
+        if task_id:
+            board_task = find_task_by_id(str(task_id))
+            if board_task:
+                target = persist_edit_target_on_task(board_task)
+        target_line = (
+            f"Target file: {target}. read_file is allowed once, then apply_patch/write_file.\n"
+            if target
+            else ""
+        )
+        messages.append(
+            {
+                "role": "system",
+                "content": (
+                    "=== FORCED TOOL MODE (tool-loop deadlock recovery) ===\n"
+                    + target_line
+                    + "You repeated identical reads or tried to close the card without edits. "
+                    "Call apply_patch or write_file now."
+                ),
+            }
+        )
+
     def _stop_safety_refusal_or_park(
         self,
         task_id: Optional[str],
@@ -2293,6 +2444,8 @@ class ScrumAgent:
         min_n = 1 if fast_refusal else 2
         if not task_id or text_n < min_n:
             return None
+        if not self._text_rejection_park_allowed(task_id):
+            return None
         board_task = find_task_by_id(str(task_id))
         if not board_task:
             return None
@@ -2375,6 +2528,40 @@ class ScrumAgent:
                     return stop_msg
                 except Exception:
                     pass
+            try:
+                from backend.services.workflow_settings import get_execution_profile
+
+                if ws.get("autonomousMode") and get_execution_profile(ws) == "implementer":
+                    from backend.services.backup_model import arm_backup_for_agent
+                    from backend.services.dev_refusal_triage import (
+                        diagnose_dev_refusal,
+                        defer_dev_card,
+                    )
+
+                    if ws.get("enableBackupModelOnStuck", True):
+                        arm_backup_for_agent(
+                            "dev",
+                            board_task,
+                            reason="text rejection loop (autonomous)",
+                            force=True,
+                        )
+                    diagnosis = diagnose_dev_refusal(
+                        board_task,
+                        exit_reason="text_rejection_loop",
+                        agent_result=content,
+                    )
+                    if defer_dev_card(str(task_id), diagnosis):
+                        stop_msg = (
+                            f"Deferred: text rejection on {target} — "
+                            "picking another card (autonomous triage)."
+                        )
+                        log_event("policy_refusal_deferred", content[:160])
+                        add_system_log(self.role, "warning", stop_msg)
+                        self._log_step_exit(stop_msg, "warning")
+                        self._finish_run(status="failed", error=stop_msg)
+                        return stop_msg
+            except Exception:
+                pass
             parked, park_block = _try_move_to_needs_user_with_reason(
                 task_id,
                 board_task,
@@ -2510,6 +2697,10 @@ class ScrumAgent:
         phase_graph = getattr(self, "_dev_phase_graph", None)
         if phase_graph is not None:
             phase = getattr(phase_graph, "phase", None)
+        pending = getattr(self, "_patch_recovery_paths", None) or set()
+        read_ok = getattr(self, "_patch_recovery_read_ok", None) or set()
+        needs_read = {p for p in pending if p and p not in read_ok}
+        defer_patch = bool(needs_read) or bool(getattr(self, "_forced_tool_mode", False))
         # Always prefer live project primary over registry init defaults.
         primary = self.sync_role_primary_model()
         self._primary_model = str(primary or self.model or "")
@@ -2519,6 +2710,7 @@ class ScrumAgent:
             primary_model=str(self._primary_model or primary),
             backup_model=self._resolve_backup_model(),
             ws=ws,
+            defer_patch_routing=defer_patch,
         )
         from backend import state
 
@@ -2680,6 +2872,11 @@ class ScrumAgent:
 
         tool_name = call.function.name
         arguments = normalize_tool_arguments(call.function.arguments)
+        from backend.services.board_tool_args import repair_sprint_board_tool_arguments
+
+        arguments = repair_sprint_board_tool_arguments(
+            tool_name, arguments, task_id=task_id
+        )
         tool_summary = summarize_tool_args(tool_name, arguments)
         key = (tool_name, json.dumps(arguments, sort_keys=True, default=str))
 
@@ -2755,13 +2952,25 @@ class ScrumAgent:
             if is_tool_fingerprint_blocked(live_task, tool_name, arguments) and not is_po_needs_po_advance(
                 tool_name, arguments
             ):
+                from backend.services.dev_tool_loop_recovery import (
+                    build_blocked_board_recovery_hint,
+                    is_premature_lane_update,
+                )
+
                 cmd = str((arguments or {}).get("command") or tool_summary)[:120]
+                recovery_hint = (
+                    build_blocked_board_recovery_hint(live_task)
+                    if tool_name == "update_board" and is_premature_lane_update(arguments)
+                    else "Change approach or edit files before retrying."
+                )
                 tool_output = (
                     f"[blocked fingerprint] Tool '{tool_name}' with these args was blocked "
                     "after a prior stuck step"
                     + (f" ({cmd})" if cmd else "")
-                    + ". Change approach or edit files before retrying."
+                    + f". {recovery_hint}"
                 )
+                if tool_name == "update_board" and is_premature_lane_update(arguments):
+                    self._maybe_signal_tool_loop_deadlock(task_id, premature_board=True)
                 skip_intent = f"Blocked fingerprint {tool_name}"
                 self._publish_work_progress(
                     task_id=task_id,
@@ -2961,6 +3170,10 @@ class ScrumAgent:
                 )
                 setattr(result, "duplicate_skip", True)
                 setattr(result, "duplicate_attempt", same_success + 1)
+                if tool_name == "read_file":
+                    self._maybe_signal_tool_loop_deadlock(
+                        task_id, tool_name=tool_name, same_success=same_success
+                    )
                 po_stop = None
                 if self.role == "Product Owner" and tool_name == "update_board" and task_id:
                     from backend.services.po_clarification import finish_po_board_noop
@@ -3087,6 +3300,10 @@ class ScrumAgent:
                 )
                 setattr(result, "duplicate_skip", True)
                 setattr(result, "duplicate_attempt", same_success + 1)
+                if tool_name == "read_file":
+                    self._maybe_signal_tool_loop_deadlock(
+                        task_id, tool_name=tool_name, same_success=same_success
+                    )
                 po_stop = None
                 if self.role == "Product Owner" and tool_name == "update_board" and task_id:
                     from backend.services.po_clarification import finish_po_board_noop
@@ -3124,41 +3341,115 @@ class ScrumAgent:
                             except Exception:
                                 pass
                         else:
-                            tool_output = (
-                                f"Error: write_file blocked — '{path_arg}' already exists. "
-                                "Use apply_patch for edits; write_file is for new files only."
-                            )
-                            add_system_log(self.role, "warning", tool_output[:200])
-                            try:
-                                from backend.services.step_diagnostics import (
-                                    get_active_trace,
-                                    log_event,
+                            new_content = (arguments or {}).get("content")
+                            redirected = False
+                            if new_content is not None and str(new_content):
+                                try:
+                                    with open(
+                                        phys, encoding="utf-8", errors="replace"
+                                    ) as fh:
+                                        old_text = fh.read()
+                                    from backend.services.step_diagnostics import log_event
+                                    from backend.services.step_read_cache import (
+                                        get_step_read_cache,
+                                    )
+
+                                    log_event(
+                                        "write_file_redirect_apply_patch",
+                                        path_arg[:120],
+                                    )
+                                    add_system_log(
+                                        self.role,
+                                        "info",
+                                        f"Redirect write_file→apply_patch for existing '{path_arg}'",
+                                    )
+                                    get_step_read_cache(self).put(path_arg, old_text)
+                                    tool_name = "apply_patch"
+                                    arguments = {
+                                        "path": path_arg,
+                                        "old_text": old_text,
+                                        "new_text": str(new_content),
+                                    }
+                                    redirected = True
+                                except OSError:
+                                    redirected = False
+                            if not redirected:
+                                from backend.services.patch_recovery import (
+                                    is_tiny_existing_write_file_attempt,
+                                    normalize_recovery_path as norm_path,
                                 )
 
-                                log_event("write_file_blocked", path_arg[:120])
-                                trace = get_active_trace()
-                                if trace:
-                                    trace.note_tool_policy_deadlock(
-                                        f"write_file blocked on existing path {path_arg[:80]}"
+                                tiny_content = str(new_content or "")
+                                tiny_escalated = False
+                                if is_tiny_existing_write_file_attempt(
+                                    path_arg, tiny_content, file_exists=True
+                                ):
+                                    norm = norm_path(path_arg)
+                                    ow = getattr(self, "_patch_write_overwrite_paths", None)
+                                    if ow is None:
+                                        self._patch_write_overwrite_paths = set()
+                                    self._patch_write_overwrite_paths.add(norm)
+                                    esc = getattr(self, "_patch_write_escalated_paths", None)
+                                    if esc is None:
+                                        self._patch_write_escalated_paths = set()
+                                    self._patch_write_escalated_paths.add(norm)
+                                    tiny_escalated = True
+                                    try:
+                                        from backend.services.step_diagnostics import log_event
+
+                                        log_event(
+                                            "tiny_write_file_escalate",
+                                            f"{path_arg[:80]} ({len(tiny_content)} chars)",
+                                        )
+                                    except Exception:
+                                        pass
+                                if not tiny_escalated:
+                                    tool_output = (
+                                        f"Error: write_file blocked — '{path_arg}' already exists. "
+                                        "Use apply_patch for edits; write_file is for new files only."
                                     )
-                            except Exception:
-                                pass
-                            safe_args = sanitize_tool_args_for_log(tool_name, arguments)
-                            blocked = ToolExecutionResult(
-                                tool_name=tool_name,
-                                arguments=arguments if isinstance(arguments, dict) else {},
-                                safe_args=safe_args,
-                                tool_output=tool_output,
-                                success=False,
-                                duration_ms=0,
-                                timestamp="",
-                                agent=self.role,
-                                agent_id=agent_id,
-                                task_id=task_id,
-                                source="agent",
-                                run_id=run_id,
-                            )
-                            return tool_name, arguments, blocked, None
+                                    add_system_log(self.role, "warning", tool_output[:200])
+                                    try:
+                                        from backend.services.step_diagnostics import (
+                                            get_active_trace,
+                                            log_event,
+                                        )
+
+                                        log_event("write_file_blocked", path_arg[:120])
+                                        trace = get_active_trace()
+                                        if trace:
+                                            trace.note_tool_policy_deadlock(
+                                                f"write_file blocked on existing path {path_arg[:80]}"
+                                            )
+                                    except Exception:
+                                        pass
+                                    try:
+                                        live = find_task_by_id(task_id) if task_id else None
+                                        if isinstance(live, dict):
+                                            live["forcePatchNextDevStep"] = True
+                                    except Exception:
+                                        pass
+                                    setattr(self, "_reset_dev_step_wall_clock", True)
+                                    safe_args = sanitize_tool_args_for_log(
+                                        "write_file", arguments
+                                    )
+                                    blocked = ToolExecutionResult(
+                                        tool_name="write_file",
+                                        arguments=arguments
+                                        if isinstance(arguments, dict)
+                                        else {},
+                                        safe_args=safe_args,
+                                        tool_output=tool_output,
+                                        success=False,
+                                        duration_ms=0,
+                                        timestamp="",
+                                        agent=self.role,
+                                        agent_id=agent_id,
+                                        task_id=task_id,
+                                        source="agent",
+                                        run_id=run_id,
+                                    )
+                                    return tool_name, arguments, blocked, None
                 except ValueError:
                     pass
 
@@ -3573,6 +3864,12 @@ class ScrumAgent:
             and results_by_id[id(call)][2].success
             for call in all_calls
         )
+        read_success = any(
+            results_by_id[id(call)][0] == "read_file" and results_by_id[id(call)][2].success
+            for call in all_calls
+        )
+        if write_success or read_success:
+            setattr(self, "_reset_dev_step_wall_clock", True)
         if write_attempted and not write_success:
             from backend.services.llm_context import maybe_rewind_after_failed_writes
 
@@ -3621,6 +3918,7 @@ class ScrumAgent:
             compute_write_overwrite_allowed_paths,
             failed_apply_patch_paths,
             failed_patch_fingerprint,
+            is_read_guard_patch_failure,
             normalize_recovery_path,
             paths_needing_read_before_patch,
         )
@@ -3649,7 +3947,13 @@ class ScrumAgent:
                 old_text=str((args or {}).get("old_text") or ""),
                 new_text=str((args or {}).get("new_text") or ""),
             )
-            if identical_counts.get(fp, 0) >= 1 and injects < 1 and path:
+            tool_out = str(getattr(result, "tool_output", "") or "")
+            read_guard_fail = is_read_guard_patch_failure(tool_out)
+            if (
+                path
+                and injects < 2
+                and (identical_counts.get(fp, 0) >= 1 or read_guard_fail)
+            ):
                 from backend.workspace.files import read_workspace_file
 
                 body = read_workspace_file(path)
@@ -3668,7 +3972,7 @@ class ScrumAgent:
                     self._patch_recovery_injects = injects
             identical_counts[fp] = int(identical_counts.get(fp) or 0) + 1
             escalate_threshold = 2
-            if path == "pubspec.yaml" and task_id:
+            if task_id:
                 live_scope = find_task_by_id(task_id)
                 if live_scope:
                     from backend.services.file_blocker import (
@@ -3677,8 +3981,15 @@ class ScrumAgent:
                     )
 
                     scoped = normalize_file_path(resolve_dev_edit_target_path(live_scope))
-                    if scoped and scoped != "pubspec.yaml":
+                    if path == "pubspec.yaml" and scoped and scoped != "pubspec.yaml":
                         escalate_threshold = 1
+                    integration = live_scope.get("integrationEditPaths") or []
+                    if integration or str(live_scope.get("workType") or "").lower() == "integration":
+                        escalate_threshold = min(escalate_threshold, 1)
+                    if live_scope.get("forcePatchNextDevStep") and scoped:
+                        path_norm = normalize_file_path(path)
+                        if path_norm and path_norm == scoped:
+                            escalate_threshold = min(escalate_threshold, 1)
             if identical_counts[fp] >= escalate_threshold:
                 escalate_paths.append(path)
             # Cross-step circuit breaker fingerprint on the card.
@@ -3705,6 +4016,12 @@ class ScrumAgent:
                 "Patch escalation: identical apply_patch failed repeatedly on "
                 f"{', '.join(unique_paths)}. read_file then write_file overwrite is allowed."
             )
+            try:
+                from backend.services.step_diagnostics import log_event
+
+                log_event("rewrite_strategy", f"paths={','.join(unique_paths[:4])}")
+            except Exception:
+                pass
             messages.append(
                 {
                     "role": "system",
@@ -3721,6 +4038,14 @@ class ScrumAgent:
                 log_event("patch_identical_escalate", ",".join(unique_paths)[:240])
             except Exception:
                 pass
+            if task_id and not getattr(self, "_mid_step_backup_switched", False):
+                self._switch_dev_backup_model(
+                    task_id=task_id,
+                    plan_n=0,
+                    text_n=0,
+                    reason=f"patch identical escalate on {','.join(unique_paths)[:120]}",
+                    log_label="Patch-loop backup switch",
+                )
 
         write_loop_paths: list = []
         for name, args, result in recovery_batch:
@@ -3807,6 +4132,41 @@ class ScrumAgent:
 
             log_event("patch_recovery", f"paths={','.join(failed_paths)}")
 
+        if task_id and injects < 2:
+            live_scope = find_task_by_id(task_id)
+            if live_scope:
+                from backend.services.file_blocker import resolve_dev_edit_target_path
+                from backend.services.patch_recovery import (
+                    build_out_of_scope_patch_nudge,
+                    normalize_recovery_path,
+                )
+
+                scope_target = resolve_dev_edit_target_path(live_scope)
+                for name, args, result in recovery_batch:
+                    if name != "apply_patch" or getattr(result, "success", False):
+                        continue
+                    out = str(getattr(result, "tool_output", "") or "")
+                    if "scoped to" not in out.lower() or not scope_target:
+                        continue
+                    wrong = str((args or {}).get("path") or "")
+                    if wrong and normalize_recovery_path(wrong) != normalize_recovery_path(
+                        scope_target
+                    ):
+                        messages.append(
+                            {
+                                "role": "system",
+                                "content": build_out_of_scope_patch_nudge(
+                                    target=scope_target,
+                                    wrong_path=wrong,
+                                ),
+                            }
+                        )
+                        injects += 1
+                        from backend.services.step_diagnostics import log_event
+
+                        log_event("out_of_scope_patch", wrong[:80])
+                        break
+
         pending_paths, read_ok = apply_batch_to_recovery_state(
             pending_paths, read_ok, recovery_batch
         )
@@ -3830,6 +4190,55 @@ class ScrumAgent:
                 )
         except Exception:
             pass
+
+        auto_read_paths: set = getattr(self, "_patch_guard_auto_read_paths", None) or set()
+        synthetic_continue_target = ""
+        for name, args, result in recovery_batch:
+            if name != "apply_patch" or bool(getattr(result, "success", False)):
+                continue
+            if not is_read_guard_patch_failure(str(getattr(result, "tool_output", "") or "")):
+                continue
+            path = normalize_recovery_path(str((args or {}).get("path") or ""))
+            if not path or path in auto_read_paths:
+                continue
+            if self._execute_synthetic_read_fallback(
+                messages,
+                task_id=task_id,
+                target=path,
+                tools_used=tools_used,
+            ):
+                auto_read_paths.add(path)
+                self._patch_guard_auto_read_paths = auto_read_paths
+                from types import SimpleNamespace
+
+                pending_paths, read_ok = apply_batch_to_recovery_state(
+                    pending_paths,
+                    read_ok,
+                    [
+                        (
+                            "read_file",
+                            {"path": path},
+                            SimpleNamespace(success=True),
+                        )
+                    ],
+                )
+                self._patch_recovery_paths = pending_paths
+                self._patch_recovery_read_ok = read_ok
+                try:
+                    from backend.services.step_diagnostics import log_event
+
+                    log_event("synthetic_read_after_patch_guard", path[:120])
+                except Exception:
+                    pass
+                synthetic_continue_target = path
+                break
+        if synthetic_continue_target:
+            self._continue_after_synthetic_read(
+                messages,
+                target=synthetic_continue_target,
+                plan_rejection_message=_PLAN_REJECTION_MESSAGE,
+            )
+            return _SYNTHETIC_READ_CONTINUE
 
         command_success = any(
             results_by_id[id(call)][0] == "run_command"
@@ -4010,6 +4419,9 @@ class ScrumAgent:
         self._po_num_predict_bumped = False
         self._step_num_predict = None
         self._plan_outline_no_tools = bool(plan_outline_no_tools)
+        self._plan_outline_phase = (plan_outline_phase or "").strip() or (
+            "write" if plan_outline_no_tools else None
+        )
         self._plan_outline_partial_parts: list[str] = []
         self._po_outline_cap_continues = 0
         ws = get_workflow_settings()
@@ -4071,6 +4483,9 @@ class ScrumAgent:
         ]
         if self.role == "Developer" and tools:
             messages.insert(1, {"role": "system", "content": _DEV_NATIVE_TOOLS_HINT})
+            from backend.services.dev_refusal_triage import AUTHORIZED_CODEGEN_SYSTEM
+
+            messages.insert(2, {"role": "system", "content": AUTHORIZED_CODEGEN_SYSTEM})
         if session_task and should_resume_card_session(session_task, role=self.role):
             prior = load_card_session_messages(session_task)
             if prior:
@@ -4157,6 +4572,7 @@ class ScrumAgent:
         self._patch_recovery_paths = set()
         self._patch_recovery_read_ok = set()
         self._patch_recovery_injects = 0
+        self._patch_guard_auto_read_paths: set = set()
         self._patch_write_overwrite_paths: set = set()
         self._patch_write_escalated_paths: set = set()
         self._identical_patch_fail_counts = {}
@@ -4166,7 +4582,11 @@ class ScrumAgent:
         self._synthetic_read_deadline: Optional[float] = None
         self._reflect_injects = 0
         self._runaway_abort_count = 0
+        self._runaway_patch_recovery_tried = False
         self._forced_patch_step = False
+        self._premature_board_blocked_step = False
+        self._pending_tool_loop_recovery_inject = False
+        self._tool_loop_deadlock_signaled = False
         from backend.services.step_read_cache import StepReadCache
 
         self._step_read_cache = StepReadCache()
@@ -4294,6 +4714,19 @@ class ScrumAgent:
                     ensure_task_spec_for_work(task_id)
                 except Exception:
                     pass
+            if task_id:
+                try:
+                    from backend.services.file_blocker import resolve_dev_edit_target_path
+                    from backend.services.step_diagnostics import get_active_trace
+
+                    trace = get_active_trace()
+                    board_task = find_task_by_id(str(task_id))
+                    if trace and board_task:
+                        edit_target = resolve_dev_edit_target_path(board_task)
+                        if edit_target:
+                            trace.note_resolved_edit_target(edit_target)
+                except Exception:
+                    pass
 
         if getattr(self, "_forced_patch_step", False) and task_id:
             try:
@@ -4305,6 +4738,9 @@ class ScrumAgent:
 
         try:
             for iteration in range(1, max_iterations + 1):
+                if getattr(self, "_reset_dev_step_wall_clock", False):
+                    step_started_mono = time.monotonic()
+                    self._reset_dev_step_wall_clock = False
                 elapsed = time.monotonic() - step_started_mono
                 if max_duration_sec > 0 and elapsed >= max_duration_sec:
                     stop_msg = self._step_timeout_message(max_duration_sec)
@@ -4419,6 +4855,7 @@ class ScrumAgent:
                 )
                 from backend.services.llm_context import prune_messages_if_needed
 
+                self._inject_tool_loop_deadlock_recovery(messages, task_id)
                 prune_messages_if_needed(messages)
                 from backend.services.agent_efficiency import max_tools_per_llm_turn
 
@@ -4555,45 +4992,100 @@ class ScrumAgent:
                             error=err_detail[:200],
                             error_type=err_type,
                         )
-                    if (
-                        iteration == 1
-                        and self.role == "Developer"
-                        and err_type == "runaway_generation"
-                        and not getattr(self, "_runaway_iter1_recovery_tried", False)
-                    ):
-                        self._runaway_iter1_recovery_tried = True
-                        from backend.services.agent_efficiency import forced_tool_num_predict
+                    if self.role == "Developer" and err_type == "runaway_generation":
+                        pending_rec = getattr(self, "_patch_recovery_paths", None) or set()
+                        read_ok_rec = getattr(self, "_patch_recovery_read_ok", None) or set()
+                        needs_read_rec = [
+                            p for p in pending_rec if p and p not in read_ok_rec
+                        ]
+                        iter1_recover = (
+                            iteration == 1
+                            and not getattr(self, "_runaway_iter1_recovery_tried", False)
+                        )
+                        patch_recover = bool(needs_read_rec) and not getattr(
+                            self, "_runaway_patch_recovery_tried", False
+                        )
+                        if iter1_recover or patch_recover:
+                            if iter1_recover:
+                                self._runaway_iter1_recovery_tried = True
+                            if patch_recover:
+                                self._runaway_patch_recovery_tried = True
+                            from backend.services.agent_efficiency import forced_tool_num_predict
 
-                        self._forced_tool_mode = True
-                        self._step_num_predict = forced_tool_num_predict()
-                        try:
-                            log_event("forced_tool_mode", "runaway iter 1 recovery")
-                        except Exception:
-                            pass
-                        try:
-                            from backend.services.sprint_service import _should_slim_dev_prompt
-
-                            board_task = find_task_by_id(str(task_id)) if task_id else None
-                            if board_task and _should_slim_dev_prompt(board_task):
-                                slim_ctx = min(self._effective_num_ctx(), 5120)
-                                self._step_num_ctx = slim_ctx
-                        except Exception:
-                            pass
-                        target = self._resolve_text_reject_target_path(task_id)
-                        if target and not getattr(self, "_synthetic_read_fallback_used", False):
-                            self._synthetic_read_fallback_used = True
-                            if self._execute_synthetic_read_fallback(
-                                messages,
-                                task_id=task_id,
-                                target=target,
-                                tools_used=tools_used,
-                            ):
-                                self._continue_after_synthetic_read(
-                                    messages,
-                                    target=target,
-                                    plan_rejection_message=_PLAN_REJECTION_MESSAGE,
+                            self._forced_tool_mode = True
+                            self._step_num_predict = forced_tool_num_predict()
+                            try:
+                                log_event(
+                                    "forced_tool_mode",
+                                    "runaway recovery"
+                                    + (" patch_pending" if patch_recover else " iter1"),
                                 )
-                                continue
+                            except Exception:
+                                pass
+                            try:
+                                from backend.services.sprint_service import _should_slim_dev_prompt
+
+                                board_task = find_task_by_id(str(task_id)) if task_id else None
+                                if board_task and _should_slim_dev_prompt(board_task):
+                                    slim_ctx = min(self._effective_num_ctx(), 5120)
+                                    self._step_num_ctx = slim_ctx
+                            except Exception:
+                                pass
+                            from backend.services.patch_recovery import normalize_recovery_path
+
+                            target = ""
+                            if patch_recover and needs_read_rec:
+                                target = normalize_recovery_path(str(needs_read_rec[0]))
+                            if not target:
+                                target = self._resolve_text_reject_target_path(task_id)
+                            auto_done = getattr(self, "_patch_guard_auto_read_paths", None) or set()
+                            allow_synthetic = bool(target) and target not in auto_done
+                            if allow_synthetic and (
+                                patch_recover
+                                or not getattr(self, "_synthetic_read_fallback_used", False)
+                            ):
+                                if not patch_recover:
+                                    self._synthetic_read_fallback_used = True
+                                if self._execute_synthetic_read_fallback(
+                                    messages,
+                                    task_id=task_id,
+                                    target=target,
+                                    tools_used=tools_used,
+                                ):
+                                    if patch_recover:
+                                        auto_done.add(target)
+                                        self._patch_guard_auto_read_paths = auto_done
+                                        from types import SimpleNamespace
+
+                                        from backend.services.patch_recovery import (
+                                            apply_batch_to_recovery_state,
+                                        )
+
+                                        pending_paths = (
+                                            getattr(self, "_patch_recovery_paths", None) or set()
+                                        )
+                                        read_ok_paths = (
+                                            getattr(self, "_patch_recovery_read_ok", None) or set()
+                                        )
+                                        pending_paths, read_ok_paths = apply_batch_to_recovery_state(
+                                            pending_paths,
+                                            read_ok_paths,
+                                            [
+                                                (
+                                                    "read_file",
+                                                    {"path": target},
+                                                    SimpleNamespace(success=True),
+                                                )
+                                            ],
+                                        )
+                                        self._patch_recovery_paths = pending_paths
+                                        self._patch_recovery_read_ok = read_ok_paths
+                                    self._continue_after_synthetic_read(
+                                        messages,
+                                        target=target,
+                                        plan_rejection_message=_PLAN_REJECTION_MESSAGE,
+                                    )
+                                    continue
                     outcome = self._outcome_for_failed_chat(err_type, err_detail)
                     if outcome == "SIMULATION_FALLBACK":
                         self._log_step_exit("LLM provider unreachable — SIMULATION_FALLBACK", "warning")
@@ -4606,8 +5098,12 @@ class ScrumAgent:
 
                 message = response.message
                 native_tool_calls_before_recovery = bool(message.tool_calls)
-                recovered_tool_names, message = apply_tool_call_recovery(
+                recovered_tool_names, message, tool_recovery_source = apply_tool_call_recovery(
                     message, self.registry.tool_names()
+                )
+                tool_recovery_attempted = (
+                    not native_tool_calls_before_recovery
+                    and bool((getattr(message, "content", None) or "").strip())
                 )
                 if recovered_tool_names:
                     add_system_log(
@@ -4712,6 +5208,8 @@ class ScrumAgent:
                     eval_ms=usage.get("evalMs"),
                     native_tool_calls=bool(tool_call_names) and not bool(recovered_tool_names),
                     model_used=str(self.model or model_in_use or ""),
+                    tool_call_recovery_attempted=tool_recovery_attempted,
+                    tool_call_recovery_source=tool_recovery_source or "",
                 )
                 if (
                     self.role == "Developer"
@@ -4866,6 +5364,8 @@ class ScrumAgent:
                         max_iterations=max_iterations,
                         tools_used=tools_used,
                     )
+                    if early_stop == _SYNTHETIC_READ_CONTINUE:
+                        continue
                     if early_stop:
                         reason = "tool_failure_stop"
                         low = early_stop.lower()
@@ -5171,9 +5671,74 @@ class ScrumAgent:
                             pending_lesson = ("text_rejection_loop", set(tools_used), stopped)
                             return stopped
                     dev_text_reject = reject_label == "text-only" and self.role == "Developer"
+                    text_reject_hash = ""
+                    text_reject_dup = False
+                    if reject_label == "text-only" and content and not fast_refusal:
+                        text_reject_hash = hashlib.sha256(
+                            content.encode("utf-8", errors="replace")
+                        ).hexdigest()[:16]
+                        hashes = getattr(self, "_text_reject_hashes", {}) or {}
+                        hashes[text_reject_hash] = int(hashes.get(text_reject_hash) or 0) + 1
+                        self._text_reject_hashes = hashes
+                        text_reject_dup = hashes[text_reject_hash] >= 2
+                        try:
+                            trace = get_active_trace()
+                            if trace:
+                                trace.note_text_reject_hash(
+                                    text_reject_hash,
+                                    int(hashes[text_reject_hash]),
+                                )
+                        except Exception:
+                            pass
+                        if text_reject_dup:
+                            try:
+                                log_event(
+                                    "identical_text_reject",
+                                    f"hash={text_reject_hash} count={hashes[text_reject_hash]}",
+                                )
+                            except Exception:
+                                pass
                     if dev_text_reject:
+                        if text_n == 1:
+                            if forced_patch_step:
+                                self._maybe_switch_backup_on_forced_patch_refusal(
+                                    task_id=task_id,
+                                    plan_n=plan_n,
+                                    text_n=text_n,
+                                    reason="forced-patch Developer text-only reject",
+                                    content=content,
+                                )
+                            elif fast_refusal:
+                                self._maybe_switch_backup_on_first_refusal(
+                                    task_id=task_id,
+                                    plan_n=plan_n,
+                                    text_n=text_n,
+                                    reason=f"first Developer {refusal_class} refusal",
+                                )
+                            else:
+                                self._maybe_switch_backup_on_text_reject(
+                                    task_id=task_id,
+                                    plan_n=plan_n,
+                                    text_n=text_n,
+                                    reason="first Developer text-only reject",
+                                    content=content,
+                                )
+                        elif text_reject_dup and not fast_refusal:
+                            self._maybe_switch_backup_on_identical_text(
+                                task_id=task_id,
+                                plan_n=plan_n,
+                                text_n=text_n,
+                                reason=f"identical text apology hash={text_reject_hash}",
+                            )
                         min_park = 1 if fast_refusal else 2
-                        if text_n >= min_park:
+                        skip_park_for_backup = (
+                            getattr(self, "_mid_step_backup_switched", False) and text_n <= 2
+                        )
+                        if (
+                            text_n >= min_park
+                            and not skip_park_for_backup
+                            and self._text_rejection_park_allowed(task_id)
+                        ):
                             parked = self._try_park_text_rejection_loop(
                                 task_id,
                                 text_n=text_n,
@@ -5199,14 +5764,6 @@ class ScrumAgent:
                                         plan_rejection_message=_PLAN_REJECTION_MESSAGE,
                                     )
                                     continue
-                        if not fast_refusal and text_n == 1:
-                            self._maybe_switch_backup_on_text_reject(
-                                task_id=task_id,
-                                plan_n=plan_n,
-                                text_n=text_n,
-                                reason="first Developer text-only reject",
-                                content=content,
-                            )
                     forced_tool_threshold = 1 if dev_text_reject or forced_patch_step or fast_refusal else 3
                     if (
                         reject_label == "text-only"
@@ -5238,48 +5795,30 @@ class ScrumAgent:
                                 ),
                             }
                         )
-                    if reject_label == "text-only" and content and not fast_refusal:
-                        content_hash = hashlib.sha256(content.encode("utf-8", errors="replace")).hexdigest()[:16]
-                        hashes = getattr(self, "_text_reject_hashes", {}) or {}
-                        hashes[content_hash] = int(hashes.get(content_hash) or 0) + 1
-                        self._text_reject_hashes = hashes
-                        if hashes[content_hash] >= 2:
-                            try:
-                                log_event(
-                                    "identical_text_reject",
-                                    f"hash={content_hash} count={hashes[content_hash]}",
-                                )
-                            except Exception:
-                                pass
-                            if not fast_refusal:
-                                self._maybe_switch_backup_on_identical_text(
+                    if text_reject_dup:
+                        if fast_refusal and getattr(self, "_mid_step_backup_switched", False):
+                            self._revert_dev_backup_model(
+                                task_id,
+                                reason="backup model repeated safety refusal",
+                            )
+                        if not fast_refusal and getattr(self, "_forced_tool_mode", False):
+                            target = self._resolve_text_reject_target_path(task_id)
+                            if target and not getattr(self, "_synthetic_read_fallback_used", False):
+                                self._synthetic_read_fallback_used = True
+                                if self._execute_synthetic_read_fallback(
+                                    messages,
                                     task_id=task_id,
-                                    plan_n=plan_n,
-                                    text_n=text_n,
-                                    reason=f"identical text apology hash={content_hash}",
-                                )
-                            elif getattr(self, "_mid_step_backup_switched", False):
-                                self._revert_dev_backup_model(
-                                    task_id,
-                                    reason="backup model repeated safety refusal",
-                                )
-                            if getattr(self, "_forced_tool_mode", False):
-                                target = self._resolve_text_reject_target_path(task_id)
-                                if target and not getattr(self, "_synthetic_read_fallback_used", False):
-                                    self._synthetic_read_fallback_used = True
-                                    if self._execute_synthetic_read_fallback(
+                                    target=target,
+                                    tools_used=tools_used,
+                                ):
+                                    self._continue_after_synthetic_read(
                                         messages,
-                                        task_id=task_id,
                                         target=target,
-                                        tools_used=tools_used,
-                                    ):
-                                        self._continue_after_synthetic_read(
-                                            messages,
-                                            target=target,
-                                            plan_rejection_message=_PLAN_REJECTION_MESSAGE,
-                                        )
-                                        continue
-                            if fast_refusal and getattr(self, "_mid_step_backup_switched", False):
+                                        plan_rejection_message=_PLAN_REJECTION_MESSAGE,
+                                    )
+                                    continue
+                        if fast_refusal and getattr(self, "_mid_step_backup_switched", False):
+                            if self._text_rejection_park_allowed(task_id):
                                 parked = self._try_park_text_rejection_loop(
                                     task_id,
                                     text_n=text_n,
@@ -5289,6 +5828,7 @@ class ScrumAgent:
                                 if parked:
                                     pending_lesson = ("text_rejection_loop", set(tools_used), parked)
                                     return parked
+                        if self._text_rejection_park_allowed(task_id):
                             parked = self._try_park_text_rejection_loop(
                                 task_id,
                                 text_n=text_n,
@@ -5298,15 +5838,15 @@ class ScrumAgent:
                             if parked:
                                 pending_lesson = ("text_rejection_loop", set(tools_used), parked)
                                 return parked
-                            stop_msg = (
-                                "Stopped: text rejection loop — identical text repeated "
-                                f"({hashes[content_hash]}×). Use apply_patch or write_file."
-                            )
-                            add_system_log(self.role, "warning", stop_msg)
-                            self._log_step_exit(stop_msg, "warning")
-                            self._finish_run(status="failed", error=stop_msg)
-                            pending_lesson = ("text_rejection_loop", set(tools_used), stop_msg)
-                            return stop_msg
+                        stop_msg = (
+                            "Stopped: text rejection loop — identical text repeated. "
+                            "Use apply_patch or write_file."
+                        )
+                        add_system_log(self.role, "warning", stop_msg)
+                        self._log_step_exit(stop_msg, "warning")
+                        self._finish_run(status="failed", error=stop_msg)
+                        pending_lesson = ("text_rejection_loop", set(tools_used), stop_msg)
+                        return stop_msg
                     if (
                         reject_label == "text-only"
                         and getattr(self, "_forced_tool_mode", False)

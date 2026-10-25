@@ -807,6 +807,94 @@ export async function testLlmModel(
   })
 }
 
+export async function startModelBenchmark(payload?: {
+  url?: string
+  models?: string[]
+  agent?: string
+  resume?: boolean
+}): Promise<import('../types').ModelBenchmarkJob> {
+  return request('/api/llm/benchmark-models', {
+    method: 'POST',
+    body: JSON.stringify({
+      url: payload?.url,
+      models: payload?.models,
+      agent: payload?.agent ?? 'dev',
+      resume: Boolean(payload?.resume),
+    }),
+  })
+}
+
+export async function fetchModelBenchmarkStatus(): Promise<import('../types').ModelBenchmarkJob> {
+  return request('/api/llm/benchmark-models/status')
+}
+
+export async function fetchDevModelAssessment(
+  model?: string,
+): Promise<import('../types').DevModelAssessmentResponse> {
+  const q = model ? `?model=${encodeURIComponent(model)}` : ''
+  return request(`/api/llm/dev-model-assessment${q}`)
+}
+
+export async function cancelModelBenchmark(): Promise<import('../types').ModelBenchmarkJob> {
+  return request('/api/llm/benchmark-models/cancel', { method: 'POST' })
+}
+
+export async function exportModelBenchmark(url?: string): Promise<Blob> {
+  const q = url ? `?url=${encodeURIComponent(url)}` : ''
+  const viteToken =
+    typeof import.meta !== 'undefined' && import.meta.env?.VITE_ALLHANDS_API_TOKEN
+      ? String(import.meta.env.VITE_ALLHANDS_API_TOKEN)
+      : ''
+  let stored = ''
+  try {
+    stored = localStorage.getItem('allhandsApiToken') || ''
+  } catch {
+    /* ignore */
+  }
+  const token = (viteToken || stored).trim()
+  const res = await fetch(`/api/llm/benchmark-models/export${q}`, {
+    headers: token ? { Authorization: `Bearer ${token}` } : {},
+  })
+  if (!res.ok) {
+    let detail = res.statusText
+    try {
+      const body = (await res.json()) as { detail?: string }
+      detail = body.detail ?? detail
+    } catch {
+      /* ignore */
+    }
+    throw new Error(detail)
+  }
+  return res.blob()
+}
+
+export async function importModelBenchmark(payload: {
+  url?: string
+  snapshot: Record<string, unknown>
+}): Promise<import('../types').ModelBenchmarkJob> {
+  return request('/api/llm/benchmark-models/import', {
+    method: 'POST',
+    body: JSON.stringify({ url: payload.url, snapshot: payload.snapshot }),
+  })
+}
+
+export async function fetchModelBenchmarkBackups(
+  url?: string,
+): Promise<{ url: string; backups: import('../types').ModelBenchmarkBackupFile[] }> {
+  const q = url ? `?url=${encodeURIComponent(url)}` : ''
+  return request(`/api/llm/benchmark-models/backups${q}`)
+}
+
+export async function restoreModelBenchmarkBackup(payload: {
+  url?: string
+  filename: string
+}): Promise<import('../types').ModelBenchmarkJob> {
+  return request('/api/llm/benchmark-models/restore-backup', {
+    method: 'POST',
+    body: JSON.stringify({ url: payload.url, filename: payload.filename }),
+  })
+}
+
 export async function runTerminal(
   payload: TerminalRunPayload,
 ): Promise<TerminalRunResponse> {
@@ -907,6 +995,38 @@ export async function reconcileFileBlockers(): Promise<
 
 export async function escalateNeedsUserToPo(): Promise<AppState & { movedTaskIds?: string[] }> {
   return request('/api/board/escalate-needs-user-to-po', { method: 'POST' })
+}
+
+export async function resetSprintStalls(): Promise<AppState & { resetCount?: number }> {
+  return request('/api/board/reset-sprint-stalls', { method: 'POST' })
+}
+
+export async function resetDevLatch(
+  taskId: string,
+): Promise<AppState & { resetLatchWarning?: string }> {
+  return request(`/api/tasks/${encodeURIComponent(taskId)}/reset-dev-latch`, {
+    method: 'POST',
+  })
+}
+
+export async function addArchitectureDecision(
+  taskId: string,
+  payload: {
+    topic: string
+    title: string
+    context?: string
+    decision: string
+    alternatives: Array<{ name: string; rejectedBecause: string }>
+    consequences?: string
+    relatedFiles?: string[]
+    supersedesId?: string
+    changeNote?: string
+  },
+): Promise<AppState & { architectureDecision?: unknown }> {
+  return request(`/api/tasks/${encodeURIComponent(taskId)}/architecture-decisions`, {
+    method: 'POST',
+    body: JSON.stringify(payload),
+  })
 }
 
 export async function reindexCodebase(
@@ -1114,6 +1234,22 @@ export async function reloadMcpServers(): Promise<AppState & { registered?: numb
 
 export async function cancelSprint(): Promise<{ ok: boolean }> {
   return request<{ ok: boolean }>('/api/sprint/cancel', { method: 'POST' })
+}
+
+export async function repairWorkspace(): Promise<
+  AppState & {
+    workspaceRepair?: {
+      ok: boolean
+      clean?: boolean
+      findings?: number
+      cardsReopened?: string[]
+      lintCardsCreated?: string[]
+      detail?: string
+      error?: string
+    }
+  }
+> {
+  return request('/api/sprint/workspace-repair', { method: 'POST', body: '{}' })
 }
 
 export async function fetchPendingTools(): Promise<{ pending: import('../types').PendingToolRequest[] }> {

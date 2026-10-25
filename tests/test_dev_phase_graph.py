@@ -161,6 +161,7 @@ def test_force_patch_starts_in_patch_phase():
     assert g is not None
     assert g.phase == "patch"
     assert g.forced_patch is True
+    assert g.in_step_force_patch is True
     assert g.explore_nudge_sent is True
     assert g.pending_stop_after_nudge is False
     assert g.explore_count == 0
@@ -174,14 +175,19 @@ def test_force_patch_starts_in_patch_phase():
 def test_forced_patch_first_explore_nudges_second_stops():
     g = DevPhaseGraph.for_new_step(ws={"enableDevPhaseGraph": True}, force_patch=True)
     assert g is not None
+    assert g.in_step_force_patch is True
     a1 = g.record_batch([("read_file", True), ("list_dir", True)])
     assert a1.stop_reason is None
-    assert a1.nudge == EXPLORE_NUDGE
     assert g.phase == "patch"
-    assert g.pending_stop_after_nudge is True
 
     a2 = g.record_batch([("grep", True)])
-    assert a2.stop_reason == "explore_budget_exhausted"
+    assert a2.stop_reason is None
+    assert g.phase == "patch"
+    last = None
+    for _ in range(g.patch_max):
+        last = g.record_batch([("apply_patch", False)])
+    assert last is not None
+    assert last.stop_reason == "patch_budget_exhausted"
     assert g.phase == "stuck"
 
 
@@ -202,10 +208,10 @@ def test_forced_patch_run_command_nudges_then_stops():
     assert g.should_block_explore_tool("run_command") is True
     a1 = g.record_batch([("run_command", True)])
     assert a1.stop_reason is None
-    assert a1.nudge == EXPLORE_NUDGE
+    assert g.in_step_force_patch is True
     a2 = g.record_batch([("run_test", True)])
-    assert a2.stop_reason == "explore_budget_exhausted"
-    assert g.phase == "stuck"
+    assert a2.stop_reason is None
+    assert g.phase == "patch"
 
 
 def test_forced_patch_text_only_before_explore_does_not_stop():
@@ -221,7 +227,8 @@ def test_forced_patch_text_only_after_explore_nudge_stops():
     assert g is not None
     g.record_batch([("read_file", True)])
     a = g.after_llm_turn_without_write()
-    assert a.stop_reason == "explore_budget_exhausted"
+    assert a.stop_reason is None
+    assert g.phase == "patch"
 
 
 def test_snapshot_includes_cycle_and_status_text():

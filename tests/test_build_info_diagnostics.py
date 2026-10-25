@@ -17,6 +17,13 @@ def test_get_app_build_info_has_schema_and_git():
     assert info["diagnosticsSchemaVersion"] == DIAGNOSTICS_SCHEMA_VERSION
     assert info["gitSha"] == "abc1234"
     assert "recoveryFeatures" in info
+    for flag in (
+        "flutter_dev_path_scope",
+        "forced_patch_in_step_seed",
+        "visit_cap_sprint_skip",
+        "patch_escalation_backup",
+    ):
+        assert flag in info["recoveryFeatures"]
 
 
 def test_trace_payload_includes_app_build():

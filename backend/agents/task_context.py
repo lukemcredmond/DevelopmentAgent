@@ -325,6 +325,8 @@ def normalize_task(task: Dict[str, Any]) -> Dict[str, Any]:
         task["gitCommit"] = None
     if "decisions" not in task or not isinstance(task["decisions"], list):
         task["decisions"] = []
+    if "architectureDecisions" not in task or not isinstance(task.get("architectureDecisions"), list):
+        task["architectureDecisions"] = []
     if "transcript" not in task or not isinstance(task["transcript"], list):
         task["transcript"] = []
     from backend.services.task_working_context import normalize_working_context_fields
@@ -336,6 +338,12 @@ def normalize_task(task: Dict[str, Any]) -> Dict[str, Any]:
         task["acceptanceCriteria"] = normalize_acceptance_criteria(task["acceptanceCriteria"])
     if "blockedBy" not in task or not isinstance(task["blockedBy"], list):
         task["blockedBy"] = []
+    if "integrationEditPaths" not in task or not isinstance(task.get("integrationEditPaths"), list):
+        task["integrationEditPaths"] = []
+    else:
+        task["integrationEditPaths"] = [
+            str(p).strip() for p in task["integrationEditPaths"] if str(p).strip()
+        ][:12]
     if "priority" not in task or not isinstance(task["priority"], (int, float)):
         task["priority"] = 100
     if task.get("qaFailure") is not None and isinstance(task["qaFailure"], dict):
@@ -669,15 +677,20 @@ def normalize_task(task: Dict[str, Any]) -> Dict[str, Any]:
         try:
             from backend.services.needs_user_guard import (
                 apply_needs_user_brief,
+                autonomous_recover_latched_task,
                 build_needs_user_brief,
                 needs_user_fields_empty,
                 reconcile_needs_user_task_to_dev,
+                should_autonomous_latch_recovery,
                 should_park_in_needs_user,
                 should_reconcile_needs_user_task,
             )
 
             if should_reconcile_needs_user_task(task):
-                reconcile_needs_user_task_to_dev(task, source="normalize")
+                if should_autonomous_latch_recovery(task):
+                    autonomous_recover_latched_task(task)
+                else:
+                    reconcile_needs_user_task_to_dev(task, source="normalize")
             elif needs_user_fields_empty(task):
                 brief = build_needs_user_brief(task, kind="stuck_loop")
                 if should_park_in_needs_user(task, brief)[0]:
@@ -706,6 +719,7 @@ def init_new_task(task: Dict[str, Any]) -> Dict[str, Any]:
     task.setdefault("status", "Backlog")
     task["files"] = []
     task["decisions"] = []
+    task["architectureDecisions"] = []
     task["transcript"] = []
     task.setdefault("acceptanceCriteria", [])
     task.setdefault("blockedBy", [])
@@ -759,15 +773,20 @@ def normalize_board_tasks() -> None:
                 try:
                     from backend.services.needs_user_guard import (
                         apply_needs_user_brief,
+                        autonomous_recover_latched_task,
                         build_needs_user_brief,
                         needs_user_fields_empty,
                         reconcile_needs_user_task_to_dev,
+                        should_autonomous_latch_recovery,
                         should_park_in_needs_user,
                         should_reconcile_needs_user_task,
                     )
 
                     if should_reconcile_needs_user_task(task):
-                        reconcile_needs_user_task_to_dev(task, source="board_load")
+                        if should_autonomous_latch_recovery(task):
+                            autonomous_recover_latched_task(task)
+                        else:
+                            reconcile_needs_user_task_to_dev(task, source="board_load")
                     elif needs_user_fields_empty(task):
                         brief = build_needs_user_brief(task, kind="stuck_loop")
                         if should_park_in_needs_user(task, brief)[0]:
@@ -1637,6 +1656,15 @@ def build_task_prompt_legacy(task: Dict[str, Any], brief: str, *, agent_role: Op
     if spike_report:
         prompt += f"\n=== SPIKE REPORT ===\n{spike_report[:2000]}\n"
 
+    try:
+        from backend.services.architecture_decisions import format_architecture_decisions_for_prompt
+
+        adr_block = format_architecture_decisions_for_prompt(task)
+        if adr_block:
+            prompt += adr_block
+    except Exception:
+        pass
+
     decisions = task.get("decisions") or []
     if not slim:
         older_dec_block = _format_older_decisions_block(decisions)
@@ -1644,7 +1672,7 @@ def build_task_prompt_legacy(task: Dict[str, Any], brief: str, *, agent_role: Op
             prompt += older_dec_block
 
     if decisions:
-        prompt += "\n=== PRIOR AGENT DECISIONS ON THIS CARD ===\n"
+        prompt += "\n=== ACTIVITY LOG (tool runs and system events — not architecture) ===\n"
         if not slim:
             prompt += (
                 "Tool reuse guidance: For identical run_command results (lint/test/--version/--help), "

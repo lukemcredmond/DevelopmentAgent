@@ -107,6 +107,8 @@ ollama pull nomic-embed-text       # Embeddings (memory + Qdrant)
 
 Verify models in the sidebar **Project Config** section or `GET /api/ollama/health`. Use `GET /api/ollama/model-recommendations` for suggestions based on system RAM.
 
+**Developer agent and tool calling:** The Developer step registers Ollama **native tool calls** (`read_file`, `apply_patch`, etc.). Models that only emit chat prose (for example `THOUGHT:` / plan text without tool JSON) will loop on text rejection and rarely write files. Use a **tool-capable coder** for Dev (and set a backup coder in Project Config). Run model benchmarks from Settings → Models and prefer models with a high **native tool-call rate**; chat-style or “reasoning-only” local models are a poor fit for the Developer role even if they are fast.
+
 ### Environment and persistence
 
 | Variable | Default | Purpose |
@@ -420,9 +422,10 @@ Persisted per project. Update via sidebar **Workflow** or `POST /api/workflow/se
 | maxNeedsUserPerSprint | 2 | Cap Needs User cards per auto-sprint run (implementer multi-card sprints: use **8+**; `stuck_loop` / `phase_cycle_cap` parks are exempt from this cap) |
 | needsUserCooldownSteps | 3 | Steps between Needs User escalations |
 | implementerStopOnLatch | On | When execution profile is **implementer**, pause auto-sprint after latched card(s) that cannot park instead of dev_recovery churn |
+| implementerRequireAnalyzeClean | On | In implementer mode, block Done when workspace/card analyze is not clean (use **Repair workspace** in Sprint diagnostics after bad generations) |
 | useComposerDevStep | On (implementer) | Single bounded Dev turn + one lint check instead of multi-round fix-verify |
 | implementerMaxLlmIterationsPerStep | 5 | Cap tool iterations per implementer Dev step |
-| implementerMaxDevStepWallSec | 180 | Wall-clock budget for composer Dev step |
+| implementerMaxDevStepWallSec | 600 | Wall-clock budget for composer Dev step (local Ollama; default 10 min) |
 | implementerMaxPreloadTokens | 4000 | Max preloaded file context chars for implementer (skips semantic/graph preload) |
 | autoStartSprint | On | Auto-start sprint after Plan & Run (Settings → Workflow) |
 
@@ -1096,8 +1099,16 @@ What AllHands actually implements today (not a roadmap). Defaults and toggles li
 | **Per-role models** | Separate primary models for PO / Dev / Code Review / QA (plus optional backup models when stuck) |
 | **Retries / timeouts** | Per-attempt HTTP timeout (default 900s, not retried with a new chat); connection / 5xx / idle-server retries with delay schedule; cooldown retries; context-overflow handling |
 | **VRAM-aware swap** | Optional unload/preload when arming a backup model on a full GPU |
+| **Ollama `think` (reasoning channel)** | Agent turns use `resolve_ollama_think()` in `_chat_options` (default **off**). PO plan outline **write/refine** can enable via `ollamaThinkPlanOutlineWrite`. Per-role overrides: `ollamaThinkByRole`. Auxiliary calls (model test, context compress, card summarize, probes) always pass `think=false` via `ollama_aux_chat_options`. Step diagnostics record `think` under `sampling`. |
 
-Key code: `backend/agents/scrum_agent.py`, `backend/agents/registry.py`, `backend/services/ollama_warmup.py`, `backend/api/ollama.py`.
+**Call-site matrix (Ollama thinking policy)**
+
+| Path | `think` |
+|------|---------|
+| PO plan outline explore / backlog JSON / lane / chat / Dev / CR / QA (`execute_step` → `_chat_options`) | Default **false**; outline write/refine optional **true** when `ollamaThinkPlanOutlineWrite` |
+| Context compress, card session summarize, model test, needs-user enrich, skill merge, prompt optimize, tool probe | **false** (explicit) |
+
+Key code: `backend/agents/scrum_agent.py`, `backend/agents/registry.py`, `backend/services/ollama_warmup.py`, `backend/services/workflow_settings.py` (`resolve_ollama_think`), `backend/api/ollama.py`.
 
 ### Multi-agent scrum pattern
 

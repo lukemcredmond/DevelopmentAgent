@@ -68,14 +68,17 @@ def maybe_compress_sprint_context_block(
         f"{text[: min(len(text), 48000)]}"
     )
     try:
-        from backend.services.llm_provider import get_chat_provider
+        from backend.services.llm_provider import get_chat_provider, ollama_aux_chat_options
 
         provider = get_chat_provider()
         provider.timeout_sec = timeout
         resp = provider.chat(
             model,
             [{"role": "user", "content": prompt}],
-            options={"num_predict": max(512, max_out // 2), "temperature": 0.2},
+            options=ollama_aux_chat_options(
+                num_predict=max(512, max_out // 2),
+                temperature=0.2,
+            ),
         )
         content = (resp.message.content or "").strip() if resp and resp.message else ""
         if not content:

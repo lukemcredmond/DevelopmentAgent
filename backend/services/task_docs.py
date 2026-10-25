@@ -30,6 +30,10 @@ def task_qa_markdown_path(task_id: str) -> str:
     return f"{task_docs_rel_dir(task_id)}/qa.md"
 
 
+def task_architecture_markdown_path(task_id: str) -> str:
+    return f"{task_docs_rel_dir(task_id)}/architecture.md"
+
+
 def legacy_spec_markdown_path(task_id: str) -> str:
     return f"{TASKS_PREFIX}/{safe_task_id(task_id)}-spec.md"
 

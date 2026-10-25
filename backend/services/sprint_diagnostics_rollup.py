@@ -82,10 +82,27 @@ def build_sprint_diagnostics_rollup(
     durations: List[int] = []
     cursor_v2 = 0
     bad_by_task: Dict[str, int] = defaultdict(int)
+    dev_precheck_skip_steps = 0
+    zero_token_dev_steps = 0
+    writes_attempted = 0
+    writes_succeeded = 0
+    visit_cap_latch_steps = 0
+    dev_model_refusal_steps: Counter[str] = Counter()
 
     for payload in traces:
         reason = str(payload.get("exitReason") or "unknown").strip() or "unknown"
         exit_counts[reason] += 1
+        events = payload.get("events") or []
+        if reason == "dev_precheck_skip" or any(
+            isinstance(e, dict) and str(e.get("kind") or "") == "dev_precheck_skip"
+            for e in events
+        ):
+            dev_precheck_skip_steps += 1
+        if str(payload.get("agent") or "") == "Developer":
+            if int(payload.get("ollamaCallCount") or 0) == 0 and int(
+                payload.get("promptTokensTotal") or 0
+            ) == 0:
+                zero_token_dev_steps += 1
         if payload.get("ok"):
             ok_count += 1
         dur = int(payload.get("durationMs") or 0)
@@ -97,6 +114,15 @@ def build_sprint_diagnostics_rollup(
         rc = str(payload.get("textRefusalClass") or "").strip()
         if rc and rc != "none":
             refusal_counts[rc] += 1
+        if (
+            str(payload.get("agent") or "") == "Developer"
+            and rc in ("safety_refusal", "meta_refusal")
+        ):
+            for call in payload.get("ollamaCalls") or []:
+                if isinstance(call, dict):
+                    model_name = str(call.get("modelUsed") or "").strip()
+                    if model_name:
+                        dev_model_refusal_steps[model_name] += 1
 
         if payload.get("toolPolicyDeadlock"):
             deadlock_true += 1
@@ -109,6 +135,14 @@ def build_sprint_diagnostics_rollup(
         tid = str(payload.get("taskId") or "").strip()
         if tid and reason in UNHEALTHY_LANE_ADVANCE_EXITS:
             bad_by_task[tid] += 1
+
+        writes_attempted += int(payload.get("writesAttempted") or 0)
+        writes_succeeded += int(payload.get("writesSucceeded") or 0)
+        ccs = payload.get("cardCumulativeState") or {}
+        if isinstance(ccs, dict) and ccs.get("phaseCycleCapReached"):
+            visit_cap_latch_steps += 1
+        if reason == "dev_precheck_skip":
+            visit_cap_latch_steps += 1
 
     steps_total = len(traces)
     top_tasks = sorted(
@@ -125,6 +159,19 @@ def build_sprint_diagnostics_rollup(
 
     recent_steps: List[Dict[str, Any]] = []
     for payload in traces[:RECENT_STEPS_LIST]:
+        from backend.services.step_diagnostics import infer_primary_bottleneck_from_payload
+
+        bottleneck = infer_primary_bottleneck_from_payload(payload)
+        native_rate = payload.get("nativeToolCallRate")
+        if native_rate is None and str(payload.get("agent") or "") == "Developer":
+            calls = payload.get("ollamaCalls") or []
+            if calls:
+                native_n = sum(
+                    1
+                    for c in calls
+                    if isinstance(c, dict) and (c.get("toolCalls") or [])
+                )
+                native_rate = native_n / max(1, len(calls))
         recent_steps.append(
             {
                 "taskId": payload.get("taskId"),
@@ -134,6 +181,10 @@ def build_sprint_diagnostics_rollup(
                 "toolPolicyDeadlock": bool(payload.get("toolPolicyDeadlock")),
                 "durationMs": int(payload.get("durationMs") or 0),
                 "endedAt": payload.get("endedAt"),
+                "resolvedEditTarget": payload.get("resolvedEditTarget"),
+                "backupSwitchOutcome": payload.get("backupSwitchOutcome"),
+                "primaryBottleneck": bottleneck,
+                "nativeToolCallRate": native_rate,
             }
         )
 
@@ -144,7 +195,9 @@ def build_sprint_diagnostics_rollup(
         if isinstance(app_from_trace, dict) and app_from_trace.get("gitSha"):
             build = {**build, **app_from_trace}
 
-    return {
+    from backend.services.sprint_throughput import enrich_rollup_throughput
+
+    base = {
         "projectId": project_id or state.CURRENT_PROJECT_ID,
         "window": {
             "limit": int(limit),
@@ -158,6 +211,7 @@ def build_sprint_diagnostics_rollup(
         "cursorLikenessV2Rate": round(cursor_v2 / steps_total, 3) if steps_total else 0.0,
         "exitReason": dict(exit_counts.most_common()),
         "textRefusalClass": dict(refusal_counts.most_common()),
+        "devModelRefusalSteps": dict(dev_model_refusal_steps.most_common(8)),
         "toolPolicyDeadlock": {
             "true": deadlock_true,
             "false": deadlock_false,
@@ -169,7 +223,16 @@ def build_sprint_diagnostics_rollup(
         "recentSteps": recent_steps,
         "duplicateClusterCount": int(dup.get("duplicateClusterCount") or 0),
         "duplicateExtraCount": int(dup.get("duplicateExtraCount") or 0),
+        "devPrecheckSkipSteps": dev_precheck_skip_steps,
+        "zeroTokenDevSteps": zero_token_dev_steps,
+        "writesAttempted": writes_attempted,
+        "writesSucceeded": writes_succeeded,
+        "writesPerStep": round(writes_succeeded / steps_total, 3) if steps_total else 0.0,
+        "visitCapLatchStepRate": (
+            round(visit_cap_latch_steps / steps_total, 3) if steps_total else 0.0
+        ),
     }
+    return enrich_rollup_throughput(base)
 
 
 def _title_for_task(traces: List[Dict[str, Any]], task_id: str) -> str:

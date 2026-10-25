@@ -317,6 +317,30 @@ def is_run_command_failure(output: str) -> bool:
     return classify_run_command("", output) == "execution_failed"
 
 
+def run_command_fail_on_nonzero_exit(ws: Optional[Dict[str, Any]] = None) -> bool:
+    """When True, lint/test non-zero exits count as tool failure (not just execution_failed)."""
+    if ws is None:
+        from backend.services.workflow_settings import get_workflow_settings
+
+        ws = get_workflow_settings()
+    if ws.get("runCommandFailOnNonZeroExit") is False:
+        return False
+    return True
+
+
+def run_command_tool_success(
+    command: str,
+    output: str,
+    ws: Optional[Dict[str, Any]] = None,
+) -> bool:
+    """Whether run_command should be recorded as success for caching and gates."""
+    if is_run_command_failure(output):
+        return False
+    if not run_command_fail_on_nonzero_exit(ws):
+        return True
+    return classify_run_command(command or "", output or "") == "ok"
+
+
 def run_command_status_label(output: str, success: bool, command: str = "") -> str:
     """Human label for run_command log UI: OK, Findings, Tests failed, or Failed."""
     outcome = classify_run_command(command, output)
@@ -330,12 +354,18 @@ def run_command_status_label(output: str, success: bool, command: str = "") -> s
     return "Failed"
 
 
-def is_tool_failure(name: str, output: str) -> bool:
+def is_tool_failure(
+    name: str,
+    output: str,
+    *,
+    command: str = "",
+    ws: Optional[Dict[str, Any]] = None,
+) -> bool:
     """True when tool output indicates the invocation did not succeed."""
     if not output:
         return True
     if name == "run_command":
-        return is_run_command_failure(output)
+        return not run_command_tool_success(command, output, ws)
     lower = output.lower()
     if output.startswith("Error") or output.startswith("❌"):
         return True

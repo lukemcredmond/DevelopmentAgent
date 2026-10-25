@@ -713,6 +713,7 @@ def reset_dev_cycle_latch(task: Dict[str, Any]) -> None:
     """Explicit recovery reset; never called by ordinary PO/lane bounces."""
     task["devStepCount"] = 0
     task["devPhaseCycle"] = 0
+    task["stuckLoops"] = 0
     task["phaseCycleCapReached"] = False
     task["phaseCycleCapAt"] = None
     task["phaseCycleCapReason"] = None
@@ -733,3 +734,47 @@ def reset_dev_cycle_latch(task: Dict[str, Any]) -> None:
     from backend.services.needs_user_guard import clear_needs_user_reason_hash
 
     clear_needs_user_reason_hash(task)
+    progress = task.get("lastStepProgress")
+    if isinstance(progress, dict):
+        for graph_key in ("devPhaseGraph", "dev_phase_graph"):
+            graph = progress.get(graph_key)
+            if isinstance(graph, dict):
+                graph["cycle"] = 0
+
+
+def task_needs_sprint_stall_reset(
+    task: Dict[str, Any], ws: Optional[Dict[str, Any]] = None
+) -> bool:
+    """True when batch stall reset should clear latch/circuit fields on this card."""
+    if not isinstance(task, dict):
+        return False
+    if ws is None:
+        from backend.services.workflow_settings import get_workflow_settings
+
+        ws = get_workflow_settings()
+    if task.get("forcePatchNextDevStep"):
+        return True
+    if int(task.get("consecutiveNoWriteStall") or 0) > 0:
+        return True
+    if task.get("phaseCycleCapReached"):
+        return True
+    if task.get("poAutoSkip"):
+        return True
+    if int(task.get("identicalPatchFailCount") or 0) > 0:
+        return True
+    if int(task.get("consecutiveBadExits") or 0) > 0:
+        return True
+    if task.get("latchedRecoveryAttempted"):
+        return True
+    trip, _ = circuit_breaker_should_trip(task, ws)
+    return trip
+
+
+def clear_sprint_stall_fields(task: Dict[str, Any]) -> None:
+    """Reset latch/circuit counters and allow PO split retry."""
+    reset_dev_cycle_latch(task)
+    task.pop("circuitBreakerPoRetryUsed", None)
+    task.pop("circuitBreakerParked", None)
+    task.pop("splitAttemptedOnStuck", None)
+    task.pop("devDeferredUntilStep", None)
+    task.pop("lastRefusalDiagnosis", None)

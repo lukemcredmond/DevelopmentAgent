@@ -99,6 +99,16 @@ def build_support_bundle_bytes(*, max_diagnostics: int = 30) -> bytes:
                 "sprint_move_summary_by_task.json",
                 json.dumps(move_summary, indent=2, default=str),
             )
+            from backend.services.sprint_throughput import build_support_throughput_summary
+
+            throughput = build_support_throughput_summary(
+                project_id=pid,
+                rollup=rollup,
+            )
+            zf.writestr(
+                "sprint_throughput.json",
+                json.dumps(throughput, indent=2, default=str),
+            )
         except Exception:
             pass
 

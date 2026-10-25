@@ -418,6 +418,18 @@ class ProjectStorage:
 
         return self._locked_retry(_read)
 
+    def list_settings_keys_prefix(self, prefix: str) -> List[str]:
+        def _read() -> List[str]:
+            with self._connect() as conn:
+                cursor = conn.cursor()
+                cursor.execute(
+                    "SELECT key FROM settings WHERE key LIKE ? ORDER BY key",
+                    (f"{prefix}%",),
+                )
+                return [str(row[0]) for row in cursor.fetchall() if row and row[0]]
+
+        return self._locked_retry(_read)
+
     def add_brief_changelog(
         self,
         project_id: str,

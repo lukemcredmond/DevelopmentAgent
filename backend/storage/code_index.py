@@ -5,6 +5,7 @@ from __future__ import annotations
 import hashlib
 import re
 import uuid
+from pathlib import Path
 from typing import Any, Dict, List, Optional, Tuple
 
 from backend import state
@@ -17,6 +18,44 @@ DEFAULT_EMBED_DIM = 768
 CHUNK_SIZE = 800
 CHUNK_OVERLAP = 100
 RRF_K = 60
+
+
+def filter_semantic_index_hits(hits: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
+    """Drop index hits outside the active workspace or known cross-template leakage."""
+    if not hits:
+        return []
+    root_raw = str(getattr(state, "WORKSPACE_DIR", "") or "").strip()
+    if not root_raw:
+        return hits
+    try:
+        ws_root = Path(root_raw).resolve()
+    except Exception:
+        return hits
+    flutter = False
+    try:
+        from backend.services.file_blocker import workspace_looks_like_flutter_dart
+
+        flutter = workspace_looks_like_flutter_dart()
+    except Exception:
+        flutter = False
+    kept: List[Dict[str, Any]] = []
+    for hit in hits:
+        path = str(hit.get("path") or "").replace("\\", "/").lstrip("/")
+        if not path:
+            continue
+        if flutter:
+            lower = path.lower()
+            if lower.endswith(".py") or path.startswith(("app/", "backend/")) or "billing.py" in lower:
+                continue
+        try:
+            full = (ws_root / path).resolve()
+            full.relative_to(ws_root)
+        except (ValueError, OSError):
+            continue
+        if not full.is_file():
+            continue
+        kept.append(hit)
+    return kept
 
 
 def _publish_index_progress(
@@ -555,16 +594,17 @@ class CodeIndexEngine:
         fetch = max(limit * 2, 8)
         dense = self._dense_search(query, fetch)
         if not ws_settings.get("enableHybridSearch", True):
-            return dense[:limit]
+            return filter_semantic_index_hits(dense)[:limit]
 
         lexical = self._lexical_search(query, fetch)
         if not dense and not lexical:
             return []
         if not dense:
-            return lexical[:limit]
+            return filter_semantic_index_hits(lexical)[:limit]
         if not lexical:
-            return dense[:limit]
-        return _rrf_fuse(dense, lexical, limit=limit)
+            return filter_semantic_index_hits(dense)[:limit]
+        fused = _rrf_fuse(dense, lexical, limit=limit)
+        return filter_semantic_index_hits(fused)[:limit]
 
     def index_status(self) -> Dict[str, Any]:
         client = self._get_client()
@@ -650,7 +690,7 @@ def build_semantic_sprint_context(
             continue
         filtered.append(hit)
 
-    results = _mmr_path_diverse(filtered or raw, top_k=top_k)
+    results = filter_semantic_index_hits(_mmr_path_diverse(filtered or raw, top_k=top_k))
     if not results:
         return "", []
 

@@ -31,6 +31,20 @@ function ReportBody({
         <Stat label="Split parents" value={String(report.splitParents ?? 0)} />
         <Stat label="Needs User in / out" value={`${report.needsUserIn ?? 0} / ${report.needsUserOut ?? 0}`} />
       </div>
+      {report.throughput && (
+        <div className="grid grid-cols-2 sm:grid-cols-4 gap-2">
+          <Stat label="Done Δ" value={String(report.throughput.doneDelta ?? 0)} />
+          <Stat label="Done / hr" value={String(report.throughput.donePerHour ?? 0)} />
+          <Stat
+            label="Dart LOC Δ"
+            value={String(report.throughput.dartLocDelta ?? 0)}
+          />
+          <Stat
+            label="Dart LOC now"
+            value={String(report.throughput.workspaceLocEnd?.dartLines ?? '—')}
+          />
+        </div>
+      )}
       {transitions.length > 0 && (
         <div>
           <p className="text-[10px] uppercase tracking-wider text-cat-overlay mb-1">Where they moved</p>

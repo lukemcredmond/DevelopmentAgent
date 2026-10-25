@@ -32,6 +32,7 @@ SECTION_IDS = (
     "qa_failure",
     "last_outcome",
     "decisions_recent",
+    "architecture_decisions",
     "transcript_recent",
     "project_evidence",
     "workspace_file_list",
@@ -54,6 +55,7 @@ ALL_SECTIONS_FULL: List[str] = [
     "dependencies",
     "related_cards",
     "decisions_recent",
+    "architecture_decisions",
     "task_spec_full",
     "transcript_recent",
     "codebase_pack",
@@ -72,6 +74,7 @@ ALL_SECTIONS_SLIM: List[str] = [
     "dependencies",
     "related_cards",
     "decisions_recent",
+    "architecture_decisions",
     "task_spec_summary",
     "transcript_recent",
 ]
@@ -264,6 +267,8 @@ def build_section(
         return _section_related_cards(task, limits, focus)
     if section_id == "decisions_recent":
         return _section_decisions(task, limits)
+    if section_id == "architecture_decisions":
+        return _section_architecture_decisions(task)
     if section_id == "transcript_recent":
         return _section_transcript(task, limits)
     if section_id == "workspace_file_list":
@@ -534,7 +539,7 @@ def _section_decisions(task: Dict[str, Any], limits: _PromptLimits) -> str:
             out += older
     if not decisions:
         return out.strip()
-    out += "\n=== PRIOR AGENT DECISIONS ON THIS CARD ===\n"
+    out += "\n=== ACTIVITY LOG (tool runs and system events — not architecture) ===\n"
     if not limits.slim:
         out += (
             "Tool reuse guidance: For identical run_command results (lint/test/--version/--help), "
@@ -588,6 +593,12 @@ def _section_decisions(task: Dict[str, Any], limits: _PromptLimits) -> str:
     except Exception:
         pass
     return out.strip()
+
+
+def _section_architecture_decisions(task: Dict[str, Any]) -> str:
+    from backend.services.architecture_decisions import format_architecture_decisions_for_prompt
+
+    return format_architecture_decisions_for_prompt(task).strip()
 
 
 def _section_transcript(task: Dict[str, Any], limits: _PromptLimits) -> str:

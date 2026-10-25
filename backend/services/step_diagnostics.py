@@ -62,6 +62,10 @@ def classify_tool_failure(name: str, summary: str) -> Optional[str]:
     ):
         return "path_missing"
     if name == "update_board":
+        if "blocked fingerprint" in text and any(
+            lane in text for lane in ("done", "→ done", "qa", "→ qa")
+        ):
+            return "premature_lane_advance"
         return "board_blocked"
     return None
 
@@ -127,6 +131,7 @@ def _infer_primary_bottleneck(
     trace: "StepDiagnosticsTracker",
     *,
     exit_reason: Optional[str] = None,
+    card_state: Optional[Dict[str, Any]] = None,
 ) -> str:
     kinds = {str(e.get("kind") or "") for e in trace.events if isinstance(e, dict)}
     if "backup_model_switched" in kinds:
@@ -135,8 +140,25 @@ def _infer_primary_bottleneck(
         return "markdown_tool_recovery"
     if trace.runaway_generation_aborted or "runaway_generation_aborted" in kinds:
         return "runaway_generation"
-    if str(exit_reason or "") == "phase_cycle_cap":
+    exit_r = str(exit_reason or "")
+    if exit_r in ("phase_cycle_cap", "dev_precheck_skip"):
         return "visit_cap_latch"
+    if exit_r == "dev_step_wall":
+        return "step_timeout"
+    blocked = str(getattr(trace, "backup_switch_outcome", "") or "")
+    if blocked.startswith("blocked:") and "not_coder" in blocked:
+        return "backup_not_coder"
+    if isinstance(card_state, dict):
+        if card_state.get("phaseCycleCapReached"):
+            return "visit_cap_latch"
+        if int(card_state.get("identicalPatchFailCount") or 0) >= 2:
+            return "patch_loop"
+        lrd = card_state.get("lastRefusalDiagnosis") or {}
+        cause = str(lrd.get("cause") or "")
+        if cause == "missing_edit_target":
+            return "missing_edit_target"
+        if cause == "backup_not_coder":
+            return "backup_not_coder"
     patch_fails = sum(
         1
         for e in trace.tools_log
@@ -144,9 +166,53 @@ def _infer_primary_bottleneck(
         and str(e.get("toolName") or "") == "apply_patch"
         and not e.get("success")
     )
-    if patch_fails >= 2:
+    if patch_fails >= 2 or (
+        exit_r in ("tool_failure_stop", "max_iterations") and patch_fails >= 1
+    ):
         return "patch_loop"
+    if exit_r == "max_iterations":
+        return "iteration_cap"
     if trace.text_rejections >= 2:
+        return "text_rejection_loop"
+    if exit_r == "explore_budget_exhausted":
+        return "explore_budget"
+    return "none"
+
+
+def infer_primary_bottleneck_from_payload(payload: Dict[str, Any]) -> str:
+    """Infer bottleneck from a finalized step JSON (rollup / UI)."""
+    if not isinstance(payload, dict):
+        return "none"
+    perf = payload.get("performanceSummary")
+    if isinstance(perf, dict):
+        existing = str(perf.get("primaryBottleneck") or "").strip()
+        if existing and existing != "none":
+            return existing
+    exit_r = str(payload.get("exitReason") or "")
+    ccs = payload.get("cardCumulativeState") if isinstance(payload.get("cardCumulativeState"), dict) else {}
+    blocked = str(payload.get("backupSwitchOutcome") or "")
+    if blocked.startswith("blocked:") and "not_coder" in blocked:
+        return "backup_not_coder"
+    if exit_r in ("phase_cycle_cap", "dev_precheck_skip"):
+        return "visit_cap_latch"
+    if ccs.get("phaseCycleCapReached"):
+        return "visit_cap_latch"
+    if int(ccs.get("identicalPatchFailCount") or 0) >= 2:
+        return "patch_loop"
+    lrd = ccs.get("lastRefusalDiagnosis") or {}
+    cause = str(lrd.get("cause") or "")
+    if cause == "missing_edit_target":
+        return "missing_edit_target"
+    if cause == "backup_not_coder":
+        return "backup_not_coder"
+    if exit_r == "dev_step_wall":
+        return "step_timeout"
+    if exit_r in ("tool_failure_stop", "max_iterations"):
+        if int(payload.get("toolFailures") or 0) >= 1:
+            return "patch_loop" if exit_r == "tool_failure_stop" else "iteration_cap"
+    if exit_r == "explore_budget_exhausted":
+        return "explore_budget"
+    if int(payload.get("textRejections") or 0) >= 2:
         return "text_rejection_loop"
     return "none"
 
@@ -158,6 +224,7 @@ def build_performance_summary(
     writes_succeeded: int,
     native_rate: float,
     exit_reason: Optional[str] = None,
+    card_state: Optional[Dict[str, Any]] = None,
 ) -> Dict[str, Any]:
     events = trace.events or []
     markdown_recovery = any(
@@ -177,7 +244,11 @@ def build_performance_summary(
         "markdownRecovery": markdown_recovery,
         "backupSwitched": backup_switched,
         "backupSkippedRecoveryOk": backup_skipped,
-        "primaryBottleneck": _infer_primary_bottleneck(trace, exit_reason=exit_reason),
+        "primaryBottleneck": _infer_primary_bottleneck(
+            trace,
+            exit_reason=exit_reason,
+            card_state=card_state,
+        ),
         "fastSuccess": bool(
             writes_succeeded > 0 and native_rate >= 0.5 and duration_ms < 120_000
         ),
@@ -254,6 +325,30 @@ class StepDiagnosticsTracker:
         self.patch_recovery: Optional[Dict[str, Any]] = None
         self.tool_policy_deadlock: bool = False
         self.tool_policy_deadlock_reason: str = ""
+        self.resolved_edit_target: str = ""
+        self.backup_switch_outcome: str = ""
+        self.text_reject_content_hash: str = ""
+        self.text_reject_content_hash_count: int = 0
+
+    def note_resolved_edit_target(self, path: str) -> None:
+        norm = str(path or "").strip().replace("\\", "/")
+        if norm:
+            self.resolved_edit_target = norm[:260]
+
+    def note_backup_switch_outcome(self, outcome: str) -> None:
+        text = str(outcome or "").strip()
+        if text:
+            self.backup_switch_outcome = text[:200]
+
+    def note_text_reject_hash(self, content_hash: str, count: int) -> None:
+        h = str(content_hash or "").strip()
+        if h:
+            self.text_reject_content_hash = h[:32]
+        self.text_reject_content_hash_count = max(0, int(count or 0))
+        if int(count or 0) >= 2:
+            self.identical_text_reject_count = max(
+                self.identical_text_reject_count, int(count or 0) - 1
+            )
 
     def log_ollama_call(
         self,
@@ -278,6 +373,8 @@ class StepDiagnosticsTracker:
         phase: Optional[str] = None,
         native_tool_calls: Optional[bool] = None,
         model_used: Optional[str] = None,
+        tool_call_recovery_attempted: bool = False,
+        tool_call_recovery_source: str = "",
     ) -> None:
         self.llm_iterations_used = max(self.llm_iterations_used, iteration)
         self.last_event = f"ollama:iter{iteration}"
@@ -329,6 +426,13 @@ class StepDiagnosticsTracker:
             entry["truncated"] = bool(truncated)
         if model_used:
             entry["modelUsed"] = str(model_used)
+        if tool_call_recovery_attempted:
+            entry["toolCallRecoveryAttempted"] = True
+        source = str(tool_call_recovery_source or "").strip()
+        if source:
+            entry["toolCallRecoverySource"] = source[:80]
+        elif tool_call_recovery_attempted:
+            entry["toolCallRecoverySource"] = "none"
         self.ollama_calls.append(entry)
         self._flush_checkpoint()
         # Live rollup onto the card
@@ -485,6 +589,11 @@ class StepDiagnosticsTracker:
             "step_timeout": (
                 "Agent step exceeded maxAgentStepDurationSec — stopped to avoid an unbounded loop. "
                 "Resume with Sprint step or chat."
+            ),
+            "dev_step_wall": (
+                "Implementer dev step hit implementerMaxDevStepWallSec — local Ollama needs a longer "
+                "wall or fewer iterations per step. Raise implementer max dev step wall (sec) in "
+                "Workflow settings or split the card."
             ),
             "duplicate_tool": "Same tool + identical args repeated — agent loop stop.",
             "tool_output_echo": (
@@ -709,6 +818,9 @@ class StepDiagnosticsTracker:
             writes_succeeded=writes_succeeded,
             native_rate=native_rate,
             exit_reason=exit_reason if status == "complete" else None,
+            card_state=payload.get("cardCumulativeState")
+            if isinstance(payload.get("cardCumulativeState"), dict)
+            else None,
         )
         payload["performanceSummary"] = perf
         ttfw = perf.get("timeToFirstWriteMs")
@@ -733,6 +845,14 @@ class StepDiagnosticsTracker:
             payload["textRefusalClass"] = self.text_refusal_class
             if self.text_refusal_snippet:
                 payload["textRefusalSnippet"] = self.text_refusal_snippet
+        if self.resolved_edit_target:
+            payload["resolvedEditTarget"] = self.resolved_edit_target
+        if self.backup_switch_outcome:
+            payload["backupSwitchOutcome"] = self.backup_switch_outcome
+        if self.text_reject_content_hash:
+            payload["textRejectContentHash"] = self.text_reject_content_hash
+            if self.text_reject_content_hash_count:
+                payload["textRejectContentHashCount"] = self.text_reject_content_hash_count
         if self.patch_recovery:
             payload["patchRecovery"] = dict(self.patch_recovery)
         if self.tool_policy_deadlock:
@@ -985,6 +1105,8 @@ def log_ollama_call(
     phase: Optional[str] = None,
     native_tool_calls: Optional[bool] = None,
     model_used: Optional[str] = None,
+    tool_call_recovery_attempted: bool = False,
+    tool_call_recovery_source: str = "",
 ) -> None:
     trace = get_active_trace()
     if trace:
@@ -1009,6 +1131,8 @@ def log_ollama_call(
             phase=phase,
             native_tool_calls=native_tool_calls,
             model_used=model_used,
+            tool_call_recovery_attempted=tool_call_recovery_attempted,
+            tool_call_recovery_source=tool_call_recovery_source,
         )
         from backend.services.sprint_session import touch_session
 

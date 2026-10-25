@@ -33,6 +33,9 @@ import {
   claimReadyBacklogCards,
   clearAllTasks,
   escalateNeedsUserToPo,
+  resetSprintStalls,
+  resetDevLatch,
+  addArchitectureDecision,
   splitVisitCapBatch,
   reconcileFileBlockers,
   resolveToolApproval,
@@ -1330,6 +1333,62 @@ export default function App() {
     void withLoading(async () => handleState(await splitVisitCapBatch({ ollamaUrl })))
   }, [handleState, ollamaUrl])
 
+  const handleResetSprintStalls = useCallback(() => {
+    if (
+      !window.confirm(
+        'Clear visit-cap latches, circuit-breaker counters, and PO auto-skip flags on stuck In Progress / Needs PO / Needs User cards?',
+      )
+    ) {
+      return
+    }
+    void withLoading(async () => {
+      const data = await resetSprintStalls()
+      handleState(data)
+      if (typeof data.resetCount === 'number' && data.resetCount > 0) {
+        setActionError(null)
+      }
+    })
+  }, [handleState, withLoading])
+
+  const handleResetDevLatch = useCallback(
+    (taskId: string) => {
+      void withLoading(async () => {
+        const data = await resetDevLatch(taskId)
+        handleState(data)
+        if (data.resetLatchWarning) {
+          setActionError(data.resetLatchWarning)
+        }
+      })
+    },
+    [handleState, withLoading],
+  )
+
+  const handleAddArchitectureDecision = useCallback(
+    (
+      taskId: string,
+      payload: {
+        topic: string
+        title: string
+        context: string
+        decision: string
+        alternatives: Array<{ name: string; rejectedBecause: string }>
+        consequences?: string
+        supersedesId?: string
+        changeNote?: string
+      },
+    ) => {
+      void withLoading(async () => {
+        const data = await addArchitectureDecision(taskId, payload)
+        handleState(data)
+        const updated = Object.values(data.board ?? {})
+          .flat()
+          .find((t) => t.id === taskId)
+        if (updated) setSelectedTask(updated)
+      })
+    },
+    [handleState, withLoading],
+  )
+
   const handleReconcileFileBlockers = useCallback(() => {
     if (
       !window.confirm(
@@ -1813,6 +1872,7 @@ export default function App() {
         }
         claimableBacklogCount={claimableBacklogCount}
         onEscalateNeedsUserToPo={handleEscalateNeedsUserToPo}
+        onResetSprintStalls={handleResetSprintStalls}
         onSplitVisitCapCards={handleSplitVisitCapCards}
         onReconcileFileBlockers={handleReconcileFileBlockers}
         onClearAllTasks={() => {
@@ -2521,6 +2581,8 @@ export default function App() {
         onDiscussWithAgent={(task, lane) => handleDiscussWithAgent(task, lane)}
         onClarifyWithPo={(task) => handleClarifyWithPo(task)}
         onSplit={(taskId) => handleSplitTask(taskId)}
+        onResetDevLatch={handleResetDevLatch}
+        onAddArchitectureDecision={handleAddArchitectureDecision}
         onInjectToolEvidence={(taskId, payload) => handleInjectToolEvidence(taskId, payload)}
         defaultInjectCommand={state.recommendedLintCommand ?? ''}
         getTaskTitle={(taskId) => findTaskOnBoard(state.board, taskId)?.title}
