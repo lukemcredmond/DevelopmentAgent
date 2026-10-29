@@ -57,7 +57,7 @@ def maybe_run_system_auto_verify(
     result = run_workspace_command(lint_cmd)
     duration_ms = int((time.time() - started) * 1000)
     finding_count = len(result.diagnostics) if result.diagnostics else 0
-    clean = result.outcome == "ok" or not result.diagnostics
+    clean = result.outcome == "ok" and int(getattr(result, "exit_code", 0) or 0) == 0
     state.FIX_VERIFY_LINT_CLEAN = clean
     live = task
     if live is not None:

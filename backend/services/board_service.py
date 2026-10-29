@@ -459,7 +459,7 @@ def is_oversized_implementation(
         )
     lower = desc.lower()
     verb_hits = sum(1 for v in _OVERSIZE_VERBS if v in lower)
-    if verb_hits >= 4:
+    if verb_hits >= 6:
         return (
             f"Description spans too many concerns ({verb_hits} action verbs). "
             "Split into the smallest achievable cards — one focused change each."

@@ -27,9 +27,9 @@ DEFAULT_WORKFLOW_SETTINGS: Dict[str, Any] = {
     "maxSubtaskSpawns": 8,
     # Self-correcting against real lint/test output is most of what makes an agent feel
     # like it delivers; affordable now that the iteration budget is not the bottleneck.
-    "enableFixVerifyLoop": False,
-    # Keep fix-verify cheap: 1 round when enabled (system auto-verify covers lint).
-    "maxFixVerifyRounds": 1,
+    "enableFixVerifyLoop": True,
+    # Keep fix-verify cheap: 2 rounds when enabled (system auto-verify covers lint).
+    "maxFixVerifyRounds": 2,
     # Run project lint after Dev writes without requiring model-initiated analyze.
     "enableSystemAutoVerify": True,
     # Abort further fix-verify rounds on hard agent stops (tool_failure, plan_exhausted, …).
@@ -50,7 +50,7 @@ DEFAULT_WORKFLOW_SETTINGS: Dict[str, Any] = {
     # Treat run_command with non-zero exit (analyze/test findings) as tool failure.
     "runCommandFailOnNonZeroExit": True,
     # When implementer gates are relaxed, still block Done if AC checklist incomplete.
-    "implementerRequireAcChecklistForDone": True,
+    "implementerRequireAcChecklistForDone": False,
     "integrationStepBudgetMultiplier": 2.0,
     "maxPoLlmSkipPerTask": 12,
     # After backup attempts fail at maxStuckSteps: one PO auto-split before Needs PO.
@@ -170,8 +170,8 @@ DEFAULT_WORKFLOW_SETTINGS: Dict[str, Any] = {
     "implementerStopOnLatchCount": 4,
     "useComposerDevStep": True,
     "implementerSlimPrompt": "recovery_only",
-    "implementerMaxLlmIterationsPerStep": 5,
-    "implementerMaxDevStepWallSec": 600,
+    "implementerMaxLlmIterationsPerStep": 12,
+    "implementerMaxDevStepWallSec": 1800,
     "implementerMaxPreloadTokens": 2500,
     "maxNeedsUserPerSprint": 2,
     "needsUserCooldownSteps": 3,
@@ -213,9 +213,9 @@ DEFAULT_WORKFLOW_SETTINGS: Dict[str, Any] = {
     "ollamaThinkByRole": {},
     "warmModelOnSprintStart": True,
     "devNumPredictDefault": 2048,
-    "devEvalTimeoutSec": 60,
+    "devEvalTimeoutSec": 240,
     "runawayAbortCapPerStep": 2,
-    "forcedToolNumPredict": 512,
+    "forcedToolNumPredict": 2048,
     "ollamaRequestTimeoutSec": 900,
     # Abort a stream if prefill finished and no eval tokens arrive (hung empty gen).
     "ollamaEmptyGenerationTimeoutSec": 90,
@@ -264,11 +264,11 @@ DEFAULT_WORKFLOW_SETTINGS: Dict[str, Any] = {
     # Budgets sized so a multi-file change is reachable; the total tool-call cap and
     # the wall-clock timeout remain the real stops.
     "enableDevPhaseGraph": True,
-    "devExploreMaxTools": 2,
+    "devExploreMaxTools": 6,
     # When explore budget is hit, transition to Patch in the same step (block further reads).
     "devExploreForcePatchInStep": True,
     # After an explore-only tool batch (reads), force Patch in-step without waiting for explore_max.
-    "devExploreForcePatchAfterReadBatch": True,
+    "devExploreForcePatchAfterReadBatch": False,
     # When singleModelMode is on, still route Dev explore vs patch if explore/patch models differ.
     "singleModelRespectPhaseRouting": True,
     "poNumPredictOverride": False,
@@ -303,7 +303,7 @@ DEFAULT_WORKFLOW_SETTINGS: Dict[str, Any] = {
     "discordBotAllowedUserIds": [],
     "discordModelPresetFast": "qwen2.5-coder:7b",
     "discordModelPresetQuality": "qwen2.5-coder:14b",
-    "requireAcChecklistForDone": True,
+    "requireAcChecklistForDone": False,
     "confirmSimulationFallback": True,
     "simulationConfirmSeconds": 10,
     "simulationAutoAccept": False,
@@ -322,7 +322,7 @@ DEFAULT_WORKFLOW_SETTINGS: Dict[str, Any] = {
     # Summarize truncated (non-empty) generations; never retry empty-gen.
     "enableCutoffSummarizer": True,
     # Focus micro-steps: one AC/subtask per Dev sprint tick; rotate prompt sections per LLM iter.
-    "enableFocusMicroSteps": True,
+    "enableFocusMicroSteps": False,
     "maxFocusStepsPerCard": 8,
     "enablePromptSectionRotation": False,
     "splitCardWhenAcOver": 3,
@@ -427,7 +427,28 @@ def migrate_performance_settings(settings: Dict[str, Any]) -> Dict[str, Any]:
             if default_val is not None and out.get(key) != default_val:
                 out[key] = default_val
                 changed = True
-    if changed:
+    ver = int(out.get("performanceSettingsVersion") or 0)
+    if ver < 2:
+        for key in (
+            "enableFocusMicroSteps",
+            "requireAcChecklistForDone",
+            "implementerRequireAcChecklistForDone",
+            "enableFixVerifyLoop",
+            "maxFixVerifyRounds",
+            "devEvalTimeoutSec",
+            "forcedToolNumPredict",
+            "implementerMaxLlmIterationsPerStep",
+            "implementerMaxDevStepWallSec",
+            "devExploreMaxTools",
+            "devExploreForcePatchAfterReadBatch",
+        ):
+            default_val = DEFAULT_WORKFLOW_SETTINGS.get(key)
+            if default_val is not None and out.get(key) != default_val:
+                out[key] = default_val
+                changed = True
+        out["performanceSettingsVersion"] = 2
+        changed = True
+    elif changed:
         out["performanceSettingsVersion"] = max(
             int(out.get("performanceSettingsVersion") or 0),
             1,

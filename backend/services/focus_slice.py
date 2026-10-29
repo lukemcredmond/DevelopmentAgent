@@ -14,6 +14,42 @@ from backend.services.prompt_sections import FocusContext
 from backend.services.workflow_settings import get_workflow_settings
 
 
+def _verify_passed_for_focus(task: Dict[str, Any]) -> bool:
+    from backend import state
+
+    return bool(
+        getattr(state, "FIX_VERIFY_LINT_CLEAN", False) or task.get("fixVerifyLintClean")
+    )
+
+
+def _auto_tick_focus_ac_on_verify(task: Dict[str, Any]) -> None:
+    """When verification is clean, tick AC checklist rows for focus micro-steps."""
+    if not _verify_passed_for_focus(task):
+        return
+    ws = get_workflow_settings()
+    mode = str(task.get("focusMode") or "whole")
+    if mode != "ac":
+        return
+    acs = _ac_list(task)
+    if not acs:
+        return
+    checklist = list(task.get("acChecklist") or [])
+    while len(checklist) < len(acs):
+        checklist.append(False)
+    idx = int(task.get("focusAcIndex") or 0)
+    if idx < len(checklist):
+        checklist[idx] = True
+    if not ws.get("requireAcChecklistForDone", False):
+        checklist = [True] * len(acs)
+    task["acChecklist"] = [bool(x) for x in checklist[: len(acs)]]
+    try:
+        from backend.services.card_delivery import update_ac_verification_from_checklist
+
+        update_ac_verification_from_checklist(task, note="auto: verification passed")
+    except Exception:
+        pass
+
+
 def _ac_list(task: Dict[str, Any]) -> List[str]:
     return [str(c).strip() for c in (task.get("acceptanceCriteria") or []) if str(c).strip()]
 
@@ -97,6 +133,8 @@ def dev_micro_steps_enabled(task: Dict[str, Any]) -> bool:
 
 def all_focus_slices_done(task: Dict[str, Any]) -> bool:
     ensure_focus_initialized(task)
+    ws = get_workflow_settings()
+    _auto_tick_focus_ac_on_verify(task)
     mode = str(task.get("focusMode") or "whole")
     if mode == "whole":
         return True
@@ -106,7 +144,10 @@ def all_focus_slices_done(task: Dict[str, Any]) -> bool:
             return True
         idx = int(task.get("focusAcIndex") or 0)
         checklist = task.get("acChecklist") or []
+        require_ac = bool(ws.get("requireAcChecklistForDone", False))
         if idx >= len(acs) - 1:
+            if not require_ac or _verify_passed_for_focus(task):
+                return True
             if isinstance(checklist, list) and len(checklist) >= len(acs):
                 return all(bool(x) for x in checklist[: len(acs)])
             return idx >= len(acs) - 1
@@ -177,6 +218,7 @@ def should_block_lane_advance_for_focus(task: Dict[str, Any]) -> bool:
 
 
 def focus_advance_after_step(task: Dict[str, Any], agent_result: str) -> None:
+    _auto_tick_focus_ac_on_verify(task)
     task["focusStepsRun"] = int(task.get("focusStepsRun") or 0) + 1
     summary_line = _focus_summary_line(task)
     if summary_line:

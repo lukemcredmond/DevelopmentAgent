@@ -91,6 +91,20 @@ def run_composer_dev_step(
         else:
             n = len(cmd_result.diagnostics) if cmd_result.diagnostics else 0
             log_event("composer_dev_lint_findings", f"{n} finding(s)")
+            if ws.get("enableFixVerifyLoop") and n > 0:
+                from backend.services.fix_verify_loop import run_fix_verify_loop
+
+                rounds = max(1, int(ws.get("maxFixVerifyRounds") or 2))
+                fix_prompt = (
+                    f"Fix analyzer findings from `{lint_cmd}` on this card. "
+                    "Use read_file and apply_patch; do not stop until lint is clean."
+                )
+                result = run_fix_verify_loop(
+                    agent,
+                    task,
+                    fix_prompt,
+                    max_iterations=max(1, int(max_iterations)),
+                )
     except Exception:
         pass
     return result

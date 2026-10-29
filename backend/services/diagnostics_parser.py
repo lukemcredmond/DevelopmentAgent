@@ -24,7 +24,7 @@ def _dedupe_findings(findings: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
 def parse_flutter_analyze(output: str) -> List[Dict[str, Any]]:
     findings: List[Dict[str, Any]] = []
     pattern = re.compile(
-        r"^\s*(error|warning|info)\s+•\s+(.+?)\s+•\s+(.+?):(\d+):(\d+)\s*$",
+        r"^\s*(error|warning|info)\s+•\s+(.+?)\s+•\s+(.+?):(\d+):(\d+)(?:\s+[•-]\s+\S+)?\s*$",
         re.MULTILINE | re.IGNORECASE,
     )
     for match in pattern.finditer(output):
@@ -44,7 +44,7 @@ def parse_flutter_analyze_dash(output: str) -> List[Dict[str, Any]]:
     """Flutter/Dart analyzer lines using dash separators."""
     findings: List[Dict[str, Any]] = []
     pattern = re.compile(
-        r"^\s*(error|warning|info)\s+-\s+(.+?)\s+-\s+(.+?):(\d+):(\d+)\s*$",
+        r"^\s*(error|warning|info)\s+-\s+(.+?)\s+-\s+(.+?):(\d+):(\d+)(?:\s+[•-]\s+\S+)?\s*$",
         re.MULTILINE | re.IGNORECASE,
     )
     for match in pattern.finditer(output):
@@ -130,6 +130,8 @@ def parse_generic(output: str) -> List[Dict[str, Any]]:
         re.MULTILINE | re.IGNORECASE,
     )
     for match in path_line_col.finditer(output):
+        if "•" in match.group(0):
+            continue
         severity = (match.group(4) or "error").lower()
         findings.append(
             {

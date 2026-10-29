@@ -2262,7 +2262,6 @@ def _check_stuck_and_escalate(
         task
     ):
         if is_lint_wall_card(task):
-            task["forcePatchNextDevStep"] = True
             record_task_decision(
                 task_id,
                 "System",
@@ -3495,6 +3494,32 @@ def _log_lane_advance_event(kind: str, message: str) -> None:
         pass
 
 
+def _auto_tick_ac_checklist_on_verify(task: Dict[str, Any]) -> None:
+    """Tick all AC rows when lint/verify passed (verify-driven whole-card completion)."""
+    ws = get_workflow_settings()
+    lint_clean = bool(
+        getattr(state, "FIX_VERIFY_LINT_CLEAN", False) or task.get("fixVerifyLintClean")
+    )
+    if not lint_clean:
+        return
+    acs = [
+        str(c).strip()
+        for c in (task.get("acceptanceCriteria") or [])
+        if str(c).strip()
+    ]
+    if not acs:
+        return
+    if ws.get("requireAcChecklistForDone", False) and not lint_clean:
+        return
+    task["acChecklist"] = [True] * len(acs)
+    try:
+        from backend.services.card_delivery import update_ac_verification_from_checklist
+
+        update_ac_verification_from_checklist(task, note="auto: lint clean / verify passed")
+    except Exception:
+        pass
+
+
 def _maybe_advance_dev_after_writes(
     task_id: str,
     task: Dict[str, Any],
@@ -3545,6 +3570,7 @@ def _maybe_advance_dev_after_writes(
         ):
             _log_lane_advance_event("lane_advance_skipped", "no_verify_in_tools_log")
             return False
+    _auto_tick_ac_checklist_on_verify(task)
     from backend.services.focus_slice import should_block_lane_advance_for_focus
     from backend.services.subtask_service import subtask_gate_blocks_advance
 
@@ -6862,10 +6888,14 @@ def _keep_lint_card_for_developer(task: Dict[str, Any]) -> bool:
     Unlatches the visit cap once. After that, skip Auto Sprint without Needs User.
     Returns True when Developer should run again.
     """
-    from backend.services.sprint_speed_gates import reset_dev_cycle_latch
+    from backend.services.sprint_speed_gates import last_step_exit_reason, reset_dev_cycle_latch
 
     task_id = str(task.get("id") or "")
-    task["forcePatchNextDevStep"] = True
+    allow_force_patch = last_step_exit_reason(task) != "identical_write_loop"
+    if allow_force_patch:
+        task["forcePatchNextDevStep"] = True
+    else:
+        task.pop("forcePatchNextDevStep", None)
     task["consecutiveNoWriteStall"] = 0
     task.pop("lastNextWorkNoWrite", None)
     task.pop("parkFailed", None)
@@ -6886,7 +6916,8 @@ def _keep_lint_card_for_developer(task: Dict[str, Any]) -> bool:
             task["parkFailed"] = True
             task["poAutoSkip"] = True
             task["latchedRecoveryAttempted"] = True
-            task["forcePatchNextDevStep"] = True
+            if allow_force_patch:
+                task["forcePatchNextDevStep"] = True
             add_system_log(
                 "System",
                 "warning",
@@ -6896,7 +6927,8 @@ def _keep_lint_card_for_developer(task: Dict[str, Any]) -> bool:
             return False
         task["lintUnlatchCount"] = used + 1
         reset_dev_cycle_latch(task)
-        task["forcePatchNextDevStep"] = True
+        if allow_force_patch:
+            task["forcePatchNextDevStep"] = True
         add_system_log(
             "System",
             "info",

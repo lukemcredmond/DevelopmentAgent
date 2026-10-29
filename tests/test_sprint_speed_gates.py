@@ -132,13 +132,13 @@ def test_stuck_is_explore_without_write():
 
 
 def test_force_patch_after_write_exits():
-    assert gates.should_force_patch_next_dev_step(
+    assert not gates.should_force_patch_next_dev_step(
         {"lastStepOutcome": {"exitReason": "max_iterations_after_writes"}}
     )
-    assert gates.should_force_patch_next_dev_step(
+    assert not gates.should_force_patch_next_dev_step(
         {"lastStepOutcome": {"exitReason": "completed_with_writes"}}
     )
-    assert gates.should_force_patch_next_dev_step(
+    assert not gates.should_force_patch_next_dev_step(
         {"lastStepOutcome": {"exitReason": "identical_write_loop"}}
     )
     assert gates.should_force_patch_next_dev_step(

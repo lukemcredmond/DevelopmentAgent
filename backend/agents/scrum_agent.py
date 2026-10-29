@@ -2609,21 +2609,23 @@ class ScrumAgent:
         from backend.services.step_diagnostics import log_event
 
         log_event(action.stop_reason, stop_msg)
-        self._mark_force_patch_next_dev_step(action.stop_reason)
+        if action.stop_reason in {
+            "read_only_no_edits",
+            "explore_budget_exhausted",
+            "duplicate_tool",
+            "text_rejection_loop",
+            "llm_call_failed",
+        }:
+            self._mark_force_patch_next_dev_step(action.stop_reason)
         self._log_step_exit(stop_msg, "warning")
         self._finish_run(status="failed", error=stop_msg)
         return action.stop_reason, stop_msg
 
     def _mark_force_patch_next_dev_step(self, stop_reason: Optional[str]) -> None:
+        from backend.services.sprint_speed_gates import DEV_STALL_FORCE_PATCH_EXITS
+
         reason = str(stop_reason or "").strip().lower()
-        if reason not in {
-            "read_only_no_edits",
-            "explore_budget_exhausted",
-            "duplicate_tool",
-            "max_iterations_after_writes",
-            "completed_with_writes",
-            "identical_write_loop",
-        }:
+        if reason not in DEV_STALL_FORCE_PATCH_EXITS:
             return
         task_id = state.ACTIVE_SPRINT_TASK_ID
         if not task_id:
@@ -3364,6 +3366,9 @@ class ScrumAgent:
                                         f"Redirect write_file→apply_patch for existing '{path_arg}'",
                                     )
                                     get_step_read_cache(self).put(path_arg, old_text)
+                                    from backend.workspace.files import record_step_file_read
+
+                                    record_step_file_read(path_arg, old_text)
                                     tool_name = "apply_patch"
                                     arguments = {
                                         "path": path_arg,
@@ -3519,6 +3524,9 @@ class ScrumAgent:
                         run_id=run_id,
                     )
                     setattr(cached, "read_cache_hit", True)
+                    from backend.workspace.files import record_step_file_read
+
+                    record_step_file_read(path_arg, cached_out)
                     with _FAILURE_LOCK:
                         successful_tool_keys.append(dup_key)
                     return tool_name, arguments, cached, None
@@ -4090,7 +4098,6 @@ class ScrumAgent:
             from backend.services.step_diagnostics import log_event
 
             log_event("identical_write_loop", ",".join(unique_writes)[:240])
-            self._mark_force_patch_next_dev_step("identical_write_loop")
             self._log_step_exit(stop_msg, "warning")
             self._finish_run(status="failed", error=stop_msg)
             return stop_msg
@@ -5572,8 +5579,6 @@ class ScrumAgent:
                                 model_switches=int(getattr(self, "_model_switches", 0) or 0),
                             )
                         )
-                        if write_tools:
-                            self._mark_force_patch_next_dev_step("max_iterations_after_writes")
                         self._log_step_exit(max_msg, "warning")
                         self._finish_run(status="failed", error=max_msg)
                         pending_lesson = ("max_iterations", set(tools_used), max_msg)
@@ -6031,9 +6036,7 @@ class ScrumAgent:
                     "info",
                     f"Step exit: {exit_reason} tools=[{', '.join(sorted(tools_used)) or 'none'}]",
                 )
-                if exit_reason == "completed_with_writes":
-                    self._mark_force_patch_next_dev_step("completed_with_writes")
-                elif write_tools:
+                if write_tools and exit_reason != "completed_with_writes":
                     self._finish_run(status="failed", error="Write tools ran but no file changed.")
                     pending_lesson = (exit_reason, set(tools_used), content or "")
                     return content or "Patch did not apply."
@@ -6071,8 +6074,6 @@ class ScrumAgent:
                     model_switches=int(getattr(self, "_model_switches", 0) or 0),
                 )
             )
-            if write_tools:
-                self._mark_force_patch_next_dev_step("max_iterations_after_writes")
             self._log_step_exit(max_msg, "warning")
             self._finish_run(status="failed", error=max_msg)
             pending_lesson = ("max_iterations", set(tools_used), max_msg)

@@ -11,6 +11,11 @@ _PATH_IN_TEXT = re.compile(
 )
 
 
+_WRITE_FILE_ACTIONS = frozenset(
+    {"write", "written", "edited", "patch", "patched", "created", ""}
+)
+
+
 def infer_write_paths_for_po_task(
     task: Dict[str, Any],
     *,
@@ -31,11 +36,6 @@ def infer_write_paths_for_po_task(
             _add(item)
     for key in ("writePath", "write_path", "file", "path", "targetFile", "target_file"):
         _add(task.get(key))
-    for item in task.get("files") or []:
-        if isinstance(item, str):
-            _add(item)
-        elif isinstance(item, dict):
-            _add(item.get("path"))
     blob = " ".join(
         [
             str(task.get("title") or ""),
@@ -45,6 +45,17 @@ def infer_write_paths_for_po_task(
     )
     for match in _PATH_IN_TEXT.finditer(blob):
         _add(match.group(1))
+    for item in task.get("files") or []:
+        if isinstance(item, str):
+            continue
+        if not isinstance(item, dict):
+            continue
+        action = str(item.get("action") or "write").strip().lower()
+        if action in ("read", "context"):
+            continue
+        if action and action not in _WRITE_FILE_ACTIONS:
+            continue
+        _add(item.get("path"))
     if parent:
         for item in parent.get("files") or []:
             if isinstance(item, str):

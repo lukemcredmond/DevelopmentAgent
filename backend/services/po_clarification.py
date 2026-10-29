@@ -262,16 +262,20 @@ def should_move_off_needs_po_without_llm(task: Optional[Dict[str, Any]]) -> bool
     blocked, _ = po_skip_churn_should_block(task)
     if blocked:
         return False
-    if not task_has_ready_spec(task):
+    if not isinstance(task, dict):
         return False
+    from backend.services.board_service import prepare_task_for_dev_claim
+    from backend.services.task_spec_validation import dev_claim_blocked
     from backend.services.workflow_settings import get_workflow_settings
 
     ws = get_workflow_settings()
+    prepare_task_for_dev_claim(task)
+    if dev_claim_blocked(task, ws):
+        return False
+    if not task_has_ready_spec(task):
+        return False
     if po_llm_skip_cap_reached(task, ws):
-        from backend.services.task_spec_validation import dev_claim_blocked
-
-        if not dev_claim_blocked(task, ws):
-            return True
+        return not dev_claim_blocked(task, ws)
     if int(task.get("identicalPoClarificationCount") or 0) >= 1:
         return True
     from backend.services.sprint_speed_gates import (
@@ -328,7 +332,7 @@ def move_off_needs_po(task_id: str) -> Optional[str]:
         task["refinementStatus"] = "po_updated"
     else:
         dest = "In Progress"
-    move_board_stage(task_id, dest)
+    move_board_stage(task_id, dest, honor_dev_claim_gate=False)
     actual = get_task_lane(task_id) or dest
     return actual
 

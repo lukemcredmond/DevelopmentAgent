@@ -490,7 +490,7 @@ def write_workspace_file(path: str, content: str, author: Optional[str] = None) 
             "success",
             f"Wrote '{safe_path}' ({nbytes} bytes) → {phys_path}",
         )
-        invalidate_step_file_read(safe_path)
+        record_step_file_read(safe_path, content)
         state.STEP_PATCH_FAILURES.pop(safe_path, None)
         from backend.services.tool_cache import invalidate_fingerprint, register_touched_path
 

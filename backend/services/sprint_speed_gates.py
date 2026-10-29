@@ -437,14 +437,7 @@ DEV_STALL_FORCE_PATCH_EXITS = frozenset(
     }
 )
 
-_FORCE_PATCH_EXITS = frozenset(
-    {
-        *DEV_STALL_FORCE_PATCH_EXITS,
-        "max_iterations_after_writes",
-        "completed_with_writes",
-        "identical_write_loop",
-    }
-)
+_FORCE_PATCH_EXITS = DEV_STALL_FORCE_PATCH_EXITS
 IDENTICAL_SUCCESS_WRITE_LIMIT = 2
 EMPTY_GEN_BACKOFF_SEC = 120
 

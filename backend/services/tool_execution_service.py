@@ -824,13 +824,18 @@ def execute_tool(
 
                 record_step_file_read(str(arguments.get("path") or ""), tool_output)
             elif tool_name in ("write_file", "apply_patch"):
-                from backend.workspace.files import invalidate_step_file_read
-
                 path_key = str(
                     arguments.get("path") or arguments.get("test_script_path") or ""
                 )
                 if path_key:
-                    invalidate_step_file_read(path_key)
+                    from backend.workspace.files import read_workspace_file, record_step_file_read
+
+                    body = read_workspace_file(path_key)
+                    if body and not str(body).startswith("Error:"):
+                        record_step_file_read(path_key, body)
+                        from backend.services.step_read_cache import get_step_read_cache
+
+                        get_step_read_cache(agent).put(path_key, body)
 
         if not success and tool_name in ("write_file", "apply_patch"):
             from backend.workspace.files import invalidate_read_file_tracking_for_path
@@ -840,6 +845,9 @@ def execute_tool(
             )
             if path_key:
                 invalidate_read_file_tracking_for_path(path_key)
+                from backend.services.step_read_cache import get_step_read_cache
+
+                get_step_read_cache(agent).invalidate(path_key)
 
         duration_ms = int((time.time() - started) * 1000)
         _emit_tool_end(

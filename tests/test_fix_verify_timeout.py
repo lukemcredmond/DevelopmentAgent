@@ -118,6 +118,7 @@ def test_fix_verify_clean_on_first_round_stops():
     agent.execute_step.return_value = "ok"
     lint_ok = MagicMock()
     lint_ok.outcome = "ok"
+    lint_ok.exit_code = 0
     lint_ok.diagnostics = []
     lint_ok.summary = "clean"
     with patch(
@@ -316,6 +317,7 @@ def test_fix_verify_lints_after_write_iteration_cap():
     agent.execute_step.return_value = "Max tool iterations reached without completing the task."
     lint_ok = MagicMock()
     lint_ok.outcome = "ok"
+    lint_ok.exit_code = 0
     lint_ok.diagnostics = []
     lint_ok.summary = "clean"
     with patch(

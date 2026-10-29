@@ -303,33 +303,55 @@ def _guarded_update_board(
                         "If the focus cap is reached, split or recover the card."
                     )
                 exit_r = ""
-                outcome = task.get("lastStepOutcome") if isinstance(task.get("lastStepOutcome"), dict) else {}
+                writes_succeeded = 0
+                outcome = (
+                    task.get("lastStepOutcome")
+                    if isinstance(task.get("lastStepOutcome"), dict)
+                    else {}
+                )
                 diag = (
                     task.get("lastStepDiagnostics")
                     if isinstance(task.get("lastStepDiagnostics"), dict)
                     else {}
                 )
-                exit_r = str(
-                    (outcome or {}).get("exitReason")
-                    or (outcome or {}).get("stopReason")
-                    or (diag or {}).get("exitReason")
-                    or ""
-                )
-                # Live step: prefer active trace provisional reason when present.
                 try:
                     from backend import state as _st
                     from backend.services.step_diagnostics import derive_exit_reason, get_active_trace
 
                     trace = get_active_trace()
-                    if trace and not exit_r:
-                        exit_r = derive_exit_reason(
-                            agent_result=getattr(_st, "LAST_AGENT_STEP_RESULT", None),
-                            tools_used=set(trace.tools_used or []),
-                            lane_before=lane,
-                            lane_after=lane,
-                        )
+                    if trace:
+                        exit_r = str(
+                            derive_exit_reason(
+                                agent_result=getattr(_st, "LAST_AGENT_STEP_RESULT", None),
+                                tools_used=set(trace.tools_used or []),
+                                lane_before=lane,
+                                lane_after=lane,
+                            )
+                            or ""
+                        ).strip()
+                        try:
+                            from backend.services.step_diagnostics import _write_tools_succeeded
+
+                            tools_log = getattr(trace, "tools_log", None) or []
+                            if _write_tools_succeeded(tools_log):
+                                writes_succeeded = 1
+                        except Exception:
+                            pass
                 except Exception:
                     pass
+                if not exit_r:
+                    exit_r = str(
+                        (outcome or {}).get("exitReason")
+                        or (outcome or {}).get("stopReason")
+                        or (diag or {}).get("exitReason")
+                        or ""
+                    )
+                if not writes_succeeded:
+                    writes_succeeded = int(
+                        (diag or {}).get("writesSucceeded")
+                        or (outcome or {}).get("writesSucceeded")
+                        or 0
+                    )
                 verify_passed = False
                 try:
                     from backend.services.duplicate_tool_policy import tools_log_has_verify
@@ -344,11 +366,7 @@ def _guarded_update_board(
                     verify_passed = False
                 if unhealthy_exit_blocks_lane_advance(
                     exit_r,
-                    writes_succeeded=int(
-                        (diag or {}).get("writesSucceeded")
-                        or (outcome or {}).get("writesSucceeded")
-                        or 0
-                    ),
+                    writes_succeeded=writes_succeeded,
                     lint_clean=bool(
                         getattr(state, "FIX_VERIFY_LINT_CLEAN", False)
                         or (task.get("fixVerifyLintClean") if isinstance(task, dict) else False)

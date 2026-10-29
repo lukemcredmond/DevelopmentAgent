@@ -58,11 +58,8 @@ def _scaffold_edit_path_from_title(title: str, description: str = "") -> str:
     combined = f"{title} {description}".lower()
     hints = (
         "scaffold",
-        "offline",
-        "persistence",
         "main.dart",
         "startup",
-        "edge case",
     )
     if not any(h in combined for h in hints):
         return ""
@@ -172,7 +169,26 @@ def infer_feature_edit_path_from_title(title: str, description: str = "") -> str
         return ""
     if not candidates:
         return ""
-    candidates.sort(key=lambda p: (p.count("/"), len(p)))
+
+    def _candidate_score(rel: str) -> tuple[int, int, int]:
+        lower = rel.lower()
+        kw_hits = sum(1 for k in keywords if k in lower)
+        specificity = 0
+        if "provider" in combined and ("/providers/" in lower or "/provider/" in lower):
+            specificity += 4
+        if "screen" in combined and "/screens/" in lower:
+            specificity += 4
+        if "model" in combined and "/models/" in lower:
+            specificity += 4
+        if "database" in combined and "/database/" in lower:
+            specificity += 4
+        if "test" in combined and lower.startswith("test/"):
+            specificity += 3
+        if rel.endswith("main.dart"):
+            specificity -= 2
+        return (kw_hits, specificity, rel.count("/"))
+
+    candidates.sort(key=_candidate_score, reverse=True)
     for rel in candidates:
         if validate_dev_edit_target_path(rel):
             return rel
@@ -313,7 +329,25 @@ def dev_edit_path_explicitly_allowed(task: Dict[str, Any], path: str) -> bool:
     scoped_src = normalize_file_path(str(task.get("lintSourceFile") or ""))
     if scoped_src and scoped_src == norm:
         return True
+    for raw in task.get("writePaths") or []:
+        if normalize_file_path(str(raw)) == norm:
+            return True
     return False
+
+
+def _strict_single_file_dev_card(task: Dict[str, Any]) -> bool:
+    """Lint/file-blocker cards lock edits to one resolved target."""
+    title = str(task.get("title") or "")
+    if title.startswith("Lint: "):
+        return True
+    if normalize_file_path(str(task.get("fileFixFor") or "")):
+        return True
+    try:
+        from backend.services.needs_user_guard import is_lint_wall_card
+
+        return bool(is_lint_wall_card(task))
+    except Exception:
+        return False
 
 
 def dev_read_path_allowed_for_tool(task: Dict[str, Any], path: str) -> tuple[bool, str]:
@@ -372,6 +406,12 @@ def dev_edit_path_allowed_for_tool(task: Dict[str, Any], path: str) -> tuple[boo
         return True, ""
     if dev_edit_path_explicitly_allowed(task, norm):
         return True, ""
+    if not _strict_single_file_dev_card(task):
+        for raw in task.get("writePaths") or []:
+            if normalize_file_path(str(raw)) == norm:
+                return True, ""
+        if norm.startswith(("lib/", "test/", "integration_test/")) and norm.endswith(".dart"):
+            return True, ""
     return (
         False,
         f"This card is scoped to `{target}`; do not edit `{norm}`. "

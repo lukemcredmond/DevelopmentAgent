@@ -72,7 +72,7 @@ def _run_lint_once(task_id: str, task: Dict[str, Any], lint_cmd: str) -> Any:
     )
     from backend import state as _state
 
-    clean = cmd_result.outcome == "ok" or not cmd_result.diagnostics
+    clean = cmd_result.outcome == "ok" and int(getattr(cmd_result, "exit_code", 0) or 0) == 0
     _state.FIX_VERIFY_LINT_CLEAN = clean
     board_task = find_task_by_id(task_id)
     target = board_task or task
