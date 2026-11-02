@@ -50,24 +50,17 @@ def maybe_run_system_auto_verify(
     lint_cmd = derive_project_lint_command()
     if not lint_cmd:
         return False
-    from backend.services.command_result import run_workspace_command
+    from backend.services.fix_verify_loop import _run_lint_once
 
-    started = time.time()
-    add_system_log("System", "info", f"Auto-verify: {lint_cmd}")
-    result = run_workspace_command(lint_cmd)
-    duration_ms = int((time.time() - started) * 1000)
-    finding_count = len(result.diagnostics) if result.diagnostics else 0
-    clean = result.outcome == "ok" and int(getattr(result, "exit_code", 0) or 0) == 0
-    state.FIX_VERIFY_LINT_CLEAN = clean
-    live = task
-    if live is not None:
-        live["fixVerifyLintClean"] = clean
-    summary = f"system_verify {lint_cmd} ({finding_count} findings, {result.outcome})"
+    cmd_result, clean = _run_lint_once(task_id, task, lint_cmd)
+    finding_count = len(cmd_result.diagnostics) if cmd_result.diagnostics else 0
+    summary = f"system_verify {lint_cmd} ({finding_count} findings, {cmd_result.outcome})"
+    duration_ms = int(getattr(cmd_result, "duration_ms", 0) or 0)
     log_tool("system_verify", clean, summary, duration_ms=duration_ms)
-    log_event("system_auto_verify", f"{lint_cmd} {duration_ms}ms clean={clean}")
+    log_event("system_auto_verify", f"{lint_cmd} clean={clean}")
     add_system_log(
         "System",
         "info" if clean else "warning",
-        f"Auto-verify finished in {duration_ms}ms — {finding_count} finding(s), clean={clean}",
+        f"Auto-verify finished — {finding_count} finding(s), clean={clean}",
     )
     return True

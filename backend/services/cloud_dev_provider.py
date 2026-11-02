@@ -47,7 +47,6 @@ def should_use_cloud_dev_for_step(*, agent_key: str, ws: Optional[Dict[str, Any]
         return True
     if use_for in ("stuck_only", "stuck"):
         return False
-    # implementer_autonomous: implementer profile during auto sprint / relaxed autonomous
     if get_execution_profile(ws) != "implementer":
         return False
     return is_auto_sprint_active() or implementer_gate_relaxation_active(ws)

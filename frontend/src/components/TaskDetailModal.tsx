@@ -460,7 +460,7 @@ export default function TaskDetailModal({
   }, [task?.id, defaultInjectCommand])
 
   // Counts-only flow view so each Agent progress row can show LLM/tool effort.
-  const flowRefreshKey = `${task?.transcript?.length ?? 0}-${flowActivityKey}`
+  const flowRefreshKey = `${task?.transcript?.length ?? 0}-${flowActivityKey}-${isAgentRunningOnTask ? 'run' : 'idle'}`
   useEffect(() => {
     if (!task?.id) {
       setFlowSummary(null)

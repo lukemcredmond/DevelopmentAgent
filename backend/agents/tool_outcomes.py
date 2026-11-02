@@ -240,7 +240,7 @@ def classify_run_command_outcome(
     if not diags and combined.strip() and combined.strip() != "(no output)":
         from backend.services.diagnostics_parser import parse_command_diagnostics
 
-        diags = parse_command_diagnostics(command, combined)
+        diags = parse_command_diagnostics(command, combined, exit_code=exit_code)
 
     if diags:
         if _is_test_command(command):
@@ -256,6 +256,10 @@ def classify_run_command_outcome(
     if _is_test_command(cmd):
         return "test_failed"
     if _is_lint_command(cmd):
+        from backend.services.diagnostics_parser import looks_like_toolchain_failure
+
+        if looks_like_toolchain_failure(cmd, combined):
+            return "toolchain_error"
         return "lint_findings"
     return "lint_findings"
 

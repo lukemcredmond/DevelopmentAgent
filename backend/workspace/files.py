@@ -412,8 +412,40 @@ def list_workspace_file_paths() -> list[str]:
     return paths
 
 
+_VFS_DISK_SIGNATURE: Optional[tuple] = None
+_VFS_DISK_CACHE: Optional[Dict[str, str]] = None
+
+
+def _workspace_disk_signature() -> tuple:
+    if not os.path.exists(state.WORKSPACE_DIR):
+        return ("missing",)
+    parts: list[tuple] = []
+    try:
+        for root, _dirs, files_in_dir in os.walk(state.WORKSPACE_DIR):
+            for file in files_in_dir:
+                rel_path = os.path.relpath(os.path.join(root, file), state.WORKSPACE_DIR)
+                rel_norm = rel_path.replace("\\", "/")
+                if _path_should_skip_index(rel_norm):
+                    continue
+                full = os.path.join(root, file)
+                try:
+                    st = os.stat(full)
+                    parts.append((rel_norm, int(st.st_mtime_ns), int(st.st_size)))
+                except OSError:
+                    parts.append((rel_norm, 0, 0))
+    except OSError:
+        return ("error",)
+    parts.sort()
+    return tuple(parts)
+
+
 def sync_virtual_filesystem_from_disk() -> Dict[str, str]:
     """Scans the physical workspace and syncs VIRTUAL_FILESYSTEM."""
+    global _VFS_DISK_SIGNATURE, _VFS_DISK_CACHE
+    sig = _workspace_disk_signature()
+    if _VFS_DISK_CACHE is not None and _VFS_DISK_SIGNATURE == sig:
+        state.VIRTUAL_FILESYSTEM = dict(_VFS_DISK_CACHE)
+        return dict(_VFS_DISK_CACHE)
     file_list: Dict[str, str] = {}
     if os.path.exists(state.WORKSPACE_DIR):
         for root, _dirs, files_in_dir in os.walk(state.WORKSPACE_DIR):
@@ -427,7 +459,11 @@ def sync_virtual_filesystem_from_disk() -> Dict[str, str]:
                         pass
     if file_list:
         state.VIRTUAL_FILESYSTEM = file_list
+        _VFS_DISK_SIGNATURE = sig
+        _VFS_DISK_CACHE = dict(file_list)
         return file_list
+    _VFS_DISK_SIGNATURE = sig
+    _VFS_DISK_CACHE = dict(state.VIRTUAL_FILESYSTEM or {})
     return dict(state.VIRTUAL_FILESYSTEM)
 
 
@@ -915,7 +951,7 @@ def read_workspace_file(
         base = (
             f"File '{safe_path}' not found. "
             "Use list_dir('.') or glob_file_search — do not retry this path. "
-            "If the card requires this file, call write_file/apply_patch to create it."
+            "If the card requires this file, call write_file to create it (apply_patch cannot create new files)."
         )
         return _path_tool_failure_message("read_file", safe_path, f"Error: {base}")
 

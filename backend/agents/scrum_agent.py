@@ -512,6 +512,8 @@ class ScrumAgent:
         self._last_chat_error_type: Optional[str] = None
         self._last_chat_error: Optional[str] = None
         self._step_num_ctx: Optional[int] = None
+        self._step_num_ctx_model: Optional[str] = None
+        self._truncated_tool_json_retries: int = 0
         self._step_num_predict: Optional[int] = None
         self._po_num_predict_bumped: bool = False
         self._length_ctx_retried: bool = False
@@ -558,6 +560,12 @@ class ScrumAgent:
         return current
 
     def _ollama_timeout_sec(self) -> float:
+        aux = getattr(self, "_aux_request_timeout_sec", None)
+        if aux is not None:
+            try:
+                return max(5.0, float(aux))
+            except (TypeError, ValueError):
+                pass
         return float(get_workflow_settings().get("ollamaRequestTimeoutSec", 900))
 
     def _ollama_max_retries(self) -> int:
@@ -1208,16 +1216,44 @@ class ScrumAgent:
     ) -> None:
         if self._step_num_ctx is not None:
             return
-        from backend.services.prompt_budget import packed_prompt_num_ctx
+        from backend.services.agent_efficiency import dev_num_predict_default
+        from backend.services.llm_context import estimate_messages_chars, prune_messages_if_needed
+        from backend.services.prompt_budget import (
+            GENERATION_RESERVE_TOKENS,
+            packed_prompt_num_ctx,
+            prompt_fills_ctx_window,
+        )
 
-        as_dicts = []
+        as_dicts: list = []
         for msg in messages:
             if isinstance(msg, dict):
-                as_dicts.append(msg)
+                as_dicts.append(dict(msg))
             else:
                 as_dicts.append({"content": str(getattr(msg, "content", "") or "")})
+        ceiling = self._num_ctx_ceiling()
+        num_predict = int(getattr(self, "_step_num_predict", 0) or 0)
+        if self.role == "Developer" and num_predict <= 0:
+            num_predict = dev_num_predict_default()
+        reserve = GENERATION_RESERVE_TOKENS + num_predict
+        if prompt_fills_ctx_window(as_dicts, ceiling, tools=tools, reserve_tokens=reserve):
+            before = estimate_messages_chars(as_dicts)
+            prune_messages_if_needed(as_dicts, force_threshold_pct=35.0)
+            after = estimate_messages_chars(as_dicts)
+            if after < before:
+                try:
+                    from backend.services.step_diagnostics import log_event
+
+                    log_event(
+                        "context_trimmed",
+                        f"chars {before}->{after} reserve={reserve}",
+                    )
+                except Exception:
+                    pass
         self._step_num_ctx = packed_prompt_num_ctx(
-            as_dicts, self._num_ctx_ceiling(), tools=tools
+            as_dicts,
+            ceiling,
+            tools=tools,
+            num_predict=num_predict,
         )
 
     def _effective_num_ctx(self) -> int:
@@ -1319,6 +1355,41 @@ class ScrumAgent:
         )
         return False
 
+    def _pivot_truncation_without_tools(
+        self,
+        messages: List[Dict[str, Any]],
+        *,
+        task_id: Optional[str],
+    ) -> None:
+        """After a length-truncated text-only turn, force tool mode with a small num_predict."""
+        if getattr(self, "_truncation_pivot_applied", False):
+            return
+        self._truncation_pivot_applied = True
+        from backend.services.agent_efficiency import truncation_pivot_num_predict
+        from backend.services.step_diagnostics import log_event
+
+        ws = get_workflow_settings()
+        self._forced_tool_mode = True
+        self._step_num_predict = truncation_pivot_num_predict(ws)
+        log_event("truncation_pivot", f"num_predict={self._step_num_predict}")
+        target = self._resolve_text_reject_target_path(task_id)
+        if task_id:
+            self._maybe_switch_backup_on_text_reject(
+                task_id=task_id,
+                plan_n=0,
+                text_n=1,
+                reason="truncation without tool calls",
+                content="",
+            )
+        hint = (
+            "=== TRUNCATION PIVOT ===\n"
+            "Last reply hit the generation limit with no tool calls. "
+            "Next message MUST be native tool_calls only (apply_patch or write_file"
+            + (f" on `{target}`" if target else "")
+            + "). Do not write plans or essays.\n"
+        )
+        messages.append({"role": "system", "content": hint})
+
     def _chat_options(self) -> Dict[str, Any]:
         from backend.services.agent_efficiency import effective_keep_alive
         from backend.services.sampling import sampling_options_for_role
@@ -1340,6 +1411,12 @@ class ScrumAgent:
                 plan_outline_phase=getattr(self, "_plan_outline_phase", None),
                 ws=ws,
             )
+            try:
+                num_keep = int(ws.get("ollamaNumKeep") or 4096)
+            except (TypeError, ValueError):
+                num_keep = 4096
+            if num_keep > 0:
+                opts["num_keep"] = min(num_keep, int(opts.get("num_ctx") or num_keep))
         if self.role == "Product Owner":
             cap = getattr(self, "_step_num_predict", None)
             if cap is not None:
@@ -1352,6 +1429,8 @@ class ScrumAgent:
             cap = getattr(self, "_step_num_predict", None)
             if cap is not None:
                 opts["num_predict"] = int(cap)
+            elif getattr(self, "_aux_num_predict_cap", None) is not None:
+                opts["num_predict"] = int(getattr(self, "_aux_num_predict_cap"))
             elif "num_predict" not in opts:
                 from backend.services.agent_efficiency import dev_num_predict_default
 
@@ -1411,7 +1490,11 @@ class ScrumAgent:
     @staticmethod
     def _is_context_overflow_error(error: str) -> bool:
         lower = error.lower()
-        return "exceed_context" in lower or "context size" in lower
+        return (
+            "exceed_context" in lower
+            or "context size" in lower
+            or "exceed_context_size" in lower
+        )
 
     @staticmethod
     def _classify_ollama_error(error: str) -> str:
@@ -1739,6 +1822,37 @@ class ScrumAgent:
                                 f"Recovered truncated tool JSON for {tool_name} — using default args",
                             )
                             return synthetic_tool_call_chat_result(tool_name, defaults)
+                        if tool_name in ("apply_patch", "write_file") and int(
+                            getattr(self, "_truncated_tool_json_retries", 0) or 0
+                        ) < 1:
+                            self._truncated_tool_json_retries = 1
+                            ws_pred = get_workflow_settings()
+                            base_pred = int(
+                                ws_pred.get("devNumPredictDefault")
+                                or ws_pred.get("forcedToolNumPredict")
+                                or 2048
+                            )
+                            self._step_num_predict = max(
+                                int(getattr(self, "_step_num_predict", 0) or 0),
+                                max(3072, base_pred),
+                            )
+                            messages.append(
+                                {
+                                    "role": "system",
+                                    "content": (
+                                        "Your previous tool call JSON was truncated (output limit). "
+                                        "Retry with a smaller change: for apply_patch use one hunk "
+                                        "of about 10–30 lines around the edit, not the whole file."
+                                    ),
+                                }
+                            )
+                            from backend.services.step_diagnostics import log_event
+
+                            log_event(
+                                "tool_json_truncation_retry",
+                                f"{tool_name} bump num_predict={self._step_num_predict}",
+                            )
+                            continue
                         self._log_chat_attempt(
                             iteration,
                             attempt=attempt_num,
@@ -2699,6 +2813,8 @@ class ScrumAgent:
         phase_graph = getattr(self, "_dev_phase_graph", None)
         if phase_graph is not None:
             phase = getattr(phase_graph, "phase", None)
+        if self.role == "Developer" and not str(phase or "").strip():
+            phase = "explore"
         pending = getattr(self, "_patch_recovery_paths", None) or set()
         read_ok = getattr(self, "_patch_recovery_read_ok", None) or set()
         needs_read = {p for p in pending if p and p not in read_ok}
@@ -2983,8 +3099,17 @@ class ScrumAgent:
                     publish_activity_event=True,
                 )
                 add_system_log(self.role, "info", skip_intent)
+                board_stop = None
                 with _FAILURE_LOCK:
-                    successful_tool_keys.append(dup_key)
+                    failed_tool_keys.append(key)
+                    total_failures[0] += 1
+                    blocked_repeats = failed_tool_keys.count(key)
+                if self.role == "Developer" and tool_name == "update_board":
+                    from backend.services.dev_tool_loop_recovery import handle_developer_board_blocked_retry
+
+                    board_stop = handle_developer_board_blocked_retry(
+                        self, task_id, tool_output
+                    )
                 _track_fingerprint()
                 _log_duplicate_skip(
                     agent=self.role,
@@ -3011,6 +3136,15 @@ class ScrumAgent:
                     run_id=run_id,
                 )
                 setattr(result, "duplicate_skip", True)
+                if board_stop:
+                    return tool_name, arguments, result, board_stop
+                if blocked_repeats >= 2 or total_failures[0] >= max_tool_failures:
+                    cap_msg = (
+                        f"Stopped: blocked fingerprint '{tool_name}' repeated {blocked_repeats} "
+                        f"time(s) this step (limit {max_tool_failures}). "
+                        f"{recovery_hint}"
+                    )
+                    return tool_name, arguments, result, cap_msg
                 po_stop = None
                 if self.role == "Product Owner" and tool_name == "update_board" and task_id:
                     from backend.services.po_clarification import finish_po_board_noop
@@ -3601,11 +3735,21 @@ class ScrumAgent:
             _track_fingerprint()
 
         if not result.success and not result.pending_approval:
-            with _FAILURE_LOCK:
-                total_failures[0] += 1
-                failed_tool_keys.append(key)
-                same_count = failed_tool_keys.count(key)
-                fail_total = total_failures[0]
+            out_lower = str(result.tool_output or "").lower()
+            framework_feedback = tool_name == "system_verify" or (
+                tool_name == "update_board"
+                and str(result.tool_output or "").strip().startswith("Error:")
+            )
+            if not framework_feedback:
+                with _FAILURE_LOCK:
+                    total_failures[0] += 1
+                    failed_tool_keys.append(key)
+                    same_count = failed_tool_keys.count(key)
+                    fail_total = total_failures[0]
+            else:
+                with _FAILURE_LOCK:
+                    same_count = failed_tool_keys.count(key)
+                    fail_total = total_failures[0]
             if tool_name in ("apply_patch", "write_file"):
                 path_key = str(arguments.get("path") or "")
                 if path_key:
@@ -3617,6 +3761,20 @@ class ScrumAgent:
                     invalidate_read_file_tracking_for_path(path_key)
                     purge_read_file_success_keys_for_path(successful_tool_keys, path_key)
             _track_fingerprint()
+            if tool_name == "update_board" and self.role == "Developer" and task_id:
+                from backend.services.dev_tool_loop_recovery import handle_developer_board_blocked_retry
+
+                board_stop = handle_developer_board_blocked_retry(
+                    self,
+                    task_id,
+                    str(result.tool_output or ""),
+                    ws=get_workflow_settings(),
+                )
+                if board_stop:
+                    self._maybe_signal_tool_loop_deadlock(task_id, premature_board=True)
+                    self._log_step_exit(board_stop, "error")
+                    self._finish_run(status="failed", error=board_stop)
+                    return tool_name, arguments, result, board_stop
             if same_count >= SAME_ARGS_FAILURE_LIMIT or (
                 tool_name in PATH_TOOL_NAMES
                 and same_count >= PATH_TOOL_SAME_ARGS_FAILURE_LIMIT
@@ -4386,6 +4544,10 @@ class ScrumAgent:
             json_only_split=json_only_split,
             plan_outline_no_tools=plan_outline_no_tools,
         )
+        if self.role == "Developer":
+            from backend.services.dev_tool_loop_recovery import filter_developer_step_tools
+
+            tools = filter_developer_step_tools(tools, task_id_for_tools)
         if json_only_backlog:
             if json_only_split:
                 add_system_log(
@@ -4420,7 +4582,11 @@ class ScrumAgent:
             )
         self._last_memories_used = []
         self._decisions_in_prompt = 0
-        self._step_num_ctx = None
+        model_key = str(getattr(self, "model", "") or "")
+        if getattr(self, "_step_num_ctx_model", None) != model_key:
+            self._step_num_ctx = None
+        self._step_num_ctx_model = model_key
+        self._truncated_tool_json_retries = 0
         self._length_ctx_retried = False
         self._logged_ctx_clamp = False
         self._po_num_predict_bumped = False
@@ -4594,6 +4760,10 @@ class ScrumAgent:
         self._premature_board_blocked_step = False
         self._pending_tool_loop_recovery_inject = False
         self._tool_loop_deadlock_signaled = False
+        self._board_blocked_count = 0
+        self._hide_update_board_tools = False
+        setattr(self, "_fix_verify_ran_this_step", False)
+        self._truncation_pivot_applied = False
         from backend.services.step_read_cache import StepReadCache
 
         self._step_read_cache = StepReadCache()
@@ -4974,6 +5144,17 @@ class ScrumAgent:
                         if isinstance(t, dict)
                         and str((t.get("function") or {}).get("name") or "") in allowed
                     ]
+                elif self.role == "Developer":
+                    from backend.services.dev_tool_loop_recovery import filter_developer_step_tools
+
+                    active_tools = filter_developer_step_tools(list(tools or []), task_id)
+                    if getattr(self, "_hide_update_board_tools", False):
+                        active_tools = [
+                            t
+                            for t in active_tools
+                            if isinstance(t, dict)
+                            and str((t.get("function") or {}).get("name") or "") != "update_board"
+                        ]
                 try:
                     response = self._chat(
                         messages,
@@ -5218,6 +5399,12 @@ class ScrumAgent:
                     tool_call_recovery_attempted=tool_recovery_attempted,
                     tool_call_recovery_source=tool_recovery_source or "",
                 )
+                if (
+                    self.role == "Developer"
+                    and not tool_call_names
+                    and str(usage.get("doneReason") or "").lower() in ("length", "max_tokens")
+                ):
+                    self._pivot_truncation_without_tools(messages, task_id=task_id)
                 if (
                     self.role == "Developer"
                     and not getattr(self, "_skip_cutoff_summary", False)
@@ -5614,6 +5801,10 @@ class ScrumAgent:
                         )
                         log_event("text_rejected", content[:200])
                         reject_label = "text-only"
+                    if self.role == "Developer":
+                        from backend.services.agent_efficiency import dev_text_reject_num_predict
+
+                        self._step_num_predict = dev_text_reject_num_predict(ws)
                     forced_patch_step = bool(getattr(self, "_forced_patch_step", False))
                     slim_recovery = self._is_slim_recovery_step(task_id)
                     from backend.services.dev_refusal_triage import (
@@ -6104,7 +6295,13 @@ class ScrumAgent:
                     from backend.services.board_service import publish_board_update
                     from backend.services.project_service import save_current_project_state
 
-                    save_current_project_state()
+                    try:
+                        from backend.services.persistence_flush import flush_persistence
+
+                        flush_persistence(force=True)
+                    except Exception:
+                        pass
+                    save_current_project_state(immediate=True)
                     publish_board_update(task_id, source="task_files")
 
     def stream_messages(

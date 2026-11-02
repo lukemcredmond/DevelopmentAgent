@@ -158,7 +158,7 @@ DEFAULT_WORKFLOW_SETTINGS: Dict[str, Any] = {
     "cloudDevRequestTimeoutSec": 900,
     # Per-card LLM thread continuity across sprint steps on the same card.
     "enableCardSessionContinuity": True,
-    "enableCardSessionSummarize": True,
+    "enableCardSessionSummarize": False,
     # Auto-load AGENTS.md / .cursor/rules into system prompt.
     "enableWorkspaceRulesInject": True,
     "workspaceRulesMaxChars": 12000,
@@ -274,6 +274,10 @@ DEFAULT_WORKFLOW_SETTINGS: Dict[str, Any] = {
     "poNumPredictOverride": False,
     "devPatchMaxTools": 12,
     "devVerifyMaxTools": 8,
+    # Stop Dev steps after N blocked update_board → Done/QA attempts (saves GPU retry loops).
+    "maxPrematureBoardRetries": 2,
+    # num_predict cap after plan/text-only rejection until a tool call succeeds.
+    "devTextRejectNumPredict": 512,
     "enableStepLessonMemory": True,
     # Pinned Dev core memory block (always injected; lessons merge into it).
     "enableDevCoreMemoryBlock": True,
@@ -443,10 +447,17 @@ def migrate_performance_settings(settings: Dict[str, Any]) -> Dict[str, Any]:
             "devExploreForcePatchAfterReadBatch",
         ):
             default_val = DEFAULT_WORKFLOW_SETTINGS.get(key)
-            if default_val is not None and out.get(key) != default_val:
+            if default_val is not None and key not in settings and out.get(key) != default_val:
                 out[key] = default_val
                 changed = True
         out["performanceSettingsVersion"] = 2
+        changed = True
+        ver = 2
+    if ver < 3:
+        if out.get("enableCardSessionSummarize") is not False:
+            out["enableCardSessionSummarize"] = False
+            changed = True
+        out["performanceSettingsVersion"] = 3
         changed = True
     elif changed:
         out["performanceSettingsVersion"] = max(
@@ -487,18 +498,36 @@ def resolve_ollama_think(
     return bool(ws.get("ollamaThinkDefault"))
 
 
+_WORKFLOW_SETTINGS_CACHE: dict[str, tuple[str, dict[str, Any]]] = {}
+
+
+def _invalidate_workflow_settings_cache(project_id: str | None = None) -> None:
+    pid = project_id or state.CURRENT_PROJECT_ID
+    _WORKFLOW_SETTINGS_CACHE.pop(pid, None)
+
+
 def get_workflow_settings(project_id: str | None = None) -> Dict[str, Any]:
     pid = project_id or state.CURRENT_PROJECT_ID
     raw = state.storage.get_setting(_settings_key(pid))
+    raw_key = raw if raw is not None else ""
+    cached = _WORKFLOW_SETTINGS_CACHE.get(pid)
+    if cached is not None and cached[0] == raw_key:
+        return dict(cached[1])
     if not raw:
-        return dict(DEFAULT_WORKFLOW_SETTINGS)
+        out = dict(DEFAULT_WORKFLOW_SETTINGS)
+        _WORKFLOW_SETTINGS_CACHE[pid] = (raw_key, out)
+        return dict(out)
     try:
         merged = migrate_performance_settings({**DEFAULT_WORKFLOW_SETTINGS, **json.loads(raw)})
         from backend.services.llm_provider import normalize_llm_provider_settings
 
-        return normalize_llm_provider_settings(merged)
+        out = normalize_llm_provider_settings(merged)
+        _WORKFLOW_SETTINGS_CACHE[pid] = (raw_key, dict(out))
+        return dict(out)
     except json.JSONDecodeError:
-        return dict(DEFAULT_WORKFLOW_SETTINGS)
+        out = dict(DEFAULT_WORKFLOW_SETTINGS)
+        _WORKFLOW_SETTINGS_CACHE[pid] = (raw_key, out)
+        return dict(out)
 
 
 def _sync_project_sidecar(project_id: str) -> None:
@@ -565,6 +594,7 @@ def save_workflow_settings(
 
     current = normalize_llm_provider_settings(current)
     state.storage.set_setting(_settings_key(pid), json.dumps(current))
+    _invalidate_workflow_settings_cache(pid)
     if sync_sidecar:
         _sync_project_sidecar(pid)
     return current
@@ -575,6 +605,7 @@ def reset_workflow_settings(project_id: str | None = None) -> Dict[str, Any]:
     pid = project_id or state.CURRENT_PROJECT_ID
     defaults = dict(DEFAULT_WORKFLOW_SETTINGS)
     state.storage.set_setting(_settings_key(pid), json.dumps(defaults))
+    _invalidate_workflow_settings_cache(pid)
     _sync_project_sidecar(pid)
     return defaults
 

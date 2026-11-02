@@ -953,11 +953,17 @@ def _record_last_step_outcome(
                 task.get("focusSliceCompletedAt")
                 or task.get("lastFocusSliceCompletedAt")
             )
-            record_consecutive_bad_exit(
+            bad_count = record_consecutive_bad_exit(
                 task,
                 exit_r,
                 progress_made=lane_after != lane_before or focus_completed,
                 writes_succeeded=int(diag.get("writesSucceeded") or 0),
+            )
+            _maybe_arm_cloud_for_consecutive_stuck_dev_exit(
+                task,
+                exit_r,
+                bad_count,
+                agent=str(diag.get("agent") or (state.LAST_STEP_OUTCOME or {}).get("agent") or ""),
             )
         except Exception:
             pass
@@ -1319,6 +1325,20 @@ def _count_implementer_latched_skip_cards() -> int:
     return count
 
 
+def _implementer_latch_counts_for_pause(task: Dict[str, Any], lane: str) -> bool:
+    """Whether a latched card in this lane counts toward implementerStopOnLatch pause."""
+    if not isinstance(task, dict):
+        return False
+    lane_s = str(lane or task.get("status") or task.get("lane") or "").strip()
+    if lane_s == "Done":
+        return False
+    if lane_s == "Features":
+        meta = task.get("meta") if isinstance(task.get("meta"), dict) else {}
+        if meta.get("mvpFrozen"):
+            return False
+    return _latched_card_skip_auto_sprint(task) and lane_s == "In Progress"
+
+
 def _attempt_implementer_latch_recovery_batch() -> int:
     """Try backup + auto-split on latched skip cards before pausing auto sprint."""
     from backend.services.needs_user_guard import autonomous_recover_latched_task
@@ -1356,6 +1376,8 @@ def _implementer_auto_sprint_should_pause_on_latch(ws: Optional[Dict[str, Any]] 
     settings = ws or get_workflow_settings()
     if get_execution_profile(settings) != "implementer":
         return False
+    if settings.get("autonomousMode") and settings.get("implementerStopOnLatch", True):
+        return False
     if not settings.get("implementerStopOnLatch", True):
         return False
     threshold = max(1, int(settings.get("implementerStopOnLatchCount") or 1))
@@ -1376,6 +1398,15 @@ def _set_needs_user_fields(task: Dict[str, Any], msg: str, *, kind: str = "stuck
 
 def _redirect_to_needs_po(task_id: str, task: Dict[str, Any], msg: str, *, kind: str = "clarification") -> bool:
     """Route clarification-shaped escalations to Needs PO instead of Needs User."""
+    ws = get_workflow_settings()
+    if ws.get("autonomousMode"):
+        task.pop("poAutoSkip", None)
+        task.pop("poAutoSkipReason", None)
+        add_system_log(
+            "System",
+            "info",
+            f"{task_id}: autonomous mode — Needs PO round-trip (PO runs on next sprint step)",
+        )
     if _escalate_po_limit(task):
         add_system_log(
             "System",
@@ -2420,7 +2451,22 @@ def _maybe_auto_extend_dev_step(
     tools_raw = (progress or {}).get("toolsUsed") or []
     tools = {str(t) for t in tools_raw} if isinstance(tools_raw, (list, set, tuple)) else set()
     has_writes = bool(tools & _WRITE_TOOLS) or _task_has_write_files(task)
-    has_tools = bool(tools)
+    progress_tools = tools - {"update_board"}
+    has_tools = bool(progress_tools)
+    trace = None
+    try:
+        from backend.services.step_diagnostics import get_active_trace
+
+        trace = get_active_trace()
+    except Exception:
+        trace = None
+    if trace and not has_writes:
+        tools_log = getattr(trace, "tools_log", None) or []
+        any_success = any(
+            isinstance(e, dict) and e.get("success") for e in tools_log
+        )
+        if tools and not any_success:
+            return result
     verify_known = _step_trace_has_verify()
     verify_only = has_writes and not verify_known
     if verify_known:
@@ -2513,11 +2559,41 @@ def _task_has_write_files(task: Dict[str, Any]) -> bool:
     return False
 
 
+def _step_has_write_files(task: Dict[str, Any], step_started: str = "") -> bool:
+    """True when this sprint step recorded a successful write on the transcript."""
+    started = step_started or str(getattr(state, "SPRINT_STEP_STARTED_AT", "") or "")
+    if started:
+        for entry in _transcript_entries_since(task, started):
+            name = str(entry.get("toolName") or "")
+            if name in _WRITE_TOOLS and entry.get("toolSuccess") is not False:
+                return True
+        return False
+    return _task_has_write_files(task)
+
+
 FORCE_PATCH_INSTRUCTION = (
     "FORCED PATCH: Call write_file or apply_patch this turn — do not only explore. "
     "If the workspace has no source files, scaffold first (flutter create . / write_file stubs) "
     "then implement the card."
 )
+
+
+def build_dev_turn_action_required(task: Dict[str, Any], agent_role: str = "Developer") -> str:
+    """Single binding action directive for the Dev turn (forced patch takes precedence)."""
+    parts: list[str] = []
+    forced = _force_patch_dev_instruction(task, agent_role)
+    if forced:
+        parts.append(forced.strip())
+    else:
+        lint = _lint_fix_hint(task)
+        if lint:
+            parts.append(lint)
+        patch = _patch_recovery_hint(task)
+        if patch:
+            parts.append(patch)
+    if not parts:
+        return ""
+    return "=== ACTION REQUIRED THIS TURN ===\n" + "\n".join(parts)
 
 
 def _lint_fix_hint(task: Dict[str, Any]) -> str:
@@ -2561,6 +2637,17 @@ def _patch_recovery_hint(task: Dict[str, Any]) -> str:
     last_summary = str((progress or {}).get("lastToolSummary") or "").strip()
     tool_blob = failed_tool or last_summary
     tool_lower = tool_blob.lower()
+    path_hint = ""
+    if "apply_patch" in tool_lower:
+        diags = task.get("lastCommandDiagnostics") or []
+        if isinstance(diags, list) and diags and isinstance(diags[0], dict):
+            path_hint = str(diags[0].get("file") or "").strip()
+        if not path_hint and isinstance(progress, dict):
+            path_hint = str(progress.get("resolvedEditTarget") or "").strip()
+        snippet = _patch_file_context_snippet(path_hint) if path_hint else ""
+        snippet_clause = f"\nFile start ({path_hint}):\n{snippet}" if snippet else ""
+    else:
+        snippet_clause = ""
     if patch_fails >= 2 or (
         tool_blob and "apply_patch" in tool_lower and "old_text" in tool_lower
     ):
@@ -2568,6 +2655,7 @@ def _patch_recovery_hint(task: Dict[str, Any]) -> str:
             return (
                 f"Last patch error ({tool_blob}). "
                 "Call read_file for the full file, then write_file with the complete corrected content."
+                f"{snippet_clause}"
             )
         return (
             "Identical apply_patch failed twice — call read_file for the full file, "
@@ -2577,6 +2665,7 @@ def _patch_recovery_hint(task: Dict[str, Any]) -> str:
         return (
             f"Last patch error ({tool_blob}). "
             "Re-read with read_file, then apply_patch or write_file the full file."
+            f"{snippet_clause}"
         )
     return ""
 
@@ -3002,15 +3091,9 @@ def _inject_sprint_context(
                 parts.append(wander)
         except Exception:
             pass
-    force_patch_note = _force_patch_dev_instruction(active_task, agent_role)
+    force_patch_note = build_dev_turn_action_required(active_task, agent_role)
     if force_patch_note:
         parts.append(force_patch_note)
-    if agent_role == "Developer":
-        from backend.api.chat import CHAT_ROLE_ADDENDUM
-
-        dev_chat = CHAT_ROLE_ADDENDUM.get("dev")
-        if dev_chat:
-            parts.append(dev_chat)
 
     if use_focus_compose and state.SPRINT_PROMPT_ROTATION_ENABLED:
         state.SPRINT_PROMPT_FIXED_PREFIX = "\n\n".join(parts)
@@ -3024,8 +3107,19 @@ def _inject_sprint_context(
 
 
 def _qa_result_indicates_failure(result: str) -> bool:
-    lower = result.lower()
-    return any(m in lower for m in ("fail", "failed", "rejected", "does not pass", "not pass"))
+    text = (result or "").strip()
+    if not text:
+        return False
+    first = text.splitlines()[0].strip().upper()
+    if first.startswith("QA:"):
+        if "FAIL" in first:
+            return True
+        if "PASS" in first:
+            return False
+    lower = text.lower()
+    if re.search(r"\b(no failures|0 failures|nothing failed|all tests pass)\b", lower):
+        return False
+    return any(m in lower for m in ("rejected", "does not pass", "not pass", "qa fail"))
 
 
 def _qa_failed(result: str) -> bool:
@@ -3145,6 +3239,9 @@ def qa_gate_blocks_done(task: Dict[str, Any]) -> tuple[bool, str]:
                 blocked_an, an_reason = _implementer_analyze_clean_blocks(task)
                 if blocked_an:
                     return True, an_reason
+            evidence = task.get("qaEvidence") if isinstance(task.get("qaEvidence"), dict) else {}
+            if evidence.get("playbookRun") and evidence.get("passed") is False:
+                return True, "QA playbook did not pass — cannot move to Done."
             return False, ""
     except Exception:
         pass
@@ -3341,7 +3438,8 @@ def dev_gate_blocks_advance(
     blocked, reason = subtask_gate_blocks_advance(task)
     if blocked:
         return blocked, reason
-    if not _task_has_write_files(task):
+    step_started = str(getattr(state, "SPRINT_STEP_STARTED_AT", "") or "")
+    if not _step_has_write_files(task, step_started):
         return (
             True,
             "No files written — stay In Progress until apply_patch/write_file.",
@@ -3536,7 +3634,16 @@ def _maybe_advance_dev_after_writes(
     lint_clean = bool(
         getattr(state, "FIX_VERIFY_LINT_CLEAN", False) or task.get("fixVerifyLintClean")
     )
+    last_lint = str(getattr(state, "LAST_LINT_OUTCOME", "") or "")
     if require_lint_clean and not lint_clean:
+        if last_lint == "toolchain_error":
+            _log_lane_advance_event("lane_advance_skipped", "toolchain")
+            add_system_log(
+                "System",
+                "error",
+                f"{task_id}: lint toolchain unavailable — fix SDK/permissions before advancing",
+            )
+            return False
         _log_lane_advance_event("lane_advance_skipped", "lint_dirty")
         return False
     from backend.services.card_ledger import oracle_blocks_done
@@ -5641,6 +5748,19 @@ def _run_developer_step(active_task: Dict[str, Any], brief: str) -> None:
         if isinstance(cached, str) and cached.strip():
             prompt = cached
             add_system_log("Developer", "info", f"{task_id}: using prefetched sprint context")
+        ws_dev = get_workflow_settings()
+        use_composer = (
+            get_execution_profile() == "implementer"
+            and ws_dev.get("useComposerDevStep", True)
+        )
+        try:
+            from backend.services.card_ledger import run_dev_ideation, seed_ledger_from_task
+
+            seed_ledger_from_task(find_task_by_id(task_id) or active_task)
+            if not use_composer:
+                run_dev_ideation(agent_dev, find_task_by_id(task_id) or active_task)
+        except Exception:
+            pass
         if not prompt:
             prompt = _inject_sprint_context(active_task, brief, "Developer", instructions)
         try:
@@ -5660,22 +5780,10 @@ def _run_developer_step(active_task: Dict[str, Any], brief: str) -> None:
                     )
         except Exception:
             pass
-        try:
-            from backend.services.card_ledger import run_dev_ideation, seed_ledger_from_task
-
-            seed_ledger_from_task(find_task_by_id(task_id) or active_task)
-            run_dev_ideation(agent_dev, find_task_by_id(task_id) or active_task)
-        except Exception:
-            pass
         from backend.services.fix_verify_loop import run_fix_verify_loop
 
         live_pre = find_task_by_id(task_id) or active_task
         iters = _llm_iterations(live_pre)
-        ws_dev = get_workflow_settings()
-        use_composer = (
-            get_execution_profile() == "implementer"
-            and ws_dev.get("useComposerDevStep", True)
-        )
         if use_composer:
             from backend.services.composer_dev_step import run_composer_dev_step
 
@@ -6090,7 +6198,31 @@ def _run_code_review_step(active_task: Dict[str, Any], brief: str) -> None:
             else:
                 record_task_decision(task_id, "Code Reviewer", "review", result[:500], result)
                 if _task_in_lane(task_id, "Code Review"):
-                    move_board_stage(task_id, "QA")
+                    from backend.services.step_diagnostics import get_active_trace
+
+                    live_cr = find_task_by_id(task_id) or task
+                    trace = get_active_trace()
+                    tools_log = getattr(trace, "tools_log", None) or [] if trace else []
+                    changed = {
+                        str(f.get("path") or "")
+                        for f in (live_cr.get("files") or [])
+                        if isinstance(f, dict) and f.get("path")
+                    }
+                    read_ok = any(
+                        isinstance(e, dict)
+                        and e.get("toolName") == "read_file"
+                        and e.get("success")
+                        and str((e.get("toolArgs") or {}).get("path") or "") in changed
+                        for e in tools_log
+                    )
+                    if changed and not read_ok:
+                        add_system_log(
+                            "Code Reviewer",
+                            "warning",
+                            "CR pass deferred — read at least one changed file before QA",
+                        )
+                    else:
+                        move_board_stage(task_id, "QA")
             task = find_task_by_id(task_id)
             if task:
                 _log_sprint_step_outcome(
@@ -7548,6 +7680,30 @@ def _recover_zero_work_stall(task_id: str, exit_reason: str, brief: str) -> str:
         return "latched_recovery"
 
     live = _live_board_task(task_id) or live
+    if live and not live.get("escapeHatchAttempted"):
+        try:
+            from backend.services.cloud_dev_provider import arm_cloud_for_agent, cloud_dev_enabled
+            from backend.services.sprint_speed_gates import reset_dev_cycle_latch
+
+            if cloud_dev_enabled(ws):
+                arm_cloud_for_agent(
+                    "dev",
+                    live,
+                    reason=f"zero-work ladder ({reason_snip})",
+                )
+                reset_dev_cycle_latch(live)
+                live["escapeHatchAttempted"] = True
+                live["forcePatchNextDevStep"] = True
+                add_system_log(
+                    "System",
+                    "info",
+                    f"{task_id}: zero-work recovery — armed escape-hatch model + latch reset",
+                )
+                return "cloud_escape"
+        except Exception:
+            pass
+
+    live = _live_board_task(task_id) or live
     if live:
         park_msg = (
             f"Repeated zero-work stall ({reason_snip}). "
@@ -7569,6 +7725,103 @@ def _recover_zero_work_stall(task_id: str, exit_reason: str, brief: str) -> str:
         return "reroute_dev"
 
     return "none"
+
+
+def _maybe_arm_cloud_for_consecutive_stuck_dev_exit(
+    task: Dict[str, Any],
+    exit_reason: str,
+    consecutive_bad: int,
+    *,
+    agent: str = "",
+) -> None:
+    """Arm cloud/stuck-only Dev model after repeated tool_failure_stop / llm_call_failed."""
+    if str(agent or "").strip() not in ("", "Developer"):
+        return
+    reason = str(exit_reason or "").strip().lower()
+    if reason not in ("tool_failure_stop", "llm_call_failed"):
+        return
+    ws = get_workflow_settings()
+    try:
+        from backend.services.cloud_dev_provider import arm_cloud_for_agent, cloud_dev_enabled
+    except Exception:
+        return
+    if not cloud_dev_enabled(ws):
+        return
+    threshold = max(1, int(ws.get("cloudDevStuckSteps") or 1))
+    if int(consecutive_bad or 0) < threshold:
+        return
+    if task.get("cloudStuckEscapeArmed"):
+        return
+    if arm_cloud_for_agent("dev", task, reason=f"{consecutive_bad}x {reason}"):
+        task["cloudStuckEscapeArmed"] = True
+        task["forcePatchNextDevStep"] = True
+
+
+def _patch_file_context_snippet(path: str, *, max_lines: int = 3) -> str:
+    path = str(path or "").strip()
+    if not path:
+        return ""
+    try:
+        from backend.workspace.files import read_workspace_file
+
+        body = read_workspace_file(path)
+        if not body or str(body).startswith("Error:"):
+            return ""
+        lines = str(body).splitlines()[:max_lines]
+        return "\n".join(lines)
+    except Exception:
+        return ""
+
+
+def mark_autonomous_sprint_resume_if_needed() -> bool:
+    """After interrupted session recovery, flag autonomous auto-resume when settings allow."""
+    ws = get_workflow_settings()
+    if not ws.get("autonomousMode") or not ws.get("autoStartSprint"):
+        return False
+    recovery = state.RECOVERY_CONTEXT
+    if not recovery or str(recovery.get("suggestedAction") or "") != "resume":
+        return False
+    if not has_sprint_work():
+        return False
+    state.AUTO_RESUME_SPRINT_PENDING = True
+    add_system_log(
+        "System",
+        "info",
+        "Interrupted sprint marked for autonomous resume (autoStartSprint + autonomousMode)",
+    )
+    return True
+
+
+def schedule_autonomous_sprint_resume_if_needed() -> bool:
+    """Start background auto-sprint once when mark_autonomous_sprint_resume_if_needed ran."""
+    if not state.AUTO_RESUME_SPRINT_PENDING:
+        return False
+    ws = get_workflow_settings()
+    if not ws.get("autonomousMode") or not ws.get("autoStartSprint"):
+        state.AUTO_RESUME_SPRINT_PENDING = False
+        return False
+    from backend.services.implementer_profile import is_auto_sprint_active
+
+    if is_auto_sprint_active():
+        return False
+    state.AUTO_RESUME_SPRINT_PENDING = False
+    import threading
+
+    url = str(ws.get("ollamaBaseUrl") or ws.get("ollamaUrl") or "http://127.0.0.1:11434").strip()
+
+    def _run() -> None:
+        try:
+            run_auto_sprint("", url, continue_report=True)
+        except Exception as exc:
+            add_system_log("System", "error", f"Autonomous sprint resume failed: {exc}")
+
+    threading.Thread(
+        target=_run,
+        name="autonomous-resume-sprint",
+        daemon=True,
+    ).start()
+    add_system_log("System", "info", "Autonomous sprint resume started in background")
+    return True
 
 
 def run_auto_sprint(

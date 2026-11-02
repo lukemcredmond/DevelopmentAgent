@@ -167,8 +167,8 @@ def test_force_patch_starts_in_patch_phase():
     assert g.explore_count == 0
     snap = g.snapshot()
     assert snap["forcedPatch"] is True
-    assert g.should_block_explore_tool("read_file") is True
-    assert g.should_block_explore_tool("run_command") is True
+    assert g.should_block_explore_tool("read_file") is False
+    assert g.should_block_explore_tool("grep") is True
     assert g.should_block_explore_tool("apply_patch") is False
 
 

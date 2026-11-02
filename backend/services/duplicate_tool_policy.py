@@ -112,10 +112,27 @@ def successful_keys_include_verify(
     return False
 
 
+_WRITE_TOOLS = frozenset({"write_file", "apply_patch"})
+
+
+def _last_successful_write_index(tools_log: Optional[List[Dict[str, Any]]]) -> int:
+    last = -1
+    for i, entry in enumerate(tools_log or []):
+        if not isinstance(entry, dict):
+            continue
+        name = str(entry.get("toolName") or entry.get("name") or "")
+        if name in _WRITE_TOOLS and entry.get("success"):
+            last = i
+    return last
+
+
 def tools_log_has_verify(tools_log: Optional[List[Dict[str, Any]]]) -> bool:
     """True when this step already ran or duplicate-skipped a verify command."""
-    for entry in tools_log or []:
+    last_write = _last_successful_write_index(tools_log)
+    for i, entry in enumerate(tools_log or []):
         if not isinstance(entry, dict):
+            continue
+        if i <= last_write:
             continue
         name = str(entry.get("toolName") or entry.get("name") or "")
         summary = str(entry.get("summary") or "")
@@ -123,6 +140,8 @@ def tools_log_has_verify(tools_log: Optional[List[Dict[str, Any]]]) -> bool:
         blob = f"{summary} {output}"
         ok = bool(entry.get("success"))
         skipped = "skipped duplicate" in blob.lower() or bool(entry.get("duplicateSkip"))
+        if name == "system_verify" and ok:
+            return True
         if name == "run_test" and (ok or skipped):
             return True
         if name == "run_command" and (ok or skipped) and is_verify_command(blob):
@@ -170,27 +189,24 @@ def get_duplicate_settings(ws: dict | None = None) -> Tuple[str, List[str]]:
     return policy, exclude
 
 
-def duplicate_in_step_hard_stop_applies(tool_name: str, ws: dict | None = None) -> bool:
+def duplicate_in_step_action(tool_name: str, ws: dict | None = None) -> str:
+    """Return 'stop', 'skip', or 'allow' for identical in-step tool calls."""
     policy, exclude = get_duplicate_settings(ws)
     if policy == "off":
-        return False
+        return "allow"
     if tool_name == "run_command" and duplicate_run_command_policy(ws) == "strict":
-        return True
+        return "stop"
     if tool_name in exclude:
-        return False
-    return True
+        return "allow"
+    return "stop"
+
+
+def duplicate_in_step_hard_stop_applies(tool_name: str, ws: dict | None = None) -> bool:
+    return duplicate_in_step_action(tool_name, ws) == "stop"
 
 
 def duplicate_in_step_soft_skip_applies(tool_name: str, ws: dict | None = None) -> bool:
-    """When False, identical successful calls fall through to execute_tool (cache may apply there)."""
-    policy, exclude = get_duplicate_settings(ws)
-    if policy == "off":
-        return False
-    if tool_name == "run_command" and duplicate_run_command_policy(ws) == "strict":
-        return True
-    if tool_name in exclude:
-        return False
-    return True
+    return duplicate_in_step_action(tool_name, ws) != "allow"
 
 
 def _duplicate_args_summary(tool_name: str, arguments: Dict[str, Any]) -> str:
@@ -314,6 +330,13 @@ def duplicate_cross_step_block_applies(
     if policy == "off":
         return False
     reason = str(stop_reason or "").strip().lower()
+    if reason and reason not in (
+        "tool_failure_stop",
+        "duplicate_tool",
+        "identical_write_loop",
+        "max_iterations",
+    ):
+        return False
     if tool_name in exclude and reason != "tool_failure_stop":
         return False
     return True

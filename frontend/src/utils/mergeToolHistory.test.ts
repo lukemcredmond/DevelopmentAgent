@@ -6,13 +6,12 @@ function ev(partial: Partial<ToolExecutionEvent> & { id: string; timestamp: stri
   return {
     toolName: 'read_file',
     toolArgs: {},
-    status: 'ok',
+    status: 'completed',
     toolSuccess: true,
     toolOutput: '',
     durationMs: 1,
     agent: 'Developer',
-    agentId: 'dev',
-    source: 'sprint',
+    source: 'agent',
     ...partial,
   }
 }

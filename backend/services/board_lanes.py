@@ -1,6 +1,6 @@
 """Kanban lane normalization — migrate legacy boards to the PO → Dev → QA workflow."""
 
-from typing import Any, Dict
+from typing import Any, Dict, Optional
 
 from backend.services.workflow_settings import get_workflow_settings
 
@@ -18,6 +18,33 @@ BASE_LANES = [
     "QA",
     "Done",
 ]
+
+_LANE_ALIASES = {
+    "in progress": "In Progress",
+    "needs po": "Needs PO",
+    "needs user": "Needs User",
+    "code review": "Code Review",
+    "done": "Done",
+    "qa": "QA",
+    "backlog": "Backlog",
+    "refinement": "Refinement",
+    "blocked": "Blocked",
+    "features": FEATURES_LANE,
+}
+
+
+def canonical_lane(name: str, *, board: Optional[Dict[str, Any]] = None) -> Optional[str]:
+    """Return canonical lane name or None if unknown."""
+    raw = str(name or "").strip()
+    if not raw:
+        return None
+    lanes = list(BASE_LANES)
+    if board:
+        lanes = list(dict.fromkeys(list(board.keys()) + lanes))
+    for lane in lanes:
+        if lane.lower() == raw.lower():
+            return lane
+    return _LANE_ALIASES.get(raw.lower())
 
 
 def normalize_board_lanes(board: Dict[str, Any]) -> Dict[str, Any]:

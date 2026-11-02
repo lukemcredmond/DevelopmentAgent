@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 import re
-from typing import Any, Dict, List
+from typing import Any, Dict, List, Optional
 
 
 def _dedupe_findings(findings: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
@@ -199,13 +199,117 @@ def summarize_diagnostics(findings: List[Dict[str, Any]]) -> str:
     return summary
 
 
-def parse_command_diagnostics(command: str, output: str) -> List[Dict[str, Any]]:
+def parse_pubspec_and_resolution_errors(output: str) -> List[Dict[str, Any]]:
+    """Pubspec / pub get failures that do not emit analyzer file:line findings."""
+    findings: List[Dict[str, Any]] = []
+    text = output or ""
+    lower = text.lower()
+    if "pubspec.yaml" in lower or "pub get failed" in lower or "version solving failed" in lower:
+        snippet = ""
+        for line in text.splitlines():
+            stripped = line.strip()
+            if not stripped:
+                continue
+            if any(
+                tok in stripped.lower()
+                for tok in (
+                    "error",
+                    "pubspec",
+                    "pub get",
+                    "version solving",
+                    "because",
+                    "depends on",
+                    "syntax",
+                )
+            ):
+                snippet = stripped[:240]
+                break
+        if not snippet:
+            snippet = text.strip()[:240] or "pubspec or dependency resolution failed"
+        findings.append(
+            {
+                "severity": "error",
+                "message": snippet,
+                "file": "pubspec.yaml",
+                "line": 1,
+                "column": 1,
+            }
+        )
+    return findings
+
+
+def looks_like_toolchain_failure(command: str, output: str) -> bool:
+    """True when lint/test command failed due to SDK, permissions, or environment — not source code."""
+    cmd = (command or "").lower()
+    if not any(
+        x in cmd
+        for x in (
+            "flutter analyze",
+            "dart analyze",
+            "flutter pub",
+            "pub get",
+            "eslint",
+            "tsc",
+            "pytest",
+            "ruff",
+            "mypy",
+        )
+    ):
+        return False
+    text = (output or "").lower()
+    markers = (
+        "permission denied",
+        "command not found",
+        "not found",
+        "flutter is not installed",
+        "cannot find the flutter sdk",
+        "waiting for another flutter",
+        "pub get failed",
+        "version solving failed",
+        "update_engine_version.sh",
+        "engine.stamp",
+        "no such file or directory",
+        "is not recognized",
+        "timed out after",
+    )
+    return any(m in text for m in markers)
+
+
+def synthesize_lint_command_failure(command: str, output: str) -> List[Dict[str, Any]]:
+    """When a lint command failed but no structured findings were parsed."""
+    cmd = (command or "").lower()
+    if not any(x in cmd for x in ("flutter analyze", "dart analyze", "eslint", "tsc", "pytest")):
+        return []
+    text = (output or "").strip()
+    if not text or text == "(no output)":
+        message = f"Command failed with no parsed diagnostics: {command.strip()[:120]}"
+    else:
+        message = text.splitlines()[0][:240]
+    return [
+        {
+            "severity": "error",
+            "message": message,
+            "file": "",
+            "line": 0,
+            "column": 0,
+        }
+    ]
+
+
+def parse_command_diagnostics(
+    command: str,
+    output: str,
+    *,
+    exit_code: Optional[int] = None,
+) -> List[Dict[str, Any]]:
     cmd = (command or "").lower()
     out = output or ""
     findings: List[Dict[str, Any]] = []
 
     if "flutter analyze" in cmd or "dart analyze" in cmd:
         findings.extend(parse_dart_analyze(out))
+        if not findings:
+            findings.extend(parse_pubspec_and_resolution_errors(out))
     elif "tsc" in cmd or "typescript" in cmd:
         findings.extend(parse_tsc_output(out))
     elif "eslint" in cmd:
@@ -223,7 +327,16 @@ def parse_command_diagnostics(command: str, output: str) -> List[Dict[str, Any]]
         if generic:
             findings.extend(generic)
 
-    return _dedupe_findings(findings)
+    findings = _dedupe_findings(findings)
+
+    if exit_code not in (None, 0) and not findings:
+        if looks_like_toolchain_failure(command, out):
+            return []
+        findings.extend(synthesize_lint_command_failure(command, out))
+        if not findings:
+            findings.extend(parse_pubspec_and_resolution_errors(out))
+
+    return findings
 
 
 def parse_diagnostics_from_transcript(transcript: List[Dict[str, Any]]) -> List[Dict[str, Any]]:

@@ -325,6 +325,7 @@ export interface Task {
   childTaskIds?: string[]
   featureRollup?: FeatureRollup | null
   stuckLoops?: number
+  consecutiveNoWriteStall?: number
   phaseCycleCapReached?: boolean
   latchedRecoveryAttempted?: boolean
   poAutoSkip?: boolean

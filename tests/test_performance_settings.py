@@ -21,7 +21,7 @@ def test_normalize_drops_empty_dev_models():
 def test_migrate_backfills_missing_performance_keys():
     saved = {"maxSprintSteps": 20, "devExploreModel": ""}
     out = migrate_performance_settings({**DEFAULT_WORKFLOW_SETTINGS, **saved})
-    assert out.get("devExploreMaxTools") == 8
+    assert out.get("devExploreMaxTools") == DEFAULT_WORKFLOW_SETTINGS["devExploreMaxTools"]
     assert out.get("ollamaNumCtxAdaptive") is True
     assert out.get("devExploreForcePatchInStep") is True
     assert "devExploreModel" not in out or out.get("devExploreModel") == "qwen2.5-coder:7b"

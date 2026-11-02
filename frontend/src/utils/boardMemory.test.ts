@@ -25,6 +25,7 @@ describe('boardMemory', () => {
       transcript: Array.from({ length: CLIENT_TRANSCRIPT_CAP + 20 }, (_, i) => ({
         role: 'assistant',
         content: `m${i}`,
+        timestamp: new Date(2026, 0, 1, 0, i).toISOString(),
       })),
     })
     const trimmed = trimTaskHistory(t)
@@ -41,6 +42,7 @@ describe('boardMemory', () => {
       transcript: Array.from({ length: 80 }, (_, i) => ({
         role: 'assistant',
         content: `old${i}`,
+        timestamp: new Date(2026, 0, 1, 0, i).toISOString(),
       })),
     })
     const incoming = task({
@@ -49,6 +51,7 @@ describe('boardMemory', () => {
       transcript: Array.from({ length: 5 }, (_, i) => ({
         role: 'assistant',
         content: `new${i}`,
+        timestamp: new Date(2026, 0, 2, 0, i).toISOString(),
       })),
     })
     const merged = mergeTaskHistory(incoming, existing)
@@ -76,6 +79,7 @@ describe('boardMemory', () => {
           transcript: Array.from({ length: 60 }, (_, i) => ({
             role: 'user',
             content: String(i),
+            timestamp: new Date(2026, 0, 1, 0, i).toISOString(),
           })),
         }),
       ],
@@ -89,6 +93,6 @@ describe('boardMemory', () => {
       Blocked: [],
       Refinement: [],
     })
-    expect(board.Backlog[0].transcript?.length).toBe(CLIENT_TRANSCRIPT_CAP)
+    expect(board.Backlog?.[0].transcript?.length).toBe(CLIENT_TRANSCRIPT_CAP)
   })
 })

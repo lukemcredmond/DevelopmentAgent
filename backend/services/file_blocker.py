@@ -37,6 +37,53 @@ def normalize_file_path(path: str) -> str:
     return str(path or "").strip().replace("\\", "/")
 
 
+def canonicalize_flutter_dart_path(path: str) -> str:
+    """Match workspace file casing; map PascalCase page names to snake_case when present."""
+    norm = normalize_file_path(path)
+    if not norm or not norm.endswith(".dart"):
+        return norm
+    if not workspace_looks_like_flutter_dart():
+        return norm
+    root = Path(str(state.WORKSPACE_DIR or "")).expanduser()
+    direct = root / norm
+    if direct.is_file():
+        return norm
+    parent = direct.parent
+    if parent.is_dir():
+        want = direct.name.lower()
+        for entry in parent.iterdir():
+            if entry.is_file() and entry.name.lower() == want:
+                try:
+                    return normalize_file_path(str(entry.relative_to(root)))
+                except ValueError:
+                    return normalize_file_path(str(entry))
+    if "/pages/" in norm or norm.startswith("lib/pages/"):
+        base = norm.rsplit("/", 1)[-1]
+        if base.endswith(".dart") and base[0].isupper():
+            stem = base[: -len(".dart")]
+            snake = re.sub(r"(?<!^)(?=[A-Z])", "_", stem).lower() + ".dart"
+            snake_path = normalize_file_path(f"{norm.rsplit('/', 1)[0]}/{snake}")
+            if (root / snake_path).is_file():
+                return snake_path
+    return norm
+
+
+def normalize_task_edit_paths(task: Dict[str, Any]) -> None:
+    """Canonicalize Flutter paths on task scope fields in place."""
+    if not isinstance(task, dict) or not workspace_looks_like_flutter_dart():
+        return
+    for key in ("lintSourceFile", "fileFixFor"):
+        raw = str(task.get(key) or "").strip()
+        if raw:
+            task[key] = canonicalize_flutter_dart_path(raw)
+    for list_key in ("integrationEditPaths", "writePaths", "scaffoldedFiles"):
+        items = task.get(list_key)
+        if not isinstance(items, list):
+            continue
+        task[list_key] = [
+            canonicalize_flutter_dart_path(str(p)) for p in items if str(p or "").strip()
+        ]
+
 _VALID_DEV_EDIT_PATH_RE = re.compile(r"^[\w./-]+$")
 _MAX_DEV_EDIT_PATH_LEN = 260
 
@@ -224,6 +271,7 @@ def resolve_dev_edit_target_path(task: Dict[str, Any]) -> str:
     """Resolve a safe workspace file for synthetic read / text-loop hints."""
     if not isinstance(task, dict):
         return ""
+    normalize_task_edit_paths(task)
     src = normalize_file_path(str(task.get("lintSourceFile") or ""))
     if src and src not in ("(unknown)", "__overflow__") and validate_dev_edit_target_path(src):
         return src
@@ -254,7 +302,7 @@ def resolve_dev_edit_target_path(task: Dict[str, Any]) -> str:
         chosen = code_paths[0]
         if not task.get("lintSourceFile"):
             task["lintSourceFile"] = chosen
-        return chosen
+        return canonicalize_flutter_dart_path(chosen)
     if path_candidates:
         chosen = path_candidates[0]
         if not task.get("lintSourceFile"):
@@ -350,6 +398,36 @@ def _strict_single_file_dev_card(task: Dict[str, Any]) -> bool:
         return False
 
 
+def _maybe_log_unresolved_edit_target(task: Dict[str, Any]) -> None:
+    if not isinstance(task, dict) or task.get("_loggedUnresolvedEditTarget"):
+        return
+    target = normalize_file_path(resolve_dev_edit_target_path(task) or "")
+    if target:
+        return
+    task["_loggedUnresolvedEditTarget"] = True
+    from backend.services.logs import add_system_log
+
+    tid = str(task.get("id") or "")
+    stack = (
+        "lib/**, test/**, integration_test/**"
+        if workspace_looks_like_flutter_dart()
+        else "**/*.py"
+    )
+    add_system_log(
+        "Developer",
+        "warning",
+        f"{tid}: unresolved_edit_target — scoped reads/edits use allowlist ({stack})",
+    )
+
+
+def _unresolved_edit_target_allowlist_match(norm: str) -> bool:
+    if workspace_looks_like_flutter_dart():
+        return norm.endswith(".dart") and norm.startswith(
+            ("lib/", "test/", "integration_test/")
+        )
+    return norm.endswith(".py")
+
+
 def dev_read_path_allowed_for_tool(task: Dict[str, Any], path: str) -> tuple[bool, str]:
     """Gate Developer read_file on Flutter cards to Dart sources and scoped targets."""
     norm = normalize_file_path(path)
@@ -373,6 +451,10 @@ def dev_read_path_allowed_for_tool(task: Dict[str, Any], path: str) -> tuple[boo
     if dev_edit_path_explicitly_allowed(task, norm):
         return True, ""
     target = normalize_file_path(resolve_dev_edit_target_path(task) or "")
+    if not target:
+        _maybe_log_unresolved_edit_target(task)
+        if _unresolved_edit_target_allowlist_match(norm):
+            return True, ""
     if target and target == norm:
         return True, ""
     if norm in ("pubspec.yaml", "analysis_options.yaml"):
@@ -401,6 +483,9 @@ def dev_edit_path_allowed_for_tool(task: Dict[str, Any], path: str) -> tuple[boo
         return True, ""
     target = resolve_dev_edit_target_path(task)
     if not target:
+        _maybe_log_unresolved_edit_target(task)
+        if _unresolved_edit_target_allowlist_match(norm):
+            return True, ""
         return True, ""
     if normalize_file_path(target) == norm:
         return True, ""

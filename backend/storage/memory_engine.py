@@ -22,14 +22,20 @@ def resolve_embed_model(explicit: Optional[str] = None) -> str:
     return str(get_workflow_settings().get("embedModel") or "nomic-embed-text")
 
 
+_SHARED_MEMORY_ENGINE: Optional["SemanticMemoryEngine"] = None
+
+
 def create_memory_engine(
     ollama_url: str = "http://localhost:11434",
     embed_model: Optional[str] = None,
 ) -> "SemanticMemoryEngine":
-    return SemanticMemoryEngine(
-        ollama_url=ollama_url.rstrip("/"),
-        embed_model=resolve_embed_model(embed_model),
-    )
+    global _SHARED_MEMORY_ENGINE
+    if _SHARED_MEMORY_ENGINE is None:
+        _SHARED_MEMORY_ENGINE = SemanticMemoryEngine(
+            ollama_url=ollama_url.rstrip("/"),
+            embed_model=resolve_embed_model(embed_model),
+        )
+    return _SHARED_MEMORY_ENGINE
 
 
 class SemanticMemoryEngine:
@@ -184,7 +190,12 @@ class SemanticMemoryEngine:
                 conn.commit()
                 return
             mem_id = str(uuid.uuid4())
-            embedding = self._embed_ollama(text)
+            from backend import state as _state
+
+            if getattr(_state, "ACTIVE_SPRINT_TASK_ID", None):
+                embedding = None
+            else:
+                embedding = self._embed_ollama(text)
             embedding_json = json.dumps(embedding) if embedding else None
             conn.execute(
                 "INSERT INTO memories (id, agent_id, category, content, embedding) VALUES (?, ?, ?, ?, ?)",
@@ -308,7 +319,7 @@ class SemanticMemoryEngine:
             text = text[: max_chars - 1] + "…"
         mem_id = self.core_block_memory_id(agent_id, project_id=pid)
         scoped = self._scoped_agent_id(agent_id if agent_id != "dev" else "Developer", pid)
-        embedding = self._embed_ollama(text) if text else None
+        embedding = None
         embedding_json = json.dumps(embedding) if embedding else None
         with sqlite3.connect(self.db_path) as conn:
             cursor = conn.cursor()

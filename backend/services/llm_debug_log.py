@@ -35,11 +35,22 @@ def _truncate_messages(messages: Sequence[Any]) -> List[Any]:
     return out
 
 
-def persist_llm_log() -> None:
+def persist_llm_log_sync() -> None:
     state.storage.set_setting(
         _log_key(state.CURRENT_PROJECT_ID),
         json.dumps(state.LLM_DEBUG_LOG[-MAX_LLM_LOG_ENTRIES:]),
     )
+
+
+def persist_llm_log() -> None:
+    from backend import state as _state
+
+    if getattr(_state, "ACTIVE_SPRINT_TASK_ID", None):
+        from backend.services.persistence_flush import mark_dirty
+
+        mark_dirty("llm_debug_log")
+        return
+    persist_llm_log_sync()
 
 
 def load_llm_log_for_project(project_id: str) -> None:

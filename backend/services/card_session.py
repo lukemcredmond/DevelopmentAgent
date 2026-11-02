@@ -112,9 +112,24 @@ def build_incremental_step_prompt(task: Dict[str, Any], full_prompt: str) -> str
         if delta:
             return f"=== CONTINUATION (incremental) ===\n{delta}"
     return (
-        "=== CONTINUATION ===\n"
-        f"{full[:12000]}"
+        "=== CONTINUATION (same card session) ===\n"
+        "Sprint context changed since the last step. Continue from prior messages; "
+        "re-read changed files if needed and complete remaining acceptance criteria."
     )
+
+
+def _preserved_message_head(messages: Sequence[Dict[str, Any]]) -> int:
+    """Index after leading system messages and the first user turn."""
+    i = 0
+    while i < len(messages):
+        role = str(messages[i].get("role") or "")
+        if role == "system":
+            i += 1
+            continue
+        if role == "user":
+            return i + 1
+        break
+    return min(2, len(messages))
 
 
 def maybe_summarize_before_prune(
@@ -124,17 +139,24 @@ def maybe_summarize_before_prune(
 ) -> None:
     """Optional LLM summary of middle turns before char-based prune drops them."""
     ws = get_workflow_settings()
-    if not ws.get("enableCardSessionSummarize", True):
+    if not ws.get("enableCardSessionSummarize", False):
         return
     if len(messages) <= 6:
         return
+    for msg in messages:
+        if "=== CARD SESSION SUMMARY ===" in str(msg.get("content") or ""):
+            return
     from backend.services.llm_context import estimate_messages_chars, message_prune_threshold_chars
     from backend.services.prompt_budget import resolve_ollama_num_ctx
 
     threshold = message_prune_threshold_chars(resolve_ollama_num_ctx())
     if estimate_messages_chars(messages) <= threshold:
         return
-    middle = messages[2:-4]
+    head = _preserved_message_head(messages)
+    tail_keep = 4
+    if len(messages) <= head + tail_keep:
+        return
+    middle = messages[head : len(messages) - tail_keep]
     if not middle:
         return
     lines: List[str] = []
@@ -156,20 +178,24 @@ def maybe_summarize_before_prune(
             "Keep file paths, errors, decisions, and next actions.\n\n"
             + "\n".join(lines)
         )
+        num_ctx = resolve_ollama_num_ctx(agent_role)
         resp = provider.chat(
             model,
             [{"role": "user", "content": prompt[:16000]}],
-            options=ollama_aux_chat_options(num_predict=800, temperature=0.2),
+            options=ollama_aux_chat_options(
+                num_predict=800,
+                temperature=0.2,
+                num_ctx=num_ctx,
+            ),
         )
         summary = (resp.message.content or "").strip() if resp and resp.message else ""
         if not summary:
             return
-        messages.insert(
-            2,
-            {
-                "role": "system",
-                "content": f"=== CARD SESSION SUMMARY ===\n{summary[:3500]}",
-            },
-        )
+        summary_msg = {
+            "role": "system",
+            "content": f"=== CARD SESSION SUMMARY ===\n{summary[:3500]}",
+        }
+        del messages[head : len(messages) - tail_keep]
+        messages.insert(head, summary_msg)
     except Exception:
         return

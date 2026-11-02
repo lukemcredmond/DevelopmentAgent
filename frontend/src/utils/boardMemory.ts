@@ -28,7 +28,7 @@ export function trimTaskHistory(task: Task): Task {
 }
 
 export function trimBoardHistory(board: Board | undefined | null): Board {
-  if (!board) return board as Board
+  if (!board) return {}
   const next: Board = { ...board }
   for (const lane of Object.keys(next) as BoardLane[]) {
     next[lane] = (next[lane] ?? []).map(trimTaskHistory)

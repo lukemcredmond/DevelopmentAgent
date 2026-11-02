@@ -11,6 +11,22 @@ from backend.services.tool_probe import build_model_hints, should_skip_probe
 
 from backend.services.llm_tool_recovery import apply_tool_call_recovery, normalize_tool_arguments
 
+_NATIVE_PROBE_OK: Dict[tuple[str, str], bool] = {}
+
+
+def _probe_cache_key(model: str, tool_name: str) -> tuple[str, str]:
+    return (str(model or "").strip(), str(tool_name or "").strip())
+
+
+def mark_native_tool_probe_ok(model: str, tool_name: str) -> None:
+    key = _probe_cache_key(model, tool_name)
+    if key[0] and key[1]:
+        _NATIVE_PROBE_OK[key] = True
+
+
+def native_tool_probe_known_ok(model: str, tool_name: str) -> bool:
+    return bool(_NATIVE_PROBE_OK.get(_probe_cache_key(model, tool_name)))
+
 
 def _resolve_agent_model(agent_id: str, model: Optional[str] = None) -> tuple[Any, str]:
     from backend.agents.registry import AGENT_MAP
@@ -79,6 +95,24 @@ def run_llm_tool_probe(
             parameters = defn.get("parameters") or {}
             break
 
+    if native_tool_probe_known_ok(resolved_model, tool_name):
+        hints = build_model_hints(tool_name, parameters, status="pass")
+        return {
+            "toolName": tool_name,
+            "status": "pass",
+            "success": True,
+            "output": "Cached native tool probe success",
+            "durationMs": 0,
+            "hints": hints,
+            "probeArgs": {},
+            "skipReason": None,
+            "mode": "llm",
+            "model": resolved_model,
+            "modelCalledTool": True,
+            "llmContent": "",
+            "cached": True,
+        }
+
     skip_reason = should_skip_probe(tool_name, include_destructive=include_destructive)
     if skip_reason:
         hints = build_model_hints(tool_name, parameters, status="skip")
@@ -134,13 +168,17 @@ def run_llm_tool_probe(
     tools = [schema]
     ws = get_workflow_settings()
     from backend.services.llm_provider import ollama_aux_chat_options
+    from backend.services.prompt_budget import resolve_ollama_num_ctx
 
-    options = ollama_aux_chat_options(temperature=0.1)
+    options = ollama_aux_chat_options(temperature=0.1, num_predict=128)
+    num_ctx = resolve_ollama_num_ctx(agent_id, settings=ws)
     provider = agent._get_provider() if chat_fn is None else None
-    if provider is not None and provider.capabilities.num_ctx:
-        options["num_ctx"] = int(ws.get("ollamaNumCtx", 32768))
-    elif chat_fn is not None:
-        options["num_ctx"] = int(ws.get("ollamaNumCtx", 32768))
+    if chat_fn is not None or (
+        provider is not None
+        and getattr(provider, "capabilities", None)
+        and provider.capabilities.num_ctx
+    ):
+        options["num_ctx"] = num_ctx
 
     started = time.time()
     llm_content = ""
@@ -239,6 +277,8 @@ def run_llm_tool_probe(
     success = bool(result.success)
     status = "pass" if success else "fail"
     output = (result.tool_output or "")[:4000]
+    if success and chat_fn is None:
+        mark_native_tool_probe_ok(resolved_model, tool_name)
     hints = build_model_hints(tool_name, parameters, status=status, output=output)
     return {
         "toolName": tool_name,
@@ -301,6 +341,8 @@ def maybe_route_backup_from_step_probe(agent: Any, task_id: Optional[str]) -> bo
 
         agent_id = next((aid for aid, a in AGENT_MAP.items() if a is agent), "dev")
         model = str(getattr(agent, "model", "") or "")
+        if native_tool_probe_known_ok(model, "read_file"):
+            return False
         probe = run_llm_tool_probe(agent_id, "read_file", model=model)
         if probe.get("modelCalledTool") and probe.get("success"):
             return False

@@ -335,6 +335,8 @@ class DevPhaseGraph:
     def should_block_explore_tool(self, tool_name: Optional[str]) -> bool:
         """Reject explore/verify tools until a successful write on a Forced Patch step."""
         name = str(tool_name or "")
+        if self.forced_patch and not self.write_succeeded and name == "read_file":
+            return False
         return (
             bool(self.forced_patch)
             and not bool(self.write_succeeded)

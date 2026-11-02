@@ -56,6 +56,22 @@ def _agent_had_successful_write(agent) -> bool:
     return False
 
 
+def lint_run_is_clean(cmd_result: Any) -> bool:
+    """True when the workspace lint/analyze run found no fixable source issues."""
+    outcome = str(getattr(cmd_result, "outcome", "") or "")
+    if outcome == "ok":
+        return True
+    if outcome == "toolchain_error":
+        return False
+    if outcome == "lint_findings" and not (getattr(cmd_result, "diagnostics", None) or []):
+        return True
+    return False
+
+
+def lint_run_is_toolchain(cmd_result: Any) -> bool:
+    return str(getattr(cmd_result, "outcome", "") or "") == "toolchain_error"
+
+
 def _run_lint_once(task_id: str, task: Dict[str, Any], lint_cmd: str) -> Any:
     lint_started = time.time()
     cmd_result = run_workspace_command(lint_cmd)
@@ -72,23 +88,56 @@ def _run_lint_once(task_id: str, task: Dict[str, Any], lint_cmd: str) -> Any:
     )
     from backend import state as _state
 
-    clean = cmd_result.outcome == "ok" and int(getattr(cmd_result, "exit_code", 0) or 0) == 0
-    _state.FIX_VERIFY_LINT_CLEAN = clean
+    toolchain = lint_run_is_toolchain(cmd_result)
+    clean = lint_run_is_clean(cmd_result)
+    _state.LAST_LINT_OUTCOME = str(cmd_result.outcome or "")
+    if toolchain:
+        snippet = (cmd_result.combined_output or cmd_result.summary or lint_cmd)[:400]
+        add_system_log(
+            "System",
+            "error",
+            f"Lint toolchain failure (not source code): {snippet}",
+        )
+        log_event("lint_toolchain_error", f"{lint_cmd} {snippet[:200]}")
+    else:
+        _state.FIX_VERIFY_LINT_CLEAN = clean
     board_task = find_task_by_id(task_id)
     target = board_task or task
-    if target is not None:
+    if target is not None and not toolchain:
         target["fixVerifyLintClean"] = clean
         if cmd_result.diagnostics:
             target["lastCommandDiagnostics"] = cmd_result.diagnostics[:50]
+        elif not clean:
+            target["lastCommandDiagnostics"] = [
+                {
+                    "severity": "error",
+                    "message": (cmd_result.combined_output or cmd_result.summary or lint_cmd)[
+                        :500
+                    ],
+                    "file": "",
+                    "line": 0,
+                    "column": 0,
+                }
+            ]
         else:
             target["lastCommandDiagnostics"] = []
     try:
         from backend.services.card_ledger import write_oracle
+        from backend.services.step_diagnostics import log_tool
 
-        detail = cmd_result.summary or cmd_result.outcome or lint_cmd
-        if cmd_result.diagnostics:
-            detail = f"{finding_count} lint finding(s): {detail}"
-        write_oracle(task_id, passed=bool(clean), detail=str(detail)[:500])
+        if not toolchain:
+            detail = cmd_result.summary or cmd_result.outcome or lint_cmd
+            if not detail or detail == lint_cmd:
+                detail = (cmd_result.combined_output or detail or lint_cmd)[:500]
+            if cmd_result.diagnostics:
+                detail = f"{finding_count} lint finding(s): {detail}"
+            write_oracle(task_id, passed=bool(clean), detail=str(detail)[:500])
+        log_tool(
+            "system_verify",
+            clean if not toolchain else True,
+            f"fix_verify {lint_cmd} ({finding_count} findings, {cmd_result.outcome})",
+            duration_ms=lint_duration_ms,
+        )
     except Exception:
         pass
     return cmd_result, clean
@@ -116,6 +165,7 @@ def run_fix_verify_loop(
         return agent.execute_step(user_prompt, max_iterations=max_iterations)
 
     max_rounds = max(1, int(ws.get("maxFixVerifyRounds", 2)))
+    setattr(agent, "_fix_verify_ran_this_step", True)
     max_keep = max(0, int(ws.get("maxInCardLintFixes", 5)))
     abort_on_hard = bool(ws.get("fixVerifyAbortOnHardStop", True))
     task_id = str(task.get("id") or "")

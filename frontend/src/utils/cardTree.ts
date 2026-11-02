@@ -155,7 +155,7 @@ export function buildDependencyGraph(board: Board): DependencyGraph {
   ]
 
   const roots: CardTreeNode[] = []
-  for (const { task, lane } of byId.values()) {
+  for (const { task } of byId.values()) {
     if (hasIncoming.has(task.id)) continue
     roots.push(makeDependencyNode(task.id, byId, new Set()))
   }

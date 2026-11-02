@@ -2528,7 +2528,7 @@ export default function App() {
         }}
         onReindexCodebase={() => {
           void withLoading(async () => {
-            await reindexCodebase({ ollama_url: ollamaUrl })
+            await reindexCodebase(ollamaUrl)
           })
         }}
         onApprove={(taskId) =>

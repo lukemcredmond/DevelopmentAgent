@@ -36,7 +36,8 @@ def test_force_patch_only_after_stall_exits():
 def test_migrate_performance_settings_v2_verify_driven_defaults():
     old = {"performanceSettingsVersion": 1, "enableFocusMicroSteps": True}
     out = migrate_performance_settings(old)
-    assert out["performanceSettingsVersion"] == 2
+    assert out["performanceSettingsVersion"] == 3
+    assert out["enableCardSessionSummarize"] is False
     assert out["enableFocusMicroSteps"] is False
     assert out["requireAcChecklistForDone"] is False
     assert out["enableFixVerifyLoop"] is True

@@ -18,7 +18,7 @@ function formatStamp(raw: string): string {
   return s
 }
 
-function renderSnapshot(field: TaskFieldHistoryField, value: string): React.ReactNode {
+function renderSnapshot(field: TaskFieldHistoryField, value: string): ReactNode {
   if (field === 'acceptanceCriteria') {
     try {
       const arr = JSON.parse(value) as unknown

@@ -119,6 +119,13 @@ def load_project_into_state(project_id: str) -> bool:
     from backend.services.sprint_session import detect_recovery_on_startup
 
     detect_recovery_on_startup(project_id)
+    try:
+        from backend.services.sprint_service import mark_autonomous_sprint_resume_if_needed
+
+        mark_autonomous_sprint_resume_if_needed()
+        schedule_autonomous_sprint_resume_if_needed()
+    except Exception:
+        pass
     if hydrated_plan_from_sidecar:
         try:
             save_current_project_state(project_id=project_id, persist_board=False)

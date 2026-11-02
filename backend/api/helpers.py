@@ -118,6 +118,8 @@ def build_state_response(*, include_files: bool = True) -> dict:
     recovery = get_recovery_context()
     if recovery is not None:
         response["recovery"] = recovery
+    if getattr(state, "AUTO_RESUME_SPRINT_PENDING", False):
+        response["autoResumeSprintPending"] = True
     from backend.services.simulation_gate import get_pending_simulation_public
 
     pending_sim = get_pending_simulation_public()

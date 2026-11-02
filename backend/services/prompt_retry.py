@@ -87,26 +87,33 @@ def _auto_diagnose_if_needed(task_id: str, ollama_url: str) -> None:
 
 
 def _post_retry_verification(task_id: str) -> Dict[str, Any]:
-    from backend.services.command_result import run_workspace_command
+    from backend.services.duplicate_tool_policy import tools_log_has_verify
+    from backend.services.fix_verify_loop import _run_lint_once
+    from backend.services.step_diagnostics import get_active_trace
     from backend.workspace.files import derive_project_lint_command
+
+    trace = get_active_trace()
+    tools_log = getattr(trace, "tools_log", None) if trace else None
+    if tools_log and tools_log_has_verify(tools_log):
+        return {
+            "status": "skipped",
+            "diagnosticsCount": 0,
+            "command": None,
+            "reason": "already_verified",
+        }
 
     lint_cmd = derive_project_lint_command()
     if not lint_cmd:
         return {"status": "skipped", "diagnosticsCount": 0, "command": None}
 
-    result = run_workspace_command(lint_cmd)
-    task = find_task_by_id(task_id)
-    if task:
-        task["lastCommandDiagnostics"] = (
-            result.diagnostics[:50] if result.diagnostics else []
-        )
-
-    status = "clean" if not result.diagnostics else "findings"
+    task = find_task_by_id(task_id) or {}
+    cmd_result, clean = _run_lint_once(task_id, task, lint_cmd)
+    status = "clean" if clean else "findings"
     return {
         "status": status,
-        "diagnosticsCount": len(result.diagnostics),
-        "summary": result.summary,
-        "outcome": result.outcome,
+        "diagnosticsCount": len(cmd_result.diagnostics) if cmd_result.diagnostics else 0,
+        "summary": cmd_result.summary,
+        "outcome": cmd_result.outcome,
         "command": lint_cmd,
     }
 

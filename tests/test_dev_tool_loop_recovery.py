@@ -6,6 +6,8 @@ from backend.services.dev_tool_loop_recovery import (
     arm_task_for_tool_loop_recovery,
     build_blocked_board_recovery_hint,
     dev_tool_loop_deadlock_active,
+    filter_developer_step_tools,
+    handle_developer_board_blocked_retry,
     is_premature_lane_update,
     recover_dev_tool_loop_deadlock,
 )
@@ -32,7 +34,54 @@ def test_dev_tool_loop_deadlock_active_read_and_board():
 def test_is_premature_lane_update():
     assert is_premature_lane_update({"stage": "Done"})
     assert is_premature_lane_update({"lane": "QA"})
+    assert is_premature_lane_update({"target_lane": "Done"})
     assert not is_premature_lane_update({"stage": "In Progress"})
+
+
+def test_filter_developer_step_tools_hides_board_on_oracle_fail(monkeypatch):
+    tools = [
+        {"function": {"name": "apply_patch"}},
+        {"function": {"name": "update_board"}},
+    ]
+
+    class _Agent:
+        _board_blocked_count = 0
+        _hide_update_board_tools = False
+
+    with patch(
+        "backend.services.dev_tool_loop_recovery.developer_oracle_blocks_lane_advance",
+        return_value=True,
+    ):
+        filtered = filter_developer_step_tools(tools, "T-1")
+    names = {(t.get("function") or {}).get("name") for t in filtered}
+    assert "update_board" not in names
+    assert "apply_patch" in names
+
+
+def test_handle_developer_board_blocked_retry_stops_at_cap():
+    agent = type("A", (), {"_board_blocked_count": 0, "_hide_update_board_tools": False})()
+
+    with patch(
+        "backend.services.dev_tool_loop_recovery.arm_task_for_tool_loop_recovery",
+        return_value="lib/main.dart",
+    ):
+        with patch(
+            "backend.services.dev_tool_loop_recovery.max_premature_board_retries",
+            return_value=2,
+        ):
+            assert handle_developer_board_blocked_retry(
+                agent,
+                "T-1",
+                "Error: Oracle FAIL — cannot mark Done",
+            ) is None
+            assert agent._board_blocked_count == 1
+            stop = handle_developer_board_blocked_retry(
+                agent,
+                "T-1",
+                "Error: Oracle FAIL — cannot mark Done",
+            )
+    assert stop is not None
+    assert "cap 2" in stop
 
 
 def test_classify_premature_lane_advance_on_blocked_board():

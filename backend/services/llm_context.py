@@ -247,7 +247,20 @@ def prune_messages_if_needed(
         return messages
 
     enable_episode = ws.get("enableEpisodeSummary", True)
-    preserved_head = 2
+
+    def _preserved_head() -> int:
+        i = 0
+        while i < len(messages):
+            role = str(messages[i].get("role") or "")
+            if role == "system":
+                i += 1
+                continue
+            if role == "user":
+                return i + 1
+            break
+        return min(2, len(messages))
+
+    preserved_head = _preserved_head()
     keep_from = _index_of_last_assistant(messages)
     pruned = 0
     removed_summaries: List[str] = []
@@ -255,6 +268,8 @@ def prune_messages_if_needed(
         if preserved_head >= keep_from:
             break
         removed = messages.pop(preserved_head)
+        if keep_from > preserved_head:
+            keep_from -= 1
         pruned += 1
         if enable_episode:
             line = _summarize_removed(removed if isinstance(removed, dict) else {})
@@ -270,6 +285,8 @@ def prune_messages_if_needed(
                 nxt.get("content", "")
             ):
                 extra = messages.pop(preserved_head)
+                if keep_from > preserved_head:
+                    keep_from -= 1
                 pruned += 1
                 if enable_episode:
                     removed_summaries.append(_summarize_removed(extra))

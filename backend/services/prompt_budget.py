@@ -6,7 +6,7 @@ import json
 from typing import Any, Dict, Optional, Sequence
 
 DEFAULT_NUM_CTX = 32768
-PACKED_NUM_CTX_FLOOR = 4096
+PACKED_NUM_CTX_FLOOR = 8192
 GENERATION_RESERVE_TOKENS = 256
 
 _ROLE_KEYS = frozenset({"po", "dev", "cr", "qa"})
@@ -239,7 +239,8 @@ def packed_prompt_num_ctx(
     ceiling: int,
     *,
     tools: Optional[Sequence[Any]] = None,
-    headroom_tokens: int = 1024,
+    headroom_tokens: int = 2560,
+    num_predict: int = 0,
 ) -> int:
     """num_ctx sized to the packed prompt plus headroom, clamped to the ceiling."""
     from backend.services.llm_context import estimate_messages_chars
@@ -249,7 +250,8 @@ def packed_prompt_num_ctx(
     except (TypeError, ValueError):
         ceiling_i = DEFAULT_NUM_CTX
     chars = estimate_messages_chars(messages or []) + _estimate_tools_chars(tools)
-    needed = max(0, int(chars) // 4) + max(0, int(headroom_tokens))
+    gen = max(0, int(num_predict or 0))
+    needed = max(0, int(chars) // 4) + gen + max(0, int(headroom_tokens))
     rounded = ((needed + 1023) // 1024) * 1024
     floor = min(ceiling_i, PACKED_NUM_CTX_FLOOR)
     return min(ceiling_i, max(floor, rounded))

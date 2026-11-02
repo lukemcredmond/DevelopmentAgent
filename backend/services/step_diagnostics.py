@@ -166,6 +166,21 @@ def _infer_primary_bottleneck(
         and str(e.get("toolName") or "") == "apply_patch"
         and not e.get("success")
     )
+    board_blocked = sum(
+        1
+        for e in trace.tools_log
+        if isinstance(e, dict)
+        and str(e.get("toolName") or "") == "update_board"
+        and classify_tool_failure("update_board", str(e.get("summary") or "")) == "board_blocked"
+    )
+    if board_blocked >= 2 or (
+        board_blocked >= 1 and exit_r in ("tool_failure_stop", "max_iterations")
+    ):
+        return "premature_lane_loop"
+    if exit_r == "read_only_no_edits":
+        eval_total = sum(int(c.get("evalTokens") or 0) for c in (trace.ollama_calls or []))
+        if eval_total >= 512:
+            return "text_only_generation"
     if patch_fails >= 2 or (
         exit_r in ("tool_failure_stop", "max_iterations") and patch_fails >= 1
     ):
@@ -207,6 +222,16 @@ def infer_primary_bottleneck_from_payload(payload: Dict[str, Any]) -> str:
         return "backup_not_coder"
     if exit_r == "dev_step_wall":
         return "step_timeout"
+    board_blocked = 0
+    for entry in payload.get("toolsLog") or []:
+        if not isinstance(entry, dict):
+            continue
+        if str(entry.get("toolName") or "") != "update_board":
+            continue
+        if classify_tool_failure("update_board", str(entry.get("summary") or "")) == "board_blocked":
+            board_blocked += 1
+    if board_blocked >= 2:
+        return "premature_lane_loop"
     if exit_r in ("tool_failure_stop", "max_iterations"):
         if int(payload.get("toolFailures") or 0) >= 1:
             return "patch_loop" if exit_r == "tool_failure_stop" else "iteration_cap"
@@ -214,6 +239,9 @@ def infer_primary_bottleneck_from_payload(payload: Dict[str, Any]) -> str:
         return "explore_budget"
     if int(payload.get("textRejections") or 0) >= 2:
         return "text_rejection_loop"
+    if str(payload.get("exitReason") or "") == "read_only_no_edits":
+        if int(payload.get("evalTokensTotal") or 0) >= 512:
+            return "text_only_generation"
     return "none"
 
 
@@ -454,10 +482,19 @@ class StepDiagnosticsTracker:
         self.llm_iterations_max = max_iterations
 
     def log_tool(
-        self, name: str, success: bool, summary: str, *, duration_ms: Optional[int] = None
+        self,
+        name: str,
+        success: bool,
+        summary: str,
+        *,
+        duration_ms: Optional[int] = None,
+        error: Optional[str] = None,
     ) -> None:
         self.tools_used.add(name)
-        if not success:
+        framework_feedback = name == "system_verify" or (
+            name == "update_board" and str(summary or "").strip().startswith("Error:")
+        )
+        if not success and not framework_feedback:
             self.tool_failures += 1
         self.last_event = f"tool:{name}"
         limit = _TOOL_SUMMARY_FAIL if not success and name in {"apply_patch", "run_command"} else _TOOL_SUMMARY_OK
@@ -471,6 +508,9 @@ class StepDiagnosticsTracker:
         if duration_ms is not None:
             entry["durationMs"] = int(duration_ms)
         if not success:
+            err_line = (error or "").strip().splitlines()[0] if error else clipped
+            if err_line:
+                entry["error"] = err_line[:300]
             failure_class = classify_tool_failure(name, clipped)
             if failure_class:
                 entry["failureClass"] = failure_class
@@ -892,6 +932,13 @@ class StepDiagnosticsTracker:
     def _flush_checkpoint(self, *, force: bool = False) -> None:
         import time
 
+        from backend import state as _state
+
+        if not force and getattr(_state, "ACTIVE_SPRINT_TASK_ID", None):
+            from backend.services.persistence_flush import mark_dirty
+
+            mark_dirty("step_checkpoint")
+            return
         now = time.monotonic()
         if not force and self._last_checkpoint_monotonic and (now - self._last_checkpoint_monotonic) < 60:
             if str(self.last_event or "").startswith("ollama_wait"):
@@ -958,6 +1005,12 @@ def _prune_old_files(project_dir: Path) -> None:
 
 def get_active_trace() -> Optional[StepDiagnosticsTracker]:
     return state.ACTIVE_STEP_DIAGNOSTICS
+
+
+def flush_step_checkpoint_sync() -> None:
+    trace = get_active_trace()
+    if trace is not None:
+        trace._flush_checkpoint(force=True)
 
 
 def get_active_trace_summary() -> Optional[Dict[str, Any]]:
@@ -1154,11 +1207,16 @@ def log_ollama_call(
 
 
 def log_tool(
-    name: str, success: bool, summary: str, *, duration_ms: Optional[int] = None
+    name: str,
+    success: bool,
+    summary: str,
+    *,
+    duration_ms: Optional[int] = None,
+    error: Optional[str] = None,
 ) -> None:
     trace = get_active_trace()
     if trace:
-        trace.log_tool(name, success, summary, duration_ms=duration_ms)
+        trace.log_tool(name, success, summary, duration_ms=duration_ms, error=error)
         from backend.services.sprint_session import touch_session
 
         touch_session(
@@ -1700,6 +1758,14 @@ def derive_exit_reason(
             return "identical_write_loop"
         if "files already written this step" in lower or "lint_after_write" in lower:
             return "max_iterations_after_writes"
+        if "task already done" in lower:
+            trace_early = get_active_trace()
+            step_wrote = bool(tools & _WRITE_TOOLS) or bool(
+                trace_early and _write_tools_succeeded(trace_early.tools_log)
+            )
+            if step_wrote:
+                return "completed_with_writes"
+            return "lane_advanced"
         return "tool_failure_stop"
     wrote = False
     trace = get_active_trace()

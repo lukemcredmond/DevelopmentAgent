@@ -874,7 +874,16 @@ def execute_tool(
                     "tool_end",
                     f"{tool_name} {status_label} {duration_ms}ms — {arg_summary}",
                 )
-                log_tool(tool_name, success, arg_summary, duration_ms=duration_ms)
+                err_line = ""
+                if not success and tool_output:
+                    err_line = str(tool_output).strip().splitlines()[0] if tool_output else ""
+                log_tool(
+                    tool_name,
+                    success,
+                    arg_summary,
+                    duration_ms=duration_ms,
+                    error=err_line or None,
+                )
         output_preview = tool_output[:TOOL_OUTPUT_PREVIEW_CHARS]
 
         if task_id and source == "agent":

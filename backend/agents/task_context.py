@@ -696,7 +696,9 @@ def normalize_task(task: Dict[str, Any]) -> Dict[str, Any]:
                 if should_park_in_needs_user(task, brief)[0]:
                     apply_needs_user_brief(task, brief)
         except Exception:
-            pass
+            import logging
+
+            logging.getLogger(__name__).exception("Needs User reconcile failed during normalize_task")
     return task
 
 

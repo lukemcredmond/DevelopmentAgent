@@ -32,7 +32,7 @@ export function mergeAppStateIdentity(
 
 /** Drop pendingSimulation when missing, and ignore a snapshot that revives a dismissed id. */
 export function mergePendingSimulation(
-  prev: { pendingSimulation?: PendingSimulation | null },
+  _prev: { pendingSimulation?: PendingSimulation | null },
   incoming: { pendingSimulation?: PendingSimulation | null },
   dismissedId?: string | null,
 ): PendingSimulation | null {

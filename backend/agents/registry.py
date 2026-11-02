@@ -51,8 +51,9 @@ agent_qa = ScrumAgent(
 tool_write = Tool(
     name="write_file",
     description=(
-        "Creates or modifies code and configurations inside the workspace root. "
-        "Path is relative to the workspace (e.g. lib/main.dart), never a nested project folder name."
+        "Creates NEW files in the workspace root. For existing files use apply_patch "
+        "(write_file is blocked on existing paths unless recovery explicitly allows overwrite). "
+        "Path is relative (e.g. lib/main.dart)."
     ),
     parameters={
         "type": "object",
@@ -216,6 +217,16 @@ def _guarded_update_board(
         qa_gate_blocks_done,
     )
 
+    from backend.services.board_lanes import canonical_lane
+
+    canon_lane = canonical_lane(target_lane)
+    if not canon_lane:
+        from backend.services.board_lanes import BASE_LANES
+
+        valid = ", ".join(BASE_LANES)
+        return f"Error: unknown lane '{target_lane}'; valid: {valid}"
+    target_lane = canon_lane
+
     task = find_task_by_id(task_id)
     if task:
         normalize_task(task)
@@ -338,14 +349,19 @@ def _guarded_update_board(
                         except Exception:
                             pass
                 except Exception:
-                    pass
+                    import logging
+
+                    logging.getLogger(__name__).exception(
+                        "derive_exit_reason failed in update_board gate"
+                    )
+                    exit_r = "unknown_exit"
                 if not exit_r:
                     exit_r = str(
                         (outcome or {}).get("exitReason")
                         or (outcome or {}).get("stopReason")
                         or (diag or {}).get("exitReason")
                         or ""
-                    )
+                    ).strip()
                 if not writes_succeeded:
                     writes_succeeded = int(
                         (diag or {}).get("writesSucceeded")
@@ -628,7 +644,21 @@ tool_board = Tool(
         "type": "object",
         "properties": {
             "task_id": {"type": "string"},
-            "target_lane": {"type": "string"},
+            "target_lane": {
+                "type": "string",
+                "enum": [
+                    "Backlog",
+                    "Refinement",
+                    "Blocked",
+                    "In Progress",
+                    "Needs PO",
+                    "Needs User",
+                    "Code Review",
+                    "QA",
+                    "Done",
+                    "Features",
+                ],
+            },
             "user_question": {
                 "type": "string",
                 "description": "Required when target_lane is Needs User — specific question for the user.",
@@ -958,7 +988,6 @@ def configure_agent_tools(ws: dict | None = None) -> None:
             names = [
                 "read_file",
                 "list_dir",
-                "apply_patch",
                 "update_board",
                 "grep",
                 "glob_file_search",

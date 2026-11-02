@@ -19,6 +19,9 @@ CHUNK_SIZE = 800
 CHUNK_OVERLAP = 100
 RRF_K = 60
 
+_QDRANT_CLIENT_CACHE: Dict[tuple, Any] = {}
+_EMBED_DIM_CACHE: Dict[tuple, int] = {}
+
 
 def filter_semantic_index_hits(hits: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
     """Drop index hits outside the active workspace or known cross-template leakage."""
@@ -171,13 +174,21 @@ class CodeIndexEngine:
         return f"code_{safe}"
 
     def _resolve_embed_dim(self) -> int:
+        cache_key = (self.qdrant_url, self.embed_model)
+        cached = _EMBED_DIM_CACHE.get(cache_key)
+        if cached:
+            self._embed_dim = cached
+            return cached
         if self._embed_dim:
+            _EMBED_DIM_CACHE[cache_key] = self._embed_dim
             return self._embed_dim
         probe = self._embed("index dim probe")
         if probe:
             self._embed_dim = len(probe)
+            _EMBED_DIM_CACHE[cache_key] = self._embed_dim
             return self._embed_dim
         self._embed_dim = DEFAULT_EMBED_DIM
+        _EMBED_DIM_CACHE[cache_key] = self._embed_dim
         return self._embed_dim
 
     def _collection_vector_size(self, client) -> Optional[int]:
@@ -221,6 +232,10 @@ class CodeIndexEngine:
     def _get_client(self):
         if self._client is not None:
             return self._client
+        cache_key = (self.qdrant_url, self.qdrant_api_key or "")
+        if cache_key in _QDRANT_CLIENT_CACHE:
+            self._client = _QDRANT_CLIENT_CACHE[cache_key]
+            return self._client
         try:
             from qdrant_client import QdrantClient
 
@@ -228,6 +243,7 @@ class CodeIndexEngine:
             if self.qdrant_api_key:
                 kwargs["api_key"] = self.qdrant_api_key
             self._client = QdrantClient(**kwargs)
+            _QDRANT_CLIENT_CACHE[cache_key] = self._client
             self._ensure_collection(self._client)
             self._available = True
             return self._client
@@ -506,6 +522,18 @@ class CodeIndexEngine:
         ws_settings = get_workflow_settings(self.project_id)
         if not ws_settings.get("enableSemanticSearch", True):
             return
+        if getattr(state, "ACTIVE_SPRINT_TASK_ID", None):
+            import threading
+
+            threading.Thread(
+                target=self._upsert_file_sync,
+                args=(path, content),
+                daemon=True,
+            ).start()
+            return
+        self._upsert_file_sync(path, content)
+
+    def _upsert_file_sync(self, path: str, content: str) -> None:
         client = self._get_client()
         if client is None:
             return

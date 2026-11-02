@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import json
+import queue
 import threading
 import time
 from dataclasses import dataclass, field
@@ -1144,6 +1145,43 @@ class RunawayGenerationAborted(TimeoutError):
     """Raised when text generation exceeds eval_timeout without tool calls."""
 
 
+class _PrefetchStreamReader:
+    """Single background thread pulls stream chunks into a queue."""
+
+    def __init__(self, iterator: Iterator[ChatResult]):
+        self._iterator = iterator
+        self._queue: queue.Queue = queue.Queue(maxsize=8)
+        self._error: Optional[BaseException] = None
+        self._thread = threading.Thread(target=self._fill, name="ollama-stream-prefetch", daemon=True)
+        self._thread.start()
+
+    def _fill(self) -> None:
+        try:
+            while True:
+                self._queue.put(next(self._iterator))
+        except StopIteration:
+            self._queue.put(None)
+        except Exception as exc:
+            self._error = exc
+            self._queue.put(None)
+
+    def next_with_timeout(self, timeout_sec: float) -> Optional[ChatResult]:
+        if self._error is not None:
+            raise self._error
+        try:
+            item = self._queue.get(timeout=max(0.05, float(timeout_sec)))
+        except queue.Empty:
+            close_chat_stream(self._iterator)
+            raise EmptyGenerationTimeout(
+                f"Ollama empty generation timed out after {float(timeout_sec):.0f}s"
+            )
+        if item is None:
+            if self._error is not None:
+                raise self._error
+            return None
+        return item
+
+
 def _next_stream_chunk(
     iterator: Iterator[ChatResult], timeout_sec: float, *, empty_budget_sec: Optional[float] = None
 ) -> Optional[ChatResult]:
@@ -1193,6 +1231,7 @@ def consume_chat_stream(
     tokens arrive. Heartbeats do not extend that empty window.
     """
     iterator = iter(stream)
+    reader = _PrefetchStreamReader(iterator)
     empty_wait = max(0.05, float(empty_timeout_sec))
     flowing_wait = max(empty_wait, float(flowing_timeout_sec))
     first_event_at: Optional[float] = None
@@ -1235,9 +1274,7 @@ def consume_chat_stream(
                         f"Ollama empty generation timed out after {empty_wait:.0f}s"
                     )
                 wait = remaining
-            chunk = _next_stream_chunk(
-                iterator, wait, empty_budget_sec=empty_wait if progressed else flowing_wait
-            )
+            chunk = reader.next_with_timeout(wait)
             if chunk is None:
                 break
             if first_event_at is None:

@@ -1,14 +1,16 @@
 {
   "format": "allhands-project",
   "formatVersion": 2,
-  "id": "default-proj",
-  "name": "My Local Scrum Project",
-  "brief": "Decompose meal recipe planner modules in Nodejs.",
-  "original_brief": "",
+  "id": "5b1de568-1cc4-40ee-8259-822d4232fe67",
+  "name": "Demo",
+  "brief": "Build a todo app",
+  "original_brief": "Build a meal planner",
   "workspace_dir": "/mnt/Storage/my-agents/my-agent-lab/DevelopmentAgent",
-  "skills_dir": "./global_skills",
+  "skills_dir": "/tmp/pytest-of-lukemcredmond/pytest-1/test_config_save_persists_lmst0",
   "po_skills": [],
-  "dev_skills": [],
+  "dev_skills": [
+    "from_old.md"
+  ],
   "cr_skills": [],
   "qa_skills": [],
   "po_model": "qwen2.5-coder:7b",
@@ -19,7 +21,7 @@
   "dev_backup_model": "",
   "cr_backup_model": "",
   "qa_backup_model": "",
-  "plan_outline": "",
+  "plan_outline": "## Summary\nMeal shopping list app.\n\n## Approach\nFlutter.\n\n## Proposed epics\n- Recipes \u2014 browse and save recipes\n- Shopping list \u2014 add items from recipes\n",
   "workflow_settings": {
     "requireFeaturePackApproval": true,
     "planOutlineRefinePass": true,
@@ -144,7 +146,7 @@
     "cloudDevStuckSteps": 1,
     "cloudDevRequestTimeoutSec": 900,
     "enableCardSessionContinuity": true,
-    "enableCardSessionSummarize": true,
+    "enableCardSessionSummarize": false,
     "enableWorkspaceRulesInject": true,
     "workspaceRulesMaxChars": 12000,
     "implementerRelaxGatesOnAutoSprint": true,
@@ -235,6 +237,8 @@
     "poNumPredictOverride": false,
     "devPatchMaxTools": 12,
     "devVerifyMaxTools": 8,
+    "maxPrematureBoardRetries": 2,
+    "devTextRejectNumPredict": 512,
     "enableStepLessonMemory": true,
     "enableDevCoreMemoryBlock": true,
     "enableLlmContextCompress": false,
@@ -299,7 +303,7 @@
         "stepInstructions": null
       }
     },
-    "performanceSettingsVersion": 2
+    "performanceSettingsVersion": 3
   },
-  "updated_at": "2026-10-29T01:21:14+00:00"
+  "updated_at": "2026-10-31T02:58:16+00:00"
 }

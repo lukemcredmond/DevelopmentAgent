@@ -798,3 +798,27 @@ def test_record_dev_precheck_skip_includes_park_fields(tmp_path, monkeypatch):
     assert data["parkSucceeded"] is False
     assert data["needsUserKind"] == "phase_cycle_cap"
 
+
+def test_infer_primary_bottleneck_premature_lane_loop():
+    from backend.services.step_diagnostics import infer_primary_bottleneck_from_payload
+
+    payload = {
+        "exitReason": "tool_failure_stop",
+        "toolFailures": 3,
+        "toolsLog": [
+            {"toolName": "update_board", "success": False, "summary": "Error: Oracle FAIL"},
+            {"toolName": "update_board", "success": False, "summary": "Error: Cannot move to Done"},
+        ],
+    }
+    assert infer_primary_bottleneck_from_payload(payload) == "premature_lane_loop"
+
+
+def test_infer_primary_bottleneck_text_only_generation():
+    from backend.services.step_diagnostics import infer_primary_bottleneck_from_payload
+
+    payload = {
+        "exitReason": "read_only_no_edits",
+        "evalTokensTotal": 2048,
+    }
+    assert infer_primary_bottleneck_from_payload(payload) == "text_only_generation"
+

@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import json
+import logging
 import re
 import uuid
 from datetime import datetime
@@ -10,6 +11,7 @@ from typing import Any, Dict, List, Optional, Tuple
 
 MAX_ARCHITECTURE_DECISIONS = 50
 ADR_ID_PREFIX = "ADR-"
+logger = logging.getLogger(__name__)
 
 _TOPIC_SLUG_RE = re.compile(r"[^a-z0-9]+")
 
@@ -305,6 +307,8 @@ def maybe_extract_architecture_decisions(
     if not task:
         return 0
     normalize_task(task)
+    if str(task.get("lane") or "").strip() == "In Progress":
+        return 0
     if not _task_has_write_files(task):
         return 0
     if exit_reason and exit_reason in ("SIMULATION_FALLBACK", "ollama_fallback", "llm_call_failed"):
@@ -339,9 +343,18 @@ def maybe_extract_architecture_decisions(
         {"role": "user", "content": prompt},
     ]
     try:
-        response = agent_dev._chat(messages, iteration=1, task_id=task_id, agent_id="dev")
+        prev_timeout = getattr(agent_dev, "_aux_request_timeout_sec", None)
+        prev_cap = getattr(agent_dev, "_aux_num_predict_cap", None)
+        agent_dev._aux_request_timeout_sec = 60
+        agent_dev._aux_num_predict_cap = 512
+        try:
+            response = agent_dev._chat(messages, iteration=1, task_id=task_id, agent_id="dev")
+        finally:
+            agent_dev._aux_request_timeout_sec = prev_timeout
+            agent_dev._aux_num_predict_cap = prev_cap
         raw = (response.message.content or "") if response else ""
     except Exception:
+        logger.exception("ADR post-step extract failed for %s", task_id)
         return 0
 
     added = 0

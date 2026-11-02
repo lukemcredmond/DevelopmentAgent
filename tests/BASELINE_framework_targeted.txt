@@ -1,0 +1,10 @@
+# Targeted suite baseline (Framework Performance and Correctness plan)
+# Recorded after Phase 0 collection fix and plan implementation.
+# Command:
+#   .venv/bin/python -m pytest tests/test_framework_performance_correctness.py \
+#     tests/test_phase3_cursor_parity.py tests/test_sprint_performance_fixes.py \
+#     tests/test_llm_performance.py tests/test_dev_phase_graph.py \
+#     tests/test_file_blocker.py tests/test_prompt_sections.py -q
+#
+# Expected: all pass except known pre-existing failures in test_file_blocker
+# (ModuleNotFoundError: backend.services.sse) when run in isolation.

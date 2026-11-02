@@ -109,7 +109,7 @@ def build_command_result(
     duration_ms: int = 0,
 ) -> CommandResult:
     combined = "\n".join(part for part in (stdout, stderr) if part).strip() or "(no output)"
-    diagnostics = parse_command_diagnostics(command, combined)
+    diagnostics = parse_command_diagnostics(command, combined, exit_code=exit_code)
     from backend.agents.tool_outcomes import classify_run_command_outcome
 
     outcome = classify_run_command_outcome(command, exit_code, combined, diagnostics)

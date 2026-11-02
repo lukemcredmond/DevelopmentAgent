@@ -147,6 +147,19 @@ def forced_tool_num_predict(ws: Optional[Dict[str, Any]] = None) -> int:
     return max(512, int(ws.get("forcedToolNumPredict") or 256))
 
 
+def dev_text_reject_num_predict(ws: Optional[Dict[str, Any]] = None) -> int:
+    if ws is None:
+        from backend.services.workflow_settings import get_workflow_settings
+
+        ws = get_workflow_settings()
+    return max(128, min(1024, int(ws.get("devTextRejectNumPredict") or 512)))
+
+
+def truncation_pivot_num_predict(ws: Optional[Dict[str, Any]] = None) -> int:
+    """Low cap when generation hit length without tool calls."""
+    return min(dev_text_reject_num_predict(ws), forced_tool_num_predict(ws))
+
+
 def single_model_name(ws: Optional[Dict[str, Any]] = None, *, fallback: str = "") -> str:
     """The one model every role uses in single-model mode (the Developer primary)."""
     from backend import state
@@ -160,6 +173,22 @@ def single_model_name(ws: Optional[Dict[str, Any]] = None, *, fallback: str = ""
     except Exception:
         dev = ""
     primary = dev or str(fallback or "").strip()
+    if not is_developer_tool_capable(primary):
+        subst = _fast_coder_preset(ws)
+        try:
+            from backend.services.logs import add_system_log
+
+            add_system_log(
+                "System",
+                "warning",
+                f"single_model_substituted: {primary or '(empty)'} → {subst} (Developer requires a tool-capable coder)",
+            )
+            from backend.services.step_diagnostics import log_event
+
+            log_event("single_model_substituted", f"{primary} -> {subst}")
+        except Exception:
+            pass
+        return subst
     if _is_heavy_general_model(primary):
         return _fast_coder_preset(ws)
     return primary
@@ -237,6 +266,9 @@ def resolve_step_model(
         ws = get_workflow_settings()
     primary = (primary_model or "").strip() or "qwen2.5-coder:14b"
 
+    if role == "Developer" and not str(phase or "").strip():
+        phase = "explore"
+
     if single_model_mode_active(ws) and not (
         role == "Developer"
         and phase_model_routing_enabled(ws)
@@ -252,6 +284,9 @@ def resolve_step_model(
         return chosen, "single_model"
 
     if role != "Developer" or not phase_model_routing_enabled(ws) or not str(phase or "").strip():
+        if role == "Developer" and not is_developer_tool_capable(primary):
+            subst = developer_tool_capable_or_preset(primary, ws)
+            return subst, "dev_primary_not_tool_capable"
         fast = _heavy_primary_fast_model(role=role, primary=primary, ws=ws)
         if fast:
             from backend.services.prompt_budget import normalize_role_key
@@ -298,7 +333,38 @@ def _is_coder_model(model: str) -> bool:
     m = (model or "").strip().lower()
     if not m:
         return False
-    return any(tok in m for tok in ("coder", "codestral", "deepseek-coder", "starcoder", "qwen2.5-coder"))
+    return any(
+        tok in m
+        for tok in (
+            "coder",
+            "codestral",
+            "deepseek-coder",
+            "starcoder",
+            "qwen2.5-coder",
+            "qwen3-coder",
+        )
+    )
+
+
+def is_developer_tool_capable(model: str) -> bool:
+    """Fail-closed: only known tool-friendly coders are allowed for Developer."""
+    name = (model or "").strip()
+    if not name:
+        return False
+    if _is_coder_model(name):
+        return True
+    lower = name.lower()
+    if "essentialai" in lower or "rnj" in lower:
+        return False
+    if _is_heavy_general_model(name):
+        return False
+    return False
+
+
+def developer_tool_capable_or_preset(model: str, ws: Optional[Dict[str, Any]] = None) -> str:
+    if is_developer_tool_capable(model):
+        return model
+    return _fast_coder_preset(ws)
 
 
 def _is_heavy_general_model(model: str) -> bool:

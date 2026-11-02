@@ -81,6 +81,9 @@ def run_composer_dev_step(
     if not _agent_had_successful_write(agent):
         return result
 
+    if getattr(agent, "_fix_verify_ran_this_step", False):
+        return result
+
     lint_cmd = derive_project_lint_command()
     if not lint_cmd:
         return result
@@ -91,7 +94,26 @@ def run_composer_dev_step(
         else:
             n = len(cmd_result.diagnostics) if cmd_result.diagnostics else 0
             log_event("composer_dev_lint_findings", f"{n} finding(s)")
-            if ws.get("enableFixVerifyLoop") and n > 0:
+            live_board = None
+            try:
+                from backend.agents.task_context import find_task_by_id
+
+                live_board = find_task_by_id(tid) if tid else None
+            except Exception:
+                live_board = None
+            if live_board and str(live_board.get("lane") or "") == "Done":
+                try:
+                    from backend.services.board_service import move_board_stage
+
+                    move_board_stage(tid, "In Progress", honor_dev_claim_gate=False)
+                    add_system_log(
+                        "Developer",
+                        "warning",
+                        "Reopened card to In Progress — lint failed after premature Done",
+                    )
+                except Exception:
+                    pass
+            if ws.get("enableFixVerifyLoop") and not clean:
                 from backend.services.fix_verify_loop import run_fix_verify_loop
 
                 rounds = max(1, int(ws.get("maxFixVerifyRounds") or 2))

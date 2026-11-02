@@ -147,6 +147,27 @@ def save_current_project_state(
     project_id: Optional[str] = None,
     persist_board: bool = True,
     force_board: bool = False,
+    immediate: bool = False,
+) -> None:
+    from backend import state as _state
+
+    if not immediate and getattr(_state, "ACTIVE_SPRINT_TASK_ID", None):
+        from backend.services.persistence_flush import mark_dirty
+
+        mark_dirty("project_state")
+        return
+    save_current_project_state_sync(
+        project_id=project_id,
+        persist_board=persist_board,
+        force_board=force_board,
+    )
+
+
+def save_current_project_state_sync(
+    *,
+    project_id: Optional[str] = None,
+    persist_board: bool = True,
+    force_board: bool = False,
 ) -> None:
     from backend.agents.registry import agent_cr, agent_dev, agent_po, agent_qa
     from backend.services.board_snapshots import write_board_snapshot

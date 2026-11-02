@@ -10,6 +10,7 @@ from backend.services.file_blocker import (
     BLOCKED_BY_KIND_FILE_FIX,
     dev_edit_path_allowed_for_tool,
     dev_read_path_allowed_for_tool,
+    canonicalize_flutter_dart_path,
     orchestrate_file_blocker,
     reconcile_file_blockers_from_board,
     resolve_dev_edit_target_path,
@@ -281,3 +282,15 @@ def test_resolve_prefers_shopping_screen_over_main_scaffold(tmp_path):
     path = resolve_dev_edit_target_path(task)
     assert path == "lib/screens/shopping_list_screen.dart"
     assert task.get("lintSourceFile") == "lib/screens/shopping_list_screen.dart"
+
+
+def test_canonicalize_flutter_dart_path_snake_case(tmp_path, monkeypatch):
+    monkeypatch.setattr(state, "WORKSPACE_DIR", str(tmp_path))
+    (tmp_path / "pubspec.yaml").write_text("name: app\ndependencies:\n  flutter:\n    sdk: flutter\n")
+    pages = tmp_path / "lib" / "pages"
+    pages.mkdir(parents=True)
+    (pages / "shopping_list_page.dart").write_text("// ok\n", encoding="utf-8")
+    assert (
+        canonicalize_flutter_dart_path("lib/pages/ShoppingListPage.dart")
+        == "lib/pages/shopping_list_page.dart"
+    )

@@ -85,6 +85,14 @@ def move_board_stage(
     park_msg: str = "",
 ) -> str:
     requested_lane = str(target_lane)
+    from backend.services.board_lanes import canonical_lane
+
+    canon = canonical_lane(requested_lane, board=state.SHARED_BOARD)
+    if not canon:
+        from backend.services.board_lanes import BASE_LANES
+
+        return f"Error: unknown lane '{requested_lane}'; valid: {', '.join(BASE_LANES)}"
+    target_lane = canon
     claim_block_reason = ""
     final_lane = requested_lane
     with state.STATE_LOCK:
@@ -222,10 +230,10 @@ def move_board_stage(
                 ensure_needs_user_brief(active_task)
             except Exception:
                 pass
+        if target_lane not in state.SHARED_BOARD:
+            return f"Error: unknown lane '{target_lane}'."
         if target_lane == "Refinement":
             reset_refinement_fields(active_task)
-        if target_lane not in state.SHARED_BOARD:
-            state.SHARED_BOARD[target_lane] = []
         state.SHARED_BOARD[target_lane].append(active_task)
         if target_lane == "Done":
             from backend.agents.task_context import on_task_completed

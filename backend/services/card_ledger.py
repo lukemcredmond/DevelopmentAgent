@@ -525,10 +525,14 @@ def run_dev_ideation(agent: Any, task: Dict[str, Any]) -> str:
         ]
         prev = getattr(agent, "_skip_cutoff_summary", False)
         agent._skip_cutoff_summary = True
+        agent._aux_request_timeout_sec = 60
+        agent._aux_num_predict_cap = 512
         try:
             response = agent._chat(messages, tools=None, iteration=0, task_id=tid)
         finally:
             agent._skip_cutoff_summary = prev
+            agent._aux_request_timeout_sec = None
+            agent._aux_num_predict_cap = None
         if response is None:
             return ""
         content = getattr(getattr(response, "message", None), "content", None) or ""

@@ -281,6 +281,38 @@ def _check_workspace() -> Check:
     return Check("workspace", STATUS_FAIL, f"Workspace directory missing: {path}", "Create it or pick another in Project Config.")
 
 
+def _check_toolchain(ws: Dict[str, Any]) -> Check:
+    import os
+
+    from backend import state
+    from backend.services.command_result import run_workspace_command
+    from backend.workspace.files import derive_project_lint_command
+
+    if not state.WORKSPACE_DIR or not os.path.isdir(state.WORKSPACE_DIR):
+        return Check("toolchain", STATUS_WARN, "Workspace not set — lint toolchain not checked")
+    cmd = derive_project_lint_command()
+    if not cmd:
+        return Check("toolchain", STATUS_OK, "No project lint command detected (skipped)")
+    try:
+        result = run_workspace_command(cmd, timeout=120)
+    except Exception as exc:
+        return Check(
+            "toolchain",
+            STATUS_WARN,
+            f"Lint probe failed: {exc}",
+            "Verify flutter/dart or project lint command manually.",
+        )
+    if result.outcome == "toolchain_error":
+        snippet = (result.summary or result.combined_output or cmd)[:240]
+        return Check(
+            "toolchain",
+            STATUS_FAIL,
+            f"Lint toolchain error: {snippet}",
+            "Fix SDK install, permissions, or pub get before sprint.",
+        )
+    return Check("toolchain", STATUS_OK, f"Lint probe OK ({cmd})")
+
+
 def run_preflight(settings: Optional[Dict[str, Any]] = None) -> Dict[str, Any]:
     """Run every readiness check. Never raises: a broken check is itself a finding."""
     try:
@@ -324,6 +356,7 @@ def run_preflight(settings: Optional[Dict[str, Any]] = None) -> Dict[str, Any]:
     checks.extend(safely("qdrant", lambda: _check_vector_store(ws)))
     checks.extend(safely("offline_safety", lambda: _check_outbound_features(ws)))
     checks.extend(safely("workspace", _check_workspace))
+    checks.extend(safely("toolchain", lambda: _check_toolchain(ws)))
 
     status = _overall(checks)
     return {

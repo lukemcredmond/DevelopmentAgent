@@ -71,6 +71,7 @@ PROJECT_TOOL_EVIDENCE: List[Dict[str, Any]] = []
 
 # Interrupted sprint session context surfaced on startup (crash recovery banner).
 RECOVERY_CONTEXT: Optional[Dict[str, Any]] = None
+AUTO_RESUME_SPRINT_PENDING: bool = False
 
 # Offline simulation awaiting user confirm (10s popup in UI).
 PENDING_SIMULATION: Optional[Dict[str, Any]] = None
@@ -106,6 +107,7 @@ STEP_PATCH_FAILURES: Dict[str, int] = {}
 FIX_VERIFY_ROUND: Optional[int] = None
 FIX_VERIFY_MAX_ROUNDS: Optional[int] = None
 FIX_VERIFY_LINT_CLEAN: bool = False
+LAST_LINT_OUTCOME: str = ""
 
 # Set by workspace repair (manual analyze).
 WORKSPACE_ANALYZE_CLEAN: Optional[bool] = None

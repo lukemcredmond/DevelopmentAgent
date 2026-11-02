@@ -688,7 +688,9 @@ export default function WorkflowPanel({
             value={settings.fileBlockerMinDependents ?? 2}
             min={2}
             max={20}
-            onChange={(n) => onSettingsChange({ fileBlockerMinDependents: n })}
+            onCommit={(fileBlockerMinDependents) =>
+              onSettingsChange({ fileBlockerMinDependents })
+            }
           />
         </label>
       )}
